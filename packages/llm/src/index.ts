@@ -23,15 +23,24 @@ export {
   OPENAI_PLACEHOLDER_API_KEY,
   OpenAiStreamReducer,
   createOpenAiClient,
+  fromDataUrl,
   fromOpenAiFinishReason,
   fromOpenAiMessage,
   fromOpenAiMessages,
   reduceOpenAiStream,
+  toDataUrl,
   toOpenAiMessages,
   toOpenAiParams,
   toOpenAiTools,
 } from './providers/openai-compatible.js';
-export { parseToolInput, stringifyToolInput, toProviderError } from './providers/common.js';
+export {
+  IMAGE_OMITTED_TEXT,
+  parseToolInput,
+  resolveSupportsVision,
+  stringifyToolInput,
+  stripImages,
+  toProviderError,
+} from './providers/common.js';
 export { estimateMessageTokens, estimateTokens, groupToolPairs, windowMessages } from './tokens.js';
 export { RUN_ACTION_TOOL, extractFencedActions, stripFencedActions } from './actions.js';
 export type { FencedAction } from './actions.js';

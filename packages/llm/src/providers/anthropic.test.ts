@@ -4,6 +4,7 @@ import { APIError, APIUserAbortError } from '@anthropic-ai/sdk';
 import { RpError } from '@rp/shared';
 import type { LlmChatRequest, LlmMessage, ProviderConfig } from '@rp/shared';
 import { RUN_ACTION_TOOL } from '../actions.js';
+import { IMAGE_OMITTED_TEXT } from './common.js';
 import {
   AnthropicProvider,
   fromAnthropicMessage,
@@ -95,6 +96,41 @@ describe('anthropic message mapping', () => {
     expect(without.tools).toBeUndefined();
     expect(without.system).toBeUndefined();
     expect(without.max_tokens).toBe(12);
+  });
+
+  it('maps image parts to base64 image blocks and round-trips', () => {
+    const msgs: LlmMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'image', mime: 'image/png', data: 'AAAA' }] },
+    ];
+    const params = toAnthropicMessages(msgs);
+    expect(params).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'look' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+        ],
+      },
+    ]);
+    expect(fromAnthropicMessages(params)).toEqual(msgs);
+  });
+
+  it('keeps images by default (vision on) and replaces them when supportsVision is false', () => {
+    const request: LlmChatRequest = {
+      model: 'm',
+      system: '',
+      messages: [{ role: 'user', content: [{ type: 'image', mime: 'image/jpeg', data: 'BBBB' }, { type: 'text', text: 'what is this?' }] }],
+    };
+    expect(toAnthropicParams(request, true).messages[0]?.content).toEqual([
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'BBBB' } },
+      { type: 'text', text: 'what is this?' },
+    ]);
+    expect(toAnthropicParams(request, true, false).messages[0]?.content).toEqual([
+      { type: 'text', text: IMAGE_OMITTED_TEXT },
+      { type: 'text', text: 'what is this?' },
+    ]);
+    // the request itself is not mutated
+    expect(request.messages[0]?.content[0]).toEqual({ type: 'image', mime: 'image/jpeg', data: 'BBBB' });
   });
 
   it('converts a response message, ignoring unknown block types', () => {
@@ -277,6 +313,18 @@ describe('AnthropicProvider.chat (fake client)', () => {
     const sent = received[0]!.params as { tools?: unknown[]; system?: string };
     expect(sent.tools).toHaveLength(1);
     expect(sent.system).toBe('sys');
+  });
+
+  it('strips images at the provider level when config.supportsVision is false', async () => {
+    const { client, received } = fakeClient({ throws: new Error('stop here') });
+    const provider = new AnthropicProvider({ ...config, supportsVision: false }, client);
+    const withImage: LlmChatRequest = {
+      ...request,
+      messages: [{ role: 'user', content: [{ type: 'image', mime: 'image/webp', data: 'CCCC' }] }],
+    };
+    await expect(provider.chat(withImage)).rejects.toBeInstanceOf(RpError);
+    const sent = received[0]!.params as { messages: { content: unknown[] }[] };
+    expect(sent.messages[0]?.content).toEqual([{ type: 'text', text: IMAGE_OMITTED_TEXT }]);
   });
 
   it('omits tools when supportsTools is false', async () => {

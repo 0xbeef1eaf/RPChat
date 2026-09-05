@@ -2,6 +2,8 @@ import type { ContentPart, LlmMessage } from '@rp/shared';
 
 /** Approximate chars-per-token ratio used by the estimator. */
 const CHARS_PER_TOKEN = 4;
+/** Rough cost of one inline image. */
+const IMAGE_TOKENS = 1000;
 /** Fixed per-message overhead (role, framing) in tokens. */
 const MESSAGE_OVERHEAD_TOKENS = 4;
 
@@ -11,7 +13,12 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-function partText(part: ContentPart): string {
+function partTokens(part: ContentPart): number {
+  if (part.type === 'image') return IMAGE_TOKENS;
+  return estimateTokens(partText(part));
+}
+
+function partText(part: Exclude<ContentPart, { type: 'image' }>): string {
   switch (part.type) {
     case 'text':
       return part.text;
@@ -30,10 +37,10 @@ function safeJson(value: unknown): string {
   }
 }
 
-/** Estimate tokens of a whole message (tool_use inputs are counted as their JSON text). */
+/** Estimate tokens of a whole message (tool_use inputs are counted as their JSON text, images as ~1000). */
 export function estimateMessageTokens(msg: LlmMessage): number {
   let total = MESSAGE_OVERHEAD_TOKENS;
-  for (const part of msg.content) total += estimateTokens(partText(part));
+  for (const part of msg.content) total += partTokens(part);
   return total;
 }
 

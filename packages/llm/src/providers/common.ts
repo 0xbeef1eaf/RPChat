@@ -1,4 +1,5 @@
 import { RpError } from '@rp/shared';
+import type { ContentPart, LlmMessage } from '@rp/shared';
 
 /** Duck-typed view of the SDKs' `APIError` (both SDKs share this shape). */
 interface ApiErrorLike {
@@ -49,4 +50,25 @@ export function stringifyToolInput(input: unknown): string {
   } catch {
     return '{}';
   }
+}
+
+/** Text substituted for an image part when the configured model has no vision. */
+export const IMAGE_OMITTED_TEXT = '[image omitted: model has no vision]';
+
+/** Resolve `supportsVision` for a provider kind: Anthropic defaults to true, everything else to false. */
+export function resolveSupportsVision(config: { kind: string; supportsVision?: boolean }): boolean {
+  return config.supportsVision ?? config.kind === 'anthropic';
+}
+
+/**
+ * When `supportsVision` is false, replace every `image` part with the
+ * `[image omitted: model has no vision]` text part. Returns the input untouched
+ * (same array) when nothing needs replacing.
+ */
+export function stripImages(messages: LlmMessage[], supportsVision: boolean): LlmMessage[] {
+  if (supportsVision || !messages.some((m) => m.content.some((p) => p.type === 'image'))) return messages;
+  return messages.map((m) => ({
+    ...m,
+    content: m.content.map((p): ContentPart => (p.type === 'image' ? { type: 'text', text: IMAGE_OMITTED_TEXT } : p)),
+  }));
 }

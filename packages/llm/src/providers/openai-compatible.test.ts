@@ -4,12 +4,15 @@ import { APIError, APIUserAbortError } from 'openai';
 import { RpError } from '@rp/shared';
 import type { LlmChatRequest, LlmMessage, ProviderConfig } from '@rp/shared';
 import { RUN_ACTION_TOOL } from '../actions.js';
+import { IMAGE_OMITTED_TEXT } from './common.js';
 import {
   OpenAiCompatibleProvider,
+  fromDataUrl,
   fromOpenAiFinishReason,
   fromOpenAiMessage,
   fromOpenAiMessages,
   reduceOpenAiStream,
+  toDataUrl,
   toOpenAiMessages,
   toOpenAiParams,
   toOpenAiTools,
@@ -69,6 +72,44 @@ describe('openai message mapping', () => {
     ]);
     expect(params[0]).toMatchObject({ role: 'assistant', content: null });
     expect(params[1]).toEqual({ role: 'tool', tool_call_id: 'c', content: 'r' });
+  });
+
+  it('maps image parts to image_url data URLs in a content-parts array and round-trips', () => {
+    const msgs: LlmMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'image', mime: 'image/png', data: 'AAAA' }] },
+    ];
+    const params = toOpenAiMessages('', msgs);
+    expect(params).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'look' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+        ],
+      },
+    ]);
+    expect(fromOpenAiMessages(params)).toEqual({ system: '', messages: msgs });
+    expect(toDataUrl('image/gif', 'Zz==')).toBe('data:image/gif;base64,Zz==');
+    expect(fromDataUrl('data:image/webp;base64,Q1==')).toEqual({ type: 'image', mime: 'image/webp', data: 'Q1==' });
+    expect(fromDataUrl('https://example.com/a.png')).toBeNull();
+    // text-only user messages stay plain strings
+    expect(toOpenAiMessages('', [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }])).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+
+  it('replaces images by default (no vision) and keeps them when supportsVision is true', () => {
+    const request: LlmChatRequest = {
+      model: 'm',
+      system: '',
+      messages: [{ role: 'user', content: [{ type: 'image', mime: 'image/jpeg', data: 'BBBB' }, { type: 'text', text: 'what is this?' }] }],
+    };
+    expect(toOpenAiParams(request, true).messages[0]).toEqual({ role: 'user', content: `${IMAGE_OMITTED_TEXT}what is this?` });
+    expect(toOpenAiParams(request, true, true).messages[0]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,BBBB' } },
+        { type: 'text', text: 'what is this?' },
+      ],
+    });
   });
 
   it('maps tools, finish reasons and non-streaming messages', () => {
@@ -231,6 +272,23 @@ describe('OpenAiCompatibleProvider.chat (fake client)', () => {
     expect(sent.stream).toBe(true);
     expect(sent.tools).toHaveLength(1);
     expect(sent.messages[0]).toEqual({ role: 'system', content: 'sys' });
+  });
+
+  it('honours config.supportsVision at the provider level', async () => {
+    const withImage: LlmChatRequest = {
+      ...request,
+      messages: [{ role: 'user', content: [{ type: 'image', mime: 'image/png', data: 'DDDD' }] }],
+    };
+    const blind = fakeClient({ chunks: [chunk({ content: 'x' }, 'stop')] });
+    await new OpenAiCompatibleProvider(config, blind.client).chat(withImage);
+    expect((blind.received[0]!.params as { messages: unknown[] }).messages[1]).toEqual({ role: 'user', content: IMAGE_OMITTED_TEXT });
+
+    const sighted = fakeClient({ chunks: [chunk({ content: 'x' }, 'stop')] });
+    await new OpenAiCompatibleProvider({ ...config, supportsVision: true }, sighted.client).chat(withImage);
+    expect((sighted.received[0]!.params as { messages: unknown[] }).messages[1]).toEqual({
+      role: 'user',
+      content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,DDDD' } }],
+    });
   });
 
   it('omits tools when supportsTools is false', async () => {

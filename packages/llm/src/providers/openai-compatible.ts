@@ -13,7 +13,7 @@ import type {
   StopReason,
   ToolDefinition,
 } from '@rp/shared';
-import { parseToolInput, stringifyToolInput, toProviderError } from './common.js';
+import { parseToolInput, resolveSupportsVision, stringifyToolInput, stripImages, toProviderError } from './common.js';
 
 type ChatMessageParam = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 type ChatTool = OpenAI.Chat.Completions.ChatCompletionTool;
@@ -22,6 +22,7 @@ type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessage;
 type FinishReason = OpenAI.Chat.Completions.ChatCompletionChunk.Choice['finish_reason'];
 type StreamParams = OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming;
 type ToolCallParam = OpenAI.Chat.Completions.ChatCompletionMessageToolCall;
+type UserContentPart = OpenAI.Chat.Completions.ChatCompletionContentPart;
 
 /** Placeholder key sent to local servers (Ollama, LM Studio) that ignore auth but require the header. */
 export const OPENAI_PLACEHOLDER_API_KEY = 'ollama';
@@ -41,6 +42,7 @@ function joinText(parts: ContentPart[]): string {
  * `system` + `LlmMessage[]` → OpenAI chat messages.
  * Assistant `tool_use` parts become `tool_calls`; each `tool_result` part becomes its own
  * `role: 'tool'` message (emitted before any user text so it directly follows the call).
+ * User messages with images use a content-parts array (`text` + `image_url` data URLs).
  */
 export function toOpenAiMessages(system: string, messages: LlmMessage[]): ChatMessageParam[] {
   const out: ChatMessageParam[] = [];
@@ -63,11 +65,39 @@ export function toOpenAiMessages(system: string, messages: LlmMessage[]): ChatMe
           out.push({ role: 'tool', tool_call_id: part.toolUseId, content: part.content });
         }
       }
-      const text = joinText(msg.content);
-      if (text.length > 0) out.push({ role: 'user', content: text });
+      const userContent = toUserContent(msg.content);
+      if (userContent !== null) out.push({ role: 'user', content: userContent });
     }
   }
   return out;
+}
+
+/** Text/image parts of a user message → string (text only) or content-parts array (with images). */
+function toUserContent(parts: ContentPart[]): string | UserContentPart[] | null {
+  const hasImage = parts.some((p) => p.type === 'image');
+  if (!hasImage) {
+    const text = joinText(parts);
+    return text.length > 0 ? text : null;
+  }
+  const out: UserContentPart[] = [];
+  for (const part of parts) {
+    if (part.type === 'text' && part.text.length > 0) out.push({ type: 'text', text: part.text });
+    else if (part.type === 'image') out.push({ type: 'image_url', image_url: { url: toDataUrl(part.mime, part.data) } });
+  }
+  return out.length > 0 ? out : null;
+}
+
+export function toDataUrl(mime: string, base64: string): string {
+  return `data:${mime};base64,${base64}`;
+}
+
+const DATA_URL = /^data:([^;,]+);base64,(.*)$/s;
+
+/** Parse a `data:<mime>;base64,<data>` URL back into an image part; `null` for anything else. */
+export function fromDataUrl(url: string): Extract<ContentPart, { type: 'image' }> | null {
+  const m = DATA_URL.exec(url);
+  if (!m) return null;
+  return { type: 'image', mime: m[1] as Extract<ContentPart, { type: 'image' }>['mime'], data: m[2] ?? '' };
 }
 
 function isToolResultsOnly(msg: LlmMessage): boolean {
@@ -78,6 +108,20 @@ function partText(content: string | null | undefined | ReadonlyArray<{ type: str
   if (!content) return '';
   if (typeof content === 'string') return content;
   return content.map((c) => (typeof c.text === 'string' ? c.text : '')).join('');
+}
+
+/** User message content → parts, keeping text/image order. */
+function userContentToParts(content: string | ReadonlyArray<UserContentPart>): ContentPart[] {
+  if (typeof content === 'string') return [{ type: 'text', text: content }];
+  const parts: ContentPart[] = [];
+  for (const c of content) {
+    if (c.type === 'text') parts.push({ type: 'text', text: c.text });
+    else if (c.type === 'image_url') {
+      const img = fromDataUrl(c.image_url.url);
+      if (img) parts.push(img);
+    }
+  }
+  return parts;
 }
 
 /**
@@ -96,12 +140,12 @@ export function fromOpenAiMessages(params: ChatMessageParam[]): { system: string
         system += (system ? '\n' : '') + partText(param.content);
         break;
       case 'user': {
-        const text = partText(param.content);
+        const parts = userContentToParts(param.content);
         const prev = last();
         if (prev && prev.role === 'user' && isToolResultsOnly(prev)) {
-          prev.content.push({ type: 'text', text });
+          prev.content.push(...parts);
         } else {
-          messages.push({ role: 'user', content: [{ type: 'text', text }] });
+          messages.push({ role: 'user', content: parts });
         }
         break;
       }
@@ -161,11 +205,14 @@ export function fromOpenAiFinishReason(reason: FinishReason | undefined, hasTool
   return 'end';
 }
 
-/** Build the streaming request body. */
-export function toOpenAiParams(request: LlmChatRequest, supportsTools: boolean): StreamParams {
+/**
+ * Build the streaming request body.
+ * Images are replaced by `[image omitted: model has no vision]` when `supportsVision` is false.
+ */
+export function toOpenAiParams(request: LlmChatRequest, supportsTools: boolean, supportsVision = false): StreamParams {
   const params: StreamParams = {
     model: request.model,
-    messages: toOpenAiMessages(request.system, request.messages),
+    messages: toOpenAiMessages(request.system, stripImages(request.messages, supportsVision)),
     stream: true,
     stream_options: { include_usage: true },
   };
@@ -299,7 +346,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
   }
 
   async chat(request: LlmChatRequest, handlers: LlmStreamHandlers = {}): Promise<LlmChatResponse> {
-    const params = toOpenAiParams(request, this.config.supportsTools !== false);
+    const params = toOpenAiParams(request, this.config.supportsTools !== false, resolveSupportsVision(this.config));
     const reducer = new OpenAiStreamReducer(handlers);
     try {
       const stream = await this.client.chat.completions.create(params, { signal: request.signal ?? null });

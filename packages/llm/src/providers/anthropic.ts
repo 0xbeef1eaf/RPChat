@@ -13,7 +13,7 @@ import type {
   StopReason,
   ToolDefinition,
 } from '@rp/shared';
-import { parseToolInput, toProviderError } from './common.js';
+import { parseToolInput, resolveSupportsVision, stripImages, toProviderError } from './common.js';
 
 type MessageParam = Anthropic.Messages.MessageParam;
 type ContentBlockParam = Anthropic.Messages.ContentBlockParam;
@@ -45,6 +45,8 @@ function toBlockParam(part: ContentPart): ContentBlockParam | null {
       if (part.isError) block.is_error = true;
       return block;
     }
+    case 'image':
+      return { type: 'image', source: { type: 'base64', media_type: part.mime, data: part.data } };
   }
 }
 
@@ -99,6 +101,11 @@ function blocksToParts(blocks: ReadonlyArray<ContentBlockParam | Anthropic.Messa
         parts.push(part);
         break;
       }
+      case 'image':
+        if (block.source.type === 'base64') {
+          parts.push({ type: 'image', mime: block.source.media_type, data: block.source.data });
+        }
+        break;
       default:
         // thinking, server tool blocks, images, ... are not part of the LlmMessage model.
         break;
@@ -134,12 +141,15 @@ export function fromAnthropicStopReason(reason: AnthropicStopReason | null | und
   }
 }
 
-/** Build the request body for `messages.stream()` / `messages.create()`. */
-export function toAnthropicParams(request: LlmChatRequest, supportsTools: boolean): StreamParams {
+/**
+ * Build the request body for `messages.stream()` / `messages.create()`.
+ * Images are replaced by `[image omitted: model has no vision]` when `supportsVision` is false.
+ */
+export function toAnthropicParams(request: LlmChatRequest, supportsTools: boolean, supportsVision = true): StreamParams {
   const params: StreamParams = {
     model: request.model,
     max_tokens: request.maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS,
-    messages: toAnthropicMessages(request.messages),
+    messages: toAnthropicMessages(stripImages(request.messages, supportsVision)),
   };
   if (request.system) params.system = request.system;
   if (request.temperature !== undefined) params.temperature = request.temperature;
@@ -279,7 +289,7 @@ export class AnthropicProvider implements LlmProvider {
   }
 
   async chat(request: LlmChatRequest, handlers: LlmStreamHandlers = {}): Promise<LlmChatResponse> {
-    const params = toAnthropicParams(request, this.config.supportsTools !== false);
+    const params = toAnthropicParams(request, this.config.supportsTools !== false, resolveSupportsVision(this.config));
     const reducer = new AnthropicStreamReducer(handlers);
     try {
       const stream = this.client.messages.stream(params, { signal: request.signal ?? null });

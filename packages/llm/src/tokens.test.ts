@@ -33,6 +33,13 @@ describe('estimateTokens', () => {
     expect(estimateMessageTokens(msg)).toBeGreaterThanOrEqual(estimateTokens(JSON.stringify(big)));
     expect(estimateMessageTokens(user(''))).toBeGreaterThan(0); // per-message overhead
   });
+
+  it('counts an image as ~1000 tokens regardless of payload size', () => {
+    const small: LlmMessage = { role: 'user', content: [{ type: 'image', mime: 'image/png', data: 'AA' }] };
+    const large: LlmMessage = { role: 'user', content: [{ type: 'image', mime: 'image/png', data: 'A'.repeat(100_000) }] };
+    expect(estimateMessageTokens(small)).toBe(estimateMessageTokens(large));
+    expect(estimateMessageTokens(small) - estimateMessageTokens(user(''))).toBe(1000);
+  });
 });
 
 describe('groupToolPairs', () => {
