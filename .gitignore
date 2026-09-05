@@ -1,0 +1,15 @@
+node_modules/
+dist/
+out/
+build/
+release/
+*.tsbuildinfo
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+.vite/
+*.rppack
+!examples/**/*.rppack

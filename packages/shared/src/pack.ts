@@ -1,0 +1,116 @@
+import type { BehaviourHook } from './capability.js';
+import type { CharacterId, PackId } from './ids.js';
+
+export const PACK_FORMAT_VERSION = 1 as const;
+export const PACK_MANIFEST_FILENAME = 'pack.json';
+export const CHARACTER_MANIFEST_FILENAME = 'character.json';
+export const PACK_FILE_EXTENSION = '.rppack';
+
+export interface PackAuthor {
+  name: string;
+  url?: string;
+  email?: string;
+}
+
+/** Contents of `pack.json`. Validated by `@rp/pack` (zod). */
+export interface PackManifest {
+  formatVersion: typeof PACK_FORMAT_VERSION;
+  id: PackId;
+  name: string;
+  version: string;
+  description?: string;
+  author?: PackAuthor;
+  license?: string;
+  homepage?: string;
+  tags?: string[];
+  /** Directories (relative to pack root) containing a `character.json`. */
+  characters: string[];
+  /** Pack-level `pack`/`prompt` capability requests; `trusted` modules are implicit. */
+  capabilities?: string[];
+  /** Directory (relative to pack root) that holds media assets. Default `media`. */
+  mediaRoot?: string;
+  minAppVersion?: string;
+}
+
+export interface ExampleDialogueTurn {
+  user: string;
+  character: string;
+}
+
+export interface ModelHints {
+  temperature?: number;
+  maxTokens?: number;
+  /** Preferred provider model id; the user's settings may override. */
+  model?: string;
+}
+
+/** Contents of `character.json`. Paths are relative to the character directory. */
+export interface CharacterDefinition {
+  id: CharacterId;
+  name: string;
+  tagline?: string;
+  avatar?: string;
+  /** Markdown file containing the persona / system prompt body. */
+  persona: string;
+  greeting?: string;
+  exampleDialogue?: ExampleDialogueTurn[];
+  /** Hook → TypeScript file (relative to character dir) executed in the sandbox. */
+  behaviours?: Partial<Record<BehaviourHook, string>>;
+  /** Extra capability requests specific to this character. */
+  capabilities?: string[];
+  modelHints?: ModelHints;
+}
+
+export type AssetKind = 'image' | 'video' | 'audio' | 'text' | 'other';
+
+export interface AssetEntry {
+  /** Path relative to the pack root, forward slashes. */
+  path: string;
+  kind: AssetKind;
+  bytes: number;
+  mime: string;
+}
+
+/** A fully loaded, validated pack (manifest + characters + resolved persona text + asset index). */
+export interface LoadedPack {
+  root: string;
+  manifest: PackManifest;
+  characters: LoadedCharacter[];
+  assets: AssetEntry[];
+  readme?: string;
+}
+
+export interface LoadedCharacter {
+  /** Directory relative to pack root. */
+  dir: string;
+  definition: CharacterDefinition;
+  personaText: string;
+  /** Hook → script source text. */
+  behaviourSources: Partial<Record<BehaviourHook, string>>;
+  /** Avatar path relative to the pack root, if any. */
+  avatarPath?: string;
+}
+
+/** Record kept by the app for an installed pack. */
+export interface InstalledPackRecord {
+  packId: PackId;
+  version: string;
+  name: string;
+  root: string;
+  installedAt: string;
+  /** Capabilities requested by the pack (pack + character level, deduplicated). */
+  requestedCapabilities: string[];
+  characterIds: CharacterId[];
+}
+
+/** What the renderer needs to list characters. */
+export interface CharacterSummary {
+  ref: string;
+  packId: PackId;
+  packName: string;
+  characterId: CharacterId;
+  name: string;
+  tagline?: string;
+  /** `rp-asset://` URL, if the character has an avatar. */
+  avatarUrl?: string;
+}

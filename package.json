@@ -1,0 +1,21 @@
+{
+  "name": "rp-code-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "LLM roleplay chat where characters act on the host PC through a sandboxed TypeScript SDK",
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "pnpm -r --filter './packages/**' run build && pnpm --filter @rp/desktop run build",
+    "build:packages": "pnpm -r --filter './packages/**' run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "dev": "pnpm --filter @rp/desktop run dev",
+    "clean": "pnpm -r exec rm -rf dist out node_modules/.cache"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}
