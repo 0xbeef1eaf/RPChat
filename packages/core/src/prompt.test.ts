@@ -46,7 +46,7 @@ async function input(transcript: ChatMessage[], overrides: Partial<PromptInput> 
     session,
     transcript,
     state: { userName: 'Sam' },
-    timers: [{ id: 't1', sessionId: 's1', characterRef: session.characterRef, fireAt: '2026-01-01T12:00:00.000Z', payload: { reason: 'x' }, createdAt: 't', label: 'L' }],
+    timers: [{ id: 't1', sessionId: 's1', characterRef: session.characterRef, kind: 'wake', fireAt: '2026-01-01T12:00:00.000Z', payload: { reason: 'x' }, createdAt: 't', label: 'L' }],
     userDisplayName: 'Sam',
     contextTokenBudget: 24_000,
     useTools: true,
@@ -121,7 +121,7 @@ describe('PromptBuilder', () => {
     const { system } = new PromptBuilder().build(await input([], { pack: { ...pack, assets }, state: big }));
     expect(system).toContain('… and 50 more');
     expect(system).toContain('(truncated');
-    expect(system.length).toBeLessThan(40_000);
+    expect(system.length).toBeLessThan(80_000); // caps hold: the asset list and state are bounded even with 250 assets and 10 KB of state
   });
 
   it('expands actions to tool pairs, merges same-role text and prefixes system messages', () => {

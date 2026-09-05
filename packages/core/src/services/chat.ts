@@ -4,7 +4,8 @@ import { RpError, parseCharacterRef, serializeError } from '@rp/shared';
 import type { ActionLoop } from '../action-loop.js';
 import type { MemoryService } from './memory.js';
 import type { BehaviourRunner } from '../behaviours.js';
-import { PromptBuilder } from '../prompt.js';
+import { PromptBuilder, SELF_WAKE_PREFIX } from '../prompt.js';
+import type { AuditService } from './audit.js';
 import type { PackService } from './packs.js';
 import type { PermissionService } from './permissions.js';
 import type { SessionService } from './sessions.js';
@@ -31,7 +32,15 @@ export interface ChatServiceOptions {
   locale?: string;
   /** When present, memories are injected into the prompt and consolidated every `settings.memory.consolidateEveryTurns` turns. */
   memories?: MemoryService;
+  /** Used for `timers.run` entries of code timers and `llm.wake` denials. */
+  audit?: Pick<AuditService, 'record'>;
 }
+
+export type SelfWakeSource = 'immediate' | 'timer' | 'wake-timer';
+
+const AUTONOMY_TIMESTAMPS_KEY = 'autonomy.wakeTimestamps';
+const AUTONOMY_CONSECUTIVE_KEY = 'autonomy.consecutive';
+const HOUR_MS = 60 * 60 * 1000;
 
 /** Serialises turns per session, runs behaviours around the LLM turn, handles timer wake-ups. */
 export class ChatService {
@@ -40,6 +49,7 @@ export class ChatService {
   private readonly providers = new Map<string, LlmProvider>();
   private readonly promptBuilder: PromptBuilder;
   private readonly turnCounts = new Map<string, number>();
+  private readonly pendingWakes = new Map<string, string>();
 
   constructor(private readonly o: ChatServiceOptions) {
     this.promptBuilder = o.promptBuilder ?? new PromptBuilder();
@@ -54,6 +64,7 @@ export class ChatService {
     this.requireCharacter(session); // fail fast (NOT_FOUND) before queueing
     await this.enqueue(sessionId, async () => {
       await this.o.sessions.addMessage({ sessionId, role: 'user', content: text });
+      await this.o.storage.state.set(`session:${sessionId}`, AUTONOMY_CONSECUTIVE_KEY, 0); // a user message resets the consecutive limit
       const fresh = await this.o.sessions.require(sessionId);
 
       const hook = await this.runBehaviour(fresh, 'onUserMessage', { text });
@@ -80,7 +91,80 @@ export class ChatService {
     await Promise.all(pending.map((p) => p?.catch(() => undefined)));
   }
 
-  /** Timer wake-up: `onTimer` behaviour if present, else a system message and an LLM turn. */
+  /**
+   * Queue a self-wake that runs right after the current turn finishes (or immediately when the
+   * session is idle). A second call before it runs joins the prompts with a newline.
+   */
+  queueImmediateWake(sessionId: string, prompt: string): void {
+    const existing = this.pendingWakes.get(sessionId);
+    this.pendingWakes.set(sessionId, existing ? `${existing}\n${prompt}` : prompt);
+    if (!this.isBusy(sessionId)) this.flushImmediateWake(sessionId);
+  }
+
+  /** Move the pending immediate wake (if any) onto the session queue. */
+  private flushImmediateWake(sessionId: string): void {
+    const prompt = this.pendingWakes.get(sessionId);
+    if (prompt === undefined) return;
+    this.pendingWakes.delete(sessionId);
+    void this.selfWake(sessionId, prompt, 'immediate').catch((err) => this.o.logger.warn('[chat] immediate self-wake failed', err));
+  }
+
+  /**
+   * Wake the character with a prompt from its past self: appends a `[self-wake]` system message and
+   * runs a normal turn, queued behind any running turn. Subject to the autonomy limits; a dropped
+   * wake is audited (`llm.wake` denied) and announced through a `status` event. Resolves `true` when it ran.
+   */
+  async selfWake(sessionId: string, prompt: string, source: SelfWakeSource = 'immediate'): Promise<boolean> {
+    const session = await this.o.sessions.get(sessionId);
+    if (!session) return false;
+    const { packId } = parseCharacterRef(session.characterRef);
+    if (!this.o.packs.tryGetLoaded(packId)) return false;
+    return this.enqueue(sessionId, async () => {
+      const fresh = await this.o.sessions.require(sessionId);
+      if (!(await this.consumeSelfWake(fresh, source, prompt))) return false;
+      await this.o.sessions.addMessage({ sessionId, role: 'system', content: `${SELF_WAKE_PREFIX}${prompt}`, origin: 'timer' });
+      await this.runLlmTurn(await this.o.sessions.require(sessionId), 'timer');
+      await this.afterTurn(sessionId);
+      return true;
+    });
+  }
+
+  /** Apply the per-hour and consecutive self-wake limits; records the wake when allowed. */
+  private async consumeSelfWake(session: Session, source: SelfWakeSource, prompt: string): Promise<boolean> {
+    const { autonomy } = await this.o.settings.get();
+    const scope = `session:${session.id}`;
+    const nowMs = this.o.now().getTime();
+    const rawStamps = await this.o.storage.state.get(scope, AUTONOMY_TIMESTAMPS_KEY);
+    const stamps = (Array.isArray(rawStamps) ? rawStamps : []).filter((s): s is string => typeof s === 'string' && nowMs - Date.parse(s) < HOUR_MS);
+    const rawConsecutive = await this.o.storage.state.get(scope, AUTONOMY_CONSECUTIVE_KEY);
+    const consecutive = typeof rawConsecutive === 'number' ? rawConsecutive : 0;
+    const reason =
+      stamps.length >= autonomy.maxSelfWakesPerHour
+        ? `per-hour limit (${autonomy.maxSelfWakesPerHour}) reached`
+        : consecutive >= autonomy.maxConsecutiveSelfWakes
+          ? `consecutive limit (${autonomy.maxConsecutiveSelfWakes}) reached`
+          : undefined;
+    if (reason) {
+      this.o.logger.warn(`[chat] self-wake dropped in session ${session.id}: ${reason}`);
+      await this.o.audit?.record({
+        sessionId: session.id,
+        characterRef: session.characterRef,
+        module: 'llm',
+        method: 'wake',
+        args: [prompt, { source }],
+        outcome: 'denied',
+        error: { code: 'PERMISSION_DENIED', message: `Self-wake dropped: ${reason}` },
+      });
+      this.o.emitter.emit('chat', { type: 'status', sessionId: session.id, text: 'paused: autonomy limit reached' });
+      return false;
+    }
+    stamps.push(this.o.now().toISOString());
+    await this.o.storage.state.set(scope, AUTONOMY_TIMESTAMPS_KEY, stamps);
+    await this.o.storage.state.set(scope, AUTONOMY_CONSECUTIVE_KEY, consecutive + 1);
+    return true;
+  }
+
+  /** Timer fired: dispatch by kind (`wake` → onTimer behaviour or LLM turn; `code` → run the code; `prompt` → self-wake). */
   async handleTimer(timer: ScheduledTimer): Promise<void> {
     const session = await this.o.sessions.get(timer.sessionId);
     if (!session) {
@@ -96,6 +180,15 @@ export class ChatService {
       this.o.logger.info(`[chat] timer ${timer.id} dropped: pack ${packId} is not installed`);
       return;
     }
+    if (timer.kind === 'prompt') {
+      await this.selfWake(session.id, timer.prompt ?? '', 'timer');
+      return;
+    }
+    if (timer.kind === 'code') {
+      await this.enqueue(session.id, () => this.runCodeTimer(session, timer));
+      this.flushImmediateWake(session.id);
+      return;
+    }
     await this.enqueue(session.id, async () => {
       if (this.o.behaviours.has(session, 'onTimer')) {
         const info: Record<string, import('@rp/shared').Json> = { id: timer.id, payload: (timer.payload ?? null) as import('@rp/shared').Json };
@@ -103,6 +196,7 @@ export class ChatService {
         await this.runBehaviour(session, 'onTimer', { timer: info }, { kind: 'timer', timerId: timer.id });
         return;
       }
+      if (!(await this.consumeSelfWake(session, 'wake-timer', JSON.stringify(timer.payload ?? null)))) return;
       const label = timer.label ? `${timer.label} ` : '';
       await this.o.sessions.addMessage({
         sessionId: session.id,
@@ -117,8 +211,39 @@ export class ChatService {
 
   // ---- internals ----------------------------------------------------------
 
-  /** Count assistant turns and kick off memory consolidation (fire-and-forget) every N turns. */
+  /** Run a `code` timer through the behaviour path (character surface + permissions) and audit it. */
+  private async runCodeTimer(session: Session, timer: ScheduledTimer): Promise<void> {
+    const { packId, characterId } = parseCharacterRef(session.characterRef);
+    const started = this.o.now().getTime();
+    const controller = new AbortController();
+    this.controllers.set(session.id, controller);
+    let result: import('@rp/shared').CodeRunResult | undefined;
+    let failure: unknown;
+    try {
+      result = await this.o.behaviours.runScript(packId, characterId, session.id, timer.code ?? '', (timer.input ?? null) as import('@rp/shared').Json, { kind: 'timer', timerId: timer.id }, { signal: controller.signal });
+    } catch (err) {
+      failure = err;
+    } finally {
+      if (this.controllers.get(session.id) === controller) this.controllers.delete(session.id);
+    }
+    const error = failure ? serializeError(failure) : result && !result.ok ? result.error : undefined;
+    if (error) this.o.logger.warn(`[chat] code timer ${timer.id} failed: ${error.message}`);
+    const entry: Parameters<AuditService['record']>[0] = {
+      sessionId: session.id,
+      characterRef: session.characterRef,
+      module: 'timers',
+      method: 'run',
+      args: [timer.id, timer.label ?? null, { runs: (timer.runs ?? 0) + 1 }],
+      outcome: error ? 'failed' : 'allowed',
+      durationMs: this.o.now().getTime() - started,
+    };
+    if (error) entry.error = error;
+    await this.o.audit?.record(entry);
+  }
+
+  /** After `turn-finished`: run a queued immediate self-wake, count turns, kick off memory consolidation. */
   private async afterTurn(sessionId: string): Promise<void> {
+    this.finishTurn(sessionId);
     const memories = this.o.memories;
     if (!memories) return;
     const count = (this.turnCounts.get(sessionId) ?? 0) + 1;
@@ -127,6 +252,11 @@ export class ChatService {
     const every = Math.max(1, Math.floor(settings.memory.consolidateEveryTurns));
     if (!settings.memory.enabled || count % every !== 0 || memories.isConsolidating(sessionId)) return;
     void memories.consolidate(sessionId, { auto: true }).catch((err) => this.o.logger.warn('[chat] consolidation failed', err));
+  }
+
+  /** Called when a turn's work is complete: an immediate wake queued during the turn runs next. */
+  private finishTurn(sessionId: string): void {
+    this.flushImmediateWake(sessionId);
   }
 
   private enqueue<T>(sessionId: string, task: () => Promise<T>): Promise<T> {

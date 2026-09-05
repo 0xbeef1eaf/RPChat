@@ -16,6 +16,7 @@ import { BehaviourRunner } from './behaviours.js';
 import { CapabilityDispatcher } from './dispatcher.js';
 import { TypedEmitter } from './emitter.js';
 import { ChatHandler } from './handlers/chat.js';
+import { LlmHandler } from './handlers/llm.js';
 import { LogHandler } from './handlers/log.js';
 import { MemoryHandler } from './handlers/memory.js';
 import { PackHandler } from './handlers/pack.js';
@@ -90,7 +91,7 @@ export class Engine {
     this.settings = new SettingsService(opts.storage, providerFactory);
     this.audit = new AuditService(opts.storage, now, logger);
     this.permissions = new PermissionService(opts.storage, opts.registry, opts.permissionPrompter, this.events, now, logger);
-    this.timers = new TimerService(opts.storage, now, logger);
+    this.timers = new TimerService(opts.storage, now, logger, async () => (await this.settings.get()).autonomy);
     this.packs = new PackService(opts.storage, opts.packsDir, opts.registry, this.permissions, this.timers, now, logger);
     this.sessions = new SessionService(opts.storage, this.packs, this.permissions, this.timers, this.events, now, logger);
     this.memories = new MemoryService({
@@ -111,8 +112,15 @@ export class Engine {
       new LogHandler(logger),
       new StateHandler(opts.storage.state),
       new PackHandler(this.packs),
-      new TimersHandler(this.timers, now),
+      new TimersHandler(this.timers),
       new MemoryHandler(this.memories),
+      new LlmHandler({
+        settings: this.settings,
+        providerFactory,
+        timers: this.timers,
+        sessions: this.sessions,
+        chat: () => this.chat,
+      }),
     ];
     this.dispatcher = new CapabilityDispatcher({
       registry: opts.registry,
@@ -160,6 +168,7 @@ export class Engine {
       now,
       logger,
       memories: this.memories,
+      audit: this.audit,
     };
     if (opts.locale !== undefined) chatOptions.locale = opts.locale;
     this.chat = new ChatService(chatOptions);

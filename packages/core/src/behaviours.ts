@@ -75,6 +75,36 @@ export class BehaviourRunner implements BehaviourHooks {
     }
   }
 
+  /**
+   * Run an arbitrary action body (e.g. a `code` timer) with the character's surface and permissions,
+   * `input` bound like a behaviour script. Throws `NOT_FOUND` when the pack/character is gone.
+   */
+  async runScript(
+    packId: string,
+    characterId: string,
+    sessionId: string,
+    source: string,
+    input: BehaviourInput | undefined,
+    trigger: ActionTrigger,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<CodeRunResult> {
+    const pack = this.o.packs.getLoaded(packId);
+    if (!pack.characters.some((c) => c.definition.id === characterId)) {
+      throw new RpError('NOT_FOUND', `Character "${characterId}" does not exist in pack ${packId}`);
+    }
+    const context: ActionContext = { packId, characterId, sessionId, packRoot: pack.root, trigger };
+    const request: CodeRunRequest = {
+      code: wrapBehaviourScript(source, input),
+      language: 'ts',
+      context,
+      surface: await this.surfaceFor(packId),
+      invoker: this.o.invoker,
+      limits: await this.limits(),
+    };
+    if (options.signal) request.signal = options.signal;
+    return this.o.runner.run(request);
+  }
+
   /** The SDK surface currently allowed for a pack (trusted + granted modules). */
   async surfaceFor(packId: string): Promise<SdkSurface> {
     const modules = await this.o.permissions.allowedModules(packId);

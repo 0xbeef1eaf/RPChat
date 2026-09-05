@@ -1,72 +1,66 @@
-import { randomUUID } from 'node:crypto';
 import type { ActionContext, CapabilityHandler, Json, ScheduledTimer } from '@rp/shared';
 import { RpError, characterRef } from '@rp/shared';
-import type { TimerService } from '../services/timers.js';
-import type { Clock } from '../types.js';
+import type { RunLaterOptions, TimerService } from '../services/timers.js';
 
-export const TIMER_MIN_DELAY_MS = 1000;
-export const TIMER_MAX_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
-export const TIMERS_PER_SESSION = 20;
-const LABEL_MAX = 80;
+export { TIMER_MAX_DELAY_MS, TIMER_MIN_DELAY_MS } from '../services/timers.js';
 
+/** The `TimerInfo` shape declared in the SDK preamble. */
 export function timerInfo(timer: ScheduledTimer): Json {
-  const info: Record<string, Json> = { id: timer.id, fireAt: timer.fireAt, payload: (timer.payload ?? null) as Json };
+  const info: Record<string, Json> = { id: timer.id, kind: timer.kind, fireAt: timer.fireAt, payload: (timer.payload ?? null) as Json };
   if (timer.label !== undefined) info.label = timer.label;
+  if (timer.repeat) {
+    const repeat: Record<string, Json> = { everyMs: timer.repeat.everyMs };
+    if (timer.repeat.remaining !== undefined) repeat.remaining = timer.repeat.remaining;
+    info.repeat = repeat;
+  }
   return info;
 }
 
-/** `sdk.timers`: schedule / cancel / list, persisted through `TimerService`. */
+function optionsArg(value: unknown): Record<string, Json> {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value)) throw new RpError('INVALID_ARGUMENT', 'opts must be an object');
+  return value as Record<string, Json>;
+}
+
+function optionalNumber(value: Json | undefined, name: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'number') throw new RpError('INVALID_ARGUMENT', `${name} must be a number`);
+  return value;
+}
+
+function optionalString(value: Json | undefined, name: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new RpError('INVALID_ARGUMENT', `${name} must be a string`);
+  return value;
+}
+
+/** `sdk.timers`: schedule / runLater / cancel / list, persisted through `TimerService`. */
 export class TimersHandler implements CapabilityHandler {
   readonly moduleId = 'timers';
 
-  constructor(
-    private readonly timers: TimerService,
-    private readonly now: Clock,
-  ) {}
+  constructor(private readonly timers: TimerService) {}
 
   async invoke(method: string, args: Json[], context: ActionContext): Promise<Json | void> {
     const ref = characterRef(context.packId, context.characterId);
     switch (method) {
       case 'schedule': {
-        const delay = args[0];
-        if (typeof delay !== 'number' || !Number.isFinite(delay)) {
-          throw new RpError('INVALID_ARGUMENT', 'delayMs must be a number');
-        }
-        if (delay < TIMER_MIN_DELAY_MS || delay > TIMER_MAX_DELAY_MS) {
-          throw new RpError('INVALID_ARGUMENT', `delayMs must be between ${TIMER_MIN_DELAY_MS} and ${TIMER_MAX_DELAY_MS}`, {
-            min: TIMER_MIN_DELAY_MS,
-            max: TIMER_MAX_DELAY_MS,
-          });
-        }
-        const payload = args.length > 1 ? args[1] : null;
-        const opts = args[2];
-        let label: string | undefined;
-        if (opts !== undefined && opts !== null) {
-          if (typeof opts !== 'object' || Array.isArray(opts)) throw new RpError('INVALID_ARGUMENT', 'opts must be an object');
-          const raw = (opts as Record<string, Json>).label;
-          if (raw !== undefined && raw !== null) {
-            if (typeof raw !== 'string') throw new RpError('INVALID_ARGUMENT', 'opts.label must be a string');
-            label = raw.trim().slice(0, LABEL_MAX);
-          }
-        }
-        const pending = await this.timers.list({ sessionId: context.sessionId });
-        if (pending.length >= TIMERS_PER_SESSION) {
-          throw new RpError('INVALID_ARGUMENT', `this session already has ${TIMERS_PER_SESSION} pending timers; cancel one first`, {
-            limit: TIMERS_PER_SESSION,
-          });
-        }
-        const at = this.now();
-        const timer: ScheduledTimer = {
-          id: randomUUID(),
-          sessionId: context.sessionId,
-          characterRef: ref,
-          fireAt: new Date(at.getTime() + Math.floor(delay)).toISOString(),
-          payload: payload ?? null,
-          createdAt: at.toISOString(),
-        };
-        if (label) timer.label = label;
-        await this.timers.schedule(timer);
-        return timerInfo(timer);
+        const opts = optionsArg(args[2]);
+        const wakeOpts: { label?: string } = {};
+        const label = optionalString(opts.label, 'opts.label');
+        if (label !== undefined) wakeOpts.label = label;
+        return timerInfo(await this.timers.scheduleWake(context, args[0] as number, (args.length > 1 ? args[1] : null) as Json, wakeOpts));
+      }
+      case 'runLater': {
+        const opts = optionsArg(args[2]);
+        const runOpts: RunLaterOptions = {};
+        if (opts.input !== undefined) runOpts.input = opts.input;
+        const label = optionalString(opts.label, 'opts.label');
+        if (label !== undefined) runOpts.label = label;
+        const every = optionalNumber(opts.repeatEveryMs, 'opts.repeatEveryMs');
+        if (every !== undefined) runOpts.repeatEveryMs = every;
+        const maxRuns = optionalNumber(opts.maxRuns, 'opts.maxRuns');
+        if (maxRuns !== undefined) runOpts.maxRuns = maxRuns;
+        return timerInfo(await this.timers.runLater(context, args[0] as number, args[1] as string, runOpts));
       }
       case 'cancel': {
         const id = args[0];

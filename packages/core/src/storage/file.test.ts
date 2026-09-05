@@ -46,7 +46,7 @@ describe('FileStorage', () => {
     await a.messages.update({ ...m2, content: 'hello' });
     await a.state.set('char:p/c', 'k', { nested: [1, 2] });
     await a.state.set('session:s1', 'k', 1);
-    await a.timers.upsert({ id: 't1', sessionId: 's1', characterRef: 'p/c', fireAt: 'f', payload: null, createdAt: 't' });
+    await a.timers.upsert({ id: 't1', sessionId: 's1', characterRef: 'p/c', kind: 'wake', fireAt: 'f', payload: null, createdAt: 't' });
     await a.audit.append(audit(1));
     await a.audit.append(audit(2, 's2'));
     const mem = (id: string, characterRef: string): MemoryEntry => ({ id, characterRef, text: `t-${id}`, tags: [], importance: 3, source: 'user', createdAt: 't', updatedAt: 't', recallCount: 0 });

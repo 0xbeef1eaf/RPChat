@@ -49,6 +49,12 @@ export { ChatHandler } from './handlers/chat.js';
 export { LogHandler } from './handlers/log.js';
 export { PackHandler } from './handlers/pack.js';
 export { StateHandler, STATE_MAX_KEYS, STATE_MAX_VALUE_BYTES, characterScope, sessionScope } from './handlers/state.js';
-export { TimersHandler, TIMERS_PER_SESSION, TIMER_MAX_DELAY_MS, TIMER_MIN_DELAY_MS } from './handlers/timers.js';
+export { TimersHandler, timerInfo, TIMER_MAX_DELAY_MS, TIMER_MIN_DELAY_MS } from './handlers/timers.js';
+export { LlmHandler, ASK_DEFAULT_MAX_TOKENS, ASK_MAX_TOKENS, ASK_TIMEOUT_MS, ASK_DEFAULT_SYSTEM } from './handlers/llm.js';
+export type { LlmHandlerOptions } from './handlers/llm.js';
+export { normalizeTimer, validateDelay, TIMER_CODE_MAX_BYTES, TIMER_PROMPT_MAX, TIMER_LABEL_MAX } from './services/timers.js';
+export type { RunLaterOptions, TimerLimits } from './services/timers.js';
+export { SELF_WAKE_PREFIX } from './prompt.js';
+export type { SelfWakeSource } from './services/chat.js';
 
 export { extractFencedActions } from '@rp/llm';

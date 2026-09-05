@@ -46,6 +46,8 @@ export interface BuiltPrompt {
   messages: LlmMessage[];
 }
 
+/** Content prefix of the `role: 'system'` message a self-wake appends to the transcript. */
+export const SELF_WAKE_PREFIX = '[self-wake] ';
 export const ASSET_LIST_CAP = 200;
 export const STATE_JSON_CAP = 4 * 1024;
 const MIN_TRANSCRIPT_BUDGET = 1024;
@@ -64,6 +66,7 @@ function engineRules(name: string, useTools: boolean): string {
     'Act only when it serves the conversation. One action per intention, a few sdk calls each, and keep the code short. Never loop or wait inside an action; use sdk.timers to do something later.',
     'Results of your actions are sent back to you; read them before claiming success. If an action fails, recover gracefully in character and do not paste error text at the user.',
     'Do not narrate or explain the code you run unless the user asks; the conversation is what the user sees, the code is not.',
+    'You can act on your own initiative: `sdk.llm.wake` gives you a turn later (or right after this action) with a note from your past self; `sdk.timers.runLater` runs code later without a turn. Use them to follow up, continue stories, or check in. Limits apply; do not chain wakes needlessly.',
     'The <memories> in <memory> are your own past with this user: let them shape what you say and bring them up naturally when relevant, but never list or recite them. When you learn something durable (facts about the user, promises, recurring themes), store it with sdk.memory.remember; correct or forget memories the user disputes.',
     'Reply in the user\'s language. Keep your visible text natural and in your own voice.',
   ].join('\n');
@@ -177,7 +180,10 @@ export function transcriptToMessages(transcript: ChatMessage[], useTools: boolea
       continue;
     }
     if (msg.role === 'system') {
-      if (msg.content.trim().length > 0) push('user', [{ type: 'text', text: `[system] ${msg.content}` }]);
+      if (msg.content.trim().length > 0) {
+        const wake = msg.content.startsWith(SELF_WAKE_PREFIX) ? msg.content.slice(SELF_WAKE_PREFIX.length) : undefined;
+        push('user', [{ type: 'text', text: wake !== undefined ? `[system] Message from your past self: ${wake}` : `[system] ${msg.content}` }]);
+      }
       continue;
     }
     const text = msg.kind === 'emote' ? `*${msg.content.trim()}*` : msg.content;
