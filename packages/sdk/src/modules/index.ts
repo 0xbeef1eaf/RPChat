@@ -4,11 +4,15 @@ import { logModule } from './log.js';
 import { stateModule } from './state.js';
 import { packModule } from './pack.js';
 import { timersModule } from './timers.js';
+import { displayModule } from './display.js';
 import { mediaModule } from './media.js';
 import { uiModule } from './ui.js';
 import { systemModule } from './system.js';
+import { wallpaperModule } from './wallpaper.js';
+import { browserModule } from './browser.js';
+import { inputModule } from './input.js';
 
-export { chatModule, logModule, stateModule, packModule, timersModule, mediaModule, uiModule, systemModule };
+export { chatModule, logModule, stateModule, packModule, timersModule, displayModule, mediaModule, uiModule, wallpaperModule, browserModule, inputModule, systemModule };
 
 /** All v1 standard modules in their canonical (prompt) order. */
 export const standardModules: readonly CapabilityModuleSpec[] = [
@@ -17,7 +21,11 @@ export const standardModules: readonly CapabilityModuleSpec[] = [
   stateModule,
   packModule,
   timersModule,
+  displayModule,
   mediaModule,
   uiModule,
+  wallpaperModule,
+  browserModule,
+  inputModule,
   systemModule,
 ];

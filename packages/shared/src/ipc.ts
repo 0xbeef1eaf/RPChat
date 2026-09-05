@@ -1,9 +1,9 @@
 import type { CapabilityGrant, PermissionDecision, PermissionRequest } from './capability.js';
 import type { AuditEntry, ChatEvent, ChatMessage, CreateSessionInput, Session } from './chat.js';
 import type { ModelInfo, ProviderConfig } from './llm.js';
-import type { MediaCommand, MediaWindowEvent } from './media.js';
+import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo } from './media.js';
 import type { CharacterSummary, InstalledPackRecord, PackManifest } from './pack.js';
-import type { AppSettings } from './settings.js';
+import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 
 export type Unsubscribe = () => void;
 
@@ -85,6 +85,10 @@ export interface IpcApi {
     update(patch: Partial<AppSettings>): Promise<AppSettings>;
     testProvider(config: ProviderConfig): Promise<{ ok: boolean; message?: string }>;
     listModels(config: ProviderConfig): Promise<ModelInfo[]>;
+    /** Run a command template with sample values so the user can verify it. */
+    testCommand(name: keyof CommandTemplates, template: CommandTemplate): Promise<{ code: number; stdout: string; stderr: string }>;
+    /** Platform defaults used when a template is left empty (for display in the UI). */
+    defaultCommands(): Promise<CommandTemplates>;
   };
   audit: {
     list(options?: { sessionId?: string; limit?: number }): Promise<AuditEntry[]>;
@@ -100,6 +104,10 @@ export interface IpcApi {
     report(event: MediaWindowEvent): Promise<void>;
     /** Main UI: close every open media item. */
     closeAll(): Promise<void>;
+  };
+  display: {
+    backend(): Promise<DisplayBackendInfo>;
+    monitors(): Promise<MonitorInfo[]>;
   };
 }
 

@@ -167,10 +167,16 @@ const checks: [
   Same<PlayVideoOptions, S.PlayVideoOptions>,
   Same<PlayAudioOptions, S.PlayAudioOptions>,
   Same<MediaPosition, S.MediaPosition>,
+  Same<OverlayOptions, S.OverlayOptions>,
+  Same<OverlayUpdate, S.OverlayUpdate>,
+  Same<OverlayLayer, S.OverlayLayer>,
+  Same<MonitorSelector, S.MonitorSelector>,
+  Same<MonitorInfo, S.MonitorInfo>,
+  Same<DisplayBackendInfo, S.DisplayBackendInfo>,
   Same<MediaHandle['kind'], S.MediaKind>,
   Same<AssetRef['kind'], S.AssetKind>,
   Same<Json, S.Json>,
-] = [true, true, true, true, true, true, true];
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true];
 export {};
 `;
     const diags = compile({ 'sdk.d.ts': generateSdkTypings(registry), 'mirror.ts': check }, { nodeResolution: true });
@@ -186,7 +192,7 @@ describe('describeSurface', () => {
 
   it('lists modules with their method names, dotted for nested members', () => {
     const surface = describeSurface(registry);
-    expect(surface.modules.map((m) => m.id)).toEqual(['chat', 'log', 'state', 'pack', 'timers', 'media', 'ui', 'system']);
+    expect(surface.modules.map((m) => m.id)).toEqual(['chat', 'log', 'state', 'pack', 'timers', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input', 'system']);
     const state = surface.modules.find((m) => m.id === 'state')!;
     expect(state.methods).toContain('session.get');
     expect(state.methods).toContain('session.all');

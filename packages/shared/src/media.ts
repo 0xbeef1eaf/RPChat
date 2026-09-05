@@ -1,27 +1,101 @@
 import type { MediaItemId } from './ids.js';
 
-/** Where a media overlay is placed on the primary display. */
+/** Where a media overlay is anchored on the chosen monitor. */
 export type MediaPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
-export interface ShowImageOptions {
-  /** Auto-close after this many ms. Omit to keep open until closed. */
-  durationMs?: number;
+/**
+ * Stacking layer of an overlay, modelled on wlr-layer-shell.
+ * `background`/`bottom` sit under normal windows, `top`/`overlay` above them.
+ * Backends that cannot honour a layer fall back to the nearest one they support.
+ */
+export type OverlayLayer = 'background' | 'bottom' | 'top' | 'overlay';
+
+/** `primary`, the monitor under the cursor, a zero-based index, or a monitor name (e.g. `DP-1`). */
+export type MonitorSelector = 'primary' | 'cursor' | number | string;
+
+export interface OverlayPlacement {
+  /** Which monitor to use. Default `primary`. */
+  monitor?: MonitorSelector;
+  /** Anchor preset on that monitor. Default `center`. Ignored when `x`/`y` are given. */
   position?: MediaPosition;
+  /** Explicit left offset from the monitor's left edge: 0..1 = fraction of monitor width, > 1 = logical px. */
+  x?: number;
+  /** Explicit top offset from the monitor's top edge: 0..1 = fraction of monitor height, > 1 = logical px. */
+  y?: number;
+  /** Gap kept from the monitor edges for anchor presets, in px. Default 24. */
+  marginPx?: number;
+}
+
+export interface OverlayOptions extends OverlayPlacement {
+  /** Stacking layer. Default `top`. */
+  layer?: OverlayLayer;
+  /** Window opacity 0..1. Default 1. */
+  opacity?: number;
+  /** When true, mouse input passes through the overlay to whatever is underneath. Default false. */
+  clickThrough?: boolean;
   /** Max width in CSS px. Default 480. */
   width?: number;
+  /** Max height in CSS px. Default: fit content. */
+  height?: number;
+}
+
+export interface ShowImageOptions extends OverlayOptions {
+  /** Auto-close after this many ms. Omit to keep open until closed. */
+  durationMs?: number;
   /** Caption rendered under the image. */
   caption?: string;
 }
 
-export interface PlayVideoOptions {
-  position?: MediaPosition;
-  width?: number;
+export interface PlayVideoOptions extends OverlayOptions {
   /** 0..1, default 1. */
   volume?: number;
   loop?: boolean;
   /** Close the window automatically when playback ends. Default true. */
   closeOnEnd?: boolean;
   muted?: boolean;
+}
+
+/** Live changes to an open overlay via `sdk.media.update`. */
+export interface OverlayUpdate extends OverlayPlacement {
+  layer?: OverlayLayer;
+  opacity?: number;
+  clickThrough?: boolean;
+  width?: number;
+  height?: number;
+}
+
+export interface MonitorInfo {
+  /** Stable id for this monitor (backend specific). */
+  id: string;
+  /** Connector or display name, e.g. `DP-1`, `Built-in Retina Display`. */
+  name: string;
+  /** Zero-based index in the backend's monitor order. */
+  index: number;
+  primary: boolean;
+  /** Logical (scaled) work-area geometry in the global coordinate space. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+  /** Whether the pointer is currently on this monitor. */
+  hasCursor: boolean;
+}
+
+/** What the active display backend can do; the LLM sees this via `sdk.display.backend()`. */
+export interface DisplayBackendInfo {
+  /** `electron` (generic BrowserWindow), `hyprland` (Hyprland IPC), or a plugin name. */
+  name: string;
+  platform: 'linux' | 'win32' | 'darwin' | string;
+  /** Whether the session is Wayland, X11 or native. */
+  windowSystem: 'wayland' | 'x11' | 'native' | 'unknown';
+  supports: {
+    layers: OverlayLayer[];
+    opacity: boolean;
+    clickThrough: boolean;
+    monitorSelection: boolean;
+    exactPosition: boolean;
+  };
 }
 
 export interface PlayAudioOptions {
@@ -38,6 +112,8 @@ export interface MediaItem {
   asset: string;
   packId: string;
   startedAt: string;
+  /** Effective overlay settings after backend fallbacks. */
+  overlay?: Required<Pick<OverlayOptions, 'layer' | 'opacity' | 'clickThrough'>> & { monitorId?: string };
 }
 
 /** Commands sent from main to a media window. `url` is always an `rp-asset://` URL. */
@@ -45,11 +121,13 @@ export type MediaCommand =
   | { type: 'show-image'; id: MediaItemId; url: string; options: ShowImageOptions }
   | { type: 'play-video'; id: MediaItemId; url: string; options: PlayVideoOptions }
   | { type: 'play-audio'; id: MediaItemId; url: string; options: PlayAudioOptions }
+  | { type: 'update'; id: MediaItemId; options: OverlayUpdate }
   | { type: 'close'; id: MediaItemId }
   | { type: 'close-all' };
 
 /** Events sent from a media window back to main. */
 export type MediaWindowEvent =
+  | { type: 'content-size'; id: MediaItemId; width: number; height: number }
   | { type: 'ended'; id: MediaItemId }
   | { type: 'error'; id: MediaItemId; message: string }
   | { type: 'closed'; id: MediaItemId };

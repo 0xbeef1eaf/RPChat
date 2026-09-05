@@ -171,8 +171,12 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `state`  | trusted    | `get/set/delete/keys` (character-scoped, persistent), `session.get/set/delete/keys` |
 | `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `readText(path)`, `info()`                    |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `cancel(id)`, `list()`                         |
-| `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `close(id)`, `closeAll()`, `list()` |
+| `display`| trusted    | `monitors()`, `backend()` — read-only screen/backend info for placement decisions   |
+| `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `update(id, changes)`, `close(id)`, `closeAll()`, `list()`; overlay options: monitor, position or x/y, layer (background/bottom/top/overlay), opacity, clickThrough, width/height |
 | `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`          |
+| `wallpaper` | pack    | `set(asset, { monitor? })`, `restore()`, `current()` — via the user's wallpaper command template |
+| `browser`| pack       | `open(url, { newWindow? })` — via the user's browser command template               |
+| `input`  | prompt     | `lock(durationMs, { reason? })`, `unlock()`, `status()` — via the user's input-lock command template, duration capped |
 | `system` | prompt     | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)` |
 
 Adding a module = write a spec (typings+docs+methods) and a host handler,
@@ -373,6 +377,14 @@ JSONL, size-capped).
   media items (image, video, audio) driven by IPC commands.
 
 ---
+
+## 10a. Display backends and external commands
+
+Overlays are placed by a `DisplayBackend` (`electron` generic, or `hyprland`
+which drives Hyprland over its IPC socket so overlays get real placement,
+layers, opacity and click-through on Wayland). Wallpaper, browser and input
+lock run user-editable **command templates** (argv-tokenised, placeholder
+substituted, no shell by default). See `docs/spec/overlay.md`.
 
 ## 11. Extending the system
 

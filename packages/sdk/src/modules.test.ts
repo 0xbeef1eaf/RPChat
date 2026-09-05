@@ -10,8 +10,12 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   },
   pack: { permission: 'trusted', methods: ['asset', 'listAssets', 'readText', 'info'] },
   timers: { permission: 'trusted', methods: ['schedule', 'cancel', 'list'] },
-  media: { permission: 'pack', methods: ['showImage', 'playVideo', 'playAudio', 'close', 'closeAll', 'list'] },
+  display: { permission: 'trusted', methods: ['monitors', 'backend'] },
+  media: { permission: 'pack', methods: ['showImage', 'playVideo', 'playAudio', 'update', 'close', 'closeAll', 'list'] },
   ui: { permission: 'pack', methods: ['notify', 'confirm', 'choose'] },
+  wallpaper: { permission: 'pack', methods: ['set', 'restore', 'current'] },
+  browser: { permission: 'pack', methods: ['open'] },
+  input: { permission: 'prompt', methods: ['lock', 'unlock', 'status'] },
   system: { permission: 'prompt', methods: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite'] },
 };
 
@@ -31,6 +35,7 @@ describe('standard modules', () => {
     expect(modules.stateModule.id).toBe('state');
     expect(modules.packModule.id).toBe('pack');
     expect(modules.timersModule.id).toBe('timers');
+    expect(modules.displayModule.id).toBe('display');
     expect(modules.mediaModule.id).toBe('media');
     expect(modules.uiModule.id).toBe('ui');
     expect(modules.systemModule.id).toBe('system');

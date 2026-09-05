@@ -24,25 +24,54 @@ interface AssetRef {
   readonly bytes: number;
 }
 
-/** Where a media overlay window is placed on the user's primary display. */
+/** Anchor preset on the chosen monitor. */
 type MediaPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
-interface ShowImageOptions {
-  /** Auto-close after this many milliseconds. Omit to keep the image open until closed. */
-  durationMs?: number;
-  /** Default 'center'. */
+/**
+ * Stacking layer of an overlay (wlr-layer-shell naming): 'background' and 'bottom' sit
+ * under normal windows, 'top' and 'overlay' float above them. Check
+ * sdk.display.backend() for the layers the current desktop actually supports; unsupported
+ * layers fall back to the nearest supported one.
+ */
+type OverlayLayer = 'background' | 'bottom' | 'top' | 'overlay';
+
+/** 'primary', 'cursor' (monitor under the pointer), a zero-based index, or a monitor name such as 'DP-1'. */
+type MonitorSelector = 'primary' | 'cursor' | number | string;
+
+interface OverlayPlacement {
+  /** Which monitor to use (see sdk.display.monitors()). Default 'primary'. */
+  monitor?: MonitorSelector;
+  /** Anchor preset on that monitor. Default 'center'. Ignored when x/y are given. */
   position?: MediaPosition;
+  /** Explicit left offset from the monitor's left edge: 0..1 = fraction of its width, > 1 = logical px. */
+  x?: number;
+  /** Explicit top offset from the monitor's top edge: 0..1 = fraction of its height, > 1 = logical px. */
+  y?: number;
+  /** Gap kept from the monitor edges for anchor presets, in px. Default 24. */
+  marginPx?: number;
+}
+
+interface OverlayOptions extends OverlayPlacement {
+  /** Stacking layer. Default 'top'. */
+  layer?: OverlayLayer;
+  /** Window opacity 0..1 (1 = fully opaque). Default 1. */
+  opacity?: number;
+  /** When true, clicks pass through the overlay to whatever is underneath and it never takes focus. Default false. */
+  clickThrough?: boolean;
   /** Max width in CSS px. Default 480. */
   width?: number;
+  /** Max height in CSS px. Default: fit content. */
+  height?: number;
+}
+
+interface ShowImageOptions extends OverlayOptions {
+  /** Auto-close after this many milliseconds. Omit to keep the image open until closed. */
+  durationMs?: number;
   /** Caption rendered under the image. */
   caption?: string;
 }
 
-interface PlayVideoOptions {
-  /** Default 'center'. */
-  position?: MediaPosition;
-  /** Max width in CSS px. Default 480. */
-  width?: number;
+interface PlayVideoOptions extends OverlayOptions {
   /** 0..1, default 1. */
   volume?: number;
   /** Restart when playback ends. Default false. */
@@ -58,6 +87,51 @@ interface PlayAudioOptions {
   volume?: number;
   /** Restart when playback ends. Default false. */
   loop?: boolean;
+}
+
+/** Live changes to an open overlay, for sdk.media.update(). Only the given fields change. */
+interface OverlayUpdate extends OverlayPlacement {
+  layer?: OverlayLayer;
+  opacity?: number;
+  clickThrough?: boolean;
+  width?: number;
+  height?: number;
+}
+
+/** One monitor as reported by sdk.display.monitors(). Geometry is in logical pixels. */
+interface MonitorInfo {
+  /** Stable id; pass it (or name/index) as a MonitorSelector. */
+  id: string;
+  /** Connector or display name, e.g. 'DP-1'. */
+  name: string;
+  /** Zero-based index. */
+  index: number;
+  primary: boolean;
+  /** Work-area geometry in the global coordinate space. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+  /** Whether the mouse pointer is currently on this monitor. */
+  hasCursor: boolean;
+}
+
+/** What the active display backend can do, from sdk.display.backend(). */
+interface DisplayBackendInfo {
+  /** 'electron' (generic), 'hyprland' (Hyprland IPC), or a plugin name. */
+  name: string;
+  platform: 'linux' | 'win32' | 'darwin' | string;
+  windowSystem: 'wayland' | 'x11' | 'native' | 'unknown';
+  supports: {
+    /** Layers that are honoured (others fall back). */
+    layers: OverlayLayer[];
+    opacity: boolean;
+    clickThrough: boolean;
+    monitorSelection: boolean;
+    /** Whether explicit x/y placement works (false when the compositor forbids client positioning). */
+    exactPosition: boolean;
+  };
 }
 
 /** A media item currently shown/playing. Returned by sdk.media.* and accepted by sdk.media.close(). */
