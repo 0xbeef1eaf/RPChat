@@ -1,0 +1,237 @@
+import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createStandardRegistry, describeSurface, generateSdkDocs, generateSdkTypings, SDK_PREAMBLE_TYPINGS } from './index.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+/** Virtual files live "inside" this package so `@rp/shared` resolves through node_modules when needed. */
+const VDIR = path.join(here, '__virtual__');
+
+/**
+ * Compile a set of virtual files in memory (plus the real lib.es2022.d.ts and,
+ * when `nodeResolution` is on, real files reachable through node_modules).
+ * Returns formatted diagnostics; an empty array means a clean compile.
+ */
+function compile(files: Record<string, string>, opts: { nodeResolution?: boolean } = {}): string[] {
+  const options: ts.CompilerOptions = {
+    noEmit: true,
+    strict: true,
+    noUncheckedIndexedAccess: true,
+    target: ts.ScriptTarget.ES2022,
+    lib: ['lib.es2022.d.ts'],
+    types: [], // no @types/node: it would redeclare `console`
+    // Real .d.ts files reachable through node_modules reference DOM/node globals (AbortSignal);
+    // skip checking them in that mode. The generated sdk.d.ts itself is checked in the default mode.
+    skipLibCheck: opts.nodeResolution === true,
+    ...(opts.nodeResolution
+      ? { module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext }
+      : { module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler }),
+  };
+  const virtual = new Map(Object.entries(files).map(([name, text]) => [path.join(VDIR, name), text]));
+  const host = ts.createCompilerHost(options, true);
+  const realGetSourceFile = host.getSourceFile.bind(host);
+  const realFileExists = host.fileExists.bind(host);
+  const realReadFile = host.readFile.bind(host);
+  host.getSourceFile = (fileName, languageVersionOrOptions, onError, shouldCreate) => {
+    const text = virtual.get(fileName);
+    if (text !== undefined) return ts.createSourceFile(fileName, text, languageVersionOrOptions, true);
+    return realGetSourceFile(fileName, languageVersionOrOptions, onError, shouldCreate);
+  };
+  host.fileExists = (f) => virtual.has(f) || realFileExists(f);
+  host.readFile = (f) => virtual.get(f) ?? realReadFile(f);
+  host.writeFile = () => undefined;
+
+  const program = ts.createProgram([...virtual.keys()], options, host);
+  return ts.getPreEmitDiagnostics(program).map((d) => {
+    const where = d.file ? `${path.basename(d.file.fileName)}:${d.file.getLineAndCharacterOfPosition(d.start ?? 0).line + 1}` : '';
+    return `${where} TS${d.code}: ${ts.flattenDiagnosticMessageText(d.messageText, '\n')}`;
+  });
+}
+
+/** Wrap character code the way the sandbox does: body of an async function with `sdk` in scope. */
+function characterAction(code: string): string {
+  return `async function __action() {\n${code}\n}\n__action;\n`;
+}
+
+describe('generateSdkTypings', () => {
+  const registry = createStandardRegistry();
+
+  it('emits the documented layout', () => {
+    const out = generateSdkTypings(registry);
+    expect(out.startsWith('// ---- rp-code character SDK (generated) ----\n')).toBe(true);
+    expect(out).toContain(SDK_PREAMBLE_TYPINGS.trimEnd());
+    expect(out).toContain('/** The SDK available to character code as the global `sdk`. */\ndeclare const sdk: Sdk;\ninterface Sdk {');
+    expect(out).toContain('  /** Show images and play video/audio from the pack in an overlay window on the user\'s screen. (permission: pack) */\n  media: MediaApi;');
+    expect(out).toContain('declare const console: {');
+    for (const spec of registry.list()) {
+      expect(out).toContain(`// ---- module: ${spec.id} v${spec.version} ----\n${spec.typings.trim()}`);
+    }
+    // Sdk interface precedes every module banner; modules follow registration order.
+    const banners = registry.list().map((s) => out.indexOf(`// ---- module: ${s.id} `));
+    expect(banners.every((i) => i > out.indexOf('interface Sdk {'))).toBe(true);
+    expect([...banners].sort((a, b) => a - b)).toEqual(banners);
+    expect(out).not.toMatch(/^\s*(import|export)\b/m);
+  });
+
+  it('compiles with zero diagnostics against lib.es2022', () => {
+    expect(compile({ 'sdk.d.ts': generateSdkTypings(registry) })).toEqual([]);
+  });
+
+  it('compiles for every single-module subset and for the empty subset', () => {
+    for (const spec of registry.list()) {
+      expect(compile({ 'sdk.d.ts': generateSdkTypings(registry, { modules: [spec.id] }) }), spec.id).toEqual([]);
+    }
+    const none = generateSdkTypings(registry, { modules: [] });
+    expect(none).toContain('interface Sdk {\n}');
+    expect(none).not.toContain('// ---- module:');
+    expect(compile({ 'sdk.d.ts': none })).toEqual([]);
+  });
+
+  it('filters by granted modules and ignores unknown ids', () => {
+    const out = generateSdkTypings(registry, { modules: ['media', 'chat', 'nope'] });
+    expect(out).toContain('  chat: ChatApi;');
+    expect(out).toContain('  media: MediaApi;');
+    expect(out).not.toContain('system: SystemApi');
+    expect(out).not.toContain('interface SystemApi');
+    expect(out).toContain('// ---- module: chat ');
+    expect(out).toContain('// ---- module: media ');
+    expect(out.indexOf('// ---- module: chat ')).toBeLessThan(out.indexOf('// ---- module: media '));
+    expect(out).not.toContain('// ---- module: system ');
+  });
+
+  it('lets realistic character code type-check', () => {
+    const code = `
+const info = await sdk.pack.info();
+const pics = await sdk.pack.listAssets("media/images", "image");
+const pick = pics[Math.floor(Math.random() * pics.length)];
+if (pick) {
+  const handle = await sdk.media.showImage(pick, { durationMs: 8000, position: "bottom-right", caption: info.name });
+  await sdk.state.session.set("lastImage", handle.id);
+}
+await sdk.media.playAudio("media/audio/song.mp3", { volume: 0.4, loop: false });
+const song = await sdk.state.session.get("song");
+if (typeof song === "string") await sdk.media.close(song);
+const timer = await sdk.timers.schedule(15 * 60 * 1000, { reason: "check on them", count: 1 }, { label: "check-in" });
+const pending = await sdk.timers.list();
+await sdk.timers.cancel(pending[0]?.id ?? timer.id);
+const name = await sdk.state.get("user.name");
+await sdk.state.set("visits", 3);
+await sdk.state.set("profile", { name: typeof name === "string" ? name : null, tags: ["a", "b"] });
+const all = await sdk.state.all();
+const hist = await sdk.chat.history(5);
+sdk.log.info("history", hist.length, hist[0]?.role, hist[0]?.at);
+console.log("keys", await sdk.state.keys(), Object.keys(all));
+await sdk.chat.say("One moment...");
+await sdk.chat.emote("smiles");
+await sdk.chat.setStatus(null);
+const ok = await sdk.ui.confirm("Play it?");
+const choice = await sdk.ui.choose("Which?", ["a", "b"]);
+await sdk.ui.notify("Hi", choice ?? undefined);
+const lore = await sdk.pack.readText("lore/backstory.md", 4096);
+const res = await sdk.system.exec("date", ["+%A"], { timeoutMs: 5000 });
+await sdk.system.writeFile("~/Desktop/x.txt", res.stdout + lore.length);
+await sdk.system.openExternal("https://example.com");
+await sdk.system.clipboardWrite(await sdk.system.readFile("~/x.txt", 100));
+await sdk.media.closeAll();
+const open = await sdk.media.list();
+return { ok, shown: open.length, id: info.characterId };`;
+    expect(compile({ 'sdk.d.ts': generateSdkTypings(registry), 'action.ts': characterAction(code) })).toEqual([]);
+  });
+
+  it('rejects wrongly typed character code', () => {
+    const bad = characterAction(`
+await sdk.media.showImage(123);
+await sdk.timers.schedule("soon", {});
+await sdk.state.set("k", () => 1);
+await sdk.nope.thing();
+await sdk.state.session.get(1);`);
+    const diags = compile({ 'sdk.d.ts': generateSdkTypings(registry), 'action.ts': bad });
+    expect(diags).toHaveLength(5);
+    expect(diags.every((d) => d.startsWith('action.ts:'))).toBe(true);
+  });
+
+  it('does not expose denied modules to character code', () => {
+    const typings = generateSdkTypings(registry, { modules: ['chat', 'log', 'state', 'pack', 'timers'] });
+    const diags = compile({ 'sdk.d.ts': typings, 'action.ts': characterAction('await sdk.system.exec("rm");') });
+    expect(diags).toHaveLength(1);
+    expect(diags[0]).toMatch(/Property 'system' does not exist on type 'Sdk'/);
+  });
+
+  it('preamble media option types mirror @rp/shared exactly', () => {
+    const check = `
+import type * as S from '@rp/shared';
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? ((<T>() => T extends keyof A ? 1 : 2) extends (<T>() => T extends keyof B ? 1 : 2) ? true : false) : false) : false;
+const checks: [
+  Same<ShowImageOptions, S.ShowImageOptions>,
+  Same<PlayVideoOptions, S.PlayVideoOptions>,
+  Same<PlayAudioOptions, S.PlayAudioOptions>,
+  Same<MediaPosition, S.MediaPosition>,
+  Same<MediaHandle['kind'], S.MediaKind>,
+  Same<AssetRef['kind'], S.AssetKind>,
+  Same<Json, S.Json>,
+] = [true, true, true, true, true, true, true];
+export {};
+`;
+    const diags = compile({ 'sdk.d.ts': generateSdkTypings(registry), 'mirror.ts': check }, { nodeResolution: true });
+    expect(diags).toEqual([]);
+    // and the check itself is not vacuous
+    const broken = check.replace('S.PlayAudioOptions', 'S.PlayVideoOptions');
+    expect(compile({ 'sdk.d.ts': generateSdkTypings(registry), 'mirror.ts': broken }, { nodeResolution: true })).toHaveLength(1);
+  });
+});
+
+describe('describeSurface', () => {
+  const registry = createStandardRegistry();
+
+  it('lists modules with their method names, dotted for nested members', () => {
+    const surface = describeSurface(registry);
+    expect(surface.modules.map((m) => m.id)).toEqual(['chat', 'log', 'state', 'pack', 'timers', 'media', 'ui', 'system']);
+    const state = surface.modules.find((m) => m.id === 'state')!;
+    expect(state.methods).toContain('session.get');
+    expect(state.methods).toContain('session.all');
+    expect(state.methods).toContain('get');
+    expect(state.methods.every((m) => m.split('.').length <= 2)).toBe(true);
+  });
+
+  it('respects the module filter and keeps registration order', () => {
+    const surface = describeSurface(registry, { modules: ['ui', 'chat', 'unknown'] });
+    expect(surface.modules.map((m) => m.id)).toEqual(['chat', 'ui']);
+  });
+
+  it('agrees with the generated typings and method specs', () => {
+    for (const mod of describeSurface(registry).modules) {
+      expect(mod.methods).toEqual(Object.keys(registry.get(mod.id)!.methods));
+      for (const method of mod.methods) expect(() => registry.methodSpec(mod.id, method)).not.toThrow();
+    }
+  });
+});
+
+describe('generateSdkDocs', () => {
+  const registry = createStandardRegistry();
+
+  it('starts with the general section and includes every module section with its permission', () => {
+    const docs = generateSdkDocs(registry);
+    expect(docs.startsWith('# Acting with the SDK')).toBe(true);
+    for (const rule of ['body of an async function', '`await` every', '`return`', 'one action per intention', 'busy-wait', 'sdk.timers.schedule']) {
+      expect(docs).toContain(rule);
+    }
+    for (const spec of registry.list()) {
+      expect(docs).toContain(`## sdk.${spec.id} — ${spec.title} (permission: ${spec.permission})`);
+      expect(docs).toContain(spec.docs.trim());
+    }
+    expect(docs).not.toContain('## Not available');
+    expect(docs).toContain('confirmation dialog');
+  });
+
+  it('filters granted modules and lists denied ones', () => {
+    const docs = generateSdkDocs(registry, { modules: ['chat', 'media'], deniedModules: ['system', 'ui', 'ui'] });
+    expect(docs).toContain('## sdk.chat');
+    expect(docs).toContain('## sdk.media');
+    expect(docs).not.toContain('## sdk.system');
+    expect(docs).not.toContain('## sdk.state');
+    expect(docs).toContain('## Not available');
+    expect(docs).toContain('`sdk.system`, `sdk.ui`.');
+    expect(docs.indexOf('## Not available')).toBeGreaterThan(docs.indexOf('## sdk.media'));
+  });
+});
