@@ -55,8 +55,11 @@ export type HostEventName =
   | 'avatar-clicked'     // data: {}
   | 'routine-changed';   // data: { from, to, label? }
 
+/** Subscribable event names: host events plus character-raised `custom:<name>` events. */
+export type EventName = HostEventName | `custom:${string}`;
+
 export interface HostEvent {
-  name: HostEventName;
+  name: EventName;
   data: Json;
   at: string;
 }
@@ -65,7 +68,7 @@ export interface EventSubscription {
   id: string;
   sessionId: SessionId;
   characterRef: CharacterRef;
-  event: HostEventName;
+  event: EventName;
   /** Event-specific filter, see HostEventName comments. */
   filter?: Record<string, Json>;
   /** Action body run with `input = { event, data, ...input }`. */

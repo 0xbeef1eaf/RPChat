@@ -135,7 +135,45 @@ await sdk.system.openExternal("https://example.com");
 await sdk.system.clipboardWrite(await sdk.system.readFile("~/x.txt", 100));
 await sdk.media.closeAll();
 const open = await sdk.media.list();
-return { ok, shown: open.length, id: info.characterId };`;
+const presence = await sdk.presence.status();
+const np = await sdk.presence.nowPlaying();
+const look = await sdk.screen.look({ question: "what app?" });
+const drawn = await sdk.screen.draw([{ type: "circle", x: 0.5, y: 0.5, radius: 40 }, { type: "text", x: 10, y: 20, text: "hi" }], { durationMs: 3000 });
+await sdk.screen.clear(drawn.ids);
+const cal = await sdk.calendar.upcoming(6);
+const w = await sdk.web.weather("Oslo");
+const feed = await sdk.web.rss("https://example.com/feed", 3);
+const r2 = await sdk.web.fetch("https://example.com", { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
+const sub = await sdk.events.on("time", "await sdk.chat.say('tick')", { filter: { hour: 9, minute: 0 }, once: true, label: "morning" });
+await sdk.events.on("custom:tea", "return input", { input: { cups: 1 } });
+await sdk.events.emit("tea", { cups: 2 });
+const subs = await sdk.events.list();
+await sdk.events.off(subs[0]?.id ?? sub.id);
+const av = await sdk.avatar.show({ expression: "happy", position: "bottom-right", size: 200, layer: "top" });
+await sdk.avatar.set({ expression: "neutral" });
+await sdk.avatar.say("psst", { durationMs: 2000 });
+await sdk.avatar.animate("wave");
+await sdk.avatar.moveTo({ monitor: "cursor", x: 0.1, y: 0.9 }, { durationMs: 500 });
+const avs = await sdk.avatar.state();
+const wi = await sdk.widgets.show({ id: "note", html: "<b>hi</b>", width: 200, height: 100, position: "top-left", opacity: 0.9 });
+await sdk.widgets.update(wi.id, { postMessage: { n: 1 } });
+await sdk.voice.speak("hello", { rate: 1.2, wait: true });
+const heard = await sdk.voice.listen({ maxSeconds: 5 });
+const wins = await sdk.desktop.listWindows();
+await sdk.desktop.focusWindow({ id: wins[0]?.id });
+await sdk.desktop.moveWindow({ app: "mpv" }, { monitor: 1, workspace: 2, width: 800 });
+await sdk.desktop.launch("mpv", ["x.mp3"]);
+await sdk.desktop.setVolume(40);
+await sdk.files.append("diary.md", "note");
+const filesList = await sdk.files.list("diary");
+const mood = await sdk.mood.nudge({ mood: 0.2 }, "nice chat");
+const routine = await sdk.routine.set([{ at: "23:00", state: "asleep" }, { at: "07:00", state: "available", days: [1, 2], wakePrompt: "morning" }]);
+await sdk.routine.override("busy", { minutes: 10 });
+const chans = await sdk.messaging.channels();
+if (chans[0]?.kind === "telegram") await sdk.messaging.send(chans[0].name, "hi");
+await sdk.input.type("hi"); await sdk.input.key("ctrl+s"); await sdk.input.click(1, 2, "right"); await sdk.input.moveMouse(3, 4);
+const clip = await sdk.system.clipboardRead();
+return { ok, shown: open.length, id: info.characterId, idle: presence.idleMs, np: np?.title, look: look.width, cal: cal.length, w: w.tempC, feed: feed.length, st: r2.status, av: av.expression, avs: avs?.visible, heard: heard.text, files: filesList.length, mood: mood.mood, routine: routine.state, clip: clip.length };`;
     expect(compile({ 'sdk.d.ts': generateSdkTypings(registry), 'action.ts': characterAction(code) })).toEqual([]);
   });
 
@@ -162,7 +200,8 @@ await sdk.state.session.get(1);`);
     const check = `
 import type * as S from '@rp/shared';
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? ((<T>() => T extends keyof A ? 1 : 2) extends (<T>() => T extends keyof B ? 1 : 2) ? true : false) : false) : false;
-const checks: [
+type AllTrue<T extends readonly boolean[]> = T extends readonly true[] ? true : false;
+const ok: AllTrue<[
   Same<ShowImageOptions, S.ShowImageOptions>,
   Same<PlayVideoOptions, S.PlayVideoOptions>,
   Same<PlayAudioOptions, S.PlayAudioOptions>,
@@ -176,7 +215,23 @@ const checks: [
   Same<MediaHandle['kind'], S.MediaKind>,
   Same<AssetRef['kind'], S.AssetKind>,
   Same<Json, S.Json>,
-] = [true, true, true, true, true, true, true, true, true, true, true, true, true];
+  // phase 2 (docs/spec/living.md §1)
+  Same<PresenceSnapshot, S.PresenceSnapshot>,
+  Same<NowPlaying, S.NowPlaying>,
+  Same<CalendarEvent, S.CalendarEvent>,
+  Same<HostEventName, S.HostEventName>,
+  Same<MoodState, S.MoodState>,
+  Same<RoutineEntry, S.RoutineEntry>,
+  Same<RoutineStatus, S.RoutineStatus>,
+  Same<RoutineStateName, S.RoutineStateName>,
+  Same<DrawShape, S.DrawShape>,
+  Same<AvatarAnimation, S.AvatarAnimation>,
+  Same<AvatarStateInfo, Omit<S.AvatarState, 'imageUrl'>>,
+  Same<WidgetInfo, Pick<S.WidgetSpec, 'id' | 'title'>>,
+  Same<Omit<EventSubscriptionInfo, 'event'>, Pick<S.EventSubscription, 'id' | 'label' | 'once' | 'fired'>>,
+  Same<Awaited<ReturnType<MessagingApi['channels']>>[number]['kind'], S.MessagingChannel['kind']>,
+]> = true;
+void ok;
 export {};
 `;
     const diags = compile({ 'sdk.d.ts': generateSdkTypings(registry), 'mirror.ts': check }, { nodeResolution: true });
@@ -192,7 +247,11 @@ describe('describeSurface', () => {
 
   it('lists modules with their method names, dotted for nested members', () => {
     const surface = describeSurface(registry);
-    expect(surface.modules.map((m) => m.id)).toEqual(['chat', 'log', 'state', 'pack', 'timers', 'llm', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input', 'system']);
+    expect(surface.modules.map((m) => m.id)).toEqual([
+      'chat', 'log', 'state', 'pack', 'timers', 'llm', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input',
+      'presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging',
+      'system',
+    ]);
     const state = surface.modules.find((m) => m.id === 'state')!;
     expect(state.methods).toContain('session.get');
     expect(state.methods).toContain('session.all');

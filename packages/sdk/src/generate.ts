@@ -91,11 +91,19 @@ export function generateSdkDocs(registry: CapabilityRegistry, options: GenerateD
         '', '**Every call of this module shows the user a confirmation dialog** with the method and arguments; the call fails with `PERMISSION_PROMPT_REJECTED` if they decline. Use it sparingly and only when the user asked for the effect.',
       );
     }
-    const dangerous = Object.entries(spec.methods)
-      .filter(([, m]) => m.dangerous)
-      .map(([name]) => `\`${name}\``);
-    if (dangerous.length > 0 && spec.permission !== 'prompt') {
-      lines.push('', `Methods with effects outside the app (use with care): ${dangerous.join(', ')}.`);
+    if (spec.permission !== 'prompt') {
+      const prompted = Object.entries(spec.methods)
+        .filter(([, m]) => m.permission === 'prompt')
+        .map(([name]) => `\`${name}\``);
+      if (prompted.length > 0) {
+        lines.push('', `Methods that ask the user for confirmation on each call (unless covered by an allowlist in their settings): ${prompted.join(', ')}.`);
+      }
+      const dangerous = Object.entries(spec.methods)
+        .filter(([, m]) => m.dangerous)
+        .map(([name]) => `\`${name}\``);
+      if (dangerous.length > 0) {
+        lines.push('', `Methods with effects outside the app (use with care): ${dangerous.join(', ')}.`);
+      }
     }
     lines.push('', spec.docs.trim());
     sections.push(lines.join('\n'));

@@ -2,9 +2,9 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const systemModule: CapabilityModuleSpec = {
   id: 'system',
-  version: '1.0.0',
+  version: '1.1.0',
   title: 'System access',
-  summary: 'Open links, run commands, read/write files and the clipboard on the host PC; each call needs user approval.',
+  summary: 'Open links, run commands, read/write files and read/write the clipboard on the host PC; each call needs user approval.',
   permission: 'prompt',
   apiTypeName: 'SystemApi',
   typings: `/**
@@ -50,6 +50,12 @@ interface SystemApi {
    * @example await sdk.system.clipboardWrite("https://example.com/the-link");
    */
   clipboardWrite(text: string): Promise<void>;
+  /**
+   * Read the text currently on the system clipboard (empty string if it holds no text).
+   * Clipboards often contain passwords or private snippets: only read it when the user asked you to.
+   * @example const clip = await sdk.system.clipboardRead(); return { chars: clip.length };
+   */
+  clipboardRead(): Promise<string>;
 }`,
   docs: `Reach outside the app: open a link, run a program, read or write a file, copy to the clipboard. Requires the \`system\` capability **and** the user confirms every single call in a dialog.
 
@@ -67,5 +73,6 @@ return { saved: true };
     readFile: { description: 'Read a text file from the host.', dangerous: true },
     writeFile: { description: 'Write a text file on the host.', dangerous: true },
     clipboardWrite: { description: 'Write text to the system clipboard.', dangerous: true },
+    clipboardRead: { description: 'Read text from the system clipboard.', dangerous: true },
   },
 };

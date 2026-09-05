@@ -2,15 +2,17 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const inputModule: CapabilityModuleSpec = {
   id: 'input',
-  version: '1.0.0',
-  title: 'Input lock',
-  summary: "Temporarily lock the user's keyboard and mouse for a set duration (runs the user's configured lock command).",
+  version: '1.1.0',
+  title: 'Input control',
+  summary: "Lock the user's keyboard/mouse for a set duration, or type, press keys, click and move the mouse for them; each call needs user approval.",
   permission: 'prompt',
   apiTypeName: 'InputApi',
   typings: `/**
- * Lock the user's keyboard/mouse for a bounded time, using the lock command they configured
- * in Settings. Every call needs the user's confirmation (they can allow it for the session), and
- * durations are capped by their settings. Requires the 'input' capability.
+ * Control the user's input devices: lock keyboard/mouse for a bounded time, or synthesise typing,
+ * key presses, clicks and pointer moves through the commands they configured in Settings. Every
+ * call needs the user's confirmation (they can allow it for the session); lock durations are capped
+ * by their settings. Requires the 'input' capability. Synthesised input goes to whatever window is
+ * focused, so focus the right window first (sdk.desktop.focusWindow) and keep sequences short.
  */
 interface InputApi {
   /**
@@ -26,11 +28,38 @@ interface InputApi {
   unlock(): Promise<void>;
   /** Whether a lock is active and when it ends. */
   status(): Promise<{ locked: boolean; until?: string }>;
+  /**
+   * Type text into the focused window as if on the keyboard.
+   * @param text Text to type (newlines press Enter). Keep it short; long text is slow.
+   * @example await sdk.input.type("hello from Luna");
+   */
+  type(text: string): Promise<void>;
+  /**
+   * Press a key combination in the focused window.
+   * @param combo xdotool-style combo, e.g. "ctrl+s", "alt+tab", "Return", "super+2".
+   * @example await sdk.input.key("ctrl+s");
+   */
+  key(combo: string): Promise<void>;
+  /**
+   * Click at a screen position.
+   * @param x Global screen coordinates in logical px (see sdk.display.monitors() for the geometry).
+   * @param y Global screen coordinates in logical px.
+   * @param button Default 'left'.
+   * @example await sdk.input.click(640, 400);
+   */
+  click(x: number, y: number, button?: 'left' | 'right' | 'middle'): Promise<void>;
+  /**
+   * Move the mouse pointer to a screen position without clicking.
+   * @param x Global screen coordinates in logical px.
+   * @param y Global screen coordinates in logical px.
+   */
+  moveMouse(x: number, y: number): Promise<void>;
 }`,
-  docs: `Lock the user's input for a short, agreed time. Requires the \`input\` capability and always asks the user first, so only use it when it is clearly part of the play and the user knows it is coming.
+  docs: `Take the user's keyboard and mouse — lock them for a short agreed time, or type, press keys and click on their behalf. Requires the \`input\` capability and always asks the user first, so only use it when it is clearly part of the play or the user asked for it.
 
-- Keep durations short; say what you are doing before locking; \`unlock()\` early if the user seems distressed.
-- Fails with CAPABILITY_FAILED when the user has not configured a lock command.
+- Keep lock durations short; say what you are doing before locking; \`unlock()\` early if the user seems distressed.
+- Synthesised input hits whatever window is focused: \`sdk.desktop.focusWindow\` first, then a few \`type\`/\`key\`/\`click\` calls at most. Never type into password fields or run destructive shortcuts.
+- Fails with CAPABILITY_FAILED when the user has not configured the matching command.
 
 \`\`\`ts
 await sdk.chat.say("Close your eyes. Ten seconds.");
@@ -41,5 +70,9 @@ return { until };
     lock: { description: "Lock keyboard and mouse for a bounded duration (via the user's command).", dangerous: true },
     unlock: { description: 'Release the input lock early.', dangerous: true },
     status: { description: 'Whether input is currently locked.' },
+    type: { description: 'Type text into the focused window.', dangerous: true },
+    key: { description: 'Press a key combination.', dangerous: true },
+    click: { description: 'Click the mouse at a screen position.', dangerous: true },
+    moveMouse: { description: 'Move the mouse pointer.', dangerous: true },
   },
 };

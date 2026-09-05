@@ -17,8 +17,38 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   ui: { permission: 'pack', methods: ['notify', 'confirm', 'choose'] },
   wallpaper: { permission: 'pack', methods: ['set', 'restore', 'current'] },
   browser: { permission: 'pack', methods: ['open'] },
-  input: { permission: 'prompt', methods: ['lock', 'unlock', 'status'] },
-  system: { permission: 'prompt', methods: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite'] },
+  input: { permission: 'prompt', methods: ['lock', 'unlock', 'status', 'type', 'key', 'click', 'moveMouse'] },
+  presence: { permission: 'pack', methods: ['status', 'nowPlaying', 'activeWindow', 'idleMs'] },
+  screen: { permission: 'pack', methods: ['look', 'draw', 'clear'] },
+  calendar: { permission: 'pack', methods: ['upcoming', 'today'] },
+  web: { permission: 'pack', methods: ['fetch', 'rss', 'weather'] },
+  events: { permission: 'trusted', methods: ['on', 'off', 'list', 'emit'] },
+  avatar: { permission: 'pack', methods: ['show', 'set', 'say', 'animate', 'moveTo', 'hide', 'state', 'expressions'] },
+  widgets: { permission: 'pack', methods: ['show', 'update', 'close', 'closeAll', 'list'] },
+  voice: { permission: 'pack', methods: ['speak', 'stop', 'listen'] },
+  desktop: {
+    permission: 'pack',
+    methods: ['launch', 'listWindows', 'focusWindow', 'moveWindow', 'workspace', 'currentWorkspace', 'setVolume', 'getVolume', 'setBrightness', 'doNotDisturb', 'setTheme'],
+  },
+  files: { permission: 'pack', methods: ['write', 'append', 'read', 'list', 'delete', 'open', 'homePath'] },
+  mood: { permission: 'trusted', methods: ['get', 'nudge', 'set'] },
+  routine: { permission: 'trusted', methods: ['set', 'get', 'now', 'override'] },
+  messaging: { permission: 'pack', methods: ['send', 'channels'] },
+  system: { permission: 'prompt', methods: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead'] },
+};
+
+/** Method-level overrides required by docs/spec/living.md §1: (P) = permission 'prompt', (D) = dangerous. */
+const OVERRIDES: Record<string, { prompt?: string[]; dangerous?: string[] }> = {
+  wallpaper: { dangerous: ['set'] },
+  browser: { dangerous: ['open'] },
+  screen: { prompt: ['look'], dangerous: ['look'] },
+  web: { prompt: ['fetch', 'rss'], dangerous: ['fetch'] },
+  voice: { prompt: ['listen'] },
+  desktop: { prompt: ['launch'], dangerous: ['launch'] },
+  files: { dangerous: ['open'] },
+  messaging: { dangerous: ['send'] },
+  input: { dangerous: ['lock', 'unlock', 'type', 'key', 'click', 'moveMouse'] },
+  system: { dangerous: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead'] },
 };
 
 describe('standard modules', () => {
@@ -41,6 +71,15 @@ describe('standard modules', () => {
     expect(modules.mediaModule.id).toBe('media');
     expect(modules.uiModule.id).toBe('ui');
     expect(modules.systemModule.id).toBe('system');
+    for (const id of ['presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging']) {
+      const exported = (modules as Record<string, unknown>)[`${id}Module`] as { id: string } | undefined;
+      expect(exported?.id, id).toBe(id);
+    }
+    // phase-2 modules sit after the v1 modules and before `system`, which stays last.
+    const ids = r.list().map((m) => m.id);
+    expect(ids.at(-1)).toBe('system');
+    expect(ids.indexOf('presence')).toBe(ids.indexOf('input') + 1);
+    expect(ids.slice(ids.indexOf('presence'), -1)).toEqual(['presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging']);
   });
 
   it('expose exactly the methods and permissions from the spec', () => {
@@ -55,12 +94,31 @@ describe('standard modules', () => {
     }
   });
 
+  it('applies exactly the method-level prompt/dangerous overrides from the spec', () => {
+    const r = createStandardRegistry();
+    for (const spec of r.list()) {
+      const exp = OVERRIDES[spec.id] ?? {};
+      const prompted = Object.entries(spec.methods).filter(([, m]) => m.permission !== undefined).map(([n]) => n);
+      const dangerous = Object.entries(spec.methods).filter(([, m]) => m.dangerous).map(([n]) => n);
+      expect(prompted, `${spec.id} prompt overrides`).toEqual(exp.prompt ?? []);
+      expect(dangerous, `${spec.id} dangerous`).toEqual(exp.dangerous ?? []);
+      for (const name of exp.prompt ?? []) expect(r.permissionFor(spec.id, name)).toBe('prompt');
+    }
+    expect(modules.inputModule.version).toBe('1.1.0');
+    expect(modules.systemModule.version).toBe('1.1.0');
+  });
+
   it('marks every system method dangerous and prompt-level', () => {
     const r = createStandardRegistry();
     for (const [name, m] of Object.entries(modules.systemModule.methods)) {
       expect(m.dangerous, name).toBe(true);
       expect(r.permissionFor('system', name)).toBe('prompt');
     }
+  });
+
+  it('presence docs steer the model to the prompt senses line', () => {
+    expect(modules.presenceModule.docs).toMatch(/<senses>/);
+    expect(modules.presenceModule.docs).toMatch(/status\(\).*fresh numbers/);
   });
 
   it('documents every method with parameters and return values where they exist', () => {
