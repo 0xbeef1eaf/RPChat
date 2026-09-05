@@ -180,7 +180,7 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`          |
 | `wallpaper` | pack    | `set(asset, { monitor? })`, `restore()`, `current()` — via the user's wallpaper command template |
 | `browser`| pack       | `open(url, { newWindow? })` — via the user's browser command template               |
-| `input`  | prompt     | `lock(durationMs, { reason? })`, `unlock()`, `status()` — via the user's input-lock command template, duration capped |
+| `input`  | pack       | `lock(durationMs, { reason? })`, `unlock()`, `status()`, `type`, `key`, `click`, `moveMouse` — via the user's command templates, duration capped, no per-call prompt once granted |
 | `system` | prompt     | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)` |
 
 Adding a module = write a spec (typings+docs+methods) and a host handler,

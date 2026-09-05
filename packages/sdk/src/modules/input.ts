@@ -5,13 +5,13 @@ export const inputModule: CapabilityModuleSpec = {
   version: '1.1.0',
   title: 'Input control',
   summary: "Lock the user's keyboard/mouse for a set duration, or type, press keys, click and move the mouse for them; each call needs user approval.",
-  permission: 'prompt',
+  permission: 'pack',
   apiTypeName: 'InputApi',
   typings: `/**
  * Control the user's input devices: lock keyboard/mouse for a bounded time, or synthesise typing,
- * key presses, clicks and pointer moves through the commands they configured in Settings. Every
- * call needs the user's confirmation (they can allow it for the session); lock durations are capped
- * by their settings. Requires the 'input' capability. Synthesised input goes to whatever window is
+ * key presses, clicks and pointer moves through the commands they configured in Settings. Once the
+ * user has granted the 'input' capability you may use it freely; lock durations are capped by their
+ * settings and every call is logged. Synthesised input goes to whatever window is
  * focused, so focus the right window first (sdk.desktop.focusWindow) and keep sequences short.
  */
 interface InputApi {
@@ -19,7 +19,7 @@ interface InputApi {
    * Lock input for a duration. Resolves once the lock is active; it is released automatically
    * when the duration elapses (or by unlock()).
    * @param durationMs 1000 .. the user's configured maximum (default 5 minutes). Longer requests are clamped.
-   * @param options reason: shown in the confirmation dialog.
+   * @param options reason: shown in the action log.
    * @returns until: ISO time the lock ends; durationMs: the effective (possibly clamped) duration.
    * @example await sdk.input.lock(30_000, { reason: "hold still for the surprise" });
    */
@@ -55,7 +55,7 @@ interface InputApi {
    */
   moveMouse(x: number, y: number): Promise<void>;
 }`,
-  docs: `Take the user's keyboard and mouse — lock them for a short agreed time, or type, press keys and click on their behalf. Requires the \`input\` capability and always asks the user first, so only use it when it is clearly part of the play or the user asked for it.
+  docs: `Take the user's keyboard and mouse — lock them for a short agreed time, or type, press keys and click on their behalf. Requires the \`input\` capability (granted once per pack). Use it when it is clearly part of the play or the user asked for it; say what you are about to do.
 
 - Keep lock durations short; say what you are doing before locking; \`unlock()\` early if the user seems distressed.
 - Synthesised input hits whatever window is focused: \`sdk.desktop.focusWindow\` first, then a few \`type\`/\`key\`/\`click\` calls at most. Never type into password fields or run destructive shortcuts.

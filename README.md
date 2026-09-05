@@ -56,7 +56,7 @@ Characters, their behaviours and their media are distributed as shareable
   speech and push-to-talk through your own commands.
 - **Desktop control**: launch apps, move and focus windows, switch workspaces,
   volume, brightness, do-not-disturb, theme; a per-character home folder; typed
-  input and clicks behind per-call approval; outbound messages via webhooks.
+  input and clicks once you grant them; outbound messages via webhooks.
 - **Inner life**: a mood model that decays and reacts, a daily routine with
   wake-ups on transitions, and long-term memory.
 - **Permissions are an intersection**: what a pack asks for ∩ what your global

@@ -433,7 +433,7 @@ describe('permissions', () => {
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).not.toContain('media');
   });
 
-  it('routes display (trusted), wallpaper/browser (pack) and input (prompt) through the permission levels', async () => {
+  it('routes display (trusted), wallpaper/browser/input (pack) through the permission levels', async () => {
     const rec = (id: string) => new RecordingHandler(id, `${id}-ok`);
     const handlers = [rec('display'), rec('wallpaper'), rec('browser'), rec('input')];
     t = await createTestEngine({ hostHandlers: handlers, prompter: async () => 'allow-once' });
@@ -458,14 +458,12 @@ describe('permissions', () => {
     expect(await call('b2', 'browser', 'open', ['https://example.com'])).toEqual({ ok: true, value: 'browser-ok' });
     expect(t.prompts).toHaveLength(0);
 
-    // prompt-level: grant + per-call confirmation
+    // input is pack-level: grant, then no per-call confirmation
     expect(await call('i1', 'input', 'lock', [5000])).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
     await t.engine.permissions.setGrant(LUNA_ID, 'input', true);
     expect(await call('i2', 'input', 'lock', [5000])).toEqual({ ok: true, value: 'input-ok' });
-    expect(t.prompts).toHaveLength(1);
-    expect(t.prompts[0]).toMatchObject({ call: { module: 'input', method: 'lock' }, dangerous: true });
     expect(await call('i3', 'input', 'status')).toEqual({ ok: true, value: 'input-ok' });
-    expect(t.prompts).toHaveLength(2); // allow-once is not remembered
+    expect(t.prompts).toHaveLength(0);
 
     const surface = (await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id);
     expect(surface).toEqual(expect.arrayContaining(['display', 'wallpaper', 'browser', 'input', 'media']));

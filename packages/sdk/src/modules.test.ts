@@ -17,7 +17,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   ui: { permission: 'pack', methods: ['notify', 'confirm', 'choose'] },
   wallpaper: { permission: 'pack', methods: ['set', 'restore', 'current'] },
   browser: { permission: 'pack', methods: ['open'] },
-  input: { permission: 'prompt', methods: ['lock', 'unlock', 'status', 'type', 'key', 'click', 'moveMouse'] },
+  input: { permission: 'pack', methods: ['lock', 'unlock', 'status', 'type', 'key', 'click', 'moveMouse'] },
   presence: { permission: 'pack', methods: ['status', 'nowPlaying', 'activeWindow', 'idleMs'] },
   screen: { permission: 'pack', methods: ['look', 'draw', 'clear'] },
   calendar: { permission: 'pack', methods: ['upcoming', 'today'] },
@@ -41,7 +41,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
 const OVERRIDES: Record<string, { prompt?: string[]; dangerous?: string[] }> = {
   wallpaper: { dangerous: ['set'] },
   browser: { dangerous: ['open'] },
-  screen: { prompt: ['look'], dangerous: ['look'] },
+  screen: { dangerous: ['look'] },
   web: { prompt: ['fetch', 'rss'], dangerous: ['fetch'] },
   voice: { prompt: ['listen'] },
   desktop: { prompt: ['launch'], dangerous: ['launch'] },

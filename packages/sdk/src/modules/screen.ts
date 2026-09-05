@@ -14,7 +14,7 @@ export const screenModule: CapabilityModuleSpec = {
  */
 interface ScreenApi {
   /**
-   * Take a screenshot of one monitor and describe it. The user must confirm the call.
+   * Take a screenshot of one monitor and describe it (allowed once the pack has the 'screen' capability).
    * Ask a focused question to get a useful answer; the description is short.
    * @param opts monitor: which monitor (default 'primary'); question: what you want to know,
    *   e.g. "What game is this and what is happening?" (default: general description).
@@ -49,7 +49,7 @@ await sdk.screen.draw([{ type: "arrow", x: 0.5, y: 0.7, x2: 0.9, y2: 0.1, color:
 return { saw: look.description };
 \`\`\``,
   methods: {
-    look: { description: 'Take a screenshot and describe it with a vision model.', permission: 'prompt', dangerous: true },
+    look: { description: 'Take a screenshot and describe it with a vision model.', dangerous: true },
     draw: { description: 'Draw temporary shapes over the screen.' },
     clear: { description: 'Remove drawn shapes.' },
   },
