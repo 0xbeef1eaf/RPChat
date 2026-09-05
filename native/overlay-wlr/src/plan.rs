@@ -28,6 +28,8 @@ pub struct OverlaySettings {
     pub width: f64,
     /// Explicit height from the app; when `None` the page's `content-size` drives it.
     pub height: Option<f64>,
+    /// Added to a content-driven height (stage padding / shadow / caption room).
+    pub content_padding: f64,
     pub opacity: f64,
     pub click_through: bool,
     pub namespace: String,
@@ -46,6 +48,7 @@ impl OverlaySettings {
             monitor: show.monitor.clone(),
             width: show.width,
             height: show.height,
+            content_padding: finite_non_negative(show.content_padding),
             opacity: show.opacity,
             click_through: show.click_through,
             namespace: show
@@ -217,7 +220,7 @@ pub fn plan(settings: &OverlaySettings, monitors: &[MonitorInfo]) -> OverlayPlan
     let wanted_h = settings
         .height
         .and_then(finite_positive)
-        .or_else(|| settings.content_size.and_then(|(_, h)| finite_positive(h)))
+        .or_else(|| settings.content_size.and_then(|(_, h)| finite_positive(h)).map(|h| h + settings.content_padding))
         .unwrap_or(DEFAULT_HEIGHT);
     let width = clamp_i32(wanted_w.round() as i32, MIN_SIZE.min(mon_w), mon_w);
     let height = clamp_i32(wanted_h.round() as i32, MIN_SIZE.min(mon_h), mon_h);
@@ -451,7 +454,7 @@ mod tests {
         assert_eq!(plan(&s, &m).height, 320);
         assert!(s.set_content_size(300.0, 180.0));
         let p = plan(&s, &m);
-        assert_eq!((p.width, p.height), (480, 180), "width stays fixed, height follows content");
+        assert_eq!((p.width, p.height), (480, 204), "width stays fixed, height follows content plus the 24 px padding");
         assert!(!s.set_content_size(300.0, 180.0), "same size again → no change");
         assert!(s.set_content_size(300.0, 5000.0));
         assert_eq!(plan(&s, &m).height, 1400 - 24, "content height clamped to the work area minus margin");
@@ -514,5 +517,13 @@ mod tests {
         assert_eq!(v["clickThrough"], true);
         assert_eq!(v["monitorIndex"], serde_json::Value::Null);
         assert_eq!(v["anchors"]["top"], false);
+    }
+}
+
+fn finite_non_negative(v: f64) -> f64 {
+    if v.is_finite() && v >= 0.0 {
+        v
+    } else {
+        0.0
     }
 }

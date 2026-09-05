@@ -16,6 +16,8 @@ pub const DEFAULT_WIDTH: f64 = 480.0;
 pub const DEFAULT_HEIGHT: f64 = 320.0;
 /// Gap kept from the monitor edges for anchor presets.
 pub const DEFAULT_MARGIN_PX: f64 = 24.0;
+/// Extra height added around a page-reported `content-size` (room for the page's stage padding, shadow and caption).
+pub const DEFAULT_CONTENT_PADDING_PX: f64 = 24.0;
 /// Layer-shell namespace used when the request does not set one.
 pub const DEFAULT_NAMESPACE: &str = "rp-overlay";
 
@@ -120,6 +122,9 @@ fn default_width() -> f64 {
 fn default_margin() -> f64 {
     DEFAULT_MARGIN_PX
 }
+fn default_content_padding() -> f64 {
+    DEFAULT_CONTENT_PADDING_PX
+}
 
 fn default_opacity() -> f64 {
     1.0
@@ -147,6 +152,9 @@ pub struct ShowParams {
     pub width: f64,
     #[serde(default)]
     pub height: Option<f64>,
+    /// Added to the page's reported content height when no explicit `height` was given. Default 24.
+    #[serde(default = "default_content_padding")]
+    pub content_padding: f64,
     #[serde(default = "default_opacity")]
     pub opacity: f64,
     #[serde(default)]

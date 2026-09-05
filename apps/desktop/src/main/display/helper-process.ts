@@ -58,7 +58,20 @@ interface Pending {
 }
 
 const defaultSpawn: HelperSpawner = (binary, args) =>
-  spawn(binary, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }) as unknown as HelperChildLike;
+  spawn(binary, args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+    // The helper is a Wayland layer-shell client: force GTK onto Wayland even when DISPLAY is
+    // also set (GTK would otherwise pick X11, where there is no layer shell). RP_OVERLAY_WAYLAND_DISPLAY /
+    // RP_OVERLAY_XDG_RUNTIME_DIR let the helper target a different compositor than the app itself
+    // (used by the layer-shell smoke test, where the app runs on X11 and the helper on a nested Sway).
+    env: {
+      ...process.env,
+      GDK_BACKEND: 'wayland',
+      ...(process.env.RP_OVERLAY_WAYLAND_DISPLAY ? { WAYLAND_DISPLAY: process.env.RP_OVERLAY_WAYLAND_DISPLAY } : {}),
+      ...(process.env.RP_OVERLAY_XDG_RUNTIME_DIR ? { XDG_RUNTIME_DIR: process.env.RP_OVERLAY_XDG_RUNTIME_DIR } : {}),
+    },
+  }) as unknown as HelperChildLike;
 
 /**
  * Events: `event` (every helper event), `message` (page payloads), `closed`,

@@ -24,7 +24,7 @@ stdin → helper (requests). Every request may carry `"seq": n`; responses echo 
 |---|---|---|
 | `hello` | `version: 1` | `{ ev: "ready", version, features: { layers: [...4], opacity, clickThrough, exactPosition: true, video: true } }` |
 | `monitors` | – | `{ ev: "monitors", monitors: [MonitorInfo] }` — GDK monitors: `id` = `"<index>"`, `name` = model or connector when available, geometry = **work area** in logical px, `scale`, `primary` (index 0 or GDK primary), `hasCursor` from the pointer device position |
-| `show` | `id, url, layer, anchor, marginPx, x?, y?, monitor?, width, height?, opacity, clickThrough, namespace?` | `{ ev: "shown", id }` after the window is mapped; the page size is fixed to `width`×`height` (height default 320 until the page reports `content-size`, see below) |
+| `show` | `id, url, layer, anchor, marginPx, x?, y?, monitor?, width, height?, contentPadding? (default 24, added to a page-reported content height), opacity, clickThrough, namespace?` | `{ ev: "shown", id }` after the window is mapped; the page size is fixed to `width`×`height` (height default 320 until the page reports `content-size`, see below) |
 | `update` | `id, patch: { layer?, anchor?, marginPx?, x?, y?, monitor?, width?, height?, opacity?, clickThrough? }` | `{ ev: "updated", id }` |
 | `js` | `id, script` | `{ ev: "js-done", id }` — runs the script in that overlay's web view (used to forward `MediaCommand`s to the page) |
 | `close` | `id` | `{ ev: "closed", id }` |
@@ -77,3 +77,13 @@ Not found → the app falls back to the `hyprland-ipc` emulation and logs why.
 
 Tests: `cargo test` (protocol + plan), and `cargo run -- --self-test` which parses a sample conversation
 from stdin and prints the plans without touching GTK; exits 0.
+
+## Verified against a nested compositor
+
+`pnpm test:wlr` (`scripts/wlr-smoke.sh`) runs Sway headless (software rendered, real
+wlr-layer-shell), starts the app on Xvfb with `displayBackend=hyprland` and the helper pointed at
+Sway through `RP_OVERLAY_WAYLAND_DISPLAY`, drives the mock turn and verifies from `grim` captures
+that the image and the playing video are rendered as layer surfaces at the requested anchors.
+Findings from that run, valid for Hyprland too: `top`/`overlay`/`bottom` behave as documented;
+a `background` surface is stacked with the wallpaper client (swaybg, hyprpaper, swww) and ends up
+underneath it, so use `bottom` for ambient art that must stay visible behind windows.

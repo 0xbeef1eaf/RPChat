@@ -103,6 +103,12 @@ the image overlay shows the pack image and the video overlay is playing (colour
 spread and frame advance), checks audio playback was accepted, and fails if the
 main process raised an uncaught exception. Needs `Xvfb`, `xwd`, `xdotool` and ImageMagick.
 
+`pnpm test:wlr` does the same for the Hyprland path: it runs the native
+layer-shell helper against a nested headless Sway compositor (real
+wlr-layer-shell, software rendered), with the app on Xvfb driving it through
+the `hyprland` backend, and verifies the layer surfaces from `grim` captures.
+Needs `sway`, `grim`, `Xvfb`, ImageMagick, and the built helper.
+
 ### Hyprland (and other wlr-layer-shell compositors)
 
 Build the native overlay helper once (needs Rust plus `gtk3`, `gtk-layer-shell`
