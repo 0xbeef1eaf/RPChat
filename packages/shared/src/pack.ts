@@ -56,6 +56,16 @@ export interface CharacterDefinition {
   exampleDialogue?: ExampleDialogueTurn[];
   /** Hook → TypeScript file (relative to character dir) executed in the sandbox. */
   behaviours?: Partial<Record<BehaviourHook, string>>;
+  /** Persistent on-screen avatar (used by `sdk.avatar`). Paths are relative to the character directory. */
+  avatarSet?: {
+    /** Expression name → image (png/gif/webp/apng) or short video (webm). Should include `neutral`. */
+    expressions: Record<string, string>;
+    defaultExpression?: string;
+    /** Rendered width in CSS px. Default 240. */
+    size?: number;
+  };
+  /** Baselines for the mood model (`sdk.mood`). */
+  mood?: { baseline?: number; energyBaseline?: number };
   /** Extra capability requests specific to this character. */
   capabilities?: string[];
   modelHints?: ModelHints;

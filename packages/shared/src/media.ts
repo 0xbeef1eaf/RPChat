@@ -1,4 +1,4 @@
-import type { MediaItemId } from './ids.js';
+import type { Json, MediaItemId } from './ids.js';
 
 /** Where a media overlay is anchored on the chosen monitor. */
 export type MediaPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
@@ -105,6 +105,48 @@ export interface PlayAudioOptions {
 
 export type MediaKind = 'image' | 'video' | 'audio';
 
+/** Everything the display backend can put on screen. `image`/`video` come from `sdk.media`. */
+export type OverlayKind = 'image' | 'video' | 'avatar' | 'widget' | 'draw';
+
+export type AvatarAnimation = 'bounce' | 'shake' | 'nod' | 'wave' | 'pulse' | 'spin' | 'fade-in' | 'fade-out';
+
+export interface AvatarState {
+  visible: boolean;
+  expression: string;
+  /** rp-asset:// or loopback URL of the current expression image. */
+  imageUrl: string;
+  size: number;
+  lookAtCursor: boolean;
+  bubble?: { text: string; until?: string };
+  overlay: Required<Pick<OverlayOptions, 'layer' | 'opacity' | 'clickThrough'>> & { monitorId?: string; x?: number; y?: number; position?: MediaPosition };
+}
+
+export interface DrawShape {
+  type: 'arrow' | 'circle' | 'rect' | 'text' | 'line';
+  /** Coordinates in monitor logical px; fractions 0..1 are relative to the monitor. */
+  x: number;
+  y: number;
+  x2?: number;
+  y2?: number;
+  width?: number;
+  height?: number;
+  radius?: number;
+  text?: string;
+  color?: string;
+  strokeWidth?: number;
+  /** Auto-remove after this many ms. */
+  durationMs?: number;
+}
+
+export interface WidgetSpec {
+  id: string;
+  title?: string;
+  /** Character-authored HTML rendered in a sandboxed iframe (`allow-scripts` only). */
+  html: string;
+  width: number;
+  height: number;
+}
+
 export interface MediaItem {
   id: MediaItemId;
   kind: MediaKind;
@@ -116,18 +158,33 @@ export interface MediaItem {
   overlay?: Required<Pick<OverlayOptions, 'layer' | 'opacity' | 'clickThrough'>> & { monitorId?: string };
 }
 
-/** Commands sent from main to a media window. `url` is always an `rp-asset://` URL. */
+/**
+ * Commands sent from main to an overlay page (media.html). `url` is an `rp-asset://` URL in
+ * Electron windows or a loopback URL inside the native helper.
+ */
 export type MediaCommand =
   | { type: 'show-image'; id: MediaItemId; url: string; options: ShowImageOptions }
   | { type: 'play-video'; id: MediaItemId; url: string; options: PlayVideoOptions }
   | { type: 'play-audio'; id: MediaItemId; url: string; options: PlayAudioOptions }
   | { type: 'update'; id: MediaItemId; options: OverlayUpdate }
   | { type: 'close'; id: MediaItemId }
-  | { type: 'close-all' };
+  | { type: 'close-all' }
+  // avatar page
+  | { type: 'avatar-show'; id: MediaItemId; state: AvatarState }
+  | { type: 'avatar-set'; id: MediaItemId; patch: Partial<Pick<AvatarState, 'expression' | 'imageUrl' | 'size' | 'lookAtCursor' | 'bubble'>> & { animation?: AvatarAnimation; opacity?: number; clickThrough?: boolean } }
+  | { type: 'avatar-hide'; id: MediaItemId }
+  // widget page
+  | { type: 'widget-show'; id: MediaItemId; widget: WidgetSpec; options: OverlayOptions }
+  | { type: 'widget-update'; id: MediaItemId; html?: string; title?: string; postMessage?: Json }
+  // draw page (one full-monitor click-through surface per monitor)
+  | { type: 'draw-set'; id: MediaItemId; shapes: Array<DrawShape & { shapeId: string }> }
+  | { type: 'draw-clear'; id: MediaItemId };
 
 /** Events sent from a media window back to main. */
 export type MediaWindowEvent =
   | { type: 'content-size'; id: MediaItemId; width: number; height: number }
+  | { type: 'avatar-clicked'; id: MediaItemId }
+  | { type: 'widget-message'; id: MediaItemId; message: Json }
   | { type: 'ended'; id: MediaItemId }
   | { type: 'error'; id: MediaItemId; message: string }
   | { type: 'closed'; id: MediaItemId };

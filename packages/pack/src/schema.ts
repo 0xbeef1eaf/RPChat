@@ -15,6 +15,7 @@ export const BEHAVIOUR_HOOKS = [
   'onSessionStart',
   'onUserMessage',
   'onTimer',
+  'onEvent',
   'onSessionEnd',
 ] as const satisfies readonly BehaviourHook[];
 

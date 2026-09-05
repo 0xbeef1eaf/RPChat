@@ -69,9 +69,10 @@ export interface ActionContext {
 export type ActionTrigger =
   | { kind: 'llm'; actionId: string; messageId: string }
   | { kind: 'behaviour'; hook: BehaviourHook }
-  | { kind: 'timer'; timerId: string };
+  | { kind: 'timer'; timerId: string }
+  | { kind: 'event'; subscriptionId: string; event: string };
 
-export type BehaviourHook = 'onInstall' | 'onSessionStart' | 'onUserMessage' | 'onTimer' | 'onSessionEnd';
+export type BehaviourHook = 'onInstall' | 'onSessionStart' | 'onUserMessage' | 'onTimer' | 'onEvent' | 'onSessionEnd';
 
 /** A single `sdk.<module>.<method>(...args)` invocation crossing the sandbox boundary. */
 export interface CapabilityCall {
@@ -94,6 +95,12 @@ export interface CapabilityHandler {
   readonly moduleId: string;
   /** Called with validated permission. Throw `RpError` for failures. */
   invoke(method: string, args: Json[], context: ActionContext): Promise<Json | void>;
+  /**
+   * For `prompt`-level methods only: return true to skip the per-call confirmation because the
+   * call is covered by a user-configured allowlist (e.g. a web domain, a launchable app, a path
+   * inside the character's own home directory). Denials are still audited normally.
+   */
+  preauthorize?(method: string, args: Json[], context: ActionContext): Promise<boolean>;
   dispose?(): Promise<void> | void;
 }
 

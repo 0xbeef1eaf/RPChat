@@ -2,6 +2,7 @@ import type { ActionRecord } from './action.js';
 import type { SerializedError } from './errors.js';
 import type { CharacterRef, MessageId, SessionId } from './ids.js';
 import type { MemoryEntry } from './memory.js';
+import type { MoodState, RoutineStatus } from './senses.js';
 
 export type MessageRole = 'user' | 'assistant' | 'system';
 
@@ -14,8 +15,8 @@ export interface ChatMessage {
   createdAt: string;
   /** Actions executed as part of producing this assistant message. */
   actions?: ActionRecord[];
-  /** Origin of assistant text: LLM, a behaviour script (`sdk.chat.say`) or a timer. */
-  origin?: 'llm' | 'behaviour' | 'timer' | 'greeting';
+  /** Origin of assistant text: LLM, a behaviour script (`sdk.chat.say`), a timer, an event or a routine transition. */
+  origin?: 'llm' | 'behaviour' | 'timer' | 'event' | 'routine' | 'greeting';
   /** Emotes (`sdk.chat.emote`) are rendered in italics. */
   kind?: 'text' | 'emote';
   /** Provider usage for the turn that produced this message. */
@@ -59,6 +60,9 @@ export type ChatEvent =
   | { type: 'action-finished'; sessionId: SessionId; messageId: MessageId; action: ActionRecord }
   | { type: 'status'; sessionId: SessionId; text: string | null }
   | { type: 'memory-added'; sessionId: SessionId; memory: MemoryEntry }
+  | { type: 'mood-changed'; sessionId: SessionId; mood: MoodState }
+  | { type: 'routine-changed'; sessionId: SessionId; routine: RoutineStatus }
+  | { type: 'event-fired'; sessionId: SessionId; subscriptionId: string; event: string }
   | { type: 'turn-finished'; sessionId: SessionId; turnId: string }
   | { type: 'error'; sessionId: SessionId; error: SerializedError };
 

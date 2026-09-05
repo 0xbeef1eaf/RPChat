@@ -13,6 +13,8 @@ export interface ProviderConfig {
   model: string;
   /** Whether the provider/model supports native tool calling. Default true. */
   supportsTools?: boolean;
+  /** Whether the model accepts image content parts. Default true for Anthropic, false otherwise. */
+  supportsVision?: boolean;
   extraHeaders?: Record<string, string>;
 }
 
@@ -25,6 +27,8 @@ export interface ToolDefinition {
 
 export type ContentPart =
   | { type: 'text'; text: string }
+  /** Inline image for vision-capable models (base64 payload, no data: prefix). */
+  | { type: 'image'; mime: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; toolUseId: string; content: string; isError?: boolean };
 

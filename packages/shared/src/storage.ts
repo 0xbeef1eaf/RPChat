@@ -3,6 +3,7 @@ import type { CapabilityGrant } from './capability.js';
 import type { Json, SessionId } from './ids.js';
 import type { InstalledPackRecord } from './pack.js';
 import type { MemoryEntry } from './memory.js';
+import type { EventSubscription } from './senses.js';
 import type { AppSettings } from './settings.js';
 
 /** Persistence contract. Implemented by `FileStorage` and `MemoryStorage` in `@rp/core`. */
@@ -54,6 +55,12 @@ export interface Storage {
     upsert(entry: MemoryEntry): Promise<void>;
     remove(id: string): Promise<void>;
     removeForCharacter(characterRef: string): Promise<void>;
+  };
+  subscriptions: {
+    list(sessionId?: SessionId): Promise<EventSubscription[]>;
+    upsert(sub: EventSubscription): Promise<void>;
+    remove(id: string): Promise<void>;
+    removeForSession(sessionId: SessionId): Promise<void>;
   };
   audit: {
     append(entry: AuditEntry): Promise<void>;

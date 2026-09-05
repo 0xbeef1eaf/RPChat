@@ -5,6 +5,7 @@ import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo } 
 import type { CharacterSummary, InstalledPackRecord, PackManifest } from './pack.js';
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { MemoryEntry, MemoryImportance } from './memory.js';
+import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
 
 export type Unsubscribe = () => void;
 
@@ -33,6 +34,24 @@ export interface InstalledPackView extends InstalledPackRecord {
   grants: CapabilityGrant[];
   readme?: string;
   characters: CharacterSummary[];
+  /** requested ∩ global policy ∩ per-pack grant. */
+  effectiveCapabilities: string[];
+  /** Requested modules the global policy denies (the per-pack toggle cannot override these). */
+  blockedByPolicy: string[];
+}
+
+/** What a pack asks for, computed before installing it (for browsing/comparing packs). */
+export interface PackInspection {
+  manifest: PackManifest;
+  characters: Array<{ id: string; name: string; tagline?: string }>;
+  requestedCapabilities: string[];
+  /** requestedCapabilities ∩ global policy. */
+  allowedByPolicy: string[];
+  blockedByPolicy: string[];
+  /** Requested modules this app does not know. */
+  unknownCapabilities: string[];
+  readme?: string;
+  assetCounts: Record<string, number>;
 }
 
 /**
@@ -51,6 +70,8 @@ export interface IpcApi {
     list(): Promise<InstalledPackView[]>;
     /** Opens a native file/directory picker, returns the chosen path or null. */
     pickInstallSource(kind: 'file' | 'directory'): Promise<string | null>;
+    /** Read a pack directory or .rppack without installing it. */
+    inspect(sourcePath: string): Promise<PackInspection>;
     install(sourcePath: string): Promise<InstalledPackView>;
     uninstall(packId: string): Promise<void>;
     setGrant(packId: string, module: string, granted: boolean): Promise<void>;
@@ -63,6 +84,16 @@ export interface IpcApi {
   };
   characters: {
     list(): Promise<CharacterSummary[]>;
+    /** Live mood and routine state of a character. */
+    status(characterRef: string): Promise<{ mood: MoodState; routine: RoutineStatus; routineEntries: RoutineEntry[] }>;
+  };
+  events: {
+    list(sessionId?: string): Promise<EventSubscription[]>;
+    remove(id: string): Promise<void>;
+  };
+  senses: {
+    /** Current presence snapshot as the host sees it (for the settings/debug view). */
+    snapshot(): Promise<PresenceSnapshot>;
   };
   sessions: {
     list(): Promise<Session[]>;
