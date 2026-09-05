@@ -6,6 +6,7 @@ import { ChatView } from '../views/ChatView';
 import { PacksView } from '../views/PacksView';
 import { SdkReferenceView } from '../views/SdkReferenceView';
 import { SettingsView } from '../views/SettingsView';
+import { MemoriesPanel } from './memory/MemoriesPanel';
 import { PermissionModal } from './modals/PermissionModal';
 import { UiPromptModal } from './modals/UiPromptModal';
 import { Sidebar } from './Sidebar';
@@ -59,6 +60,7 @@ export function App() {
         {route === 'log' ? <ActionLogView /> : null}
         {route === 'sdk' ? <SdkReferenceView /> : null}
       </main>
+      <MemoriesPanel />
       <PermissionModal />
       <UiPromptModal />
       <Toasts />

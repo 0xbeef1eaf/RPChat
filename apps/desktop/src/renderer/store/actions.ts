@@ -5,9 +5,12 @@
  */
 import type { CharacterRef, PermissionDecision, Session, SessionId, UiPromptAnswer } from '@rp/shared';
 import { api, errorMessage } from '../api';
+import { truncate } from '../lib/format';
 import { newId } from '../lib/ids';
 import {
   applyChatEvent,
+  closeMemoriesPanel,
+  openMemoriesPanel,
   dequeuePermissionRequest,
   dequeueUiPrompt,
   enqueuePermissionRequest,
@@ -19,7 +22,7 @@ import {
   setSessions,
   upsertSession,
 } from './reducers';
-import type { RouteName, Toast } from './state';
+import type { MemoriesPanelTarget, RouteName, Toast } from './state';
 import { appStore, update } from './store';
 
 export function toast(kind: Toast['kind'], text: string, ttlMs = kind === 'error' ? 8000 : 3500): void {
@@ -89,6 +92,9 @@ export async function bootstrap(): Promise<void> {
     update((s) => applyChatEvent(s, event));
     if (event.type === 'turn-finished' || event.type === 'message-added' || event.type === 'error') {
       scheduleSessionsRefresh();
+    }
+    if (event.type === 'memory-added' && event.sessionId === appStore.getState().activeSessionId) {
+      toast('info', `remembered: ${truncate(event.memory.text, 90)}`, 4500);
     }
   });
   rp.permissions.onRequest((request) => update((s) => enqueuePermissionRequest(s, request)));
@@ -223,4 +229,12 @@ export async function closeAllMedia(): Promise<void> {
   } catch (err) {
     reportError('Could not close media', err);
   }
+}
+
+export function openMemories(target: MemoriesPanelTarget): void {
+  update((s) => openMemoriesPanel(s, target));
+}
+
+export function closeMemories(): void {
+  update((s) => closeMemoriesPanel(s));
 }

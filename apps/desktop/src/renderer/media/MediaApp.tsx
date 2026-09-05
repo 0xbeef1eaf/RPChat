@@ -1,18 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MediaCommand, MediaWindowEvent } from '@rp/shared';
-import { api } from '../api';
 import { MediaItemView } from './MediaItemView';
 import { applyMediaCommand, applyMediaLocalEvent, INITIAL_MEDIA_STATE, type MediaLocalEvent, type MediaState } from './mediaState';
+import type { MediaTransport } from './transport';
 
-function report(events: MediaWindowEvent[]): void {
-  for (const ev of events) {
-    api()
-      .media.report(ev)
-      .catch((err) => console.error('media.report failed', err));
-  }
+interface MediaAppProps {
+  transport: MediaTransport;
 }
 
-export function MediaApp() {
+export function MediaApp({ transport }: MediaAppProps) {
   const [state, setState] = useState<MediaState>(INITIAL_MEDIA_STATE);
   // Reducer transitions must run once per command even under StrictMode, so
   // we keep the authoritative state in a ref and mirror it into React state.
@@ -22,13 +18,13 @@ export function MediaApp() {
     const { state: next, reports } = fn(stateRef.current);
     stateRef.current = next;
     setState(next);
-    report(reports);
-  }, []);
+    for (const ev of reports) transport.report(ev);
+  }, [transport]);
 
   useEffect(() => {
     const onCommand = (command: MediaCommand) => transition((s) => applyMediaCommand(s, command));
-    return api().media.onCommand(onCommand);
-  }, [transition]);
+    return transport.onCommand(onCommand);
+  }, [transport, transition]);
 
   const onEvent = useCallback((event: MediaLocalEvent) => transition((s) => applyMediaLocalEvent(s, event)), [transition]);
 

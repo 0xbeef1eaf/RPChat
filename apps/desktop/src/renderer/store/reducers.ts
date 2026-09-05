@@ -11,7 +11,7 @@ import type {
   SessionId,
   UiPromptRequest,
 } from '@rp/shared';
-import { EMPTY_RUNTIME, type AppState, type SessionRuntime, type Toast } from './state';
+import { EMPTY_RUNTIME, type AppState, type MemoriesPanelTarget, type SessionRuntime, type Toast } from './state';
 
 const MAX_TOASTS = 4;
 
@@ -77,6 +77,8 @@ export function applyChatEvent(state: AppState, event: ChatEvent): AppState {
     }
     case 'text-delta':
       return patchMessage(state, event.sessionId, event.messageId, (m) => ({ ...m, content: m.content + event.delta }));
+    case 'memory-added':
+      return { ...state, memoryVersion: state.memoryVersion + 1 };
     case 'action-started':
     case 'action-finished':
       return patchMessage(state, event.sessionId, event.messageId, (m) => ({
@@ -143,4 +145,12 @@ export function pushToast(state: AppState, toast: Toast): AppState {
 
 export function removeToast(state: AppState, id: string): AppState {
   return { ...state, toasts: state.toasts.filter((t) => t.id !== id) };
+}
+
+export function openMemoriesPanel(state: AppState, target: MemoriesPanelTarget): AppState {
+  return { ...state, memoriesPanel: target };
+}
+
+export function closeMemoriesPanel(state: AppState): AppState {
+  return state.memoriesPanel ? { ...state, memoriesPanel: null } : state;
 }

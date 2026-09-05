@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { CapabilityInfo, InstalledPackView } from '@rp/shared';
 import { formatDateTime } from '../../lib/format';
-import { createSession, setGrant } from '../../store/actions';
+import { createSession, openMemories, setGrant } from '../../store/actions';
 import { Avatar } from '../common/Avatar';
 import { Markdown } from '../common/Markdown';
 import { Toggle } from '../common/Toggle';
@@ -64,6 +64,9 @@ export function PackCard({ pack, capabilities, onUninstall }: PackCardProps) {
                   <span className="item-title">{c.name}</span>
                   {c.tagline ? <span className="item-sub">{c.tagline}</span> : null}
                 </div>
+                <button type="button" className="btn btn-sm" onClick={() => openMemories({ characterRef: c.ref })}>
+                  Memories
+                </button>
                 <button type="button" className="btn btn-sm btn-primary" onClick={() => createSession(c.ref)}>
                   Start chat
                 </button>

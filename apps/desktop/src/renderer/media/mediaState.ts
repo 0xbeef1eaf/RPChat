@@ -81,9 +81,14 @@ export function effectiveOpacity(opacity: number | undefined): number {
   return Math.min(1, Math.max(0, opacity));
 }
 
-/** Only `rp-asset:` URLs are ever rendered; anything else is rejected with an error report. */
+/**
+ * Only pack assets are ever rendered: `rp-asset://` (Electron) or the app's
+ * loopback media server (`http://127.0.0.1:<port>/t/<token>/asset/...`) used by
+ * native overlay helpers. Anything else is rejected with an error report.
+ */
 export function isAllowedMediaUrl(url: string): boolean {
-  return /^rp-asset:\/\/[a-z0-9][a-z0-9.-]*\/.+/i.test(url);
+  if (/^rp-asset:\/\/[a-z0-9][a-z0-9.-]*\/.+/i.test(url)) return true;
+  return /^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?\/t\/[A-Za-z0-9_-]+\/asset\/[a-z0-9][a-z0-9.-]*\/.+/i.test(url);
 }
 
 export function applyMediaCommand(state: MediaState, command: MediaCommand): MediaTransition {

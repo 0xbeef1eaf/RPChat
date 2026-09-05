@@ -28,6 +28,12 @@ export interface SessionRuntime {
   error: SerializedError | null;
 }
 
+export interface MemoriesPanelTarget {
+  characterRef: string;
+  /** Open session for the character, enabling "Consolidate now". */
+  sessionId?: SessionId;
+}
+
 export interface AppState {
   route: RouteName;
   appVersion: string;
@@ -46,6 +52,10 @@ export interface AppState {
   permissionRequests: PermissionRequest[];
   uiPrompts: UiPromptRequest[];
   toasts: Toast[];
+  /** Which character's memories panel is open, if any. */
+  memoriesPanel: MemoriesPanelTarget | null;
+  /** Bumped on every `memory-added` event so open panels re-fetch. */
+  memoryVersion: number;
 }
 
 export const EMPTY_RUNTIME: SessionRuntime = { turnId: null, status: null, error: null };
@@ -66,6 +76,8 @@ export function initialState(): AppState {
     permissionRequests: [],
     uiPrompts: [],
     toasts: [],
+    memoriesPanel: null,
+    memoryVersion: 0,
   };
 }
 

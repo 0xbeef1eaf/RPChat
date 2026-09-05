@@ -5,7 +5,7 @@ import { Composer } from '../components/chat/Composer';
 import { MessageList } from '../components/chat/MessageList';
 import { SessionPanel } from '../components/chat/SessionPanel';
 import { Avatar } from '../components/common/Avatar';
-import { abortTurn, closeAllMedia, deleteSession, navigate, saveSession, sendMessage } from '../store/actions';
+import { abortTurn, closeAllMedia, deleteSession, navigate, openMemories, saveSession, sendMessage } from '../store/actions';
 import { runtimeFor } from '../store/state';
 import { useAppState } from '../store/store';
 
@@ -71,6 +71,14 @@ export function ChatView() {
             {session.model ? ` · ${session.model}` : ''}
           </div>
         </div>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => openMemories({ characterRef: session.characterRef, sessionId: session.id })}
+          title={`What ${characterName} remembers about you`}
+        >
+          Memories
+        </button>
         <button type="button" className="btn btn-sm" onClick={closeAllMedia} title="Close every open media window">
           Close media
         </button>

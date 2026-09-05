@@ -111,6 +111,17 @@ describe('applyChatEvent', () => {
     ]);
   });
 
+  it('memory-added bumps memoryVersion and leaves messages alone', () => {
+    const s = loaded();
+    const next = applyChatEvent(s, {
+      type: 'memory-added',
+      sessionId: S,
+      memory: { id: 'mem1', characterRef: 'p/c', text: 'likes tea', tags: [], importance: 3, source: 'character', createdAt: 'now', updatedAt: 'now', recallCount: 0 },
+    });
+    expect(next.memoryVersion).toBe(s.memoryVersion + 1);
+    expect(next.messages).toBe(s.messages);
+  });
+
   it('does not mutate the previous state', () => {
     const s = loaded();
     const before = JSON.stringify(s);

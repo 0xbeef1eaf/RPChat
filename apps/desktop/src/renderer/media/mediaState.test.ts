@@ -154,6 +154,11 @@ describe('applyMediaLocalEvent', () => {
 describe('helpers', () => {
   it('isAllowedMediaUrl', () => {
     expect(isAllowedMediaUrl('rp-asset://com.example.pack/media/a.png')).toBe(true);
+    expect(isAllowedMediaUrl('http://127.0.0.1:4321/t/abcDEF_-9/asset/com.example.pack/media/a.png')).toBe(true);
+    expect(isAllowedMediaUrl('http://localhost:80/t/tok/asset/com.example.pack/v.mp4')).toBe(true);
+    expect(isAllowedMediaUrl('http://127.0.0.1:4321/t/tok/media.html')).toBe(false);
+    expect(isAllowedMediaUrl('http://evil.example/t/tok/asset/com.example.pack/a.png')).toBe(false);
+    expect(isAllowedMediaUrl('https://127.0.0.1/t/tok/asset/com.example.pack/a.png')).toBe(false);
     expect(isAllowedMediaUrl('file:///etc/passwd')).toBe(false);
     expect(isAllowedMediaUrl('rp-asset://')).toBe(false);
   });
