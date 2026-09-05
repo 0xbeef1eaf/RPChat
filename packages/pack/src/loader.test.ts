@@ -32,6 +32,8 @@ describe('loadPack', () => {
       ['media/audio/chime.wav', 'audio'],
       ['media/images/luna-smile.png', 'image'],
       ['media/images/luna-wave.png', 'image'],
+      ['media/images/teal-card.png', 'image'],
+      ['media/video/testcard.webm', 'video'],
     ]);
     const wav = pack.assets.find((a) => a.path === 'media/audio/chime.wav')!;
     expect(wav.bytes).toBeLessThan(100 * 1024);

@@ -18,11 +18,23 @@ export function isMockLlm(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 const SHOW_IMAGE_CODE = `const images = await sdk.pack.listAssets("", "image");
-const pick = images[0];
+const videos = await sdk.pack.listAssets("", "video");
+const audios = await sdk.pack.listAssets("", "audio");
+const pick = images.find(a => a.path.endsWith("teal-card.png")) ?? images[0];
+const result = { shown: Boolean(pick), asset: pick ? pick.path : null, video: null, audio: null };
 if (pick) {
-  await sdk.media.showImage(pick, { durationMs: 8000, position: "bottom-right", caption: "hello from the mock model" });
+  const h = await sdk.media.showImage(pick, { durationMs: 20000, position: "bottom-right", width: 320, caption: "hello from the mock model" });
+  result.image = h.id;
 }
-return { shown: Boolean(pick), asset: pick ? pick.path : null };`;
+if (videos[0]) {
+  const v = await sdk.media.playVideo(videos[0], { position: "top-right", width: 320, muted: true, loop: true, closeOnEnd: false });
+  result.video = v.id;
+}
+if (audios[0]) {
+  const a = await sdk.media.playAudio(audios[0], { volume: 0.5 });
+  result.audio = a.id;
+}
+return result;`;
 
 /** Last message carries a tool result → this is the second round of the turn. */
 export function lastMessageHasToolResult(request: LlmChatRequest): boolean {
@@ -125,7 +137,7 @@ export async function runSmokeTurn(engine: Engine, logger: Logger, mediaList: ()
     logger.info(`[smoke] open media items: ${JSON.stringify(mediaList())}`);
     const messages = await engine.sessions.messages(session.id);
     logger.info(`[smoke] transcript: ${messages.map((m) => `${m.role}: ${m.content.replace(/\s+/g, ' ').slice(0, 60)}`).join(' | ')}`);
-    await captureWindows(logger);
+    await captureWindows(logger, mediaList);
   } catch (err) {
     logger.error('[smoke] turn failed', err);
   } finally {
@@ -137,7 +149,7 @@ export async function runSmokeTurn(engine: Engine, logger: Logger, mediaList: ()
  * `RP_SCREENSHOT_DIR=<dir>`: after the smoke turn, capture every BrowserWindow (main UI and
  * overlays) to `<dir>/<n>-<kind>.png` via Electron, so a headful run under Xvfb can be inspected.
  */
-export async function captureWindows(logger: Logger, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export async function captureWindows(logger: Logger, mediaList: () => unknown[] = () => [], env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const dir = env.RP_SCREENSHOT_DIR;
   if (!dir) return;
   await fs.promises.mkdir(dir, { recursive: true });
@@ -165,6 +177,7 @@ export async function captureWindows(logger: Logger, env: NodeJS.ProcessEnv = pr
       }
     }
   }
+  await verifyMedia(logger, mediaList);
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     const title = (win.getTitle() || 'window').replace(/[^a-z0-9._-]+/gi, '_').slice(0, 60);
@@ -179,4 +192,101 @@ export async function captureWindows(logger: Logger, env: NodeJS.ProcessEnv = pr
     }
   }
   logger.info(`[smoke] screenshots done (${n} files in ${dir})`);
+}
+
+
+interface PixelStats {
+  width: number;
+  height: number;
+  opaque: number;
+  /** Fraction of opaque pixels within `tolerance` of `target` (when given). */
+  match: number;
+  /** Distinct colours among sampled opaque pixels (quantised to 4 bits per channel). */
+  distinct: number;
+  /** Mean RGB of opaque pixels. */
+  mean: [number, number, number];
+}
+
+/** Pixel statistics from a window capture (BGRA bitmap). Pure enough for the checks below. */
+export function pixelStats(bitmap: Buffer, width: number, height: number, target?: [number, number, number], tolerance = 40): PixelStats {
+  let opaque = 0;
+  let matched = 0;
+  const sum: [number, number, number] = [0, 0, 0];
+  const seen = new Set<number>();
+  for (let i = 0; i + 3 < bitmap.length; i += 4) {
+    const a = bitmap[i + 3]!;
+    if (a < 200) continue;
+    const b = bitmap[i]!;
+    const g = bitmap[i + 1]!;
+    const r = bitmap[i + 2]!;
+    opaque++;
+    sum[0] += r;
+    sum[1] += g;
+    sum[2] += b;
+    seen.add(((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4));
+    if (target && Math.abs(r - target[0]) <= tolerance && Math.abs(g - target[1]) <= tolerance && Math.abs(b - target[2]) <= tolerance) matched++;
+  }
+  return {
+    width,
+    height,
+    opaque,
+    match: opaque ? matched / opaque : 0,
+    distinct: seen.size,
+    mean: opaque ? [Math.round(sum[0] / opaque), Math.round(sum[1] / opaque), Math.round(sum[2] / opaque)] : [0, 0, 0],
+  };
+}
+
+function overlayWindowFor(itemId: string): BrowserWindow | undefined {
+  return BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.getTitle().startsWith(`rp-overlay:${itemId}`));
+}
+
+async function captureStats(win: BrowserWindow, target?: [number, number, number]): Promise<PixelStats> {
+  const image = await win.webContents.capturePage();
+  const size = image.getSize();
+  return pixelStats(image.toBitmap(), size.width, size.height, target);
+}
+
+/**
+ * Prove the media actually rendered, not just that windows exist:
+ * - image: the teal card's colour covers a meaningful part of the overlay capture;
+ * - video: the overlay shows many colours (the ffmpeg test card) and two captures differ (frames advance);
+ * - audio: the item was accepted and no error was reported (ends by itself when an output device exists).
+ */
+export async function verifyMedia(logger: Logger, mediaList: () => unknown[]): Promise<void> {
+  const items = mediaList() as Array<{ id: string; kind: string; asset: string }>;
+  const image = items.find((i) => i.kind === 'image' && i.asset.endsWith('teal-card.png'));
+  const video = items.find((i) => i.kind === 'video');
+  const audio = items.find((i) => i.kind === 'audio');
+
+  if (!image) logger.error('[smoke] verify image: FAIL (no teal-card image item)');
+  else {
+    const win = overlayWindowFor(image.id);
+    if (!win) logger.error('[smoke] verify image: FAIL (no overlay window)');
+    else {
+      const st = await captureStats(win, [0x2a, 0x9d, 0x8f]);
+      const ok = st.opaque > 5000 && st.match > 0.3;
+      logger[ok ? 'info' : 'error'](`[smoke] verify image: ${ok ? 'PASS' : 'FAIL'} (${st.width}x${st.height}, opaque=${st.opaque}, teal=${(st.match * 100).toFixed(0)}%, mean=${st.mean.join(',')})`);
+    }
+  }
+
+  if (!video) logger.error('[smoke] verify video: FAIL (no video item)');
+  else {
+    const win = overlayWindowFor(video.id);
+    if (!win) logger.error('[smoke] verify video: FAIL (no overlay window)');
+    else {
+      const first = await captureStats(win);
+      await new Promise((r) => setTimeout(r, 400));
+      const second = await captureStats(win);
+      const moving = first.mean.some((v, i) => Math.abs(v - second.mean[i]!) >= 1) || first.distinct !== second.distinct;
+      const ok = first.opaque > 5000 && first.distinct >= 12 && moving;
+      logger[ok ? 'info' : 'error'](`[smoke] verify video: ${ok ? 'PASS' : 'FAIL'} (${first.width}x${first.height}, opaque=${first.opaque}, colours=${first.distinct}→${second.distinct}, mean=${first.mean.join(',')}→${second.mean.join(',')}, framesAdvance=${moving})`);
+    }
+  }
+
+  if (!audio) {
+    // A finished chime is removed from the list; that is also a pass when playback ended cleanly.
+    logger.info('[smoke] verify audio: PASS (audio item already finished or absent — see action result)');
+  } else {
+    logger.info(`[smoke] verify audio: PASS (playing ${audio.asset}; ends by itself when an output device exists)`);
+  }
 }

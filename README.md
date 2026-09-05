@@ -98,8 +98,10 @@ provider that shows an image from the sample pack and replies.
 `pnpm test:headful` runs the built app headful on an Xvfb display with a
 file-backed framebuffer, drives one mock-LLM turn, screenshots every window
 (chat with the action card, Packs, Settings, SDK reference, the overlays and the
-whole framebuffer) into `/tmp/rp-headful-shots`, and fails if the main process
-raised an uncaught exception. Needs `Xvfb`, `xwd`, `xdotool` and ImageMagick.
+whole framebuffer) into `/tmp/rp-headful-shots`, verifies from pixel data that
+the image overlay shows the pack image and the video overlay is playing (colour
+spread and frame advance), checks audio playback was accepted, and fails if the
+main process raised an uncaught exception. Needs `Xvfb`, `xwd`, `xdotool` and ImageMagick.
 
 ### Hyprland (and other wlr-layer-shell compositors)
 

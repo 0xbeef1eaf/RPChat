@@ -41,6 +41,8 @@ describe('indexAssets', () => {
       'media/audio/chime.wav',
       'media/images/luna-smile.png',
       'media/images/luna-wave.png',
+      'media/images/teal-card.png',
+      'media/video/testcard.webm',
     ]);
     for (const a of assets) expect(a.bytes).toBeGreaterThan(0);
     expect(assets.find((a) => a.path === 'media/audio/chime.wav')).toMatchObject({ kind: 'audio', mime: 'audio/wav' });

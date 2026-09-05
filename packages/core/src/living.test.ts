@@ -83,7 +83,7 @@ describe('permission policy (requested ∩ global ∩ per-pack)', () => {
     expect(inspection.allowedByPolicy).toEqual(['media']);
     expect(inspection.blockedByPolicy).toEqual(['ui']);
     expect(inspection.unknownCapabilities).toEqual([]);
-    expect(inspection.assetCounts).toEqual({ image: 3, audio: 1 });
+    expect(inspection.assetCounts).toEqual({ image: 4, audio: 1, video: 1 });
     expect(inspection.readme).toContain('# Luna');
     // nothing was installed by inspecting
     expect((await t.engine.packs.list()).map((p) => p.packId)).toEqual([LUNA_ID]);
