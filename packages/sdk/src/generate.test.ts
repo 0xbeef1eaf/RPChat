@@ -192,7 +192,7 @@ describe('describeSurface', () => {
 
   it('lists modules with their method names, dotted for nested members', () => {
     const surface = describeSurface(registry);
-    expect(surface.modules.map((m) => m.id)).toEqual(['chat', 'log', 'state', 'pack', 'timers', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input', 'system']);
+    expect(surface.modules.map((m) => m.id)).toEqual(['chat', 'log', 'state', 'pack', 'timers', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input', 'system']);
     const state = surface.modules.find((m) => m.id === 'state')!;
     expect(state.methods).toContain('session.get');
     expect(state.methods).toContain('session.all');

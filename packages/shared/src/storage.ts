@@ -2,6 +2,7 @@ import type { AuditEntry, ChatMessage, ScheduledTimer, Session } from './chat.js
 import type { CapabilityGrant } from './capability.js';
 import type { Json, SessionId } from './ids.js';
 import type { InstalledPackRecord } from './pack.js';
+import type { MemoryEntry } from './memory.js';
 import type { AppSettings } from './settings.js';
 
 /** Persistence contract. Implemented by `FileStorage` and `MemoryStorage` in `@rp/core`. */
@@ -46,6 +47,13 @@ export interface Storage {
     list(): Promise<ScheduledTimer[]>;
     upsert(timer: ScheduledTimer): Promise<void>;
     remove(id: string): Promise<void>;
+  };
+  memories: {
+    list(characterRef: string): Promise<MemoryEntry[]>;
+    get(id: string): Promise<MemoryEntry | undefined>;
+    upsert(entry: MemoryEntry): Promise<void>;
+    remove(id: string): Promise<void>;
+    removeForCharacter(characterRef: string): Promise<void>;
   };
   audit: {
     append(entry: AuditEntry): Promise<void>;

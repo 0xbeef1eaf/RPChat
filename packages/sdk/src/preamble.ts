@@ -143,6 +143,21 @@ interface MediaHandle {
   readonly asset: string;
 }
 
+/** A long-term memory as returned by sdk.memory.*. */
+interface MemoryEntry {
+  id: string;
+  /** The remembered note, in your voice. */
+  text: string;
+  tags: string[];
+  /** 1 (trivia) .. 5 (defining). */
+  importance: 1 | 2 | 3 | 4 | 5;
+  /** 'character' = you stored it; 'consolidation' = the app distilled it from a conversation; 'user' = the user wrote it. */
+  source: 'character' | 'consolidation' | 'user';
+  /** ISO-8601 timestamps. */
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** One transcript message as returned by sdk.chat.history(). */
 interface HistoryMessage {
   /** 'user' is the human; 'assistant' is you (the character). */

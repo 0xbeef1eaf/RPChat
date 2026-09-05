@@ -8,39 +8,69 @@ templates. Contracts: `@rp/shared/media.ts` (`OverlayOptions`, `OverlayUpdate`,
 `MonitorInfo`, `DisplayBackendInfo`, `MediaCommand`), `@rp/shared/settings.ts`
 (`displayBackend`, `commandTemplates`, `maxInputLockMs`, `wallpaperRestoreFile`).
 
-## 1. Display backend abstraction
+## 1. Display backend abstraction (revised: the backend owns overlay lifecycle)
 
 ```ts
 // apps/desktop/src/main/display/backend.ts
-export interface OverlayWindowLike {           // what a backend manipulates (BrowserWindow behind an interface for tests)
-  id: string; title: string;
-  setBounds(b: { x: number; y: number; width: number; height: number }): void;
-  setAlwaysOnTop(flag: boolean, level?: string): void;
-  setIgnoreMouseEvents(ignore: boolean, opts?: { forward?: boolean }): void;
-  setOpacity(v: number): void;                 // Electron: Windows/macOS only; no-op on Linux
-  setFocusable(flag: boolean): void;
-  show(): void; hide(): void; isDestroyed(): boolean;
+export interface OverlaySpec {
+  id: string;
+  kind: 'image' | 'video';
+  /** Absolute file path of the asset (for backends that read files themselves). */
+  file: string;
+  /** rp-asset:// URL (Electron windows) — backends that need http get one from LoopbackServer. */
+  assetUrl: string;
+  packId: string; asset: string;
+  options: ResolvedOverlayOptions;
+  /** Page-level options forwarded to media.html (caption, durationMs, volume, loop, muted, closeOnEnd). */
+  page: ShowImageOptions | PlayVideoOptions;
+}
+export interface ResolvedOverlayOptions {
+  monitor: MonitorInfo; layer: OverlayLayer; opacity: number; clickThrough: boolean;
+  anchor: MediaPosition; marginPx: number; x?: number; y?: number;   // x/y resolved to logical px on the monitor
+  width: number; height?: number;
+}
+export interface OverlayHandle {
+  readonly id: string;
+  update(patch: OverlayUpdate): Promise<void>;         // placement/layer/opacity/clickThrough/size; also forwards the visual subset to the page
+  close(): Promise<void>;
+  on(event: 'ended' | 'closed' | 'error' | 'content-size', listener: (detail?: unknown) => void): () => void;
 }
 export interface DisplayBackend {
+  readonly name: string;
   info(): DisplayBackendInfo;
   monitors(): Promise<MonitorInfo[]>;
-  /** Called once after the window is created and shown; applies every option. */
-  apply(win: OverlayWindowLike, opts: ResolvedOverlayOptions): Promise<void>;
-  /** Live change (subset). */
-  update(win: OverlayWindowLike, patch: OverlayUpdate): Promise<void>;
+  createOverlay(spec: OverlaySpec): Promise<OverlayHandle>;
+  closeAll(): Promise<void>;
   dispose(): Promise<void>;
 }
-export interface ResolvedOverlayOptions {      // after defaults + monitor resolution + fallbacks
-  monitor: MonitorInfo; layer: OverlayLayer; opacity: number; clickThrough: boolean;
-  bounds: { x: number; y: number; width: number; height: number };   // absolute logical px
-}
-export function selectBackend(setting: AppSettings['displayBackend'], env = process.env): DisplayBackend;
-export function resolvePlacement(opts: OverlayPlacement & { width?: number; height?: number }, monitors: MonitorInfo[], size: { width: number; height: number }): { monitor: MonitorInfo; bounds: {...} };  // pure; unit-tested
+export function resolveOverlayOptions(opts: OverlayOptions, monitors: MonitorInfo[], defaults: { layer: OverlayLayer }): ResolvedOverlayOptions;  // pure, unit-tested
+export async function selectBackend(setting: AppSettings['displayBackend'], ctx: { env, findHelper(): string | undefined, logger }): Promise<DisplayBackend>;
 ```
 
-`resolvePlacement` rules: pick monitor by selector (`primary` default, `cursor` = `hasCursor`, number = index, string = id or name, unknown → primary). Size = requested `width`/`height` or the content size reported by the media window (`content-size` event, see §4) with defaults 480×(auto). Presets anchor with `marginPx` (default 24) inside the monitor work area; `x`/`y` in 0..1 are fractions of the work area, > 1 are px offsets; the result is clamped so the window stays fully on the monitor.
+The media capability handler no longer touches windows: it resolves the asset, builds an `OverlaySpec`,
+calls `backend.createOverlay`, tracks `MediaItem`s and handles `durationMs`/`closeOnEnd`. Audio never
+creates an overlay: it plays in one hidden Electron window regardless of backend.
 
-Opacity is always ALSO applied in the media window as CSS `opacity` on the item container (via the command's `options.opacity`), because Electron's `setOpacity` is a no-op on Linux; the backend calls `setOpacity` where it works. Windows are created `transparent: true, frame: false, backgroundColor: '#00000000', hasShadow: false, skipTaskbar: true, focusable: false, resizable: false`.
+Backends in v1: `electron` (generic, base for every platform) and `hyprland` (composed of the
+`wlr-layer-shell` helper with an `hyprland-ipc` emulation fallback). Future backends (`kde`, `gnome`,
+`windows`, `macos`) implement the same interface; they are NOT built now. `selectBackend('auto')`:
+`HYPRLAND_INSTANCE_SIGNATURE` set → `hyprland`, else `electron`.
+
+### 1.0 Loopback media server (`apps/desktop/src/main/loopback.ts`)
+
+Native backends render `media.html` in their own web view, which cannot use `rp-asset://`. `LoopbackServer`
+(Node `http`, bound to `127.0.0.1`, random port, random 32-byte token in every path) serves:
+`/t/<token>/media.html` (+ its built JS/CSS from `out/renderer`, or proxies `ELECTRON_RENDERER_URL` in dev),
+and `/t/<token>/asset/<packId>/<path>` with the same pack-root guard and Range support as the protocol
+handler (share the code). Started lazily by the first native backend; `MediaCommand` URLs for native
+backends are rewritten from `rp-asset://` to the loopback URL. Unit-test the path guard and range logic
+(already required) plus the URL rewrite.
+
+`media.html` runs in two transports (renderer agent implements): Electron (`window.rp`) or helper mode,
+detected by `window.__rpHelper === true` / absence of `window.rp`: the initial `MediaCommand` is read from
+`location.hash` (`#cmd=<base64url JSON>`), later commands arrive through `window.__rpMediaCommand(cmdJson)`
+(the helper runs it via the `js` op), and reports are posted with
+`window.webkit.messageHandlers.rp.postMessage(JSON.stringify(event))`.
 
 ### 1.1 `electron` backend (default: Windows, macOS, X11, generic Wayland)
 
@@ -50,6 +80,20 @@ Opacity is always ALSO applied in the media window as CSS `opacity` on the item 
 - exactPosition: `true` except when `windowSystem === 'wayland'` (compositors ignore `setBounds` position) → `false`; in that case still set size and let the compositor place it.
 
 ### 1.2 `hyprland` backend (Linux, Hyprland ≥ 0.40)
+
+Two tiers, chosen at startup:
+
+1. **`wlr-layer-shell` tier** (preferred): the Rust helper described in `docs/spec/overlay-helper.md`
+   is spawned once (`HelperProcess`: spawn, `hello`, JSON-lines reader, request/response by `seq`,
+   restart with backoff on crash, `quit` on dispose). `createOverlay` → `show` with the loopback URL,
+   `OverlayHandle.update` → `update` (+ `js` for the visual subset), `close` → `close`; helper `message`
+   events map to `content-size` / `ended` / `error` / `closed`. `info()` reports all four layers,
+   opacity, clickThrough, exactPosition, monitorSelection true. Monitors come from the helper
+   (`monitors` op) merged with Hyprland IPC names where the helper lacks connector names (match by geometry).
+2. **`hyprland-ipc` tier** (fallback when the helper binary is missing or fails `hello`): Electron
+   windows manipulated through Hyprland IPC as below; `info().supports.layers = ['top','overlay']` and
+   `bottom`/`background` are emulated with `alterzorder bottom` (still above tiled windows — say so in
+   the log and in `DisplayBackendInfo.name = 'hyprland-ipc'`).
 
 Detect with `HYPRLAND_INSTANCE_SIGNATURE`. Talk to Hyprland over its IPC socket `${XDG_RUNTIME_DIR}/hypr/${HYPRLAND_INSTANCE_SIGNATURE}/.socket.sock` (request/response, same syntax as `hyprctl`, prefix `j/` for JSON) with a fallback to spawning `hyprctl` when the socket is unavailable. Implement `hyprctl(cmd: string): Promise<string>` and `hyprctlJson<T>(cmd)`. Subscribe to the event socket `.socket2.sock` for `openwindow`/`closewindow`/`monitoradded`/`monitorremoved` (best effort; ignore errors).
 

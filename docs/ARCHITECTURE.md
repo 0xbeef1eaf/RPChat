@@ -57,6 +57,8 @@ Non-goals (v1)
 │   ├── sandbox/            @rp/sandbox   QuickJS (wasm) code runner, TS transpile, host bridge, limits
 │   └── core/               @rp/core      Chat engine: sessions, prompt builder, action loop,
 │                                         behaviours/timers, permissions, storage, audit log
+├── native/
+│   └── overlay-wlr/        rp-overlay-wlr  Rust wlr-layer-shell overlay helper (Hyprland & co.)
 ├── examples/packs/         Sample packs used by tests and as user documentation
 └── docs/                   This document + per-package specs
 ```
@@ -171,6 +173,7 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `state`  | trusted    | `get/set/delete/keys` (character-scoped, persistent), `session.get/set/delete/keys` |
 | `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `readText(path)`, `info()`                    |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `cancel(id)`, `list()`                         |
+| `memory` | trusted    | `remember(text, opts?)`, `recall(query, limit?)`, `recent(limit?)`, `update(id, patch)`, `forget(id)` — long-term memory, also consolidated automatically (see `docs/spec/memory.md`) |
 | `display`| trusted    | `monitors()`, `backend()` — read-only screen/backend info for placement decisions   |
 | `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `update(id, changes)`, `close(id)`, `closeAll()`, `list()`; overlay options: monitor, position or x/y, layer (background/bottom/top/overlay), opacity, clickThrough, width/height |
 | `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`          |
@@ -380,9 +383,14 @@ JSONL, size-capped).
 
 ## 10a. Display backends and external commands
 
-Overlays are placed by a `DisplayBackend` (`electron` generic, or `hyprland`
-which drives Hyprland over its IPC socket so overlays get real placement,
-layers, opacity and click-through on Wayland). Wallpaper, browser and input
+Overlays are created and controlled by a `DisplayBackend` that owns their
+lifecycle. `electron` is the generic backend (BrowserWindows). `hyprland` uses
+a native Rust helper (`native/overlay-wlr`, GTK3 + gtk-layer-shell + WebKitGTK)
+that renders the same media page as a real wlr-layer-shell surface, with a
+Hyprland-IPC emulation fallback when the helper is unavailable. Future
+backends (KDE, GNOME, Windows, macOS) implement the same interface. The app
+shell stays Electron: a native layer-shell client is required either way, and
+this keeps the TypeScript engine in-process. Wallpaper, browser and input
 lock run user-editable **command templates** (argv-tokenised, placeholder
 substituted, no shell by default). See `docs/spec/overlay.md`.
 

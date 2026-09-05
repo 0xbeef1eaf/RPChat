@@ -1,6 +1,7 @@
 import type { ActionRecord } from './action.js';
 import type { SerializedError } from './errors.js';
 import type { CharacterRef, MessageId, SessionId } from './ids.js';
+import type { MemoryEntry } from './memory.js';
 
 export type MessageRole = 'user' | 'assistant' | 'system';
 
@@ -57,6 +58,7 @@ export type ChatEvent =
   | { type: 'action-started'; sessionId: SessionId; messageId: MessageId; action: ActionRecord }
   | { type: 'action-finished'; sessionId: SessionId; messageId: MessageId; action: ActionRecord }
   | { type: 'status'; sessionId: SessionId; text: string | null }
+  | { type: 'memory-added'; sessionId: SessionId; memory: MemoryEntry }
   | { type: 'turn-finished'; sessionId: SessionId; turnId: string }
   | { type: 'error'; sessionId: SessionId; error: SerializedError };
 

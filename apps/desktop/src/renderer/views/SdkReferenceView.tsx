@@ -1,0 +1,86 @@
+import { useEffect, useState } from 'react';
+import type { CapabilityInfo } from '@rp/shared';
+import { api, errorMessage } from '../api';
+
+const PERMISSION_LABEL: Record<CapabilityInfo['permission'], { text: string; cls: string; hint: string }> = {
+  trusted: { text: 'always on', cls: 'badge badge-success', hint: 'Effects stay inside the app; never needs a grant.' },
+  pack: { text: 'per pack', cls: 'badge badge-accent', hint: 'The pack must request it and you grant it in Packs.' },
+  prompt: { text: 'asks each call', cls: 'badge badge-warning', hint: 'Granted per pack and confirmed on every call.' },
+};
+
+export function SdkReferenceView() {
+  const [caps, setCaps] = useState<CapabilityInfo[] | null>(null);
+  const [typings, setTypings] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([api().capabilities.list(), api().capabilities.typings()])
+      .then(([c, t]) => {
+        setCaps(c);
+        setTypings(t);
+      })
+      .catch((err) => setError(errorMessage(err)));
+  }, []);
+
+  return (
+    <div className="view">
+      <div className="view-header">
+        <h1>SDK reference</h1>
+      </div>
+      <p className="muted" style={{ marginBottom: 16, maxWidth: 720 }}>
+        Characters act by writing TypeScript against this SDK. The code runs in a sandbox and can only reach your PC through the
+        modules below, subject to the permissions you grant per pack. This is exactly what the model is shown.
+      </p>
+      {error ? <div className="callout callout-danger">{error}</div> : null}
+      {caps === null && !error ? (
+        <div className="row muted">
+          <span className="spinner" /> Loading…
+        </div>
+      ) : null}
+      {caps ? (
+        <section className="section">
+          <h2>Capability modules</h2>
+          <div className="cap-cards">
+            {caps.map((c) => {
+              const perm = PERMISSION_LABEL[c.permission];
+              return (
+                <div key={c.id} className="card cap-card">
+                  <div className="row">
+                    <h3 className="grow">
+                      {c.title} <span className="muted mono small">sdk.{c.id}</span>
+                    </h3>
+                    <span className={perm.cls} title={perm.hint}>
+                      {perm.text}
+                    </span>
+                  </div>
+                  <p className="muted small">{c.summary}</p>
+                  <ul>
+                    {c.methods.map((m) => (
+                      <li key={m.name}>
+                        <code>{m.name}()</code>
+                        {m.dangerous ? (
+                          <span className="badge badge-danger" style={{ marginLeft: 6 }}>
+                            dangerous
+                          </span>
+                        ) : null}{' '}
+                        <span className="muted">{m.description}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+      {typings !== null ? (
+        <section className="section">
+          <h2>sdk.d.ts</h2>
+          <pre className="typings">
+            <code>{typings}</code>
+          </pre>
+        </section>
+      ) : null}
+    </div>
+  );
+}

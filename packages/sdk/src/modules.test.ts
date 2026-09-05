@@ -10,6 +10,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   },
   pack: { permission: 'trusted', methods: ['asset', 'listAssets', 'readText', 'info'] },
   timers: { permission: 'trusted', methods: ['schedule', 'cancel', 'list'] },
+  memory: { permission: 'trusted', methods: ['remember', 'recall', 'recent', 'update', 'forget'] },
   display: { permission: 'trusted', methods: ['monitors', 'backend'] },
   media: { permission: 'pack', methods: ['showImage', 'playVideo', 'playAudio', 'update', 'close', 'closeAll', 'list'] },
   ui: { permission: 'pack', methods: ['notify', 'confirm', 'choose'] },

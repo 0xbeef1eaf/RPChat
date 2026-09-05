@@ -1,5 +1,6 @@
 import type { RunLimits } from './action.js';
 import type { ProviderConfig } from './llm.js';
+import { DEFAULT_MEMORY_SETTINGS, type MemorySettings } from './memory.js';
 
 /**
  * A user-editable external command. `command` is tokenised like a shell command line
@@ -51,6 +52,7 @@ export interface AppSettings {
   maxInputLockMs: number;
   /** Wallpaper file to restore with `sdk.wallpaper.restore()`; empty = unknown. */
   wallpaperRestoreFile: string;
+  memory: MemorySettings;
 }
 
 export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: RunLimits } = {
@@ -70,4 +72,5 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   },
   maxInputLockMs: 5 * 60_000,
   wallpaperRestoreFile: '',
+  memory: DEFAULT_MEMORY_SETTINGS,
 };

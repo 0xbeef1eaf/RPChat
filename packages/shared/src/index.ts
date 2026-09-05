@@ -8,4 +8,5 @@ export * from './llm.js';
 export * from './settings.js';
 export * from './media.js';
 export * from './storage.js';
+export * from './memory.js';
 export * from './ipc.js';

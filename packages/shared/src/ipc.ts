@@ -4,6 +4,7 @@ import type { ModelInfo, ProviderConfig } from './llm.js';
 import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo } from './media.js';
 import type { CharacterSummary, InstalledPackRecord, PackManifest } from './pack.js';
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
+import type { MemoryEntry, MemoryImportance } from './memory.js';
 
 export type Unsubscribe = () => void;
 
@@ -92,6 +93,14 @@ export interface IpcApi {
   };
   audit: {
     list(options?: { sessionId?: string; limit?: number }): Promise<AuditEntry[]>;
+  };
+  memories: {
+    list(characterRef: string): Promise<MemoryEntry[]>;
+    add(characterRef: string, text: string, options?: { tags?: string[]; importance?: MemoryImportance }): Promise<MemoryEntry>;
+    update(entry: MemoryEntry): Promise<MemoryEntry>;
+    remove(id: string): Promise<void>;
+    /** Force a consolidation pass for a session now. */
+    consolidate(sessionId: string): Promise<MemoryEntry[]>;
   };
   ui: {
     onPrompt(listener: (request: UiPromptRequest) => void): Unsubscribe;

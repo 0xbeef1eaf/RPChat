@@ -1,0 +1,121 @@
+/* Media overlay window: transparent, frameless, nothing but the items. */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, Cantarell, sans-serif;
+  color: #fff;
+  user-select: none;
+}
+
+#root,
+.media-stage {
+  width: 100vw;
+  height: 100vh;
+}
+
+.media-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.media-item {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: media-in 220ms ease-out both;
+}
+
+.media-item.leaving {
+  animation: media-out 180ms ease-in both;
+}
+
+.media-item img,
+.media-item video {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 24px);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  background: #000;
+}
+
+.media-item.image {
+  cursor: pointer;
+}
+
+.media-caption {
+  margin-top: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: 100%;
+  text-align: center;
+  word-break: break-word;
+}
+
+.media-audio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(20, 20, 24, 0.85);
+  font-size: 12px;
+}
+
+@keyframes media-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes media-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .media-item,
+  .media-item.leaving {
+    animation: none;
+  }
+}
+
+.media-audio-stop {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 12px;
+}
+
+.media-item.click-through,
+.media-item.click-through * {
+  pointer-events: none;
+}
