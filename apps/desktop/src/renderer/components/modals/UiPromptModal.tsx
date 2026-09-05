@@ -1,8 +1,44 @@
+import { useEffect, useState } from 'react';
+import type { UiPromptRequest } from '@rp/shared';
 import { respondUiPrompt } from '../../store/actions';
 import { useAppState } from '../../store/store';
 import { Modal } from '../common/Modal';
 
-/** `sdk.ui.confirm` / `sdk.ui.choose` questions from a character. */
+/** `sdk.ui.ask`: a free-text answer. */
+function TextPrompt({ prompt, onCancel }: { prompt: UiPromptRequest; onCancel: () => void }) {
+  const [value, setValue] = useState(prompt.defaultValue ?? '');
+  useEffect(() => setValue(prompt.defaultValue ?? ''), [prompt.promptId, prompt.defaultValue]);
+  const submit = () => respondUiPrompt(prompt.promptId, value);
+  return (
+    <>
+      {prompt.multiline ? (
+        <textarea rows={5} autoFocus style={{ width: '100%' }} placeholder={prompt.placeholder ?? ''} value={value} onChange={(e) => setValue(e.target.value)} />
+      ) : (
+        <input
+          type="text"
+          autoFocus
+          placeholder={prompt.placeholder ?? ''}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit();
+          }}
+        />
+      )}
+      <div className="form-actions">
+        <button type="button" className="btn btn-ghost" onClick={onCancel}>
+          Dismiss
+        </button>
+        <span className="grow" />
+        <button type="button" className="btn btn-primary" onClick={submit}>
+          Send
+        </button>
+      </div>
+    </>
+  );
+}
+
+/** `sdk.ui.confirm` / `sdk.ui.choose` / `sdk.ui.ask` questions from a character. */
 export function UiPromptModal() {
   const queue = useAppState((s) => s.uiPrompts);
   const prompt = queue[0];
@@ -13,7 +49,9 @@ export function UiPromptModal() {
   return (
     <Modal title={`${prompt.characterName} asks`} onClose={cancel}>
       <p style={{ whiteSpace: 'pre-wrap' }}>{prompt.question}</p>
-      {prompt.kind === 'confirm' ? (
+      {prompt.kind === 'text' ? (
+        <TextPrompt prompt={prompt} onCancel={cancel} />
+      ) : prompt.kind === 'confirm' ? (
         <div className="form-actions">
           <button type="button" className="btn btn-ghost" onClick={cancel}>
             Dismiss

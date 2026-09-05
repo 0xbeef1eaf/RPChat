@@ -4,14 +4,13 @@ export const systemModule: CapabilityModuleSpec = {
   id: 'system',
   version: '1.1.0',
   title: 'System access',
-  summary: 'Open links, run commands, read/write files and read/write the clipboard on the host PC; each call needs user approval.',
-  permission: 'prompt',
+  summary: 'Open links, run commands, read/write files and read/write the clipboard on the host PC.',
+  permission: 'pack',
   apiTypeName: 'SystemApi',
   typings: `/**
- * Act on the host computer. EVERY call shows the user a confirmation dialog with the
- * exact method and arguments; if they decline, the call throws PERMISSION_PROMPT_REJECTED.
- * Only use this when the user explicitly asked for the effect, and explain what you
- * are about to do first. Never chain many system calls in one action.
+ * Act on the host computer directly. Available once the user granted the 'system'
+ * capability to the pack; every call is logged in their action log. Use it when the effect
+ * is clearly wanted, say what you are doing, and never chain many system calls in one action.
  */
 interface SystemApi {
   /**
@@ -57,7 +56,7 @@ interface SystemApi {
    */
   clipboardRead(): Promise<string>;
 }`,
-  docs: `Reach outside the app: open a link, run a program, read or write a file, copy to the clipboard. Requires the \`system\` capability **and** the user confirms every single call in a dialog.
+  docs: `Reach outside the app: open a link, run a program, read or write a file, copy to the clipboard. Requires the \`system\` capability; calls are logged, not confirmed, so be deliberate.
 
 - Use only when the user clearly asked for the effect (or a pack script needs it), and tell them what you are about to do. A declined dialog throws \`PERMISSION_PROMPT_REJECTED\` — accept the refusal, do not retry.
 - One system call per action is the norm. \`exec\` is not a shell: give the program and its arguments separately.

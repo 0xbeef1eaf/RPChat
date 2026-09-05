@@ -1,6 +1,6 @@
 /** `sdk.ui`: OS notifications, and confirm/choose modals answered in the main window. */
 import { randomUUID } from 'node:crypto';
-import { Notification } from 'electron';
+import { BrowserWindow, Notification, dialog } from 'electron';
 import type { ActionContext, CapabilityHandler, Json, UiPromptAnswer, UiPromptRequest } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import type { Logger } from '@rp/core';
@@ -19,6 +19,9 @@ export interface UiHandlerDeps {
   logger: Logger;
   /** Injectable for tests. */
   notify?: (title: string, body: string) => void;
+  /** Native pickers (Electron `dialog`); injectable for tests. */
+  pickFiles?: (opts: { title?: string; filters?: Array<{ name: string; extensions: string[] }>; multiple?: boolean }) => Promise<string[] | null>;
+  pickFolder?: (opts: { title?: string }) => Promise<string | null>;
 }
 
 function clip(v: unknown, max: number, what: string): string {
@@ -56,6 +59,44 @@ export class UiHandler implements CapabilityHandler {
         const answer = await this.ask({ kind: 'choose', question, options: labels }, context);
         return typeof answer === 'string' && labels.includes(answer) ? answer : null;
       }
+      case 'ask': {
+        const question = clip(args[0], 1000, 'question');
+        const o = (args[1] && typeof args[1] === 'object' && !Array.isArray(args[1]) ? args[1] : {}) as Record<string, unknown>;
+        const answer = await this.ask(
+          {
+            kind: 'text',
+            question,
+            ...(typeof o['placeholder'] === 'string' ? { placeholder: o['placeholder'].slice(0, 200) } : {}),
+            ...(typeof o['defaultValue'] === 'string' ? { defaultValue: o['defaultValue'].slice(0, 4000) } : {}),
+            ...(o['multiline'] === true ? { multiline: true } : {}),
+          },
+          context,
+        );
+        return typeof answer === 'string' ? answer.trim().slice(0, 4000) : null;
+      }
+      case 'pickFile': {
+        const o = (args[0] && typeof args[0] === 'object' && !Array.isArray(args[0]) ? args[0] : {}) as Record<string, unknown>;
+        const filters = Array.isArray(o['filters'])
+          ? (o['filters'] as unknown[]).flatMap((f) => {
+              if (!f || typeof f !== 'object') return [];
+              const r = f as Record<string, unknown>;
+              if (typeof r['name'] !== 'string' || !Array.isArray(r['extensions'])) return [];
+              return [{ name: r['name'], extensions: (r['extensions'] as unknown[]).filter((e): e is string => typeof e === 'string') }];
+            })
+          : undefined;
+        const picker = this.deps.pickFiles ?? defaultPickFiles;
+        const result = await picker({
+          ...(typeof o['title'] === 'string' ? { title: o['title'].slice(0, 200) } : {}),
+          ...(filters ? { filters } : {}),
+          ...(o['multiple'] === true ? { multiple: true } : {}),
+        });
+        return result;
+      }
+      case 'pickFolder': {
+        const o = (args[0] && typeof args[0] === 'object' && !Array.isArray(args[0]) ? args[0] : {}) as Record<string, unknown>;
+        const picker = this.deps.pickFolder ?? defaultPickFolder;
+        return picker({ ...(typeof o['title'] === 'string' ? { title: o['title'].slice(0, 200) } : {}) });
+      }
       default:
         throw new RpError('CAPABILITY_UNKNOWN', `Unknown method sdk.ui.${method}`);
     }
@@ -73,7 +114,7 @@ export class UiHandler implements CapabilityHandler {
     new Notification({ title, body, silent: false }).show();
   }
 
-  private ask(partial: Pick<UiPromptRequest, 'kind' | 'question' | 'options'>, context: ActionContext): Promise<UiPromptAnswer> {
+  private ask(partial: Pick<UiPromptRequest, 'kind' | 'question' | 'options' | 'placeholder' | 'defaultValue' | 'multiline'>, context: ActionContext): Promise<UiPromptAnswer> {
     const request: UiPromptRequest = {
       promptId: randomUUID(),
       sessionId: context.sessionId,
@@ -82,4 +123,22 @@ export class UiHandler implements CapabilityHandler {
     };
     return this.deps.prompts.ask(request.promptId, () => this.deps.deliver(request));
   }
+}
+
+async function defaultPickFiles(opts: { title?: string; filters?: Array<{ name: string; extensions: string[] }>; multiple?: boolean }): Promise<string[] | null> {
+  const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.isVisible());
+  const options: Electron.OpenDialogOptions = {
+    ...(opts.title ? { title: opts.title } : {}),
+    ...(opts.filters ? { filters: opts.filters } : {}),
+    properties: opts.multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+  };
+  const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths;
+}
+
+async function defaultPickFolder(opts: { title?: string }): Promise<string | null> {
+  const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.isVisible());
+  const options: Electron.OpenDialogOptions = { ...(opts.title ? { title: opts.title } : {}), properties: ['openDirectory'] };
+  const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+  return result.canceled || result.filePaths.length === 0 ? null : (result.filePaths[0] ?? null);
 }

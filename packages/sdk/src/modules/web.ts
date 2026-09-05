@@ -4,12 +4,12 @@ export const webModule: CapabilityModuleSpec = {
   id: 'web',
   version: '1.0.0',
   title: 'Web access',
-  summary: 'Fetch web pages/APIs and RSS feeds (allowlisted sites, otherwise per-call approval) and get the weather.',
+  summary: 'Fetch web pages/APIs and RSS feeds (any site, or only the sites the user allowlisted) and get the weather.',
   permission: 'pack',
   apiTypeName: 'WebApi',
   typings: `/**
  * Reach the internet. fetch() and rss() are allowed silently for hostnames on the user's
- * allowlist (Settings > Web) and ask the user for every other site; weather() is always allowed.
+ * allowlist (Settings > Web) when they set one — other hosts then throw PERMISSION_DENIED; with no allowlist any http(s) host works. weather() is always allowed.
  * Responses are text only and size-capped; there is no browser, no JavaScript, no cookies.
  */
 interface WebApi {
@@ -38,11 +38,11 @@ interface WebApi {
    */
   weather(place: string): Promise<{ place: string; tempC: number; feelsLikeC: number; condition: string; windKph: number; humidity: number; forecast: Array<{ day: string; minC: number; maxC: number; condition: string }> }>;
 }`,
-  docs: `Read from the internet. Requires the \`web\` capability. Sites on the user's allowlist are fetched silently; any other site prompts the user each call. \`weather()\` never prompts.
+  docs: `Read from the internet. Requires the \`web\` capability. If the user configured an allowlist, only those hosts work (others throw PERMISSION_DENIED); otherwise any http(s) site is fine. \`weather()\` always works.
 
 - Prefer APIs and feeds that return JSON/RSS over scraping HTML: responses are plain text, truncated at the size cap, with no JavaScript run.
 - Never send the user's private data (state, transcripts, file contents) to a site unless they explicitly asked you to.
-- Keep it to one or two requests per action; a declined prompt throws \`PERMISSION_PROMPT_REJECTED\` — do not retry.
+- Keep it to one or two requests per action; a PERMISSION_DENIED means the host is not on the user's allowlist — do not retry.
 
 \`\`\`ts
 const w = await sdk.web.weather("Lisbon");
@@ -50,8 +50,8 @@ const news = await sdk.web.rss("https://hnrss.org/frontpage", 3);
 return { weather: w.condition + ", " + w.tempC + "°C", headlines: news.map(n => n.title) };
 \`\`\``,
   methods: {
-    fetch: { description: 'HTTP GET/POST a URL and return the body text.', permission: 'prompt', dangerous: true },
-    rss: { description: 'Fetch and parse an RSS/Atom feed.', permission: 'prompt' },
+    fetch: { description: 'HTTP GET/POST a URL and return the body text.', dangerous: true },
+    rss: { description: 'Fetch and parse an RSS/Atom feed.' },
     weather: { description: 'Current weather and forecast for a place.' },
   },
 };

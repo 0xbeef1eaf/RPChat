@@ -73,16 +73,16 @@ export class WebHandler implements CapabilityHandler {
 
   constructor(private readonly deps: WebHandlerDeps) {}
 
-  /** Allowlisted hosts (and weather, which only talks to open-meteo) skip the per-call prompt. */
-  async preauthorize(method: string, args: Json[], _context: ActionContext): Promise<boolean> {
-    if (method === 'weather') return true;
-    if (method !== 'fetch' && method !== 'rss') return false;
-    if (typeof args[0] !== 'string') return false;
+  /** When the user configured an allowlist, only those hosts may be fetched; empty = any http(s) host. */
+  private async assertAllowed(url: string): Promise<void> {
     const { allowlist } = await this.deps.settings();
-    return isAllowlisted(args[0], allowlist);
+    if (allowlist.length > 0 && !isAllowlisted(url, allowlist)) {
+      throw new RpError('PERMISSION_DENIED', `Host of ${url} is not on your web allowlist (Settings > Integrations)`);
+    }
   }
 
   async invoke(method: string, args: Json[], _context: ActionContext): Promise<Json | void> {
+    if ((method === 'fetch' || method === 'rss') && typeof args[0] === 'string') await this.assertAllowed(args[0]);
     switch (method) {
       case 'fetch':
         return (await this.fetch(httpUrl(args[0]), args[1])) as unknown as Json;

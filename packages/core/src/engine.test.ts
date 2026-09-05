@@ -12,6 +12,7 @@ import {
   MINIMAL_ID,
   RecordingHandler,
   createTestEngine,
+  createTestRegistryWithProbe,
   installLunaWith,
   runAction,
 } from './test/helpers.js';
@@ -393,27 +394,27 @@ describe('permissions', () => {
     expect(audit[1]!.characterRef).toBe(LUNA_REF);
   });
 
-  it('prompts for prompt-level modules and remembers allow-session', async () => {
-    const system = new RecordingHandler('system', 'opened');
+  it('prompts for third-party prompt-level modules and remembers allow-session', async () => {
+    const system = new RecordingHandler('probe', 'opened');
     const decisions: Array<'allow-once' | 'allow-session' | 'deny'> = ['deny', 'allow-session'];
-    t = await createTestEngine({ hostHandlers: [system], prompter: async () => decisions.shift() ?? 'deny' });
-    await installLunaWith(t.engine, t.packsDir, ['media', 'ui', 'system']);
-    await t.engine.permissions.setGrant(LUNA_ID, 'system', false);
+    t = await createTestEngine({ hostHandlers: [system], registry: createTestRegistryWithProbe(), prompter: async () => decisions.shift() ?? 'deny' });
+    await installLunaWith(t.engine, t.packsDir, ['media', 'ui', 'probe']);
+    await t.engine.permissions.setGrant(LUNA_ID, 'probe', false);
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const context = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: '/x', trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
-    const call = (n: number) => t!.engine.dispatcher.invoke({ callId: `s${n}`, module: 'system', method: 'openExternal', args: ['https://example.com'], context });
+    const call = (n: number) => t!.engine.dispatcher.invoke({ callId: `s${n}`, module: 'probe', method: 'ping', args: ['https://example.com'], context });
 
     // Not granted at all → denied without prompting.
     expect(await call(1)).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
     expect(t.prompts).toHaveLength(0);
 
-    await t.engine.permissions.setGrant(LUNA_ID, 'system', true);
+    await t.engine.permissions.setGrant(LUNA_ID, 'probe', true);
     const emitted: unknown[] = [];
     t.engine.events.on('permission-request', (r) => emitted.push(r));
 
     expect(await call(2)).toMatchObject({ ok: false, error: { code: 'PERMISSION_PROMPT_REJECTED' } });
     expect(t.prompts).toHaveLength(1);
-    expect(t.prompts[0]).toMatchObject({ call: { module: 'system', method: 'openExternal', args: ['https://example.com'] }, dangerous: true, context: { packId: LUNA_ID, sessionId: session.id } });
+    expect(t.prompts[0]).toMatchObject({ call: { module: 'probe', method: 'ping', args: ['https://example.com'] }, dangerous: true, context: { packId: LUNA_ID, sessionId: session.id } });
     expect(emitted).toHaveLength(1);
 
     expect(await call(3)).toEqual({ ok: true, value: 'opened' });
@@ -423,12 +424,12 @@ describe('permissions', () => {
     expect(t.prompts).toHaveLength(2);
     // a different session prompts again (and is denied because the decision list is exhausted)
     const other = { ...context, sessionId: 'other-session' };
-    expect(await t.engine.dispatcher.invoke({ callId: 's5', module: 'system', method: 'openExternal', args: ['https://example.com'], context: other })).toMatchObject({ ok: false, error: { code: 'PERMISSION_PROMPT_REJECTED' } });
+    expect(await t.engine.dispatcher.invoke({ callId: 's5', module: 'probe', method: 'ping', args: ['https://example.com'], context: other })).toMatchObject({ ok: false, error: { code: 'PERMISSION_PROMPT_REJECTED' } });
     expect(t.prompts).toHaveLength(3);
     expect(system.calls).toHaveLength(2);
 
     // The SDK surface handed to the runner includes granted prompt-level modules.
-    expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).toContain('system');
+    expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).toContain('probe');
     await t.engine.permissions.setGrant(LUNA_ID, 'media', false);
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).not.toContain('media');
   });

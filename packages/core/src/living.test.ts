@@ -6,7 +6,7 @@ import { matchesFilter } from './services/events.js';
 import { decayToward, energyWord, moodPromptText, moodWord } from './services/mood.js';
 import { evaluateRoutine } from './services/routine.js';
 import { sensesLine } from './prompt.js';
-import { ECHO_REF, FakeSenses, LUNA_DIR, LUNA_ID, LUNA_REF, MINIMAL_DIR, MINIMAL_ID, RecordingHandler, createTestEngine, installLunaWith } from './test/helpers.js';
+import { ECHO_REF, FakeSenses, LUNA_DIR, LUNA_ID, LUNA_REF, MINIMAL_DIR, MINIMAL_ID, RecordingHandler, createTestEngine, createTestRegistryWithProbe, installLunaWith } from './test/helpers.js';
 import type { TestEngine } from './test/helpers.js';
 
 let t: TestEngine | undefined;
@@ -101,26 +101,26 @@ describe('permission policy (requested ∩ global ∩ per-pack)', () => {
 
   it('skips the dialog when the handler pre-authorises a prompt-level call', async () => {
     const calls: string[] = [];
-    const web = {
-      moduleId: 'web',
+    const probe = {
+      moduleId: 'probe',
       async invoke(method: string) {
         calls.push(method);
-        return { status: 200, headers: {}, text: 'ok' };
+        return 'ok';
       },
       async preauthorize(_method: string, args: Json[]) {
         return typeof args[0] === 'string' && args[0].startsWith('https://allowed.example');
       },
     };
-    t = await createTestEngine({ hostHandlers: [web], prompter: async () => 'deny' });
-    await installLunaWith(t.engine, t.packsDir, ['media', 'ui', 'web']);
+    t = await createTestEngine({ hostHandlers: [probe], registry: createTestRegistryWithProbe(), prompter: async () => 'deny' });
+    await installLunaWith(t.engine, t.packsDir, ['media', 'ui', 'probe']);
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const ctx = ctxOf(LUNA_ID, 'luna', session.id);
-    expect(await invoke(ctx, 'web', 'fetch', 'https://allowed.example/x')).toMatchObject({ ok: true });
+    expect(await invoke(ctx, 'probe', 'ping', 'https://allowed.example/x')).toMatchObject({ ok: true });
     expect(t.prompts).toHaveLength(0);
-    expect(await invoke(ctx, 'web', 'fetch', 'https://other.example/x')).toMatchObject({ ok: false, error: { code: 'PERMISSION_PROMPT_REJECTED' } });
+    expect(await invoke(ctx, 'probe', 'ping', 'https://other.example/x')).toMatchObject({ ok: false, error: { code: 'PERMISSION_PROMPT_REJECTED' } });
     expect(t.prompts).toHaveLength(1);
-    expect(calls).toEqual(['fetch']);
-    const audit = (await t.engine.audit.list({ sessionId: session.id })).filter((a) => a.module === 'web');
+    expect(calls).toEqual(['ping']);
+    const audit = (await t.engine.audit.list({ sessionId: session.id })).filter((a) => a.module === 'probe');
     expect(audit.map((a) => a.outcome)).toEqual(['allowed', 'denied']);
   });
 });

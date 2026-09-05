@@ -5,7 +5,7 @@ code**. Each character is driven by an LLM that, besides talking, may write
 short TypeScript snippets against a documented SDK. The app runs those snippets
 in a WebAssembly sandbox and executes the requested actions on the host:
 show a picture, play a video or sound, remember something, set a reminder,
-notify you, and (with per-call approval) touch the system.
+notify you, and touch the system, all within the capabilities you grant.
 
 Characters, their behaviours and their media are distributed as shareable
 **packs** (`.rppack` files or plain directories).
@@ -127,8 +127,9 @@ also available inside the app under **SDK Reference**.
 
 Packs and model output are untrusted. Read the security model in
 [docs/ARCHITECTURE.md §7](docs/ARCHITECTURE.md#7-security-model) before
-installing packs from people you do not know. Capabilities with effects
-outside the app (`system.*`) always require a per-call confirmation.
+installing packs from people you do not know. Nothing prompts per call: once you grant a
+capability to a pack (within your global policy), the character uses it freely,
+and every call is written to the audit log.
 
 ## License
 

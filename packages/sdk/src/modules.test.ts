@@ -14,7 +14,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   memory: { permission: 'trusted', methods: ['remember', 'recall', 'recent', 'update', 'forget'] },
   display: { permission: 'trusted', methods: ['monitors', 'backend'] },
   media: { permission: 'pack', methods: ['showImage', 'playVideo', 'playAudio', 'update', 'close', 'closeAll', 'list'] },
-  ui: { permission: 'pack', methods: ['notify', 'confirm', 'choose'] },
+  ui: { permission: 'pack', methods: ['notify', 'confirm', 'choose', 'ask', 'pickFile', 'pickFolder'] },
   wallpaper: { permission: 'pack', methods: ['set', 'restore', 'current'] },
   browser: { permission: 'pack', methods: ['open'] },
   input: { permission: 'pack', methods: ['lock', 'unlock', 'status', 'type', 'key', 'click', 'moveMouse'] },
@@ -34,7 +34,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   mood: { permission: 'trusted', methods: ['get', 'nudge', 'set'] },
   routine: { permission: 'trusted', methods: ['set', 'get', 'now', 'override'] },
   messaging: { permission: 'pack', methods: ['send', 'channels'] },
-  system: { permission: 'prompt', methods: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead'] },
+  system: { permission: 'pack', methods: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead'] },
 };
 
 /** Method-level overrides required by docs/spec/living.md §1: (P) = permission 'prompt', (D) = dangerous. */
@@ -42,9 +42,9 @@ const OVERRIDES: Record<string, { prompt?: string[]; dangerous?: string[] }> = {
   wallpaper: { dangerous: ['set'] },
   browser: { dangerous: ['open'] },
   screen: { dangerous: ['look'] },
-  web: { prompt: ['fetch', 'rss'], dangerous: ['fetch'] },
-  voice: { prompt: ['listen'] },
-  desktop: { prompt: ['launch'], dangerous: ['launch'] },
+  web: { dangerous: ['fetch'] },
+  voice: { dangerous: ['listen'] },
+  desktop: { dangerous: ['launch'] },
   files: { dangerous: ['open'] },
   messaging: { dangerous: ['send'] },
   input: { dangerous: ['lock', 'unlock', 'type', 'key', 'click', 'moveMouse'] },
@@ -108,11 +108,15 @@ describe('standard modules', () => {
     expect(modules.systemModule.version).toBe('1.1.0');
   });
 
-  it('marks every system method dangerous and prompt-level', () => {
+  it('marks every system method dangerous and pack-level (nothing built-in prompts per call)', () => {
     const r = createStandardRegistry();
     for (const [name, m] of Object.entries(modules.systemModule.methods)) {
       expect(m.dangerous, name).toBe(true);
-      expect(r.permissionFor('system', name)).toBe('prompt');
+      expect(r.permissionFor('system', name)).toBe('pack');
+    }
+    for (const spec of r.list()) {
+      expect(spec.permission, spec.id).not.toBe('prompt');
+      for (const [name, m] of Object.entries(spec.methods)) expect(m.permission, `${spec.id}.${name}`).not.toBe('prompt');
     }
   });
 

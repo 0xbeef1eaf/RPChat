@@ -29,12 +29,12 @@ interface WindowMatch {
 /**
  * Operate the user's desktop. What works depends on their platform and the commands they
  * configured (Hyprland has full support out of the box); unsupported operations throw
- * CAPABILITY_FAILED. launch() is only silent for apps on the user's launch allowlist and asks
- * otherwise. Be a considerate housemate: small, reversible changes the user will understand.
+ * CAPABILITY_FAILED. launch() starts any app, or only those on the user's launch allowlist when they set one
+ * (others throw PERMISSION_DENIED).
  */
 interface DesktopApi {
   /**
-   * Start an application. Silent for apps on the user's allowlist, otherwise asks the user.
+   * Start an application. Restricted to the user's launch allowlist when they configured one.
    * @param app Executable name (e.g. "firefox") or path.
    * @param args Command-line arguments, e.g. ["https://example.com"].
    * @returns The process id when known.
@@ -82,7 +82,7 @@ interface DesktopApi {
   /** Switch the desktop colour scheme. */
   setTheme(theme: 'dark' | 'light'): Promise<void>;
 }`,
-  docs: `Tidy the desktop, set the mood, start things. Requires the \`desktop\` capability; \`launch()\` prompts unless the app is on the user's allowlist. Availability varies by platform (best on Hyprland); unsupported calls throw \`CAPABILITY_FAILED\`.
+  docs: `Tidy the desktop, set the mood, start things. Requires the \`desktop\` capability; \`launch()\` is limited to the user's launch allowlist when they set one. Availability varies by platform (best on Hyprland); unsupported calls throw \`CAPABILITY_FAILED\`.
 
 - Make changes the user asked for or will obviously welcome (dim lights and DND for a movie, focus their editor when they say "back to work"). Restore what you changed when the moment passes.
 - \`listWindows()\` first, then match by \`id\` — titles change. Never close windows or touch volume/brightness abruptly (step gently).
@@ -95,7 +95,7 @@ await sdk.desktop.focusWindow({ app: "mpv" });
 return { movieMode: true };
 \`\`\``,
   methods: {
-    launch: { description: 'Start an application.', permission: 'prompt', dangerous: true },
+    launch: { description: 'Start an application.', dangerous: true },
     listWindows: { description: 'List open windows.' },
     focusWindow: { description: 'Focus a window.' },
     moveWindow: { description: 'Move/resize a window or send it to a monitor/workspace.' },

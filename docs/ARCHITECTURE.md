@@ -96,7 +96,7 @@ to `dist/`, `pnpm test` = vitest, `pnpm typecheck` = `tsc --noEmit`.
 │  @rp/sandbox QuickJsRunner  (wasm isolate per action run)             │
 │  @rp/llm providers                                                    │
 │  Host handlers: media (opens MediaWindow), ui (notifications), timers,│
-│                 system (shell/fs behind per-call approval)            │
+│                 system (shell/fs, pack-level grant)                    │
 │  rp-asset:// protocol: serves files from installed pack roots only    │
 └───────────┬──────────────────────────────┬────────────────────────────┘
             │ contextBridge IPC (IpcApi)   │ IPC media commands
@@ -177,11 +177,11 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `memory` | trusted    | `remember(text, opts?)`, `recall(query, limit?)`, `recent(limit?)`, `update(id, patch)`, `forget(id)` — long-term memory, also consolidated automatically (see `docs/spec/memory.md`) |
 | `display`| trusted    | `monitors()`, `backend()` — read-only screen/backend info for placement decisions   |
 | `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `update(id, changes)`, `close(id)`, `closeAll()`, `list()`; overlay options: monitor, position or x/y, layer (background/bottom/top/overlay), opacity, clickThrough, width/height |
-| `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`          |
+| `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`, `ask(question, opts?)` (free text), `pickFile(opts?)`, `pickFolder(opts?)` (native pickers) |
 | `wallpaper` | pack    | `set(asset, { monitor? })`, `restore()`, `current()` — via the user's wallpaper command template |
 | `browser`| pack       | `open(url, { newWindow? })` — via the user's browser command template               |
-| `input`  | pack       | `lock(durationMs, { reason? })`, `unlock()`, `status()`, `type`, `key`, `click`, `moveMouse` — via the user's command templates, duration capped, no per-call prompt once granted |
-| `system` | prompt     | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)` |
+| `input`  | pack       | `lock(durationMs, { reason? })`, `unlock()`, `status()`, `type`, `key`, `click`, `moveMouse` — via the user's command templates, duration capped |
+| `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)`, `clipboardRead()` |
 
 Adding a module = write a spec (typings+docs+methods) and a host handler,
 register both. Third-party modules can later be shipped by packs or plugins;
@@ -276,8 +276,11 @@ Threat model: pack authors and the LLM are **untrusted**. The user is trusted.
   - `trusted` – always available (no side effects outside the app's own data).
   - `pack` – requested in `pack.json` `capabilities`; the user grants per pack at
     install time and can revoke in settings.
-  - `prompt` – additionally requires a per-call confirmation dialog showing the
-    module, method and arguments. Grants may be remembered "for this session".
+  - `prompt` – additionally requires a per-call confirmation dialog. Supported by
+    the engine for third-party modules, but **no built-in module uses it**: the
+    product decision is that a granted character acts without interruptions, so
+    the user's control is the grant itself, the global policy, optional allowlists
+    (web hosts, launchable apps) and the audit log.
 - **Paths**: pack assets are addressed by relative path, validated against the
   pack root (normalised, no `..`, no absolute, no symlink escape). Served to the
   renderer over `rp-asset://<packId>/<relative>` only.

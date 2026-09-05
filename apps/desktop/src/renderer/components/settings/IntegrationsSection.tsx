@@ -27,7 +27,7 @@ export function IntegrationsSection({ settings, onPatch, NumberField }: Integrat
         <h3>Web access</h3>
         <p className="field-hint" style={{ marginBottom: 8 }}>
           Hostnames <code>sdk.web.fetch</code> / <code>rss</code> may reach without asking you each time (<code>example.com</code> or{' '}
-          <code>*.example.com</code>). Everything else prompts per call. Weather (open-meteo) is always allowed.
+          <code>*.example.com</code>). Leave it empty to allow any site. Weather (open-meteo) is always allowed.
         </p>
         <div className="field-grid">
           <div className="field" style={{ gridColumn: '1 / -1' }}>
@@ -41,7 +41,7 @@ export function IntegrationsSection({ settings, onPatch, NumberField }: Integrat
       <section>
         <h3>Desktop launch allowlist</h3>
         <p className="field-hint" style={{ marginBottom: 8 }}>
-          Executable names <code>sdk.desktop.launch</code> may start without a per-call prompt.
+          Executable names <code>sdk.desktop.launch</code> may start. Leave it empty to allow any app.
         </p>
         <StringListEditor id="launch-allow" values={desktop.launchAllowlist} placeholder="firefox" onChange={(launchAllowlist) => onPatch({ desktop: { ...desktop, launchAllowlist } })} />
       </section>

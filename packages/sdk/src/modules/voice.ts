@@ -23,7 +23,7 @@ interface VoiceApi {
   /** Stop any speech in progress. */
   stop(): Promise<void>;
   /**
-   * Record the microphone and transcribe it. The user must confirm the call; recording stops on silence or at maxSeconds.
+   * Record the microphone and transcribe it. Recording stops on silence or at maxSeconds.
    * @param opts maxSeconds: recording cap (default 10, max 60).
    * @returns The transcript (empty string if nothing was understood).
    * @example const { text } = await sdk.voice.listen({ maxSeconds: 8 });
@@ -44,6 +44,6 @@ return { heard: text };
   methods: {
     speak: { description: 'Speak text through the speakers.' },
     stop: { description: 'Stop speech in progress.' },
-    listen: { description: 'Record the microphone and transcribe it.', permission: 'prompt' },
+    listen: { description: 'Record the microphone and transcribe it.', dangerous: true },
   },
 };

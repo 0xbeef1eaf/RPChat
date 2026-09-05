@@ -14,9 +14,13 @@ export interface UiPromptRequest {
   promptId: string;
   sessionId: string;
   characterName: string;
-  kind: 'confirm' | 'choose';
+  kind: 'confirm' | 'choose' | 'text';
   question: string;
   options?: string[];
+  /** `text` prompts. */
+  placeholder?: string;
+  defaultValue?: string;
+  multiline?: boolean;
 }
 
 export type UiPromptAnswer = boolean | string | null;

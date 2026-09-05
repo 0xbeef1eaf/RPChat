@@ -109,17 +109,15 @@ export class DesktopHandler implements CapabilityHandler {
 
   constructor(private readonly deps: DesktopHandlerDeps) {}
 
-  /** `launch` skips the dialog when the executable is on the user's allowlist. */
-  async preauthorize(method: string, args: Json[], _context: ActionContext): Promise<boolean> {
-    if (method !== 'launch') return false;
-    if (typeof args[0] !== 'string') return false;
-    return isLaunchAllowed(args[0], await this.deps.launchAllowlist());
-  }
-
   async invoke(method: string, args: Json[], _context: ActionContext): Promise<Json | void> {
     switch (method) {
-      case 'launch':
+      case 'launch': {
+        const allowlist = await this.deps.launchAllowlist();
+        if (allowlist.length > 0 && !(typeof args[0] === 'string' && isLaunchAllowed(args[0], allowlist))) {
+          throw new RpError('PERMISSION_DENIED', `${String(args[0])} is not on your launch allowlist (Settings > Integrations)`);
+        }
         return (await this.launch(args[0], args[1])) as unknown as Json;
+      }
       case 'listWindows':
         return (await this.listWindows()) as unknown as Json;
       case 'focusWindow': {

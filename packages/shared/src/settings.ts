@@ -97,13 +97,13 @@ export interface AppSettings {
     watchDirs: string[];
   };
   web: {
-    /** Hostname patterns (`example.com`, `*.example.com`) `sdk.web` may fetch without a per-call prompt. */
+    /** Hostname patterns (`example.com`, `*.example.com`) `sdk.web` may fetch. Empty = any http(s) host. */
     allowlist: string[];
     /** Max response bytes. Default 512 KiB. */
     maxBytes: number;
   };
   desktop: {
-    /** Apps `sdk.desktop.launch` may start without a per-call prompt (executable names). */
+    /** Apps `sdk.desktop.launch` may start (executable names). Empty = any app. */
     launchAllowlist: string[];
   };
   messaging: {
@@ -165,7 +165,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
     inputMove: { command: '' },
   },
   senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [] },
-  web: { allowlist: ['wttr.in', 'api.open-meteo.com', 'geocoding-api.open-meteo.com', 'open-meteo.com'], maxBytes: 512 * 1024 },
+  web: { allowlist: [], maxBytes: 512 * 1024 },
   desktop: { launchAllowlist: [] },
   messaging: { channels: [] },
   permissions: { moduleAllow: {} },

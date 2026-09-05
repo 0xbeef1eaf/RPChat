@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStandardRegistry } from '@rp/sdk';
-import type { CapabilityRegistry } from '@rp/sdk';
+import type { CapabilityModuleSpec, CapabilityRegistry } from '@rp/sdk';
 import { MockProvider } from '@rp/llm';
 import type { MockProviderOptions } from '@rp/llm';
 import type {
@@ -36,6 +36,30 @@ export const ECHO_REF = `${MINIMAL_ID}/echo`;
 
 export function createTestRegistry(): CapabilityRegistry {
   return createStandardRegistry();
+}
+
+/** A synthetic prompt-level module: no built-in module prompts per call, but third-party ones may. */
+export const PROBE_MODULE: CapabilityModuleSpec = {
+  id: 'probe',
+  version: '1.0.0',
+  title: 'Probe (test only)',
+  summary: 'Prompt-level test module.',
+  permission: 'prompt',
+  apiTypeName: 'ProbeApi',
+  typings: `interface ProbeApi {
+  /** Ping. */
+  ping(url: string): Promise<string>;
+  /** Peek. */
+  peek(): Promise<string>;
+}`,
+  docs: 'Test module.',
+  methods: { ping: { description: 'Ping.', dangerous: true }, peek: { description: 'Peek.' } },
+};
+
+export function createTestRegistryWithProbe(): CapabilityRegistry {
+  const r = createStandardRegistry();
+  r.register(PROBE_MODULE);
+  return r;
 }
 
 /** A scripted `SensesProvider`: fixed snapshot, events pushed with `push()`, records `setInterest` calls. */
@@ -127,6 +151,7 @@ export interface TestEngineOptions {
   respond?: MockProviderOptions['respond'];
   runnerHandler?: FakeRunHandler;
   hostHandlers?: CapabilityHandler[];
+  registry?: CapabilityRegistry;
   prompter?: (request: PermissionRequest) => Promise<PermissionDecision>;
   clock?: FakeClock;
   supportsTools?: boolean;
@@ -163,7 +188,7 @@ export async function createTestEngine(options: TestEngineOptions = {}): Promise
 
   const engineOptions: EngineOptions = {
     storage,
-    registry: createTestRegistry(),
+    registry: options.registry ?? createTestRegistry(),
     runner,
     packsDir,
     providerFactory: () => provider,

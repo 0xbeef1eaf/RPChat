@@ -286,7 +286,7 @@ describe('generateSdkDocs', () => {
       expect(docs).toContain(spec.docs.trim());
     }
     expect(docs).not.toContain('## Not available');
-    expect(docs).toContain('confirmation dialog');
+    expect(docs).not.toContain('confirmation dialog');
   });
 
   it('filters granted modules and lists denied ones', () => {

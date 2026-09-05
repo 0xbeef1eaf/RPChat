@@ -2,9 +2,9 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const uiModule: CapabilityModuleSpec = {
   id: 'ui',
-  version: '1.0.0',
+  version: '1.1.0',
   title: 'User interface',
-  summary: 'OS notifications and quick yes/no or multiple-choice questions to the user.',
+  summary: 'OS notifications; ask the user yes/no, multiple-choice or free-text questions; let them pick files or folders.',
   permission: 'pack',
   apiTypeName: 'UiApi',
   typings: `/**
@@ -36,6 +36,29 @@ interface UiApi {
    * @example const drink = await sdk.ui.choose("What are you drinking?", ["tea", "coffee", "water"]);
    */
   choose(question: string, options: string[]): Promise<string | null>;
+  /**
+   * Ask the user to type something in a modal (a name, a URL, a longer note).
+   * @param question The question to show.
+   * @param opts placeholder, defaultValue, multiline (textarea instead of a single line).
+   * @returns The text (trimmed, may be empty), or null if the user dismissed the dialog.
+   * @example const name = await sdk.ui.ask("What should I call your cat?", { placeholder: "Miso" });
+   */
+  ask(question: string, opts?: { placeholder?: string; defaultValue?: string; multiline?: boolean }): Promise<string | null>;
+  /**
+   * Open the native file picker so the user can hand you a file. You get absolute paths;
+   * read them with sdk.system.readFile if the pack has that capability.
+   * @param opts title; filters like [{ name: "Images", extensions: ["png","jpg"] }]; multiple to allow several.
+   * @returns Absolute paths chosen, or null if the user cancelled.
+   * @example const [photo] = (await sdk.ui.pickFile({ title: "Show me a photo", filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }] })) ?? [];
+   */
+  pickFile(opts?: { title?: string; filters?: Array<{ name: string; extensions: string[] }>; multiple?: boolean }): Promise<string[] | null>;
+  /**
+   * Open the native folder picker.
+   * @param opts title.
+   * @returns The absolute folder path, or null if the user cancelled.
+   * @example const dir = await sdk.ui.pickFolder({ title: "Where do you keep your music?" });
+   */
+  pickFolder(opts?: { title?: string }): Promise<string | null>;
 }`,
   docs: `Notify the user outside the chat, or ask a quick structured question. Requires the \`ui\` capability granted to the pack.
 
@@ -52,5 +75,8 @@ return { pick };
     notify: { description: 'Show an OS notification.' },
     confirm: { description: 'Ask the user a yes/no question.' },
     choose: { description: 'Ask the user to pick one of several options.' },
+    ask: { description: 'Ask the user to type a text answer.' },
+    pickFile: { description: 'Let the user choose one or more files with the native picker.' },
+    pickFolder: { description: 'Let the user choose a folder with the native picker.' },
   },
 };

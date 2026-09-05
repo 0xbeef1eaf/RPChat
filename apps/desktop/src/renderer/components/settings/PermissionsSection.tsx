@@ -10,7 +10,7 @@ interface PermissionsSectionProps {
 
 const LEVELS: Array<{ level: CapabilityInfo['permission']; title: string; hint: string }> = [
   { level: 'pack', title: 'Per-pack capabilities', hint: 'Granted per pack when installed; characters use them freely once granted.' },
-  { level: 'prompt', title: 'Confirm-every-call capabilities', hint: 'Additionally ask you before each call (unless an allowlist pre-authorises it).' },
+  { level: 'prompt', title: 'Confirm-every-call capabilities', hint: 'Third-party modules may still declare this level; none of the built-in ones do.' },
 ];
 
 /** Global policy: which non-trusted modules any pack may ever use. */
