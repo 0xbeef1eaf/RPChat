@@ -427,6 +427,44 @@ describe('permissions', () => {
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).not.toContain('media');
   });
 
+  it('routes display (trusted), wallpaper/browser (pack) and input (prompt) through the permission levels', async () => {
+    const rec = (id: string) => new RecordingHandler(id, `${id}-ok`);
+    const handlers = [rec('display'), rec('wallpaper'), rec('browser'), rec('input')];
+    t = await createTestEngine({ hostHandlers: handlers, prompter: async () => 'allow-once' });
+    await t.engine.packs.install(LUNA_DIR);
+    const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
+    const luna = t.engine.packs.getLoaded(LUNA_ID);
+    const context = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: luna.root, trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
+    const call = (n: string, module: string, method: string, args: import('@rp/shared').Json[] = []) => t!.engine.dispatcher.invoke({ callId: n, module, method, args, context });
+
+    // trusted: no grant needed, on the surface by default
+    expect(await call('d1', 'display', 'monitors')).toEqual({ ok: true, value: 'display-ok' });
+    expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).toContain('display');
+
+    // pack-level: denied until granted (Luna does not request them, but grants are per pack+module)
+    expect(await call('w1', 'wallpaper', 'set', ['images/luna-smile.png'])).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
+    expect(await call('b1', 'browser', 'open', ['https://example.com'])).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
+    await t.engine.permissions.setGrant(LUNA_ID, 'wallpaper', true);
+    await t.engine.permissions.setGrant(LUNA_ID, 'browser', true);
+    expect(await call('w2', 'wallpaper', 'set', ['images/luna-smile.png'])).toEqual({ ok: true, value: 'wallpaper-ok' });
+    expect(handlers[1]!.calls[0]!.args).toEqual(['media/images/luna-smile.png']);
+    expect(await call('b2', 'browser', 'open', ['https://example.com'])).toEqual({ ok: true, value: 'browser-ok' });
+    expect(t.prompts).toHaveLength(0);
+
+    // prompt-level: grant + per-call confirmation
+    expect(await call('i1', 'input', 'lock', [5000])).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
+    await t.engine.permissions.setGrant(LUNA_ID, 'input', true);
+    expect(await call('i2', 'input', 'lock', [5000])).toEqual({ ok: true, value: 'input-ok' });
+    expect(t.prompts).toHaveLength(1);
+    expect(t.prompts[0]).toMatchObject({ call: { module: 'input', method: 'lock' }, dangerous: true });
+    expect(await call('i3', 'input', 'status')).toEqual({ ok: true, value: 'input-ok' });
+    expect(t.prompts).toHaveLength(2); // allow-once is not remembered
+
+    const surface = (await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id);
+    expect(surface).toEqual(expect.arrayContaining(['display', 'wallpaper', 'browser', 'input']));
+    expect(surface).not.toContain('media');
+  });
+
   it('runs deferred onInstall hooks once all requested capabilities are granted', async () => {
     const installs: string[] = [];
     t = await createTestEngine({

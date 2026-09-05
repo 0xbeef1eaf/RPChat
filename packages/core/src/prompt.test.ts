@@ -77,6 +77,21 @@ describe('PromptBuilder', () => {
     expect(messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]);
   });
 
+  it('includes the new modules when granted and lists them as not available otherwise', async () => {
+    const denied = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display'], deniedModules: ['media', 'ui', 'system', 'wallpaper', 'browser', 'input'] })).system;
+    expect(denied).toContain('interface DisplayApi');
+    expect(denied).toContain('## sdk.display');
+    for (const api of ['WallpaperApi', 'BrowserApi', 'InputApi', 'MediaApi']) expect(denied).not.toContain(`interface ${api}`);
+    expect(denied).toContain('`sdk.wallpaper`, `sdk.browser`, `sdk.input`');
+    expect(denied).toContain('Not available: media, ui, system, wallpaper, browser, input');
+
+    const granted = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display', 'wallpaper', 'browser', 'input'], deniedModules: ['media', 'ui', 'system'] })).system;
+    for (const api of ['DisplayApi', 'WallpaperApi', 'BrowserApi', 'InputApi']) expect(granted).toContain(`interface ${api}`);
+    for (const id of ['display', 'wallpaper', 'browser', 'input']) expect(granted).toContain(`## sdk.${id}`);
+    expect(granted).toContain('Granted sdk modules: chat, log, state, pack, timers, display, wallpaper, browser, input');
+    expect(granted).not.toContain('`sdk.wallpaper`, ');
+  });
+
   it('explains the action fence instead of the tool in fenced mode', async () => {
     const { system } = new PromptBuilder().build(await input([], { useTools: false }));
     expect(system).toContain('```action');

@@ -29,12 +29,16 @@ export interface DispatcherOptions {
   logger?: Logger;
 }
 
-/** `media` methods whose first argument is an asset (string or AssetRef) and the kind it must have. */
-const MEDIA_ASSET_METHODS: Record<string, 'image' | 'video' | 'audio'> = {
-  showImage: 'image',
-  playVideo: 'video',
-  playAudio: 'audio',
+/** `module.method` calls whose first argument is an asset (string or AssetRef) and the kind it must have. */
+const ASSET_ARG_METHODS: Record<string, 'image' | 'video' | 'audio'> = {
+  'media.showImage': 'image',
+  'media.playVideo': 'video',
+  'media.playAudio': 'audio',
+  'wallpaper.set': 'image',
 };
+
+/** `module.method` calls whose first argument is a `MediaHandle` (or its id) that host handlers receive as the id string. */
+const HANDLE_ARG_METHODS = new Set(['media.close', 'media.update']);
 
 const AUDIT_STRING_CAP = 1024;
 
@@ -190,21 +194,43 @@ export class CapabilityDispatcher implements CapabilityInvoker {
     this.handlers.clear();
   }
 
+  /**
+   * Asset arguments (`media.showImage/playVideo/playAudio`, `wallpaper.set`) become validated
+   * pack-root-relative path strings of the required kind; handle arguments (`media.close/update`)
+   * become the handle's id string. Everything else passes through unchanged.
+   */
   private normaliseArgs(context: ActionContext, module: string, method: string, args: Json[]): Json[] {
-    if (module !== 'media') return args;
-    const wantedKind = MEDIA_ASSET_METHODS[method];
-    if (!wantedKind) return args;
-    const pack = this.packs?.tryGetLoaded(context.packId);
-    if (!pack) throw new RpError('NOT_FOUND', `Pack "${context.packId}" is not installed`, { packId: context.packId });
-    const ref = coerceAssetArg(pack, args[0]);
-    if (ref.kind !== wantedKind) {
-      throw new RpError('INVALID_ARGUMENT', `sdk.media.${method} needs a ${wantedKind} asset; "${ref.path}" is ${ref.kind}`, {
-        path: ref.path,
-        kind: ref.kind,
-      });
+    const key = `${module}.${method}`;
+    const wantedKind = ASSET_ARG_METHODS[key];
+    if (wantedKind) {
+      const pack = this.packs?.tryGetLoaded(context.packId);
+      if (!pack) throw new RpError('NOT_FOUND', `Pack "${context.packId}" is not installed`, { packId: context.packId });
+      const ref = coerceAssetArg(pack, args[0]);
+      if (ref.kind !== wantedKind) {
+        throw new RpError('INVALID_ARGUMENT', `sdk.${key} needs a ${wantedKind} asset; "${ref.path}" is ${ref.kind}`, {
+          path: ref.path,
+          kind: ref.kind,
+        });
+      }
+      const out = [...args];
+      out[0] = ref.path;
+      return out;
     }
-    const out = [...args];
-    out[0] = ref.path;
-    return out;
+    if (HANDLE_ARG_METHODS.has(key)) {
+      const handle = args[0];
+      const id =
+        typeof handle === 'string'
+          ? handle
+          : handle && typeof handle === 'object' && !Array.isArray(handle) && typeof handle.id === 'string'
+            ? handle.id
+            : undefined;
+      if (id === undefined || id.length === 0) {
+        throw new RpError('INVALID_ARGUMENT', `sdk.${key} needs a MediaHandle or its id string`);
+      }
+      const out = [...args];
+      out[0] = id;
+      return out;
+    }
+    return args;
   }
 }
