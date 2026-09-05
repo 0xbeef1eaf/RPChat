@@ -1,0 +1,8 @@
+{
+  "formatVersion": 1,
+  "id": "com.example.minimal",
+  "name": "Minimal",
+  "version": "0.1.0",
+  "description": "The smallest valid pack: one character, no media, no behaviours.",
+  "characters": ["characters/echo"]
+}
