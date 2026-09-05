@@ -7,6 +7,18 @@ import type { AppSettings } from './settings.js';
 
 export type Unsubscribe = () => void;
 
+/** A question raised by `sdk.ui.confirm` / `sdk.ui.choose`, answered by the user in the main window. */
+export interface UiPromptRequest {
+  promptId: string;
+  sessionId: string;
+  characterName: string;
+  kind: 'confirm' | 'choose';
+  question: string;
+  options?: string[];
+}
+
+export type UiPromptAnswer = boolean | string | null;
+
 export interface CapabilityInfo {
   id: string;
   title: string;
@@ -77,6 +89,10 @@ export interface IpcApi {
   audit: {
     list(options?: { sessionId?: string; limit?: number }): Promise<AuditEntry[]>;
   };
+  ui: {
+    onPrompt(listener: (request: UiPromptRequest) => void): Unsubscribe;
+    respondPrompt(promptId: string, answer: UiPromptAnswer): Promise<void>;
+  };
   media: {
     /** Media windows subscribe to commands here. */
     onCommand(listener: (command: MediaCommand) => void): Unsubscribe;
@@ -92,6 +108,7 @@ export const IPC_EVENT_CHANNELS = {
   chatEvent: 'chat:event',
   permissionRequest: 'permissions:request',
   mediaCommand: 'media:command',
+  uiPrompt: 'ui:prompt',
 } as const;
 
 declare global {

@@ -1,0 +1,40 @@
+{
+  "name": "@rp/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "rp-code desktop app",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "package": "electron-vite build && electron-builder"
+  },
+  "dependencies": {
+    "@rp/shared": "workspace:*",
+    "@rp/sdk": "workspace:*",
+    "@rp/pack": "workspace:*",
+    "@rp/llm": "workspace:*",
+    "@rp/sandbox": "workspace:*",
+    "@rp/core": "workspace:*",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "marked": "^15.0.0",
+    "dompurify": "^3.2.0"
+  },
+  "devDependencies": {
+    "electron": "^44.2.0",
+    "electron-vite": "^5.0.0",
+    "electron-builder": "^26.15.3",
+    "vite": "^7.0.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/node": "^22",
+    "@types/dompurify": "^3",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}
