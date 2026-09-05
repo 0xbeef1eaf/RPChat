@@ -125,7 +125,7 @@ describe('characterDefinitionSchema', () => {
     expect(
       characterDefinitionSchema.safeParse({ ...goodCharacter(), behaviours: { onDance: 'scripts/t.ts' } }).success,
     ).toBe(false);
-    expect(BEHAVIOUR_HOOKS).toEqual(['onInstall', 'onSessionStart', 'onUserMessage', 'onTimer', 'onSessionEnd']);
+    expect(BEHAVIOUR_HOOKS).toEqual(['onInstall', 'onSessionStart', 'onUserMessage', 'onTimer', 'onEvent', 'onSessionEnd']);
   });
 
   it('requires the avatar to be an image by extension', () => {
