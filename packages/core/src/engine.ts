@@ -5,10 +5,15 @@ import type {
   CapabilityHandler,
   CapabilityInfo,
   CodeRunner,
+  EventSubscription,
+  HostEvent,
+  MoodState,
   PermissionDecision,
   PermissionRequest,
   ProviderConfig,
   LlmProvider,
+  RoutineEntry,
+  RoutineStatus,
   Storage,
 } from '@rp/shared';
 import { ActionLoop } from './action-loop.js';
@@ -17,6 +22,7 @@ import { CapabilityDispatcher } from './dispatcher.js';
 import { TypedEmitter } from './emitter.js';
 import { ChatHandler } from './handlers/chat.js';
 import { LlmHandler } from './handlers/llm.js';
+import { EventsHandler, MoodHandler, RoutineHandler } from './handlers/living.js';
 import { LogHandler } from './handlers/log.js';
 import { MemoryHandler } from './handlers/memory.js';
 import { PackHandler } from './handlers/pack.js';
@@ -24,13 +30,16 @@ import { StateHandler } from './handlers/state.js';
 import { TimersHandler } from './handlers/timers.js';
 import { AuditService } from './services/audit.js';
 import { ChatService } from './services/chat.js';
+import { EventService } from './services/events.js';
+import { MoodService } from './services/mood.js';
+import { RoutineService } from './services/routine.js';
 import { MemoryService } from './services/memory.js';
 import { PackService } from './services/packs.js';
 import { PermissionService } from './services/permissions.js';
 import { SessionService } from './services/sessions.js';
 import { SettingsService } from './services/settings.js';
 import { TimerService } from './services/timers.js';
-import type { Clock, EngineEmitter, EngineEvents, Logger } from './types.js';
+import type { Clock, EngineEmitter, EngineEvents, Logger, SensesProvider } from './types.js';
 import { NOOP_LOGGER } from './types.js';
 
 export interface EngineOptions {
@@ -50,7 +59,12 @@ export interface EngineOptions {
   logger?: Logger;
   /** BCP-47 locale shown to the model in the session notes. */
   locale?: string;
+  /** Host presence sampler + raw host events (Phase 2). Optional: without it there is no senses line and only core-generated events. */
+  senses?: SensesProvider;
 }
+
+/** How often core evaluates `time` events and routine transitions. */
+const TICK_MS = 60_000;
 
 /** The chat engine: wires storage, packs, sessions, permissions, the dispatcher and the action loop. */
 export class Engine {
@@ -68,6 +82,16 @@ export class Engine {
   readonly sessions: SessionService;
   /** Long-term character memories (`IpcApi.memories` maps 1:1 onto list/add/update/remove/consolidate). */
   readonly memories: MemoryService;
+  /** Event subscriptions + host-event routing (`hostEvents`/`subscriptions` are the host-facing views). */
+  readonly eventService: EventService;
+  readonly mood: MoodService;
+  readonly routine: RoutineService;
+  /** Host → core event injection (same effect as `SensesProvider.subscribe`). */
+  readonly hostEvents: { emit(event: HostEvent): void };
+  /** Live event subscriptions (`IpcApi.events`). */
+  readonly subscriptions: { list(sessionId?: string): Promise<EventSubscription[]>; remove(id: string): Promise<boolean> };
+  /** Vision helper for host handlers (`screen.look`). */
+  readonly llm: { describeImage(sessionId: string, pngBase64: string, question?: string): Promise<string> };
   readonly dispatcher: CapabilityDispatcher;
   readonly behaviours: BehaviourRunner;
   readonly actionLoop: ActionLoop;
@@ -75,6 +99,9 @@ export class Engine {
   readonly capabilities: { list(): CapabilityInfo[]; typings(): string };
 
   private readonly logger: Logger;
+  private readonly senses: SensesProvider | undefined;
+  private unsubscribeSenses: (() => void) | undefined;
+  private tickHandle: NodeJS.Timeout | undefined;
   private started = false;
 
   constructor(opts: EngineOptions) {
@@ -90,9 +117,10 @@ export class Engine {
 
     this.settings = new SettingsService(opts.storage, providerFactory);
     this.audit = new AuditService(opts.storage, now, logger);
-    this.permissions = new PermissionService(opts.storage, opts.registry, opts.permissionPrompter, this.events, now, logger);
+    this.senses = opts.senses;
+    this.permissions = new PermissionService(opts.storage, opts.registry, opts.permissionPrompter, this.events, now, logger, () => this.settings.get());
     this.timers = new TimerService(opts.storage, now, logger, async () => (await this.settings.get()).autonomy);
-    this.packs = new PackService(opts.storage, opts.packsDir, opts.registry, this.permissions, this.timers, now, logger);
+    this.packs = new PackService(opts.storage, opts.packsDir, opts.registry, this.permissions, this.timers, now, logger, () => this.settings.get());
     this.sessions = new SessionService(opts.storage, this.packs, this.permissions, this.timers, this.events, now, logger);
     this.memories = new MemoryService({
       storage: opts.storage,
@@ -105,6 +133,20 @@ export class Engine {
     });
     this.sessions.setBeforeRemove(async (session) => {
       await this.memories.consolidate(session.id, { auto: true });
+    });
+
+    this.routine = new RoutineService({
+      storage: opts.storage,
+      characterRefs: () => this.packs.characters().map((c) => c.ref),
+      now,
+      logger,
+    });
+    this.mood = new MoodService({
+      storage: opts.storage,
+      packs: this.packs,
+      routineState: (ref, at) => this.routine.state(ref, at),
+      emitter: this.events,
+      now,
     });
 
     const coreHandlers: CapabilityHandler[] = [
@@ -131,6 +173,21 @@ export class Engine {
       now,
       logger,
     });
+
+    // Event service + its handler need the behaviour runner and the chat queue; both exist before start().
+    let eventService: EventService | undefined;
+    const events = (): EventService => {
+      if (!eventService) throw new Error('EventService not ready');
+      return eventService;
+    };
+    this.dispatcher.registerHandler(new EventsHandler({
+      on: (ctx, event, code, o) => events().on(ctx, event, code, o),
+      off: (ctx, id) => events().off(ctx, id),
+      list: (sessionId) => events().list(sessionId),
+      emitCustom: (ctx, name, data) => events().emitCustom(ctx, name, data),
+    } as EventService));
+    this.dispatcher.registerHandler(new MoodHandler(this.mood));
+    this.dispatcher.registerHandler(new RoutineHandler(this.routine));
 
     this.behaviours = new BehaviourRunner({
       packs: this.packs,
@@ -169,10 +226,32 @@ export class Engine {
       logger,
       memories: this.memories,
       audit: this.audit,
+      mood: this.mood,
+      routine: this.routine,
     };
     if (opts.locale !== undefined) chatOptions.locale = opts.locale;
+    if (opts.senses) chatOptions.senses = opts.senses;
     this.chat = new ChatService(chatOptions);
     this.timers.setFireHandler((timer) => this.chat.handleTimer(timer));
+
+    const eventOptions: ConstructorParameters<typeof EventService>[0] = {
+      storage: opts.storage,
+      packs: this.packs,
+      behaviours: this.behaviours,
+      audit: this.audit,
+      emitter: this.events,
+      now,
+      logger,
+      runExclusive: (sessionId, task) => this.chat.runExclusive(sessionId, task),
+    };
+    if (opts.senses?.setInterest) eventOptions.setInterest = (names) => opts.senses?.setInterest?.(names);
+    eventService = new EventService(eventOptions);
+    this.eventService = eventService;
+    this.hostEvents = { emit: (event) => void this.eventService.handleHostEvent(event) };
+    this.subscriptions = { list: (sessionId) => this.eventService.list(sessionId), remove: (id) => this.eventService.remove(id) };
+    this.sessions.setAfterRemove((session) => this.eventService.removeForSession(session.id));
+    const llmHandler = this.dispatcher.handlerFor('llm') as LlmHandler;
+    this.llm = { describeImage: (sessionId, png, question) => llmHandler.describeImage(sessionId, png, question) };
 
     this.capabilities = {
       list: () =>
@@ -197,14 +276,55 @@ export class Engine {
     this.started = true;
     await this.packs.start();
     await this.timers.start();
+    await this.routine.tick(); // record the initial routine states without emitting transitions
+    await this.eventService.updateInterest();
+    if (this.senses) {
+      try {
+        this.unsubscribeSenses = this.senses.subscribe((event) => void this.eventService.handleHostEvent(event));
+      } catch (err) {
+        this.logger.warn('[engine] senses.subscribe failed', err);
+      }
+    }
+    this.tickHandle = setInterval(() => void this.tick(), TICK_MS);
+    this.tickHandle.unref?.();
     this.logger.info(`[engine] started (app ${this.appVersion}, ${this.packs.characters().length} character(s))`);
+  }
+
+  /**
+   * One evaluation step (normally every minute): `time` events and routine transitions
+   * (`routine-changed` chat + host events, optional self-wake). Exposed for deterministic tests.
+   */
+  async tick(now: Date = new Date()): Promise<void> {
+    try {
+      await this.eventService.tick(now);
+      for (const t of await this.routine.tick(now)) {
+        const session = (await this.sessions.list()).find((s) => s.characterRef === t.characterRef);
+        this.events.emit('chat', { type: 'routine-changed', sessionId: session?.id ?? '', routine: t.status });
+        const data: Record<string, import('@rp/shared').Json> = { from: t.from, to: t.to };
+        if (t.status.label !== undefined) data.label = t.status.label;
+        await this.eventService.handleHostEvent({ name: 'routine-changed', data, at: now.toISOString() }, { characterRef: t.characterRef });
+        if (session && t.entry?.wakePrompt) await this.chat.selfWake(session.id, t.entry.wakePrompt, 'timer');
+      }
+    } catch (err) {
+      this.logger.warn('[engine] tick failed', err);
+    }
+  }
+
+  /** Current mood + routine of a character (`IpcApi.characters.status`). */
+  async characterStatus(characterRef: string): Promise<{ mood: MoodState; routine: RoutineStatus; routineEntries: RoutineEntry[] }> {
+    return { mood: await this.mood.get(characterRef), routine: await this.routine.status(characterRef), routineEntries: await this.routine.entries(characterRef) };
   }
 
   /** Stop timers, dispose handlers and the runner, close storage. Never keeps the process alive. */
   async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
+    if (this.tickHandle) clearInterval(this.tickHandle);
+    this.tickHandle = undefined;
+    this.unsubscribeSenses?.();
+    this.unsubscribeSenses = undefined;
     await this.timers.stop();
+    await this.eventService.idle();
     await this.chat.idle();
     await this.memories.idle();
     await this.dispatcher.dispose();

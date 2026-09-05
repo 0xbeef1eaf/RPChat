@@ -6,6 +6,7 @@ import type {
   AuditEntry,
   CapabilityGrant,
   ChatMessage,
+  EventSubscription,
   InstalledPackRecord,
   Json,
   MemoryEntry,
@@ -321,6 +322,26 @@ export class FileStorage implements Storage {
       }
     },
     removeForCharacter: async (characterRef) => this.unlink(this.memoriesFile(characterRef)),
+  };
+
+  // ---- event subscriptions ------------------------------------------------
+
+  readonly subscriptions: Storage['subscriptions'] = {
+    list: async (sessionId) =>
+      (await this.loadList<EventSubscription>('subscriptions.json')).filter((s) => sessionId === undefined || s.sessionId === sessionId),
+    upsert: async (sub) => {
+      const list = (await this.loadList<EventSubscription>('subscriptions.json')).filter((s) => s.id !== sub.id);
+      list.push(sub);
+      await this.save('subscriptions.json', list);
+    },
+    remove: async (id) => {
+      const list = (await this.loadList<EventSubscription>('subscriptions.json')).filter((s) => s.id !== id);
+      await this.save('subscriptions.json', list);
+    },
+    removeForSession: async (sessionId) => {
+      const list = (await this.loadList<EventSubscription>('subscriptions.json')).filter((s) => s.sessionId !== sessionId);
+      await this.save('subscriptions.json', list);
+    },
   };
 
   // ---- audit (JSONL) ----------------------------------------------------

@@ -3,11 +3,15 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStandardRegistry } from '@rp/sdk';
+import type { CapabilityRegistry } from '@rp/sdk';
 import { MockProvider } from '@rp/llm';
 import type { MockProviderOptions } from '@rp/llm';
 import type {
   ActionContext,
   CapabilityHandler,
+  HostEvent,
+  HostEventName,
+  PresenceSnapshot,
   ChatEvent,
   Json,
   PermissionDecision,
@@ -20,6 +24,7 @@ import type { EngineOptions } from '../engine.js';
 import { FakeRunner } from '../fake-runner.js';
 import type { FakeRunHandler } from '../fake-runner.js';
 import { MemoryStorage } from '../storage/memory.js';
+import type { SensesProvider } from '../types.js';
 
 export const EXAMPLES_DIR = fileURLToPath(new URL('../../../../examples/packs/', import.meta.url));
 export const LUNA_DIR = path.join(EXAMPLES_DIR, 'luna');
@@ -28,6 +33,59 @@ export const LUNA_ID = 'com.example.luna';
 export const MINIMAL_ID = 'com.example.minimal';
 export const LUNA_REF = `${LUNA_ID}/luna`;
 export const ECHO_REF = `${MINIMAL_ID}/echo`;
+
+export function createTestRegistry(): CapabilityRegistry {
+  return createStandardRegistry();
+}
+
+/** A scripted `SensesProvider`: fixed snapshot, events pushed with `push()`, records `setInterest` calls. */
+export class FakeSenses implements SensesProvider {
+  readonly listeners = new Set<(event: HostEvent) => void>();
+  readonly interests: HostEventName[][] = [];
+  snapshotValue: Partial<PresenceSnapshot> = {};
+  snapshots = 0;
+  async snapshot(): Promise<PresenceSnapshot> {
+    this.snapshots += 1;
+    return { at: '', idleMs: 0, atKeyboard: true, activeWindow: null, screenLocked: null, onBattery: null, batteryPercent: null, nowPlaying: null, sinceLastMessageMs: null, localTime: '', dayPart: 'morning', ...this.snapshotValue } as PresenceSnapshot;
+  }
+  subscribe(listener: (event: HostEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  setInterest(events: HostEventName[]): void {
+    this.interests.push(events);
+  }
+  push(name: HostEventName, data: Json = {}, at = new Date().toISOString()): void {
+    for (const l of this.listeners) l({ name, data, at });
+  }
+}
+
+/** Copy the Luna example pack with a different capability list (and optional character patch) and install it. */
+export async function installLunaWith(
+  engine: Engine,
+  packsDir: string,
+  capabilities: string[],
+  patchCharacter?: (def: Record<string, unknown>) => void,
+  extraFiles: Record<string, string> = {},
+): Promise<void> {
+  const src = path.join(packsDir, `src-luna-${Math.random().toString(36).slice(2, 8)}`);
+  await fs.cp(LUNA_DIR, src, { recursive: true });
+  const manifest = JSON.parse(await fs.readFile(path.join(src, 'pack.json'), 'utf8')) as Record<string, unknown>;
+  manifest.capabilities = capabilities;
+  await fs.writeFile(path.join(src, 'pack.json'), JSON.stringify(manifest));
+  if (patchCharacter) {
+    const file = path.join(src, 'characters', 'luna', 'character.json');
+    const def = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>;
+    patchCharacter(def);
+    await fs.writeFile(file, JSON.stringify(def));
+  }
+  for (const [rel, content] of Object.entries(extraFiles)) {
+    const abs = path.join(src, ...rel.split('/'));
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content);
+  }
+  await engine.packs.install(src);
+}
 
 export async function makeTempDir(prefix = 'rp-core-'): Promise<string> {
   return fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
@@ -73,6 +131,7 @@ export interface TestEngineOptions {
   clock?: FakeClock;
   supportsTools?: boolean;
   useToolCalling?: boolean;
+  senses?: SensesProvider;
 }
 
 export interface TestEngine {
@@ -104,7 +163,7 @@ export async function createTestEngine(options: TestEngineOptions = {}): Promise
 
   const engineOptions: EngineOptions = {
     storage,
-    registry: createStandardRegistry(),
+    registry: createTestRegistry(),
     runner,
     packsDir,
     providerFactory: () => provider,
@@ -116,6 +175,7 @@ export async function createTestEngine(options: TestEngineOptions = {}): Promise
     appVersion: '0.0.0-test',
     now: clock.now,
   };
+  if (options.senses) engineOptions.senses = options.senses;
   const engine = new Engine(engineOptions);
   engine.events.on('chat', (e) => events.push(e));
   await engine.settings.update({

@@ -23,5 +23,12 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   if (stored.autonomy && typeof stored.autonomy === 'object') {
     merged.autonomy = { ...base.autonomy, ...stored.autonomy };
   }
+  if (stored.senses && typeof stored.senses === 'object') merged.senses = { ...base.senses, ...stored.senses };
+  if (stored.web && typeof stored.web === 'object') merged.web = { ...base.web, ...stored.web };
+  if (stored.desktop && typeof stored.desktop === 'object') merged.desktop = { ...base.desktop, ...stored.desktop };
+  if (stored.messaging && typeof stored.messaging === 'object') merged.messaging = { ...base.messaging, ...stored.messaging };
+  if (stored.permissions && typeof stored.permissions === 'object') {
+    merged.permissions = { ...base.permissions, ...stored.permissions, moduleAllow: { ...base.permissions.moduleAllow, ...(stored.permissions.moduleAllow ?? {}) } };
+  }
   return merged;
 }

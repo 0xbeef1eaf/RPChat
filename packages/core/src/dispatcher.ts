@@ -21,7 +21,7 @@ export interface DispatcherOptions {
   registry: CapabilityRegistry;
   /** Core handlers first, host handlers after; a later handler for the same module wins (with a warning). */
   handlers: CapabilityHandler[];
-  permissions: Pick<PermissionService, 'isAllowed' | 'prompt' | 'buildRequest'>;
+  permissions: Pick<PermissionService, 'isAllowed' | 'prompt' | 'buildRequest'> & Partial<Pick<PermissionService, 'denialReason'>>;
   audit: Pick<AuditService, 'record'>;
   /** Used to normalise `media.*` asset arguments to pack-root-relative paths. */
   packs?: { tryGetLoaded(packId: string): LoadedPack | undefined };
@@ -144,14 +144,22 @@ export class CapabilityDispatcher implements CapabilityInvoker {
     try {
       const verdict = await this.permissions.isAllowed(context, module, method);
       if (verdict === 'deny') {
+        const reason = this.permissions.denialReason ? await this.permissions.denialReason(context.packId, module) : 'not granted';
         return fail(
-          new RpError('PERMISSION_DENIED', `sdk.${module}.${method} is not granted for pack ${context.packId}`, { module, method }),
+          new RpError('PERMISSION_DENIED', `sdk.${module}.${method} is not available to pack ${context.packId}: ${reason}`, { module, method, reason }),
           'denied',
         );
       }
       if (verdict === 'prompt') {
-        const request = this.permissions.buildRequest(context, module, method, args, call.callId);
-        const decision = await this.permissions.prompt(request);
+        let preauthorized = false;
+        if (handler.preauthorize) {
+          try {
+            preauthorized = (await handler.preauthorize(method, args, context)) === true;
+          } catch (err) {
+            this.logger.warn(`[dispatcher] preauthorize of sdk.${module}.${method} threw; prompting instead`, err);
+          }
+        }
+        const decision = preauthorized ? 'allow-once' : await this.permissions.prompt(this.permissions.buildRequest(context, module, method, args, call.callId));
         if (decision === 'deny') {
           return fail(
             new RpError('PERMISSION_PROMPT_REJECTED', `The user declined sdk.${module}.${method}`, { module, method }),

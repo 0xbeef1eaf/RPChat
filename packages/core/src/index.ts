@@ -24,7 +24,7 @@ export type { Unsubscribe } from './emitter.js';
 export { defaultSettings, mergeSettings } from './defaults.js';
 export { resolvePackAsset, coerceAssetArg, toAssetRef } from './assets.js';
 export type { AssetRef } from './assets.js';
-export type { Logger, Clock, EngineEvents, EngineEmitter, BehaviourHooks, BehaviourInput } from './types.js';
+export type { Logger, Clock, EngineEvents, EngineEmitter, BehaviourHooks, BehaviourInput, SensesProvider } from './types.js';
 
 export { AuditService } from './services/audit.js';
 export { ChatService } from './services/chat.js';
@@ -54,7 +54,17 @@ export { LlmHandler, ASK_DEFAULT_MAX_TOKENS, ASK_MAX_TOKENS, ASK_TIMEOUT_MS, ASK
 export type { LlmHandlerOptions } from './handlers/llm.js';
 export { normalizeTimer, validateDelay, TIMER_CODE_MAX_BYTES, TIMER_PROMPT_MAX, TIMER_LABEL_MAX } from './services/timers.js';
 export type { RunLaterOptions, TimerLimits } from './services/timers.js';
-export { SELF_WAKE_PREFIX } from './prompt.js';
+export { SELF_WAKE_PREFIX, sensesLine } from './prompt.js';
+export { EventService, matchesFilter, isCustomEvent, isKnownEvent, HOST_EVENT_NAMES, SUBSCRIPTIONS_PER_SESSION, EVENT_DEBOUNCE_MS } from './services/events.js';
+export type { EventServiceOptions, SubscribeOptions } from './services/events.js';
+export { MoodService, moodWord, energyWord, moodPromptText, decayToward, ROUTINE_ENERGY_FACTOR } from './services/mood.js';
+export type { MoodServiceOptions } from './services/mood.js';
+export { RoutineService, evaluateRoutine, normalizeEntries } from './services/routine.js';
+export type { RoutineServiceOptions, RoutineTransition, RoutineOverride } from './services/routine.js';
+export { EventsHandler, MoodHandler, RoutineHandler, subscriptionInfo } from './handlers/living.js';
+export { policyAllows, DENIAL_TEXT } from './services/permissions.js';
+export type { DenialReason, EffectiveCapabilities } from './services/permissions.js';
+export { dayPartOf } from './services/chat.js';
 export type { SelfWakeSource } from './services/chat.js';
 
 export { extractFencedActions } from '@rp/llm';

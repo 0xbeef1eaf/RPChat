@@ -13,6 +13,8 @@ function originOf(context: ActionContext): NonNullable<ChatMessage['origin']> {
       return 'llm';
     case 'timer':
       return 'timer';
+    case 'event':
+      return 'event';
     default:
       return 'behaviour';
   }

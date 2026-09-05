@@ -38,6 +38,46 @@ export class LlmHandler implements CapabilityHandler {
     }
   }
 
+  /**
+   * Tool-less vision call: describes a PNG (base64, no data: prefix) with the session's provider.
+   * Used by the host's `screen.look` handler. Providers without vision get a text placeholder from `@rp/llm`.
+   */
+  async describeImage(sessionId: string, pngBase64: string, question?: string): Promise<string> {
+    if (typeof pngBase64 !== 'string' || pngBase64.length === 0) throw new RpError('INVALID_ARGUMENT', 'pngBase64 must be a non-empty string');
+    const session = await this.o.sessions.get(sessionId);
+    const config = await this.o.settings.resolveProvider(session?.providerId);
+    const provider = this.o.providerFactory(config);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+    timeout.unref?.();
+    try {
+      const response = await provider.chat({
+        model: session?.model ?? config.model,
+        system: 'You describe screenshots precisely and concisely for a companion character. Mention what the user is doing, visible apps, text that matters, and anything notable. Never invent details.',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'image', mime: 'image/png', data: pngBase64 },
+              { type: 'text', text: question && question.trim().length > 0 ? question.trim() : 'Describe what is on the screen.' },
+            ],
+          },
+        ],
+        maxTokens: ASK_MAX_TOKENS,
+        signal: controller.signal,
+      });
+      return response.message.content
+        .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+        .map((p) => p.text)
+        .join('');
+    } catch (err) {
+      const rp = RpError.from(err, 'LLM_PROVIDER');
+      throw new RpError('CAPABILITY_FAILED', `describeImage failed: ${rp.message}`, { code: rp.code }, { cause: err });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   private async ask(promptArg: unknown, optsArg: unknown, context: ActionContext): Promise<string> {
     if (typeof promptArg !== 'string' || promptArg.trim().length === 0) throw new RpError('INVALID_ARGUMENT', 'prompt must be a non-empty string');
     if (promptArg.length > ASK_PROMPT_MAX_CHARS) throw new RpError('INVALID_ARGUMENT', `prompt must be at most ${ASK_PROMPT_MAX_CHARS} characters`);

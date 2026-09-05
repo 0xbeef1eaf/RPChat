@@ -3,6 +3,7 @@ import type {
   AuditEntry,
   CapabilityGrant,
   ChatMessage,
+  EventSubscription,
   InstalledPackRecord,
   Json,
   MemoryEntry,
@@ -27,6 +28,7 @@ export class MemoryStorage implements Storage {
   private readonly stateRecords = new Map<string, Map<string, Json>>();
   private readonly timerRecords = new Map<string, ScheduledTimer>();
   private readonly memoryRecords = new Map<string, MemoryEntry>();
+  private readonly subscriptionRecords = new Map<string, EventSubscription>();
   private readonly auditEntries: AuditEntry[] = [];
 
   constructor(private readonly auditCap = 5000) {}
@@ -139,6 +141,20 @@ export class MemoryStorage implements Storage {
     },
     removeForCharacter: async (characterRef) => {
       for (const [id, m] of this.memoryRecords) if (m.characterRef === characterRef) this.memoryRecords.delete(id);
+    },
+  };
+
+  readonly subscriptions: Storage['subscriptions'] = {
+    list: async (sessionId) =>
+      [...this.subscriptionRecords.values()].filter((s) => sessionId === undefined || s.sessionId === sessionId).map(clone),
+    upsert: async (sub) => {
+      this.subscriptionRecords.set(sub.id, clone(sub));
+    },
+    remove: async (id) => {
+      this.subscriptionRecords.delete(id);
+    },
+    removeForSession: async (sessionId) => {
+      for (const [id, s] of this.subscriptionRecords) if (s.sessionId === sessionId) this.subscriptionRecords.delete(id);
     },
   };
 

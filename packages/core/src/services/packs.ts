@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { CapabilityRegistry } from '@rp/sdk';
+import * as os from 'node:os';
 import { extractPack, loadPack, packDirectory, readManifestFromArchive, requestedCapabilities } from '@rp/pack';
 import type {
   CharacterSummary,
@@ -9,11 +10,13 @@ import type {
   InstalledPackView,
   LoadedCharacter,
   LoadedPack,
+  PackInspection,
   PackManifest,
   Storage,
 } from '@rp/shared';
 import { PACK_FILE_EXTENSION, RpError, assetUrl, characterRef, parseCharacterRef } from '@rp/shared';
 import type { PermissionService } from './permissions.js';
+import { policyAllows } from './permissions.js';
 import type { TimerService } from './timers.js';
 import type { Clock, Logger } from '../types.js';
 
@@ -67,6 +70,9 @@ export class PackService {
     private readonly timers: TimerService,
     private readonly now: Clock,
     private readonly logger: Logger,
+    private readonly settings: () => Promise<import('@rp/shared').AppSettings> = async () => {
+      throw new RpError('INTERNAL', 'PackService has no settings accessor');
+    },
   ) {
     this.permissions.onGrantsChanged((packId) => {
       void this.maybeRunInstallHooks(packId).catch((err) => this.logger.error('[packs] deferred onInstall failed', err));
@@ -155,11 +161,14 @@ export class PackService {
   private async viewFor(record: InstalledPackRecord): Promise<InstalledPackView | undefined> {
     const pack = this.loaded.get(record.packId);
     if (!pack) return undefined;
+    const { effective, blockedByPolicy } = await this.permissions.effective(record.packId);
     const view: InstalledPackView = {
       ...record,
       manifest: pack.manifest,
       grants: await this.permissions.grantsFor(record.packId),
       characters: this.characters().filter((c) => c.packId === record.packId),
+      effectiveCapabilities: effective,
+      blockedByPolicy,
     };
     if (pack.readme !== undefined) view.readme = pack.readme;
     return view;
@@ -235,10 +244,13 @@ export class PackService {
     if (hasInstallHooks) await this.storage.state.set(INSTALL_STATE_SCOPE(manifest.id), INSTALL_PENDING_KEY, true);
     else await this.storage.state.delete(INSTALL_STATE_SCOPE(manifest.id), INSTALL_PENDING_KEY);
 
-    // 5. Make sure every requested capability has a grant record (default: not granted).
+    // 5. Make sure every requested capability has a grant record; new grants default to the global policy.
     const grants = await this.permissions.grantsFor(manifest.id);
+    const policy = await this.settings().catch(() => undefined);
     for (const module of requested) {
-      if (!grants.some((g) => g.module === module)) await this.permissions.setGrant(manifest.id, module, false);
+      if (!grants.some((g) => g.module === module)) {
+        await this.permissions.setGrant(manifest.id, module, policy ? policyAllows(policy, module) : false);
+      }
     }
     if (hasInstallHooks) await this.maybeRunInstallHooks(manifest.id);
 
@@ -260,6 +272,47 @@ export class PackService {
       const idDir = path.join(this.packsDir, packId);
       const remaining = await fs.readdir(idDir).catch(() => null);
       if (remaining && remaining.length === 0) await fs.rm(idDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  /** Read a pack directory or `.rppack` without installing it and report what it asks for. */
+  async inspect(sourcePath: string): Promise<PackInspection> {
+    const source = path.resolve(sourcePath);
+    const kind = await pathKind(source);
+    if (kind === 'missing') throw new RpError('NOT_FOUND', `Pack source "${source}" does not exist`, { source });
+    let pack: LoadedPack;
+    let tempDir: string | undefined;
+    try {
+      if (kind === 'dir') pack = await loadPack(source);
+      else {
+        tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rp-inspect-'));
+        pack = await extractPack(source, tempDir);
+      }
+      const requested = requestedCapabilities(pack);
+      const settings = await this.settings().catch(() => undefined);
+      const unknownCapabilities = requested.filter((id) => !this.registry.has(id));
+      const known = requested.filter((id) => this.registry.has(id) && this.registry.get(id)?.permission !== 'trusted');
+      const allowedByPolicy = known.filter((id) => (settings ? policyAllows(settings, id) : true));
+      const blockedByPolicy = known.filter((id) => !allowedByPolicy.includes(id));
+      const assetCounts: Record<string, number> = {};
+      for (const a of pack.assets) assetCounts[a.kind] = (assetCounts[a.kind] ?? 0) + 1;
+      const inspection: PackInspection = {
+        manifest: pack.manifest,
+        characters: pack.characters.map((c) => {
+          const entry: PackInspection['characters'][number] = { id: c.definition.id, name: c.definition.name };
+          if (c.definition.tagline !== undefined) entry.tagline = c.definition.tagline;
+          return entry;
+        }),
+        requestedCapabilities: known.concat(unknownCapabilities),
+        allowedByPolicy,
+        blockedByPolicy,
+        unknownCapabilities,
+        assetCounts,
+      };
+      if (pack.readme !== undefined) inspection.readme = pack.readme;
+      return inspection;
+    } finally {
+      if (tempDir) await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 

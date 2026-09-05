@@ -13,6 +13,7 @@ import type { ProviderFactory, SettingsService } from './settings.js';
 import type { TimerService } from './timers.js';
 import type { Clock, EngineEmitter, Logger } from '../types.js';
 import { characterScope } from '../handlers/state.js';
+import { DENIAL_TEXT } from './permissions.js';
 
 export interface ChatServiceOptions {
   storage: Pick<Storage, 'state'>;
@@ -34,6 +35,10 @@ export interface ChatServiceOptions {
   memories?: MemoryService;
   /** Used for `timers.run` entries of code timers and `llm.wake` denials. */
   audit?: Pick<AuditService, 'record'>;
+  /** Host presence sampler (Phase 2); the senses line is added when the pack has `presence`. */
+  senses?: Pick<import('../types.js').SensesProvider, 'snapshot'>;
+  mood?: Pick<import('./mood.js').MoodService, 'get'>;
+  routine?: Pick<import('./routine.js').RoutineService, 'status'>;
 }
 
 export type SelfWakeSource = 'immediate' | 'timer' | 'wake-timer';
@@ -78,6 +83,13 @@ export class ChatService {
   /** Abort the running turn of a session (provider request and sandbox run). */
   async abort(sessionId: string): Promise<void> {
     this.controllers.get(sessionId)?.abort();
+  }
+
+  /** Run `task` serialised with the session's turns (used for event code and code timers). */
+  runExclusive<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+    const result = this.enqueue(sessionId, task);
+    void result.then(() => this.flushImmediateWake(sessionId), () => this.flushImmediateWake(sessionId));
+    return result;
   }
 
   /** `true` while a turn is running or queued for the session. */
@@ -297,6 +309,20 @@ export class ChatService {
     }
   }
 
+  /** Fill `sinceLastMessageMs`, `localTime` and `dayPart` when the host left them out. */
+  private completeSnapshot(snapshot: import('@rp/shared').PresenceSnapshot, transcript: ChatMessage[]): import('@rp/shared').PresenceSnapshot {
+    const now = this.o.now();
+    const out = { ...snapshot };
+    if (out.sinceLastMessageMs === undefined) {
+      const lastUser = [...transcript].reverse().find((m) => m.role === 'user');
+      out.sinceLastMessageMs = lastUser ? now.getTime() - Date.parse(lastUser.createdAt) : null;
+    }
+    if (!out.localTime) out.localTime = now.toLocaleTimeString(this.o.locale, { hour: '2-digit', minute: '2-digit', hour12: false });
+    if (!out.dayPart) out.dayPart = dayPartOf(now.getHours());
+    if (!out.at) out.at = now.toISOString();
+    return out;
+  }
+
   private providerFor(config: ProviderConfig): LlmProvider {
     const key = JSON.stringify(config);
     let provider = this.providers.get(key);
@@ -345,6 +371,18 @@ export class ChatService {
       now: this.o.now(),
     };
     if (this.o.locale !== undefined) promptInput.locale = this.o.locale;
+    promptInput.deniedReasons = Object.fromEntries(
+      Object.entries((await this.o.permissions.effective(pack.manifest.id)).denied).map(([id, reason]) => [id, DENIAL_TEXT[reason]]),
+    );
+    if (this.o.senses && settings.senses.includeInPrompt && allowedModules.includes('presence')) {
+      try {
+        promptInput.senses = this.completeSnapshot(await this.o.senses.snapshot(session.id), transcript);
+      } catch (err) {
+        this.o.logger.warn('[chat] senses snapshot failed', err);
+      }
+    }
+    if (this.o.mood) promptInput.mood = await this.o.mood.get(session.characterRef);
+    if (this.o.routine) promptInput.routine = await this.o.routine.status(session.characterRef);
     const { system, messages } = this.promptBuilder.build(promptInput);
 
     const controller = new AbortController();
@@ -372,6 +410,15 @@ export class ChatService {
       if (this.controllers.get(session.id) === controller) this.controllers.delete(session.id);
     }
   }
+}
+
+export function dayPartOf(hour: number): import('@rp/shared').PresenceSnapshot['dayPart'] {
+  if (hour < 5) return 'night';
+  if (hour < 8) return 'early-morning';
+  if (hour < 12) return 'morning';
+  if (hour < 18) return 'afternoon';
+  if (hour < 22) return 'evening';
+  return 'late-evening';
 }
 
 function isSkipLlm(value: unknown): boolean {

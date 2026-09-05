@@ -1,4 +1,4 @@
-import type { BehaviourHook, ChatEvent, CodeRunResult, Json, PermissionRequest, Session } from '@rp/shared';
+import type { BehaviourHook, ChatEvent, CodeRunResult, HostEvent, HostEventName, Json, PermissionRequest, PresenceSnapshot, Session } from '@rp/shared';
 import type { TypedEmitter } from './emitter.js';
 
 export type Logger = Pick<Console, 'debug' | 'info' | 'warn' | 'error'>;
@@ -23,6 +23,16 @@ export type BehaviourInput = Json;
 export interface BehaviourHooks {
   has(session: Session, hook: BehaviourHook): boolean;
   run(session: Session, hook: BehaviourHook, input?: BehaviourInput): Promise<CodeRunResult | undefined>;
+}
+
+/** Host → core presence sampling and raw host events (docs/spec/living.md §3.1). */
+export interface SensesProvider {
+  /** Host samples; core fills `sinceLastMessageMs`/`localTime`/`dayPart` when missing. */
+  snapshot(sessionId?: string): Promise<PresenceSnapshot>;
+  /** Host pushes raw events (window-changed, user-idle/back, battery-low, screen-locked/unlocked, song-changed, file-added, widget-message, avatar-clicked). */
+  subscribe(listener: (event: HostEvent) => void): () => void;
+  /** Called with the union of event names any live subscription needs, so the host only samples what is used. */
+  setInterest?(events: HostEventName[]): void;
 }
 
 export const NOOP_LOGGER: Logger = {

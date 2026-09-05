@@ -11,11 +11,16 @@ import type {
   LoadedCharacter,
   LoadedPack,
   MemoryEntry,
+  MoodState,
+  PresenceSnapshot,
+  RoutineStatus,
   ScheduledTimer,
   Session,
 } from '@rp/shared';
 import { ACTION_FENCE_TAG, RUN_ACTION_TOOL_NAME } from '@rp/shared';
 import { memoryLine } from './services/memory.js';
+import { moodPromptText } from './services/mood.js';
+import { RoutineService } from './services/routine.js';
 
 export interface PromptInput {
   pack: LoadedPack;
@@ -25,6 +30,8 @@ export interface PromptInput {
   allowedModules: string[];
   /** Module ids listed as "not available". */
   deniedModules: string[];
+  /** Optional reason per denied module (e.g. "denied by your settings"). */
+  deniedReasons?: Record<string, string>;
   session: Session;
   transcript: ChatMessage[];
   /** Current persistent character state. */
@@ -33,6 +40,12 @@ export interface PromptInput {
   timers: ScheduledTimer[];
   /** Long-term memories selected for this turn (`MemoryService.forPrompt`), most important first. */
   memories?: MemoryEntry[];
+  /** Presence snapshot for the `<session>` senses line (only when the pack has `presence`). */
+  senses?: PresenceSnapshot;
+  /** Current mood (decayed) for the `<mood>` block. */
+  mood?: MoodState;
+  /** Current routine status for the `<routine>` block. */
+  routine?: RoutineStatus;
   userDisplayName: string;
   contextTokenBudget: number;
   /** `true` → the `run_action` tool is described; `false` → the ```action fence. */
@@ -67,6 +80,7 @@ function engineRules(name: string, useTools: boolean): string {
     'Results of your actions are sent back to you; read them before claiming success. If an action fails, recover gracefully in character and do not paste error text at the user.',
     'Do not narrate or explain the code you run unless the user asks; the conversation is what the user sees, the code is not.',
     'You can act on your own initiative: `sdk.llm.wake` gives you a turn later (or right after this action) with a note from your past self; `sdk.timers.runLater` runs code later without a turn. Use them to follow up, continue stories, or check in. Limits apply; do not chain wakes needlessly.',
+    'Let your <mood> colour your tone and choices without announcing it; when something in the conversation moves you, use sdk.mood.nudge with a short reason. Respect your <routine>: if you are asleep or away, respond in character (groggy, brief, or promise to be back later).',
     'The <memories> in <memory> are your own past with this user: let them shape what you say and bring them up naturally when relevant, but never list or recite them. When you learn something durable (facts about the user, promises, recurring themes), store it with sdk.memory.remember; correct or forget memories the user disputes.',
     'Reply in the user\'s language. Keep your visible text natural and in your own voice.',
   ].join('\n');
@@ -111,7 +125,8 @@ function packContext(input: PromptInput): string {
   lines.push(`Active character: ${character.definition.name} (${character.definition.id})`);
   lines.push(assetList(pack.assets));
   lines.push(`Granted sdk modules: ${input.allowedModules.length > 0 ? input.allowedModules.join(', ') : 'none'}`);
-  lines.push(`Not available: ${input.deniedModules.length > 0 ? input.deniedModules.join(', ') : 'none'}`);
+  const denied = input.deniedModules.map((id) => (input.deniedReasons?.[id] ? `${id} (${input.deniedReasons[id]})` : id));
+  lines.push(`Not available: ${denied.length > 0 ? denied.join(', ') : 'none'}`);
   return lines.join('\n');
 }
 
@@ -136,11 +151,26 @@ function memory(input: PromptInput): string {
   return lines.join('\n');
 }
 
+/** One line summarising the presence snapshot; missing parts are omitted. */
+export function sensesLine(s: PresenceSnapshot, idleThresholdMs = 120_000): string {
+  const parts: string[] = [`Right now: ${s.localTime} (${s.dayPart})`];
+  const away = s.atKeyboard === false || (typeof s.idleMs === 'number' && s.idleMs >= idleThresholdMs);
+  if (typeof s.idleMs === 'number') parts.push(away ? `user away ${Math.max(1, Math.round(s.idleMs / 60_000))} min` : 'user at keyboard');
+  if (s.activeWindow) parts.push(`active window: "${s.activeWindow.title}" (${s.activeWindow.app})`);
+  if (s.nowPlaying && s.nowPlaying.status !== 'stopped') {
+    parts.push(`playing: ${s.nowPlaying.title}${s.nowPlaying.artist ? ` — ${s.nowPlaying.artist}` : ''}${s.nowPlaying.status === 'paused' ? ' (paused)' : ''}`);
+  }
+  if (typeof s.batteryPercent === 'number') parts.push(`battery ${s.batteryPercent}%${s.onBattery ? ' (on battery)' : ''}`);
+  if (s.screenLocked) parts.push('screen locked');
+  return parts.join('; ');
+}
+
 function sessionNotes(input: PromptInput): string {
   const lines = [
     `Current time: ${input.now.toISOString()}${input.locale ? ` (locale ${input.locale})` : ''}`,
     `The user's display name: ${input.userDisplayName}`,
   ];
+  if (input.senses) lines.push(sensesLine(input.senses));
   if (input.session.scenario && input.session.scenario.trim().length > 0) {
     lines.push(`Scenario set by the user:\n${input.session.scenario.trim()}`);
   }
@@ -229,6 +259,8 @@ export class PromptBuilder {
       section('pack', packContext(input)),
       section('sdk_reference', `\`\`\`ts\n${typings.trim()}\n\`\`\`\n\n${docs.trim()}`),
       section('memory', memory(input)),
+      ...(input.mood ? [section('mood', moodPromptText(input.mood))] : []),
+      ...(input.routine ? [section('routine', RoutineService.promptText(input.routine))] : []),
       section('session', sessionNotes(input)),
     ].join('\n\n');
 

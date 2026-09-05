@@ -14,6 +14,7 @@ export type NewMessage = Omit<ChatMessage, 'id' | 'createdAt'> & Partial<Pick<Ch
 export class SessionService {
   private behaviours: BehaviourHooks | undefined;
   private beforeRemove: ((session: Session) => Promise<void>) | undefined;
+  private afterRemove: ((session: Session) => Promise<void>) | undefined;
 
   constructor(
     private readonly storage: Pick<Storage, 'sessions' | 'messages' | 'state'>,
@@ -32,6 +33,11 @@ export class SessionService {
   /** Runs before a session is deleted (the Engine uses it for a final memory consolidation). Failures are logged. */
   setBeforeRemove(hook: (session: Session) => Promise<void>): void {
     this.beforeRemove = hook;
+  }
+
+  /** Runs after a session was deleted (the Engine removes its event subscriptions). */
+  setAfterRemove(hook: (session: Session) => Promise<void>): void {
+    this.afterRemove = hook;
   }
 
   async list(): Promise<Session[]> {
@@ -103,6 +109,13 @@ export class SessionService {
     await this.storage.state.clear(`session:${sessionId}`);
     this.permissions.clearSession(sessionId);
     await this.storage.sessions.remove(sessionId);
+    if (this.afterRemove) {
+      try {
+        await this.afterRemove(session);
+      } catch (err) {
+        this.logger.warn(`[sessions] after-remove hook failed for ${sessionId}`, err);
+      }
+    }
   }
 
   messages(sessionId: string): Promise<ChatMessage[]> {

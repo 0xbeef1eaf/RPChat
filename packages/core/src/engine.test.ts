@@ -12,6 +12,7 @@ import {
   MINIMAL_ID,
   RecordingHandler,
   createTestEngine,
+  installLunaWith,
   runAction,
 } from './test/helpers.js';
 import type { TestEngine } from './test/helpers.js';
@@ -35,11 +36,13 @@ describe('PackService', () => {
     expect(luna.requestedCapabilities).toEqual(['media', 'ui']);
     expect(luna.root).toBe(path.join(t.packsDir, LUNA_ID, '1.0.0'));
     expect(luna.readme).toContain('# Luna');
-    // grants default to "not granted" for every requested capability
+    // grants default to the global policy (allowed unless switched off) for every requested capability
     expect(luna.grants.map((g) => [g.module, g.granted])).toEqual([
-      ['media', false],
-      ['ui', false],
+      ['media', true],
+      ['ui', true],
     ]);
+    expect(luna.effectiveCapabilities).toEqual(['media', 'ui']);
+    expect(luna.blockedByPolicy).toEqual([]);
     // files were copied, not referenced in place
     await expect(fs.stat(path.join(luna.root, 'pack.json'))).resolves.toBeTruthy();
 
@@ -105,9 +108,8 @@ describe('SessionService', () => {
         expect(request.code).toContain("sdk.state.set('sessions'");
         const surface = request.surface.modules.map((m) => m.id);
         expect(surface).toEqual(expect.arrayContaining(['chat', 'log', 'state', 'pack', 'timers']));
-        expect(surface).not.toContain('media'); // requested but not granted
-        expect(surface).not.toContain('ui');
-        expect(surface).not.toContain('system');
+        expect(surface).toEqual(expect.arrayContaining(['media', 'ui'])); // requested + policy default → granted
+        expect(surface).not.toContain('system'); // not requested
         await runner.call(request, 'chat', 'say', 'Hey. I am Luna.');
         await runner.call(request, 'state', 'set', 'sessions', 1);
         return { sessions: 1 };
@@ -349,6 +351,7 @@ describe('permissions', () => {
     const media = new RecordingHandler('media', (method) => ({ id: 'm1', kind: 'image', asset: method }));
     t = await createTestEngine({ hostHandlers: [media] });
     await t.engine.packs.install(LUNA_DIR);
+    await t.engine.permissions.setGrant(LUNA_ID, 'media', false);
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const context = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: t.engine.packs.getLoaded(LUNA_ID).root, trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
 
@@ -394,7 +397,8 @@ describe('permissions', () => {
     const system = new RecordingHandler('system', 'opened');
     const decisions: Array<'allow-once' | 'allow-session' | 'deny'> = ['deny', 'allow-session'];
     t = await createTestEngine({ hostHandlers: [system], prompter: async () => decisions.shift() ?? 'deny' });
-    await t.engine.packs.install(LUNA_DIR);
+    await installLunaWith(t.engine, t.packsDir, ['media', 'ui', 'system']);
+    await t.engine.permissions.setGrant(LUNA_ID, 'system', false);
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const context = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: '/x', trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
     const call = (n: number) => t!.engine.dispatcher.invoke({ callId: `s${n}`, module: 'system', method: 'openExternal', args: ['https://example.com'], context });
@@ -425,6 +429,7 @@ describe('permissions', () => {
 
     // The SDK surface handed to the runner includes granted prompt-level modules.
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).toContain('system');
+    await t.engine.permissions.setGrant(LUNA_ID, 'media', false);
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).not.toContain('media');
   });
 
@@ -432,7 +437,8 @@ describe('permissions', () => {
     const rec = (id: string) => new RecordingHandler(id, `${id}-ok`);
     const handlers = [rec('display'), rec('wallpaper'), rec('browser'), rec('input')];
     t = await createTestEngine({ hostHandlers: handlers, prompter: async () => 'allow-once' });
-    await t.engine.packs.install(LUNA_DIR);
+    await installLunaWith(t.engine, t.packsDir, ['media', 'ui', 'wallpaper', 'browser', 'input']);
+    for (const m of ['wallpaper', 'browser', 'input']) await t.engine.permissions.setGrant(LUNA_ID, m, false);
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const luna = t.engine.packs.getLoaded(LUNA_ID);
     const context = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: luna.root, trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
@@ -442,7 +448,7 @@ describe('permissions', () => {
     expect(await call('d1', 'display', 'monitors')).toEqual({ ok: true, value: 'display-ok' });
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).toContain('display');
 
-    // pack-level: denied until granted (Luna does not request them, but grants are per pack+module)
+    // pack-level: denied until granted (requested by this Luna copy; grants were switched off above)
     expect(await call('w1', 'wallpaper', 'set', ['images/luna-smile.png'])).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
     expect(await call('b1', 'browser', 'open', ['https://example.com'])).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
     await t.engine.permissions.setGrant(LUNA_ID, 'wallpaper', true);
@@ -462,8 +468,8 @@ describe('permissions', () => {
     expect(t.prompts).toHaveLength(2); // allow-once is not remembered
 
     const surface = (await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id);
-    expect(surface).toEqual(expect.arrayContaining(['display', 'wallpaper', 'browser', 'input']));
-    expect(surface).not.toContain('media');
+    expect(surface).toEqual(expect.arrayContaining(['display', 'wallpaper', 'browser', 'input', 'media']));
+    expect(surface).not.toContain('system'); // never requested
   });
 
   it('runs deferred onInstall hooks once all requested capabilities are granted', async () => {
@@ -482,10 +488,14 @@ describe('permissions', () => {
     def.behaviours.onInstall = 'scripts/on-install.ts';
     await fs.writeFile(path.join(charDir, 'character.json'), JSON.stringify(def));
 
+    // the global policy denies `ui`, so its per-pack grant starts off and the hook is deferred
+    await t.engine.settings.update({ permissions: { moduleAllow: { ui: false } } });
     await t.engine.packs.install(src);
     expect(installs).toEqual([]);
+    expect((await t.engine.packs.view(LUNA_ID)).blockedByPolicy).toEqual(['ui']);
     await t.engine.permissions.setGrant(LUNA_ID, 'media', true);
     expect(installs).toEqual([]);
+    await t.engine.settings.update({ permissions: { moduleAllow: { ui: true } } });
     await t.engine.permissions.setGrant(LUNA_ID, 'ui', true);
     await new Promise((r) => setTimeout(r, 0));
     expect(installs).toEqual(['onInstall']);
