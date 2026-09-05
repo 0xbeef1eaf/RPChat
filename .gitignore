@@ -13,3 +13,4 @@ coverage/
 .vite/
 *.rppack
 !examples/**/*.rppack
+native/overlay-wlr/target/

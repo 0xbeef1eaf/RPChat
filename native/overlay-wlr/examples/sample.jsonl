@@ -1,0 +1,13 @@
+{"op":"hello","version":1,"seq":1}
+{"op":"monitors","seq":2}
+{"op":"show","seq":3,"id":"img-1","url":"http://127.0.0.1:41234/t/deadbeef/media.html#cmd=eyJ0eXBlIjoic2hvdyJ9","layer":"overlay","anchor":"bottom-right","marginPx":24,"width":480,"opacity":0.95,"clickThrough":true}
+{"op":"show","seq":4,"id":"vid-1","url":"http://127.0.0.1:41234/t/deadbeef/media.html#cmd=eyJ0eXBlIjoicGxheSJ9","layer":"top","anchor":"center","x":0.5,"y":0.1,"monitor":{"name":"HDMI-A-1"},"width":640,"height":360,"opacity":1,"clickThrough":false,"namespace":"rp-video"}
+{"op":"show","seq":5,"id":"bg-1","url":"http://127.0.0.1:41234/t/deadbeef/media.html#cmd=eyJ0eXBlIjoic2hvdyJ9","layer":"background","anchor":"top-left","marginPx":0,"monitor":{"x":100,"y":100},"width":2560,"height":1400,"opacity":0.5,"clickThrough":true}
+{"op":"js","seq":6,"id":"vid-1","script":"window.__rpMediaCommand('{\"type\":\"update\",\"id\":\"vid-1\",\"options\":{\"opacity\":0.5}}')"}
+{"op":"update","seq":7,"id":"img-1","patch":{"layer":"top","opacity":0.5,"clickThrough":false,"monitor":{"index":1}}}
+{"op":"update","seq":8,"id":"img-1","patch":{"anchor":"top-left","marginPx":12,"width":320}}
+{"op":"update","seq":9,"id":"vid-1","patch":{"x":200,"y":40,"height":null}}
+{"op":"update","seq":10,"id":"missing","patch":{"opacity":1}}
+{"op":"close","seq":11,"id":"bg-1"}
+{"op":"closeAll","seq":12}
+{"op":"quit","seq":13}
