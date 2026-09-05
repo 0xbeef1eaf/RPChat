@@ -5,7 +5,7 @@ import type { ActionId, Json } from './ids.js';
 export type ActionLanguage = 'ts' | 'js';
 
 export interface RunLimits {
-  /** Wall-clock timeout for the whole run, including awaited host calls. Default 10_000. */
+  /** Wall-clock timeout for the run, excluding time spent awaiting host calls (those have their own cap in the runner). Default 10_000. */
   timeoutMs: number;
   /** CPU time budget enforced through the interrupt handler. Default 2_000. */
   cpuMs: number;
