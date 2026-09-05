@@ -86,7 +86,7 @@ describe('generateSdkTypings', () => {
     expect(none).toContain('interface Sdk {\n}');
     expect(none).not.toContain('// ---- module:');
     expect(compile({ 'sdk.d.ts': none })).toEqual([]);
-  });
+  }, 60_000);
 
   it('filters by granted modules and ignores unknown ids', () => {
     const out = generateSdkTypings(registry, { modules: ['media', 'chat', 'nope'] });

@@ -93,6 +93,11 @@ class HelperOverlay implements OverlayHandle {
     return this.events.on(event, listener);
   }
 
+  async send(command: MediaCommand): Promise<void> {
+    if (this.closed) return;
+    await this.backend.runScript(this.id, command);
+  }
+
   finish(): void {
     if (this.closed) return;
     this.closed = true;
@@ -115,6 +120,12 @@ class HelperOverlay implements OverlayHandle {
       case 'closed':
         // The page removed the item; tear the surface down too.
         void this.close();
+        return;
+      case 'avatar-clicked':
+        this.events.emit('avatar-clicked');
+        return;
+      case 'widget-message':
+        this.events.emit('widget-message', payload.message);
         return;
       default:
         return;

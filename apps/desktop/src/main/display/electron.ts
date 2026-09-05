@@ -5,7 +5,7 @@
  * opacity to `setOpacity` where Electron supports it (Windows/macOS) — the
  * media page always applies CSS opacity as well.
  */
-import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo, OverlayLayer, OverlayUpdate } from '@rp/shared';
+import type { AvatarState, DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo, OverlayLayer, OverlayUpdate, WidgetSpec } from '@rp/shared';
 import type {
   BackendLogger,
   DisplayBackend,
@@ -127,7 +127,7 @@ export class OverlayEvents {
   }
 }
 
-/** The command that shows `spec` in a media page. */
+/** The command that shows `spec` in a media page (`url` is the asset URL as the page can load it). */
 export function showCommand(spec: OverlaySpec, url: string): MediaCommand {
   const overlay = {
     opacity: spec.options.opacity,
@@ -136,8 +136,29 @@ export function showCommand(spec: OverlaySpec, url: string): MediaCommand {
     ...(spec.options.height !== undefined ? { height: spec.options.height } : {}),
     layer: spec.options.layer,
   };
-  if (spec.kind === 'video') return { type: 'play-video', id: spec.id, url, options: { ...spec.page, ...overlay } };
-  return { type: 'show-image', id: spec.id, url, options: { ...spec.page, ...overlay } };
+  switch (spec.kind) {
+    case 'video':
+      return { type: 'play-video', id: spec.id, url, options: { ...spec.page, ...overlay } };
+    case 'avatar': {
+      const state: AvatarState = spec.avatar ?? {
+        visible: true,
+        expression: 'neutral',
+        imageUrl: url,
+        size: spec.options.width,
+        lookAtCursor: false,
+        overlay: { layer: spec.options.layer, opacity: spec.options.opacity, clickThrough: spec.options.clickThrough },
+      };
+      return { type: 'avatar-show', id: spec.id, state: { ...state, imageUrl: url, overlay: { ...state.overlay, layer: spec.options.layer, opacity: spec.options.opacity, clickThrough: spec.options.clickThrough } } };
+    }
+    case 'widget': {
+      const widget: WidgetSpec = spec.widget ?? { id: spec.id, html: '', width: spec.options.width, height: spec.options.height ?? 240 };
+      return { type: 'widget-show', id: spec.id, widget, options: { ...overlay } };
+    }
+    case 'draw':
+      return { type: 'draw-set', id: spec.id, shapes: [] };
+    default:
+      return { type: 'show-image', id: spec.id, url, options: { ...spec.page, ...overlay } };
+  }
 }
 
 /** One overlay window driven by the electron backend. */
@@ -189,9 +210,20 @@ export class ElectronOverlay implements OverlayHandle {
       case 'closed':
         this.finish();
         return;
+      case 'avatar-clicked':
+        this.events.emit('avatar-clicked');
+        return;
+      case 'widget-message':
+        this.events.emit('widget-message', event.message);
+        return;
       default:
         return;
     }
+  }
+
+  async send(command: MediaCommand): Promise<void> {
+    if (this.closed || this.win.isDestroyed()) return;
+    this.win.send(command);
   }
 
   /** Wait for the first `content-size` (or the timeout). */

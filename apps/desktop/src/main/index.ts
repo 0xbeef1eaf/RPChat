@@ -108,16 +108,14 @@ async function main(): Promise<void> {
   }
   const { engine } = services;
 
-  protocol.handle(ASSET_PROTOCOL, (request) =>
-    handleAssetRequest(request, { packRootFor: (packId) => engine.packs.tryGetLoaded(packId)?.root, logger }),
-  );
+  const active = services;
+  protocol.handle(ASSET_PROTOCOL, (request) => handleAssetRequest(request, { packRootFor: (packId) => active.packRootFor(packId), logger }));
 
   registerIpc({ services, windows, logger, version });
   const win = windows.createMainWindow();
   win.once('ready-to-show', () => logger.info(`[main] window opened (userData: ${app.getPath('userData')})`));
   logger.info(`[main] rp-code ${version} ready; ${engine.packs.characters().length} character(s) available`);
   if (isSmokeRun(env)) {
-    const active = services;
     setTimeout(() => void runSmokeTurn(active.engine, logger, () => active.media.list()), 1500);
   }
 }

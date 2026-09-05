@@ -22,6 +22,7 @@ import type {
 import { IPC_EVENT_CHANNELS, RpError } from '@rp/shared';
 import type { Engine, Logger } from '@rp/core';
 import type { AppServices } from './engine.js';
+import { phase2, unavailable } from './phase2.js';
 import type { WindowManager } from './windows.js';
 
 /** The memory service surface main needs (`engine.memories`, added by @rp/core). */
@@ -48,7 +49,9 @@ export interface RegisterIpcOptions {
   version: string;
 }
 
-const COMMAND_NAMES: ReadonlySet<string> = new Set<keyof CommandTemplates>(['wallpaper', 'browser', 'inputLock', 'inputUnlock']);
+const COMMAND_NAMES: ReadonlySet<string> = new Set<keyof CommandTemplates>([
+  'wallpaper', 'browser', 'inputLock', 'inputUnlock', 'activeWindow', 'nowPlaying', 'screenshot', 'tts', 'stt', 'launch', 'volumeSet', 'volumeGet', 'brightness', 'doNotDisturb', 'theme', 'inputType', 'inputKey', 'inputClick', 'inputMove',
+]);
 
 function requireString(v: unknown, what: string): string {
   if (typeof v !== 'string' || v.length === 0) throw new RpError('INVALID_ARGUMENT', `${what} must be a non-empty string`);
@@ -80,6 +83,11 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
         void event;
         return result.canceled ? null : (result.filePaths[0] ?? null);
       },
+      inspect: (_e, sourcePath) => {
+        const inspect = phase2(engine).packs.inspect;
+        if (!inspect) throw unavailable('engine.packs.inspect');
+        return inspect.call(engine.packs, requireString(sourcePath, 'sourcePath'));
+      },
       install: (_e, sourcePath) => engine.packs.install(requireString(sourcePath, 'sourcePath')),
       uninstall: (_e, packId) => engine.packs.uninstall(requireString(packId, 'packId')),
       setGrant: (_e, packId, module, granted) => engine.permissions.setGrant(requireString(packId, 'packId'), requireString(module, 'module'), Boolean(granted)),
@@ -91,6 +99,28 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
     },
     characters: {
       list: async () => engine.packs.characters(),
+      status: async (_e, characterRef) => {
+        const ref = requireString(characterRef, 'characterRef');
+        const p = phase2(engine);
+        if (!p.mood || !p.routine) throw unavailable('engine.mood / engine.routine');
+        const [mood, routine, routineEntries] = await Promise.all([p.mood.get(ref), p.routine.status(ref), p.routine.entries(ref)]);
+        return { mood, routine, routineEntries };
+      },
+    },
+    events: {
+      list: async (_e, sessionId) => {
+        const subs = phase2(engine).subscriptions;
+        if (!subs) throw unavailable('engine.subscriptions');
+        return subs.list(typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : undefined);
+      },
+      remove: async (_e, id) => {
+        const subs = phase2(engine).subscriptions;
+        if (!subs) throw unavailable('engine.subscriptions');
+        await subs.remove(requireString(id, 'id'));
+      },
+    },
+    senses: {
+      snapshot: () => services.senses.provider.snapshot(),
     },
     sessions: {
       list: () => engine.sessions.list(),
@@ -120,6 +150,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
         if (patch && patch.displayBackend !== undefined) {
           await services.selectBackend(next.displayBackend).catch((err) => logger.warn('[display] backend switch failed', err));
         }
+        if (patch && patch.senses !== undefined) await services.senses.refresh().catch((err) => logger.warn('[senses] refresh failed', err));
         return next;
       },
       testProvider: (_e, config: ProviderConfig) => engine.settings.testProvider(config),
@@ -131,7 +162,31 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
         if (!effective.command || effective.command.trim().length === 0) {
           throw new RpError('CAPABILITY_FAILED', `No ${name} command configured and no platform default is available`);
         }
-        const vars = { file: await services.sampleImage(), url: 'https://example.com', seconds: '3', durationMs: '3000', monitor: '', reason: 'test', newWindow: '' };
+        const vars = {
+          file: await services.sampleImage(),
+          url: 'https://example.com',
+          seconds: '3',
+          durationMs: '3000',
+          monitor: '',
+          reason: 'test',
+          newWindow: '',
+          text: 'Hello from rp-code',
+          level: '50',
+          on: '0',
+          onWord: 'false',
+          theme: 'dark',
+          darkMode: 'true',
+          app: 'true',
+          args: '',
+          combo: 'shift',
+          x: '10',
+          y: '10',
+          button: 'left',
+          buttonNum: '1',
+          buttonHex: '0xC0',
+          rate: '',
+          voice: '',
+        };
         return services.commands.runTemplate(effective, vars, `test:${name}`);
       },
       defaultCommands: async () => services.commands.defaults(),

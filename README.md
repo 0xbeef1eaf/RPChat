@@ -47,6 +47,20 @@ Characters, their behaviours and their media are distributed as shareable
   within rate limits you control.
 - **External commands**: wallpaper, browser and input-lock actions run through
   command templates you edit in Settings.
+- **Senses and events**: characters can see what you're doing (idle time,
+  active window, now playing, battery, calendar), look at the screen through a
+  vision model, and subscribe to events (you came back, a song changed, a file
+  landed in Downloads, a time of day) that run their code without a turn.
+- **A body and a voice**: a persistent avatar overlay with expressions, speech
+  bubbles and animations; on-screen drawing; character-built widgets; text to
+  speech and push-to-talk through your own commands.
+- **Desktop control**: launch apps, move and focus windows, switch workspaces,
+  volume, brightness, do-not-disturb, theme; a per-character home folder; typed
+  input and clicks behind per-call approval; outbound messages via webhooks.
+- **Inner life**: a mood model that decays and reacts, a daily routine with
+  wake-ups on transitions, and long-term memory.
+- **Permissions are an intersection**: what a pack asks for ∩ what your global
+  policy allows ∩ the per-pack toggle. Inspect any pack before installing it.
 
 ## Repository
 

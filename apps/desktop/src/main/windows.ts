@@ -123,6 +123,11 @@ export class ElectronOverlayWindow implements OverlayWindowLike {
   destroy(): void {
     if (!this.win.isDestroyed()) this.win.destroy();
   }
+
+  runScript(script: string): Promise<unknown> {
+    if (this.isDestroyed()) return Promise.resolve(undefined);
+    return this.win.webContents.executeJavaScript(script, true);
+  }
 }
 
 export class WindowManager {

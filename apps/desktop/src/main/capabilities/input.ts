@@ -5,6 +5,25 @@ import type { Logger } from '@rp/core';
 import type { CommandRunner } from './commands-runner.js';
 
 export const INPUT_LOCK_MIN_MS = 1000;
+export const INPUT_TEXT_MAX = 2000;
+const KEY_COMBO = /^[a-zA-Z0-9_+\-]{1,64}$/;
+const BUTTONS: Record<string, { button: string; buttonNum: string; buttonHex: string }> = {
+  left: { button: 'left', buttonNum: '1', buttonHex: '0xC0' },
+  middle: { button: 'middle', buttonNum: '2', buttonHex: '0xC2' },
+  right: { button: 'right', buttonNum: '3', buttonHex: '0xC1' },
+};
+
+export function pointArgs(x: unknown, y: unknown): { x: number; y: number } {
+  if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) throw new RpError('INVALID_ARGUMENT', 'x and y must be numbers');
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+export function buttonArg(v: unknown): { button: string; buttonNum: string; buttonHex: string } {
+  const name = typeof v === 'string' ? v.toLowerCase() : 'left';
+  const b = BUTTONS[name];
+  if (!b) throw new RpError('INVALID_ARGUMENT', 'button must be left, right or middle');
+  return b;
+}
 
 export interface InputHandlerDeps {
   commands: CommandRunner;
@@ -29,6 +48,28 @@ export class InputHandler implements CapabilityHandler {
         return;
       case 'status':
         return this.status();
+      case 'type': {
+        if (typeof args[0] !== 'string' || args[0].length === 0) throw new RpError('INVALID_ARGUMENT', 'text must be a non-empty string');
+        if (args[0].length > INPUT_TEXT_MAX) throw new RpError('INVALID_ARGUMENT', `text is longer than ${INPUT_TEXT_MAX} characters`);
+        await this.runInput('inputType', { text: args[0] }, 'input type');
+        return;
+      }
+      case 'key': {
+        if (typeof args[0] !== 'string' || !KEY_COMBO.test(args[0])) throw new RpError('INVALID_ARGUMENT', 'combo must look like "ctrl+shift+s"');
+        await this.runInput('inputKey', { combo: args[0] }, 'input key');
+        return;
+      }
+      case 'click': {
+        const { x, y } = pointArgs(args[0], args[1]);
+        const button = buttonArg(args[2]);
+        await this.runInput('inputClick', { x: String(x), y: String(y), ...button }, 'input click');
+        return;
+      }
+      case 'moveMouse': {
+        const { x, y } = pointArgs(args[0], args[1]);
+        await this.runInput('inputMove', { x: String(x), y: String(y) }, 'input move');
+        return;
+      }
       default:
         throw new RpError('CAPABILITY_UNKNOWN', `Unknown method sdk.input.${method}`);
     }
@@ -36,6 +77,11 @@ export class InputHandler implements CapabilityHandler {
 
   private now(): number {
     return (this.deps.now ?? Date.now)();
+  }
+
+  private async runInput(name: 'inputType' | 'inputKey' | 'inputClick' | 'inputMove', vars: Record<string, string>, what: string): Promise<void> {
+    const result = await this.deps.commands.run(name, vars, what);
+    if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `${what} command exited with ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
   }
 
   status(): { locked: boolean; until?: string } {

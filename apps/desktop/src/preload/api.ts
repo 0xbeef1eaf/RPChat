@@ -18,9 +18,11 @@ type Namespaces = keyof IpcApi;
 /** Every request/response method, per namespace (event subscriptions are listed in `EVENT_METHODS`). */
 export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] & string> } = {
   app: ['version', 'windowKind', 'openPath'],
-  packs: ['list', 'pickInstallSource', 'install', 'uninstall', 'setGrant', 'exportPack'],
+  packs: ['list', 'pickInstallSource', 'inspect', 'install', 'uninstall', 'setGrant', 'exportPack'],
   capabilities: ['list', 'typings'],
-  characters: ['list'],
+  characters: ['list', 'status'],
+  events: ['list', 'remove'],
+  senses: ['snapshot'],
   sessions: ['list', 'create', 'get', 'update', 'remove', 'messages'],
   chat: ['send', 'abort'],
   permissions: ['respond'],

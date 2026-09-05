@@ -247,7 +247,7 @@ export class Engine {
     if (opts.senses?.setInterest) eventOptions.setInterest = (names) => opts.senses?.setInterest?.(names);
     eventService = new EventService(eventOptions);
     this.eventService = eventService;
-    this.hostEvents = { emit: (event) => void this.eventService.handleHostEvent(event) };
+    this.hostEvents = { emit: (event) => void this.eventService.handleHostEvent(event, hostEventScope(event)) };
     this.subscriptions = { list: (sessionId) => this.eventService.list(sessionId), remove: (id) => this.eventService.remove(id) };
     this.sessions.setAfterRemove((session) => this.eventService.removeForSession(session.id));
     const llmHandler = this.dispatcher.handlerFor('llm') as LlmHandler;
@@ -280,7 +280,7 @@ export class Engine {
     await this.eventService.updateInterest();
     if (this.senses) {
       try {
-        this.unsubscribeSenses = this.senses.subscribe((event) => void this.eventService.handleHostEvent(event));
+        this.unsubscribeSenses = this.senses.subscribe((event) => void this.eventService.handleHostEvent(event, hostEventScope(event)));
       } catch (err) {
         this.logger.warn('[engine] senses.subscribe failed', err);
       }
@@ -331,4 +331,16 @@ export class Engine {
     await this.runner.dispose();
     await this.storage.close();
   }
+}
+
+/**
+ * Host events that belong to one character (avatar clicks, widget messages) carry
+ * `data.characterRef`; scope their dispatch so only that character's subscriptions fire.
+ */
+function hostEventScope(event: HostEvent): { characterRef?: string } {
+  const data = event.data;
+  if (data && typeof data === 'object' && !Array.isArray(data) && typeof data['characterRef'] === 'string') {
+    return { characterRef: data['characterRef'] };
+  }
+  return {};
 }

@@ -151,7 +151,72 @@ export function defaultTemplates(
     wallpaper = { command: `osascript -e 'tell application "System Events" to set picture of every desktop to "{file}"'` };
     browser = { command: 'open {url}' };
   }
-  return { wallpaper, browser, inputLock: empty, inputUnlock: empty };
+  // ---- phase 2 templates (docs/spec/living.md §4) ----------------------------------
+  const linux = platform === 'linux' || (platform !== 'win32' && platform !== 'darwin');
+  const pick = (...candidates: Array<[string, string]>): CommandTemplate => {
+    for (const [bin, command] of candidates) if (probe(bin)) return { command };
+    return empty;
+  };
+  const nowPlaying = probe('playerctl')
+    ? { command: `playerctl metadata --format '{"title":"{{title}}","artist":"{{artist}}","album":"{{album}}","app":"{{playerName}}","status":"{{status}}"}'` }
+    : empty;
+  let screenshot: CommandTemplate = empty;
+  let tts: CommandTemplate = empty;
+  let volumeSet: CommandTemplate = empty;
+  let volumeGet: CommandTemplate = empty;
+  let brightness: CommandTemplate = empty;
+  let doNotDisturb: CommandTemplate = empty;
+  let theme: CommandTemplate = empty;
+  let inputType: CommandTemplate = empty;
+  let inputKey: CommandTemplate = empty;
+  let inputClick: CommandTemplate = empty;
+  let inputMove: CommandTemplate = empty;
+  if (linux) {
+    if (hyprland) screenshot = pick(['grim', 'grim -o {monitor} {file}']);
+    else screenshot = pick(['grim', 'grim {file}'], ['scrot', 'scrot -o {file}'], ['import', 'import -window root {file}']);
+    tts = pick(['espeak-ng', 'espeak-ng "{text}"'], ['espeak', 'espeak "{text}"'], ['spd-say', 'spd-say -w "{text}"']);
+    volumeSet = pick(['wpctl', 'wpctl set-volume @DEFAULT_AUDIO_SINK@ {level}%'], ['pactl', 'pactl set-sink-volume @DEFAULT_SINK@ {level}%']);
+    volumeGet = pick(['wpctl', 'wpctl get-volume @DEFAULT_AUDIO_SINK@'], ['pactl', 'pactl get-sink-volume @DEFAULT_SINK@']);
+    brightness = pick(['brightnessctl', 'brightnessctl set {level}%']);
+    doNotDisturb = pick(['makoctl', 'makoctl mode -t do-not-disturb'], ['dunstctl', 'dunstctl set-paused {on}']);
+    theme = pick(['gsettings', 'gsettings set org.gnome.desktop.interface color-scheme prefer-{theme}']);
+    inputType = pick(['ydotool', 'ydotool type -- "{text}"'], ['xdotool', 'xdotool type -- "{text}"'], ['wtype', 'wtype -- "{text}"']);
+    inputKey = pick(['ydotool', 'ydotool key {combo}'], ['xdotool', 'xdotool key {combo}']);
+    inputClick = pick(['ydotool', 'ydotool mousemove --absolute -x {x} -y {y} click {buttonHex}'], ['xdotool', 'xdotool mousemove {x} {y} click {buttonNum}']);
+    inputMove = pick(['ydotool', 'ydotool mousemove --absolute -x {x} -y {y}'], ['xdotool', 'xdotool mousemove {x} {y}']);
+  } else if (platform === 'darwin') {
+    screenshot = { command: 'screencapture -x {file}' };
+    tts = { command: 'say "{text}"' };
+    volumeSet = { command: `osascript -e 'set volume output volume {level}'` };
+    volumeGet = { command: `osascript -e 'output volume of (get volume settings)'` };
+    theme = { command: `osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to {darkMode}'` };
+  } else if (platform === 'win32') {
+    tts = {
+      command:
+        'powershell -NoProfile -NonInteractive -Command "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Speak(\'{text}\')"',
+    };
+  }
+  return {
+    wallpaper,
+    browser,
+    inputLock: empty,
+    inputUnlock: empty,
+    activeWindow: empty,
+    nowPlaying,
+    screenshot,
+    tts,
+    stt: empty,
+    launch: empty,
+    volumeSet,
+    volumeGet,
+    brightness,
+    doNotDisturb,
+    theme,
+    inputType,
+    inputKey,
+    inputClick,
+    inputMove,
+  };
 }
 
 /** The template to run: the user's when it has a command, otherwise the platform default (may still be empty). */
@@ -178,6 +243,8 @@ export interface RunTemplateOptions {
   timeoutMs?: number;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
+  /** Kills the process when aborted (result code -1). */
+  signal?: AbortSignal;
 }
 
 /** Build the argv for a template without running it (exposed for tests and the settings "Test" preview). */
@@ -218,6 +285,10 @@ export function runTemplate(tpl: CommandTemplate, vars: Record<string, string>, 
       timedOut = true;
       child.kill('SIGKILL');
     }, timeoutMs);
+    const onAbort = (): void => {
+      child.kill('SIGKILL');
+    };
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
     const append = (current: string, chunk: Buffer): string =>
       current.length >= COMMAND_OUTPUT_CAP ? current : (current + chunk.toString('utf8')).slice(0, COMMAND_OUTPUT_CAP);
     child.stdout?.on('data', (chunk: Buffer) => (stdout = append(stdout, chunk)));
@@ -230,6 +301,7 @@ export function runTemplate(tpl: CommandTemplate, vars: Record<string, string>, 
     });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
       if (settled) return;
       settled = true;
       if (timedOut) stderr = `${stderr}${stderr.endsWith('\n') || stderr.length === 0 ? '' : '\n'}[rp] command timed out after ${timeoutMs} ms`;

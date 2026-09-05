@@ -6,16 +6,19 @@
  */
 import type {
   AppSettings,
+  AvatarState,
   DisplayBackendInfo,
   MediaPosition,
   MediaWindowEvent,
   MonitorInfo,
+  OverlayKind,
   OverlayLayer,
   OverlayOptions,
   OverlayUpdate,
   PlayVideoOptions,
   ShowImageOptions,
   MediaCommand,
+  WidgetSpec,
 } from '@rp/shared';
 import type { Bounds } from './placement.js';
 import { DEFAULT_MARGIN_PX, DEFAULT_OVERLAY_WIDTH, selectMonitor } from './placement.js';
@@ -46,7 +49,7 @@ export interface ResolvedOverlayOptions {
 
 export interface OverlaySpec {
   id: string;
-  kind: 'image' | 'video';
+  kind: OverlayKind;
   /** Absolute file path of the asset (for backends that read files themselves). */
   file: string;
   /** rp-asset:// URL (Electron windows); backends that need http rewrite it through the LoopbackServer. */
@@ -56,9 +59,13 @@ export interface OverlaySpec {
   options: ResolvedOverlayOptions;
   /** Page-level options forwarded to media.html (caption, durationMs, volume, loop, muted, closeOnEnd). */
   page: ShowImageOptions | PlayVideoOptions;
+  /** `avatar` overlays: the initial avatar state (its `imageUrl` is rewritten for helper backends). */
+  avatar?: AvatarState;
+  /** `widget` overlays: the widget to render. */
+  widget?: WidgetSpec;
 }
 
-export type OverlayEvent = 'ended' | 'closed' | 'error' | 'content-size';
+export type OverlayEvent = 'ended' | 'closed' | 'error' | 'content-size' | 'avatar-clicked' | 'widget-message';
 export type OverlayEventListener = (detail?: unknown) => void;
 
 export interface OverlayHandle {
@@ -66,6 +73,8 @@ export interface OverlayHandle {
   /** Placement/layer/opacity/clickThrough/size; also forwards the visual subset to the page. */
   update(patch: OverlayUpdate): Promise<void>;
   close(): Promise<void>;
+  /** Send any command to the page hosting this overlay (avatar-set, widget-update, draw-set, …). */
+  send(command: MediaCommand): Promise<void>;
   on(event: OverlayEvent, listener: OverlayEventListener): () => void;
 }
 
@@ -99,6 +108,8 @@ export interface OverlayWindowLike {
   blur(): void;
   isDestroyed(): boolean;
   destroy(): void;
+  /** Run JavaScript in the page (voice fallback via speechSynthesis). */
+  runScript?(script: string): Promise<unknown>;
 }
 
 const POSITIONS: ReadonlySet<string> = new Set(['center', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);

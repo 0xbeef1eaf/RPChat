@@ -10,7 +10,7 @@ export interface CommandRunnerDeps {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   /** Injectable for tests. */
-  run?: (tpl: CommandTemplate, vars: Record<string, string>) => Promise<CommandResult>;
+  run?: (tpl: CommandTemplate, vars: Record<string, string>, opts?: { signal?: AbortSignal }) => Promise<CommandResult>;
 }
 
 export class CommandRunner {
@@ -43,9 +43,16 @@ export class CommandRunner {
     return this.runTemplate(tpl, vars, name);
   }
 
-  async runTemplate(tpl: CommandTemplate, vars: Record<string, string>, label: string): Promise<CommandResult> {
+  /** Like `run` but without the info log line (for frequent polls such as senses samplers). */
+  async runQuiet(name: keyof CommandTemplates, vars: Record<string, string>): Promise<CommandResult> {
+    const tpl = await this.resolve(name);
+    if (!isConfigured(tpl)) throw notConfigured(name);
+    return (this.deps.run ?? ((t, v) => runTemplate(t, v, { platform: this.platform, env: this.env })))(tpl, vars);
+  }
+
+  async runTemplate(tpl: CommandTemplate, vars: Record<string, string>, label: string, opts: { signal?: AbortSignal } = {}): Promise<CommandResult> {
     const started = Date.now();
-    const result = await (this.deps.run ?? ((t, v) => runTemplate(t, v, { platform: this.platform, env: this.env })))(tpl, vars);
+    const result = await (this.deps.run ?? ((t, v, o) => runTemplate(t, v, { platform: this.platform, env: this.env, ...(o?.signal ? { signal: o.signal } : {}) })))(tpl, vars, opts);
     this.deps.logger.info(`[commands] ${label}: "${tpl.command}" → exit ${result.code} in ${Date.now() - started} ms${result.stderr ? ` (stderr: ${result.stderr.trim().slice(0, 200)})` : ''}`);
     return result;
   }

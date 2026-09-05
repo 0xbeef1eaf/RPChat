@@ -2,17 +2,34 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { app, screen } from 'electron';
+import { app, screen, shell } from 'electron';
 import { Engine, FileStorage } from '@rp/core';
 import type { Logger, ProviderFactory } from '@rp/core';
 import { createStandardRegistry } from '@rp/sdk';
 import { QuickJsRunner } from '@rp/sandbox';
 import { createProvider } from '@rp/llm';
-import type { AppSettings, LoadedPack, PermissionDecision, PermissionRequest, UiPromptAnswer, UiPromptRequest } from '@rp/shared';
+import type { AppSettings, LoadedPack, PermissionDecision, PermissionRequest, Storage, UiPromptAnswer, UiPromptRequest } from '@rp/shared';
 import { IPC_EVENT_CHANNELS, parseCharacterRef } from '@rp/shared';
 import { defaultSettings, mergeSettings } from '@rp/core';
 import { hasExecutable } from './commands.js';
+import { AvatarHandler } from './capabilities/avatar.js';
 import { BrowserHandler } from './capabilities/browser.js';
+import { CalendarHandler } from './capabilities/calendar.js';
+import { DesktopHandler } from './capabilities/desktop.js';
+import { FilesHandler } from './capabilities/files.js';
+import { MessagingHandler } from './capabilities/messaging.js';
+import { PresenceHandler } from './capabilities/presence.js';
+import { ScreenHandler } from './capabilities/screen.js';
+import { TTS_PACK_ID, VoiceHandler } from './capabilities/voice.js';
+import { WebHandler } from './capabilities/web.js';
+import { WidgetsHandler } from './capabilities/widgets.js';
+import { electronCapturer } from './capture.js';
+import { createHyprTransport } from './display/hyprland.js';
+import type { HyprTransport } from './display/hyprland.js';
+import { detectWindowSystem, isHyprland } from './display/layers.js';
+import { phase2, unavailable } from './phase2.js';
+import { createSenses } from './senses/index.js';
+import type { Senses } from './senses/index.js';
 import { CommandRunner } from './capabilities/commands-runner.js';
 import { DisplayHandler } from './capabilities/display.js';
 import { InputHandler } from './capabilities/input.js';
@@ -31,6 +48,7 @@ import type { WindowManager } from './windows.js';
 export interface AppServices {
   engine: Engine;
   media: MediaManager;
+  senses: Senses;
   commands: CommandRunner;
   permissionPrompts: PendingPrompts<PermissionDecision>;
   uiPrompts: PendingPrompts<UiPromptAnswer>;
@@ -40,6 +58,8 @@ export interface AppServices {
   loopback: LoopbackServer | undefined;
   /** Absolute path of the bundled sample image (copied out of the asar when needed). */
   sampleImage(): Promise<string>;
+  /** Root directory served for a pack id by rp-asset:// (installed packs + app-generated roots). */
+  packRootFor(packId: string): string | undefined;
   stop(): Promise<void>;
 }
 
@@ -62,8 +82,15 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const packsDir = path.join(opts.userData, 'packs');
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(packsDir, { recursive: true });
-  const storage = new FileStorage(dataDir);
+  // `as Storage`: @rp/core's FileStorage gains `subscriptions` with the phase-2 core work.
+  const storage = new FileStorage(dataDir) as unknown as Storage;
   const stored = mergeSettings(await storage.settings.get().catch(() => defaultSettings()));
+  const hypr: HyprTransport | undefined = process.platform === 'linux' && isHyprland(env) ? createHyprTransport(env, logger) : undefined;
+  const windowSystem = detectWindowSystem(env);
+  /** Extra roots served by rp-asset:// besides installed packs (generated speech files). */
+  const ttsDir = path.join(opts.userData, 'tts');
+  const extraRoots: Record<string, string> = { [TTS_PACK_ID]: ttsDir };
+  const packRootFor = (packId: string): string | undefined => extraRoots[packId] ?? engine.packs.tryGetLoaded(packId)?.root;
 
   // ---- display backend ----------------------------------------------------
   let loopback: LoopbackServer | undefined;
@@ -72,7 +99,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     const server = new LoopbackServer({
       rendererDir: windows.rendererDir,
       ...(env.ELECTRON_RENDERER_URL ? { devServerUrl: env.ELECTRON_RENDERER_URL } : {}),
-      assets: { packRootFor: (packId) => engine.packs.tryGetLoaded(packId)?.root, logger },
+      assets: { packRootFor, logger },
       logger,
     });
     await server.start();
@@ -99,6 +126,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
         onPath: (name) => hasExecutable(name, env),
       }),
     loopback: loopbackFor,
+    ...(hypr ? { hyprTransport: hypr } : {}),
   };
   let backend: DisplayBackend = await selectBackend(stored.displayBackend, backendContext);
   let backendSetting = stored.displayBackend;
@@ -130,6 +158,31 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const wallpaper = new WallpaperHandler({ commands, packs, backend: () => backend, restoreFile: async () => (await settingsOf()).wallpaperRestoreFile });
   const input = new InputHandler({ commands, maxLockMs: async () => (await settingsOf()).maxInputLockMs, logger });
 
+  // ---- phase 2: senses + handlers ------------------------------------------
+  const senses = createSenses({ settings: settingsOf, commands, ...(hypr ? { hypr } : {}), logger });
+  const emit = (event: Parameters<typeof senses.provider.push>[0]): void => senses.provider.push(event);
+  const avatar = new AvatarHandler({ backend: () => backend, packs, emit, logger });
+  const widgets = new WidgetsHandler({ backend: () => backend, emit, defaultLayer: async () => ((await settingsOf()).mediaAlwaysOnTop ? 'top' : 'bottom') });
+  const screenHandler = new ScreenHandler({
+    backend: () => backend,
+    commands,
+    capturer: electronCapturer(),
+    preferTemplate: () => windowSystem === 'wayland',
+    tmpDir: path.join(opts.userData, 'tmp'),
+    describeImage: (sessionId, png, question) => {
+      const llm = phase2(engine).llm;
+      if (!llm?.describeImage) throw unavailable('engine.llm.describeImage');
+      return llm.describeImage(sessionId, png, question);
+    },
+    logger,
+  });
+  const voice = new VoiceHandler({ commands, audioWindow: () => windows.audioWindow(), ttsDir, logger });
+  const desktop = new DesktopHandler({ commands, ...(hypr ? { hypr } : {}), launchAllowlist: async () => (await settingsOf()).desktop.launchAllowlist, logger });
+  const files = new FilesHandler({ userData: opts.userData, openPath: (p) => shell.openPath(p) });
+  const messaging = new MessagingHandler({ channels: async () => (await settingsOf()).messaging.channels, runCommand: (tpl, vars, label) => commands.runTemplate(tpl, vars, label) });
+  const web = new WebHandler({ settings: async () => (await settingsOf()).web });
+  const calendar = new CalendarHandler({ sources: async () => (await settingsOf()).senses.calendarSources, logger });
+
   const mock = isMockLlm(env);
   const providerFactory: ProviderFactory = mock ? mockProviderFactory() : createProvider;
   engine = new Engine({
@@ -146,14 +199,27 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       wallpaper,
       new BrowserHandler({ commands }),
       input,
+      new PresenceHandler(senses.provider),
+      screenHandler,
+      calendar,
+      web,
+      avatar,
+      widgets,
+      voice,
+      desktop,
+      files,
+      messaging,
     ],
     permissionPrompter,
     appVersion: opts.appVersion,
     logger,
     locale: app.getLocale(),
+    // `senses` is the phase-2 `EngineOptions.senses` (SensesProvider); spread so older core builds ignore it.
+    ...({ senses: senses.provider } as object),
   });
 
   await engine.start();
+  await senses.refresh().catch((err: unknown) => logger.warn('[senses] initial settings read failed', err));
   if (mock) await ensureMockProvider(engine, logger);
   if (mock || !app.isPackaged) await ensureExamplePack(engine, opts.appRoot, logger, env);
 
@@ -176,6 +242,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   return {
     engine,
     media,
+    senses,
     commands,
     permissionPrompts,
     uiPrompts,
@@ -191,11 +258,13 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       await previous.dispose().catch((err: unknown) => logger.warn('[display] dispose of previous backend failed', err));
     },
     sampleImage,
+    packRootFor,
     async stop() {
       if (stopped) return;
       stopped = true;
       permissionPrompts.rejectAll();
       uiPrompts.rejectAll();
+      await senses.dispose().catch((err: unknown) => logger.warn('[senses] dispose failed', err));
       await engine.stop().catch((err: unknown) => logger.warn('[engine] stop failed', err));
       await backend.dispose().catch((err: unknown) => logger.warn('[display] dispose failed', err));
       await loopback?.close().catch(() => undefined);

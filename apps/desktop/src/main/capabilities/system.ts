@@ -20,6 +20,7 @@ export const FILE_MAX_BYTES = 1024 * 1024;
 export interface SystemHandlerDeps {
   openExternal?: (url: string) => Promise<void>;
   clipboardWrite?: (text: string) => void;
+  clipboardRead?: () => string;
   home?: string;
 }
 
@@ -106,6 +107,8 @@ export class SystemHandler implements CapabilityHandler {
         (this.deps.clipboardWrite ?? ((t: string) => clipboard.writeText(t)))(args[0]);
         return;
       }
+      case 'clipboardRead':
+        return String(await (this.deps.clipboardRead ?? (() => clipboard.readText()))()).slice(0, 256 * 1024);
       default:
         throw new RpError('CAPABILITY_UNKNOWN', `Unknown method sdk.system.${method}`);
     }
