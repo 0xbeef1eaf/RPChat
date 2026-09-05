@@ -119,3 +119,171 @@ body {
 .media-item.click-through * {
   pointer-events: none;
 }
+
+/* ---------- avatar page ---------- */
+.avatar-page {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+.avatar-figure {
+  cursor: pointer;
+  line-height: 0;
+}
+.avatar-figure img {
+  width: 100%;
+  height: auto;
+  display: block;
+  transition: transform 160ms ease-out;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.35));
+}
+.avatar-bubble {
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #1c1c22;
+  font-size: 14px;
+  line-height: 1.35;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  position: relative;
+  animation: media-in 200ms ease-out both;
+  word-break: break-word;
+}
+.avatar-bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  width: 12px;
+  height: 12px;
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+}
+.anim-bounce {
+  animation: av-bounce 700ms ease-out both;
+}
+.anim-shake {
+  animation: av-shake 500ms ease-in-out both;
+}
+.anim-nod {
+  animation: av-nod 700ms ease-in-out both;
+}
+.anim-wave {
+  animation: av-wave 900ms ease-in-out both;
+  transform-origin: 50% 90%;
+}
+.anim-pulse {
+  animation: av-pulse 800ms ease-in-out both;
+}
+.anim-spin {
+  animation: av-spin 800ms ease-in-out both;
+}
+.anim-fade-in {
+  animation: av-fade-in 500ms ease-out both;
+}
+.anim-fade-out {
+  animation: av-fade-out 500ms ease-in both;
+}
+@keyframes av-bounce {
+  0%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-18px); }
+  55% { transform: translateY(0); }
+  75% { transform: translateY(-7px); }
+}
+@keyframes av-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-8px); }
+  40%, 80% { transform: translateX(8px); }
+}
+@keyframes av-nod {
+  0%, 100% { transform: rotate(0); }
+  30% { transform: rotate(6deg) translateY(4px); }
+  70% { transform: rotate(-3deg); }
+}
+@keyframes av-wave {
+  0%, 100% { transform: rotate(0); }
+  25% { transform: rotate(-8deg); }
+  50% { transform: rotate(8deg); }
+  75% { transform: rotate(-5deg); }
+}
+@keyframes av-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+@keyframes av-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes av-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes av-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* ---------- widget page ---------- */
+.widget-page {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(24, 24, 28, 0.94);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.widget-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  font-size: 12px;
+  color: #ddd;
+  background: rgba(255, 255, 255, 0.06);
+}
+.widget-title-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.widget-close {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.widget-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.widget-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+/* ---------- draw page ---------- */
+.draw-page {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  display: block;
+}
+.draw-shape {
+  animation: media-in 180ms ease-out both;
+}
+.draw-shape.fading {
+  animation: draw-fade linear both;
+}
+@keyframes draw-fade {
+  0%, 80% { opacity: 1; }
+  100% { opacity: 0; }
+}

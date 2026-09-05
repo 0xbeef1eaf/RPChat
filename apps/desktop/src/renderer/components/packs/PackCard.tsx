@@ -17,6 +17,8 @@ export function PackCard({ pack, capabilities, onUninstall }: PackCardProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const m = pack.manifest;
   const grantByModule = new Map(pack.grants.map((g) => [g.module, g]));
+  const blocked = pack.blockedByPolicy ?? [];
+  const effective = pack.effectiveCapabilities ?? [];
 
   const toggle = async (module: string, granted: boolean) => {
     setBusy(module);
@@ -32,6 +34,11 @@ export function PackCard({ pack, capabilities, onUninstall }: PackCardProps) {
             <h2>{m.name}</h2>
             <span className="badge">{m.version}</span>
             <span className="muted small mono">{m.id}</span>
+            {blocked.length > 0 ? (
+              <span className="badge badge-warning" title={`Denied by Settings → Permissions: ${blocked.join(', ')}`}>
+                {blocked.length} blocked by your policy
+              </span>
+            ) : null}
           </div>
           {m.description ? <p className="muted">{m.description}</p> : null}
           <p className="small muted">
@@ -76,6 +83,11 @@ export function PackCard({ pack, capabilities, onUninstall }: PackCardProps) {
         </section>
         <section>
           <h3 style={{ marginBottom: 8 }}>Capabilities</h3>
+          {pack.requestedCapabilities.length > 0 ? (
+            <p className="field-hint" style={{ marginBottom: 8 }}>
+              Effective now: {effective.length > 0 ? effective.map((e) => <code key={e} style={{ marginRight: 4 }}>{e}</code>) : <em>none beyond trusted</em>}
+            </p>
+          ) : null}
           <div className="cap-list">
             {pack.requestedCapabilities.length === 0 ? (
               <span className="muted small">Only trusted capabilities (chat, state, timers, …) are used.</span>
@@ -84,8 +96,9 @@ export function PackCard({ pack, capabilities, onUninstall }: PackCardProps) {
               const info = capabilities.get(module);
               const grant = grantByModule.get(module);
               const granted = grant?.granted ?? false;
+              const isBlocked = blocked.includes(module);
               return (
-                <div key={module} className="cap-row">
+                <div key={module} className={isBlocked ? 'cap-row cap-row-blocked' : 'cap-row'}>
                   <div className="item-text">
                     <span className="item-title">
                       {info?.title ?? module} <span className="muted mono small">{module}</span>
@@ -95,6 +108,11 @@ export function PackCard({ pack, capabilities, onUninstall }: PackCardProps) {
                         </span>
                       ) : null}
                       {!info ? <span className="badge badge-danger" style={{ marginLeft: 6 }}>unknown</span> : null}
+                      {isBlocked ? (
+                        <span className="badge badge-warning" style={{ marginLeft: 6 }} title="Denied globally in Settings → Permissions; this toggle cannot override it">
+                          blocked by your policy
+                        </span>
+                      ) : null}
                     </span>
                     {info?.summary ? <span className="item-sub">{info.summary}</span> : null}
                   </div>

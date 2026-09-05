@@ -18,6 +18,13 @@ export interface Toast {
   text: string;
 }
 
+export interface EventMarker {
+  id: string;
+  at: string;
+  event: string;
+  subscriptionId: string;
+}
+
 /** Per-session transient state driven by the `ChatEvent` stream. */
 export interface SessionRuntime {
   /** Id of the turn currently in progress, if any. */
@@ -26,6 +33,10 @@ export interface SessionRuntime {
   status: string | null;
   /** Last engine error for this session; cleared when a new turn starts. */
   error: SerializedError | null;
+  /** Inline markers for `event-fired`, newest last (capped). */
+  eventMarkers: EventMarker[];
+  /** Bumped on `event-fired` so an open Events drawer re-fetches subscriptions. */
+  eventsVersion: number;
 }
 
 export interface MemoriesPanelTarget {
@@ -56,9 +67,11 @@ export interface AppState {
   memoriesPanel: MemoriesPanelTarget | null;
   /** Bumped on every `memory-added` event so open panels re-fetch. */
   memoryVersion: number;
+  /** Per character: bumped on `mood-changed` / `routine-changed` so the chat header re-fetches `characters.status`. */
+  characterStatusVersion: Record<string, number>;
 }
 
-export const EMPTY_RUNTIME: SessionRuntime = { turnId: null, status: null, error: null };
+export const EMPTY_RUNTIME: SessionRuntime = { turnId: null, status: null, error: null, eventMarkers: [], eventsVersion: 0 };
 
 export function initialState(): AppState {
   return {
@@ -78,6 +91,7 @@ export function initialState(): AppState {
     toasts: [],
     memoriesPanel: null,
     memoryVersion: 0,
+    characterStatusVersion: {},
   };
 }
 

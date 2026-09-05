@@ -5,30 +5,68 @@ import { Toggle } from '../common/Toggle';
 
 type TemplateName = keyof CommandTemplates;
 
-const TEMPLATES: Array<{ name: TemplateName; label: string; placeholders: string; help: string }> = [
+interface TemplateMeta {
+  name: TemplateName;
+  label: string;
+  placeholders: string;
+  help: string;
+}
+
+interface TemplateGroup {
+  title: string;
+  hint: string;
+  templates: TemplateMeta[];
+}
+
+const GROUPS: TemplateGroup[] = [
   {
-    name: 'wallpaper',
-    label: 'Set wallpaper',
-    placeholders: '{file} {monitor}',
-    help: 'Used by sdk.wallpaper.set. {file} is the absolute image path, {monitor} the monitor name or empty.',
+    title: 'Media & system',
+    hint: 'wallpaper, browser and input lock',
+    templates: [
+      { name: 'wallpaper', label: 'Set wallpaper', placeholders: '{file} {monitor}', help: 'Used by sdk.wallpaper.set. {file} is the absolute image path, {monitor} the monitor name or empty.' },
+      { name: 'browser', label: 'Open browser', placeholders: '{url}', help: 'Used by sdk.browser.open. Include {newWindow} where a new-window flag should go.' },
+      { name: 'inputLock', label: 'Lock input', placeholders: '{seconds} {durationMs}', help: 'Used by sdk.input.lock. No platform default: point it at your own script (e.g. evsieve/xinput on Linux, or hyprlock for a screen lock).' },
+      { name: 'inputUnlock', label: 'Unlock input', placeholders: '', help: 'Optional. Leave empty when the lock command unlocks itself after the duration.' },
+    ],
   },
   {
-    name: 'browser',
-    label: 'Open browser',
-    placeholders: '{url}',
-    help: 'Used by sdk.browser.open. Include {newWindow} where a new-window flag should go.',
+    title: 'Senses',
+    hint: 'how presence is sampled (not needed on Hyprland for the active window)',
+    templates: [
+      { name: 'activeWindow', label: 'Active window', placeholders: '', help: 'Print the active window as JSON {title, app, class?} or "title<TAB>app" on stdout.' },
+      { name: 'nowPlaying', label: 'Now playing', placeholders: '', help: 'Print JSON {title, artist, album, app, status}. Default: playerctl when installed.' },
+      { name: 'screenshot', label: 'Screenshot', placeholders: '{file} {monitor}', help: 'Write a PNG to {file} for sdk.screen.look (Hyprland default: grim). Not needed where Electron can capture the screen.' },
+    ],
   },
   {
-    name: 'inputLock',
-    label: 'Lock input',
-    placeholders: '{seconds} {durationMs}',
-    help: 'Used by sdk.input.lock. No platform default: point it at your own script (e.g. evsieve/xinput on Linux, or hyprlock for a screen lock).',
+    title: 'Voice',
+    hint: 'text to speech and speech to text',
+    templates: [
+      { name: 'tts', label: 'Speak', placeholders: '{text} {file}', help: 'Speak {text}, or write a wav to {file} to have the app play it. Empty: built-in speech synthesis when available.' },
+      { name: 'stt', label: 'Listen', placeholders: '{seconds}', help: 'Record for {seconds} and print the transcript on stdout.' },
+    ],
   },
   {
-    name: 'inputUnlock',
-    label: 'Unlock input',
-    placeholders: '',
-    help: 'Optional. Leave empty when the lock command unlocks itself after the duration.',
+    title: 'Desktop',
+    hint: 'sdk.desktop — launching apps, audio, brightness, notifications, theme',
+    templates: [
+      { name: 'launch', label: 'Launch app', placeholders: '{app} {args}', help: 'Empty: spawn {app} directly. The launch allowlist (Integrations) controls what runs without a prompt.' },
+      { name: 'volumeSet', label: 'Set volume', placeholders: '{level}', help: '0..100. Defaults try wpctl, then pactl.' },
+      { name: 'volumeGet', label: 'Get volume', placeholders: '', help: 'Print the current volume 0..100.' },
+      { name: 'brightness', label: 'Brightness', placeholders: '{level}', help: '0..100. Default: brightnessctl when installed.' },
+      { name: 'doNotDisturb', label: 'Do not disturb', placeholders: '{on}', help: '{on} is 1 or 0. Defaults: makoctl, then dunstctl.' },
+      { name: 'theme', label: 'Switch theme', placeholders: '{theme}', help: 'dark or light. Default: gsettings color-scheme.' },
+    ],
+  },
+  {
+    title: 'Input',
+    hint: 'sdk.input typing and pointer control (every call asks you first)',
+    templates: [
+      { name: 'inputType', label: 'Type text', placeholders: '{text}', help: 'Default: ydotool, then xdotool.' },
+      { name: 'inputKey', label: 'Press keys', placeholders: '{combo}', help: 'e.g. ctrl+s.' },
+      { name: 'inputClick', label: 'Click', placeholders: '{x} {y} {button}', help: 'button is left/right/middle.' },
+      { name: 'inputMove', label: 'Move pointer', placeholders: '{x} {y}', help: '' },
+    ],
   },
 ];
 
@@ -60,21 +98,23 @@ export function CommandsSection({ settings, onPatch }: CommandsSectionProps) {
         (each still needs a per-pack grant). Commands are tokenised like a shell line and run <em>without</em> a shell; placeholders are
         substituted inside tokens so values can never inject extra arguments. Leave a command empty to use the platform default.
       </p>
-      {TEMPLATES.map((t) => (
-        <TemplateEditor
-          key={t.name}
-          meta={t}
-          value={templates[t.name] ?? EMPTY}
-          fallback={defaults?.[t.name]}
-          onSave={(tpl) => saveTemplate(t.name, tpl)}
-        />
+      {GROUPS.map((g) => (
+        <section key={g.title} className="stack" style={{ gap: 10 }}>
+          <div>
+            <h3>{g.title}</h3>
+            <span className="field-hint">{g.hint}</span>
+          </div>
+          {g.templates.map((t) => (
+            <TemplateEditor key={t.name} meta={t} value={templates[t.name] ?? EMPTY} fallback={defaults?.[t.name]} onSave={(tpl) => saveTemplate(t.name, tpl)} />
+          ))}
+        </section>
       ))}
     </div>
   );
 }
 
 interface TemplateEditorProps {
-  meta: (typeof TEMPLATES)[number];
+  meta: TemplateMeta;
   value: CommandTemplate;
   fallback: CommandTemplate | undefined;
   onSave: (tpl: CommandTemplate) => Promise<boolean>;

@@ -4,6 +4,8 @@
  * next item list plus the `MediaWindowEvent`s that must be reported back.
  */
 import type {
+  DrawShape,
+  Json,
   MediaCommand,
   MediaItemId,
   MediaWindowEvent,
@@ -13,14 +15,27 @@ import type {
   PlayVideoOptions,
   ShowImageOptions,
 } from '@rp/shared';
+import { applyAvatarCommand, isAvatarCommand, type AvatarPageState } from './avatar';
+import { applyWidgetCommand, drainWidgetOutbox, isWidgetCommand, validateWidgetMessage, type WidgetEntry } from './widget';
 
 export type MediaEntry =
   | { id: MediaItemId; kind: 'image'; url: string; options: ShowImageOptions }
   | { id: MediaItemId; kind: 'video'; url: string; options: PlayVideoOptions }
   | { id: MediaItemId; kind: 'audio'; url: string; options: PlayAudioOptions };
 
+export interface DrawSurface {
+  id: MediaItemId;
+  shapes: Array<DrawShape & { shapeId: string }>;
+}
+
 export interface MediaState {
   items: MediaEntry[];
+  /** `avatar` page: at most one avatar per window. */
+  avatar: AvatarPageState | null;
+  /** `widget` page. */
+  widgets: WidgetEntry[];
+  /** `draw` page: one surface per monitor id. */
+  draws: DrawSurface[];
 }
 
 export type MediaLocalEvent =
@@ -31,21 +46,45 @@ export type MediaLocalEvent =
   /** The media element failed to load/play. */
   | { type: 'error'; id: MediaItemId; message: string }
   /** The item has rendered; main uses the size to fit the window. */
-  | { type: 'content-size'; id: MediaItemId; width: number; height: number };
+  | { type: 'content-size'; id: MediaItemId; width: number; height: number }
+  /** The user clicked the avatar. */
+  | { type: 'avatar-click'; id: MediaItemId }
+  /** The avatar's speech bubble expired. */
+  | { type: 'bubble-expired'; id: MediaItemId }
+  /** A widget iframe posted a message (raw, validated here). */
+  | { type: 'widget-message'; id: MediaItemId; data: unknown }
+  /** The view delivered outbox messages up to `seq` to the iframe. */
+  | { type: 'widget-delivered'; id: MediaItemId; seq: number };
 
 export interface MediaTransition {
   state: MediaState;
   reports: MediaWindowEvent[];
 }
 
-export const INITIAL_MEDIA_STATE: MediaState = { items: [] };
+export const INITIAL_MEDIA_STATE: MediaState = { items: [], avatar: null, widgets: [], draws: [] };
 
 function without(state: MediaState, id: MediaItemId): MediaState {
-  return { items: state.items.filter((i) => i.id !== id) };
+  return { ...state, items: state.items.filter((i) => i.id !== id) };
 }
 
 function has(state: MediaState, id: MediaItemId): boolean {
   return state.items.some((i) => i.id === id);
+}
+
+/** Every open overlay id in this window, regardless of page kind. */
+export function openIds(state: MediaState): MediaItemId[] {
+  return [...state.items.map((i) => i.id), ...(state.avatar ? [state.avatar.id] : []), ...state.widgets.map((w) => w.id), ...state.draws.map((d) => d.id)];
+}
+
+function closeAny(state: MediaState, id: MediaItemId): MediaTransition {
+  if (!openIds(state).includes(id)) return { state, reports: [] };
+  const next: MediaState = {
+    items: state.items.filter((i) => i.id !== id),
+    avatar: state.avatar && state.avatar.id === id ? null : state.avatar,
+    widgets: state.widgets.filter((w) => w.id !== id),
+    draws: state.draws.filter((d) => d.id !== id),
+  };
+  return { state: next, reports: [{ type: 'closed', id }] };
 }
 
 function entryFromCommand(command: MediaCommand): MediaEntry | null {
@@ -64,12 +103,17 @@ function entryFromCommand(command: MediaCommand): MediaEntry | null {
 /** Visual subset of an `OverlayUpdate`; placement/layer are handled by the main-process backend. */
 const VISUAL_UPDATE_KEYS = ['opacity', 'width', 'height', 'clickThrough'] as const;
 
-export function applyUpdate(entry: MediaEntry, patch: OverlayUpdate): MediaEntry {
+function visualSubset(patch: OverlayUpdate): Partial<OverlayOptions> {
   const visual: Partial<OverlayOptions> = {};
   for (const key of VISUAL_UPDATE_KEYS) {
     const v = patch[key];
     if (v !== undefined) (visual as Record<string, unknown>)[key] = v;
   }
+  return visual;
+}
+
+export function applyUpdate(entry: MediaEntry, patch: OverlayUpdate): MediaEntry {
+  const visual = visualSubset(patch);
   if (Object.keys(visual).length === 0) return entry;
   if (entry.kind === 'audio') return entry;
   return { ...entry, options: { ...entry.options, ...visual } } as MediaEntry;
@@ -92,16 +136,45 @@ export function isAllowedMediaUrl(url: string): boolean {
 }
 
 export function applyMediaCommand(state: MediaState, command: MediaCommand): MediaTransition {
+  if (isAvatarCommand(command)) {
+    const { avatar, closed } = applyAvatarCommand(state.avatar, command);
+    if (avatar === state.avatar) return { state, reports: [] };
+    return { state: { ...state, avatar }, reports: closed ? [{ type: 'closed', id: command.id }] : [] };
+  }
+  if (isWidgetCommand(command)) {
+    const widgets = applyWidgetCommand(state.widgets, command);
+    return { state: widgets === state.widgets ? state : { ...state, widgets }, reports: [] };
+  }
   switch (command.type) {
     case 'close':
-      if (!has(state, command.id)) return { state, reports: [] };
-      return { state: without(state, command.id), reports: [{ type: 'closed', id: command.id }] };
+      return closeAny(state, command.id);
     case 'close-all':
-      return { state: { items: [] }, reports: state.items.map((i) => ({ type: 'closed', id: i.id })) };
+      return { state: INITIAL_MEDIA_STATE, reports: openIds(state).map((id) => ({ type: 'closed', id })) };
     case 'update': {
+      if (state.widgets.some((w) => w.id === command.id)) {
+        const widgets = state.widgets.map((w) => (w.id === command.id ? { ...w, options: { ...w.options, ...visualSubset(command.options) } } : w));
+        return { state: { ...state, widgets }, reports: [] };
+      }
+      if (state.avatar && state.avatar.id === command.id) {
+        const v = visualSubset(command.options);
+        const avatar = { ...state.avatar, opacity: v.opacity ?? state.avatar.opacity, clickThrough: v.clickThrough ?? state.avatar.clickThrough };
+        return { state: { ...state, avatar }, reports: [] };
+      }
       if (!has(state, command.id)) return { state, reports: [] };
       const items = state.items.map((i) => (i.id === command.id ? applyUpdate(i, command.options) : i));
-      return { state: { items }, reports: [] };
+      return { state: { ...state, items }, reports: [] };
+    }
+    case 'draw-set': {
+      const shapes = command.shapes.filter((sh) => typeof sh.shapeId === 'string' && sh.shapeId.length > 0);
+      const idx = state.draws.findIndex((d) => d.id === command.id);
+      const surface: DrawSurface = { id: command.id, shapes };
+      const draws = idx === -1 ? [...state.draws, surface] : state.draws.map((d, i) => (i === idx ? surface : d));
+      return { state: { ...state, draws }, reports: [] };
+    }
+    case 'draw-clear': {
+      if (!state.draws.some((d) => d.id === command.id)) return { state, reports: [] };
+      const draws = state.draws.map((d) => (d.id === command.id ? { ...d, shapes: [] } : d));
+      return { state: { ...state, draws }, reports: [] };
     }
     default: {
       const entry = entryFromCommand(command);
@@ -111,7 +184,7 @@ export function applyMediaCommand(state: MediaState, command: MediaCommand): Med
       }
       // Re-showing an existing id replaces it in place.
       const items = has(state, entry.id) ? state.items.map((i) => (i.id === entry.id ? entry : i)) : [...state.items, entry];
-      return { state: { items }, reports: [] };
+      return { state: { ...state, items }, reports: [] };
     }
   }
 }
@@ -125,8 +198,37 @@ export function closesOnEnd(entry: MediaEntry): boolean {
 }
 
 export function applyMediaLocalEvent(state: MediaState, event: MediaLocalEvent): MediaTransition {
+  switch (event.type) {
+    case 'avatar-click':
+      if (!state.avatar || state.avatar.id !== event.id) return { state, reports: [] };
+      return { state, reports: [{ type: 'avatar-clicked', id: event.id }] };
+    case 'bubble-expired': {
+      if (!state.avatar || state.avatar.id !== event.id || !state.avatar.state.bubble) return { state, reports: [] };
+      const { bubble: _b, ...rest } = state.avatar.state;
+      return { state: { ...state, avatar: { ...state.avatar, state: rest } }, reports: [] };
+    }
+    case 'widget-message': {
+      if (!state.widgets.some((w) => w.id === event.id)) return { state, reports: [] };
+      const v = validateWidgetMessage(event.data);
+      if (!v.ok) return { state, reports: [{ type: 'error', id: event.id, message: `widget message rejected: ${v.reason}` }] };
+      return { state, reports: [{ type: 'widget-message', id: event.id, message: v.message as Json }] };
+    }
+    case 'widget-delivered':
+      return { state: { ...state, widgets: drainWidgetOutbox(state.widgets, event.id, event.seq) }, reports: [] };
+    case 'content-size':
+      if (openIds(state).includes(event.id)) {
+        return { state, reports: [{ type: 'content-size', id: event.id, width: event.width, height: event.height }] };
+      }
+      return { state, reports: [] };
+    default:
+      break;
+  }
   const entry = state.items.find((i) => i.id === event.id);
-  if (!entry) return { state, reports: [] };
+  if (!entry) {
+    // Avatars and widgets can be dismissed locally too (Escape / close button).
+    if (event.type === 'dismiss') return closeAny(state, event.id);
+    return { state, reports: [] };
+  }
   switch (event.type) {
     case 'dismiss':
       return { state: without(state, event.id), reports: [{ type: 'closed', id: event.id }] };
@@ -136,8 +238,6 @@ export function applyMediaLocalEvent(state: MediaState, event: MediaLocalEvent):
       reports.push({ type: 'closed', id: event.id });
       return { state: without(state, event.id), reports };
     }
-    case 'content-size':
-      return { state, reports: [{ type: 'content-size', id: event.id, width: event.width, height: event.height }] };
     case 'error':
       return {
         state: without(state, event.id),

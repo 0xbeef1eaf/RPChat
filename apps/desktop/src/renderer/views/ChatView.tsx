@@ -1,7 +1,9 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ConfirmDialog } from '../components/common/Modal';
 import { EmptyState } from '../components/common/EmptyState';
+import { CharacterStatus } from '../components/chat/CharacterStatus';
 import { Composer } from '../components/chat/Composer';
+import { EventsDrawer } from '../components/chat/EventsDrawer';
 import { MessageList } from '../components/chat/MessageList';
 import { SessionPanel } from '../components/chat/SessionPanel';
 import { Avatar } from '../components/common/Avatar';
@@ -17,6 +19,7 @@ export function ChatView() {
   const messages = useAppState((s) => (activeSessionId ? s.messages[activeSessionId] : undefined));
   const runtime = useAppState((s) => runtimeFor(s, activeSessionId));
   const [panelOpen, setPanelOpen] = useState(false);
+  const [eventsOpen, setEventsOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const session = useMemo(() => sessions.find((s) => s.id === activeSessionId), [sessions, activeSessionId]);
@@ -65,12 +68,18 @@ export function ChatView() {
         <Avatar name={characterName} url={character?.avatarUrl} />
         <div className="item-text">
           <div className="item-title">{session.title}</div>
-          <div className="item-sub">
-            {characterName}
-            {character ? ` · ${character.packName}` : ' · pack not installed'}
-            {session.model ? ` · ${session.model}` : ''}
+          <div className="item-sub row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <span>
+              {characterName}
+              {character ? ` · ${character.packName}` : ' · pack not installed'}
+              {session.model ? ` · ${session.model}` : ''}
+            </span>
+            {character ? <CharacterStatus characterRef={session.characterRef} /> : null}
           </div>
         </div>
+        <button type="button" className="btn btn-sm" onClick={() => setEventsOpen((v) => !v)} aria-expanded={eventsOpen} title="Host events this character subscribed to">
+          Events
+        </button>
         <button
           type="button"
           className="btn btn-sm"
@@ -86,6 +95,7 @@ export function ChatView() {
           Session settings
         </button>
       </header>
+      {eventsOpen ? <EventsDrawer sessionId={session.id} onClose={() => setEventsOpen(false)} /> : null}
       {panelOpen ? (
         <SessionPanel
           session={session}
@@ -102,6 +112,7 @@ export function ChatView() {
         userName={settings?.userDisplayName || 'You'}
         turnRunning={running}
         error={runtime.error}
+        markers={runtime.eventMarkers}
       />
       <div className="status-line" aria-live="polite">
         {running ? <span className="spinner" /> : null}

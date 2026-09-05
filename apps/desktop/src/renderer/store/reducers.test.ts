@@ -39,7 +39,7 @@ describe('applyChatEvent', () => {
     s = applyChatEvent(s, { type: 'error', sessionId: S, error: { code: 'INTERNAL', message: 'boom' } });
     expect(runtimeFor(s, S).error?.message).toBe('boom');
     s = applyChatEvent(s, { type: 'turn-started', sessionId: S, turnId: 't1' });
-    expect(runtimeFor(s, S)).toEqual({ turnId: 't1', status: null, error: null });
+    expect(runtimeFor(s, S)).toEqual({ turnId: 't1', status: null, error: null, eventMarkers: [], eventsVersion: 0 });
     s = applyChatEvent(s, { type: 'turn-finished', sessionId: S, turnId: 't1' });
     expect(runtimeFor(s, S).turnId).toBeNull();
   });
@@ -120,6 +120,24 @@ describe('applyChatEvent', () => {
     });
     expect(next.memoryVersion).toBe(s.memoryVersion + 1);
     expect(next.messages).toBe(s.messages);
+  });
+
+  it('event-fired appends an inline marker and bumps eventsVersion', () => {
+    let s = loaded();
+    s = applyChatEvent(s, { type: 'event-fired', sessionId: S, subscriptionId: 'sub1', event: 'user-idle' });
+    s = applyChatEvent(s, { type: 'event-fired', sessionId: S, subscriptionId: 'sub2', event: 'time' });
+    expect(runtimeFor(s, S).eventMarkers.map((m) => m.event)).toEqual(['user-idle', 'time']);
+    expect(runtimeFor(s, S).eventsVersion).toBe(2);
+    for (let i = 0; i < 40; i++) s = applyChatEvent(s, { type: 'event-fired', sessionId: S, subscriptionId: 'x', event: 'time' });
+    expect(runtimeFor(s, S).eventMarkers.length).toBeLessThanOrEqual(30);
+  });
+
+  it('mood/routine changes bump the character status version of the session owner', () => {
+    let s = setSessions(loaded(), [session(S, '2026-01-01T00:00:00Z')]);
+    s = applyChatEvent(s, { type: 'mood-changed', sessionId: S, mood: { mood: 0.4, energy: 0.6, tags: [], updatedAt: 'now', recent: [] } });
+    s = applyChatEvent(s, { type: 'routine-changed', sessionId: S, routine: { state: 'busy' } });
+    expect(s.characterStatusVersion['com.example.pack/luna']).toBe(2);
+    expect(applyChatEvent(s, { type: 'mood-changed', sessionId: 'unknown', mood: { mood: 0, energy: 0, tags: [], updatedAt: 'now', recent: [] } })).toBe(s);
   });
 
   it('does not mutate the previous state', () => {

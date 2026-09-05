@@ -3,6 +3,9 @@ import { DEFAULT_RUN_LIMITS, type AppSettings, type ProviderConfig, type RunLimi
 import { api } from '../api';
 import { CommandsSection } from '../components/settings/CommandsSection';
 import { DisplayInfo } from '../components/settings/DisplayInfo';
+import { IntegrationsSection } from '../components/settings/IntegrationsSection';
+import { PermissionsSection } from '../components/settings/PermissionsSection';
+import { SensesSection } from '../components/settings/SensesSection';
 import { ProviderEditor } from '../components/settings/ProviderEditor';
 import { ConfirmDialog } from '../components/common/Modal';
 import { newId } from '../lib/ids';
@@ -71,8 +74,21 @@ function NumberField({
   );
 }
 
+type SettingsTab = 'general' | 'providers' | 'permissions' | 'senses' | 'integrations' | 'commands' | 'display';
+
+const TABS: Array<{ id: SettingsTab; label: string }> = [
+  { id: 'providers', label: 'Providers' },
+  { id: 'general', label: 'General' },
+  { id: 'permissions', label: 'Permissions' },
+  { id: 'senses', label: 'Senses' },
+  { id: 'integrations', label: 'Integrations' },
+  { id: 'commands', label: 'Commands' },
+  { id: 'display', label: 'Display' },
+];
+
 export function SettingsView() {
   const settings = useAppState((s) => s.settings);
+  const [tab, setTab] = useState<SettingsTab>('providers');
   const [editing, setEditing] = useState<{ config: ProviderConfig; isNew: boolean } | null>(null);
   const [removing, setRemoving] = useState<ProviderConfig | null>(null);
   const [name, setName] = useState<string | null>(null);
@@ -115,8 +131,15 @@ export function SettingsView() {
       <div className="view-header">
         <h1>Settings</h1>
       </div>
+      <div className="tabs" role="tablist" aria-label="Settings sections">
+        {TABS.map((t) => (
+          <button key={t.id} type="button" role="tab" className="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-      <section className="section">
+      <section className="section" hidden={tab !== 'providers'}>
         <div className="row" style={{ marginBottom: 10 }}>
           <h2 className="grow">LLM providers</h2>
           <button type="button" className="btn btn-primary btn-sm" onClick={() => setEditing({ config: newProvider(), isNew: true })} disabled={editing !== null}>
@@ -171,7 +194,7 @@ export function SettingsView() {
         ) : null}
       </section>
 
-      <section className="section">
+      <section className="section" hidden={tab !== 'general'}>
         <h2>Conversation</h2>
         <div className="field-grid">
           <div className="field">
@@ -215,7 +238,7 @@ export function SettingsView() {
         </div>
       </section>
 
-      <section className="section">
+      <section className="section" hidden={tab !== 'general'}>
         <h2>Sandbox limits</h2>
         <p className="muted small" style={{ marginBottom: 10 }}>
           Apply to every code run by a character. Defaults are sensible; raise them only for packs you trust.
@@ -248,7 +271,7 @@ export function SettingsView() {
         </div>
       </section>
 
-      <section className="section">
+      <section className="section" hidden={tab !== 'general'}>
         <h2>Appearance & media</h2>
         <div className="field-grid">
           <div className="field">
@@ -283,12 +306,35 @@ export function SettingsView() {
         </div>
       </section>
 
-      <section className="section">
-        <h2>Display</h2>
-        <DisplayInfo />
-      </section>
+      {tab === 'display' ? (
+        <section className="section">
+          <h2>Display</h2>
+          <DisplayInfo />
+        </section>
+      ) : null}
 
-      <section className="section">
+      {tab === 'permissions' ? (
+        <section className="section">
+          <h2>Permissions</h2>
+          <PermissionsSection settings={settings} onPatch={patchSettings} />
+        </section>
+      ) : null}
+
+      {tab === 'senses' ? (
+        <section className="section">
+          <h2>Senses</h2>
+          <SensesSection settings={settings} onPatch={patchSettings} NumberField={NumberField} />
+        </section>
+      ) : null}
+
+      {tab === 'integrations' ? (
+        <section className="section">
+          <h2>Integrations</h2>
+          <IntegrationsSection settings={settings} onPatch={patchSettings} NumberField={NumberField} />
+        </section>
+      ) : null}
+
+      <section className="section" hidden={tab !== 'commands'}>
         <h2>Commands</h2>
         <CommandsSection settings={settings} onPatch={patchSettings} />
         <div className="field-grid" style={{ marginTop: 14 }}>

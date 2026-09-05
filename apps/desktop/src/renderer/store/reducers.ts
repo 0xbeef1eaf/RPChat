@@ -14,6 +14,7 @@ import type {
 import { EMPTY_RUNTIME, type AppState, type MemoriesPanelTarget, type SessionRuntime, type Toast } from './state';
 
 const MAX_TOASTS = 4;
+const MAX_EVENT_MARKERS = 30;
 
 function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
   const idx = list.findIndex((x) => x.id === item.id);
@@ -79,6 +80,19 @@ export function applyChatEvent(state: AppState, event: ChatEvent): AppState {
       return patchMessage(state, event.sessionId, event.messageId, (m) => ({ ...m, content: m.content + event.delta }));
     case 'memory-added':
       return { ...state, memoryVersion: state.memoryVersion + 1 };
+    case 'mood-changed':
+    case 'routine-changed': {
+      const session = state.sessions.find((s) => s.id === event.sessionId);
+      if (!session) return state;
+      const ref = session.characterRef;
+      return { ...state, characterStatusVersion: { ...state.characterStatusVersion, [ref]: (state.characterStatusVersion[ref] ?? 0) + 1 } };
+    }
+    case 'event-fired': {
+      const rt = state.runtime[event.sessionId] ?? EMPTY_RUNTIME;
+      const marker = { id: `${event.subscriptionId}:${rt.eventsVersion + 1}`, at: new Date().toISOString(), event: event.event, subscriptionId: event.subscriptionId };
+      const eventMarkers = [...rt.eventMarkers, marker].slice(-MAX_EVENT_MARKERS);
+      return patchRuntime(state, event.sessionId, { eventMarkers, eventsVersion: rt.eventsVersion + 1 });
+    }
     case 'action-started':
     case 'action-finished':
       return patchMessage(state, event.sessionId, event.messageId, (m) => ({

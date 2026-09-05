@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { CapabilityInfo } from '@rp/shared';
+import type { CapabilityInfo, PackInspection } from '@rp/shared';
 import { api } from '../api';
 import { EmptyState } from '../components/common/EmptyState';
 import { ConfirmDialog } from '../components/common/Modal';
+import { InspectModal } from '../components/packs/InspectModal';
 import { PackCard } from '../components/packs/PackCard';
-import { installPack, uninstallPack } from '../store/actions';
+import { installPackFromPath, pickAndInspectPack, uninstallPack } from '../store/actions';
 import { useAppState } from '../store/store';
 
 export function PacksView() {
@@ -12,6 +13,8 @@ export function PacksView() {
   const [caps, setCaps] = useState<CapabilityInfo[]>([]);
   const [pendingUninstall, setPendingUninstall] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
+  const [pending, setPending] = useState<{ sourcePath: string; inspection: PackInspection } | null>(null);
+  const [filter, setFilter] = useState<string | null>(null);
 
   useEffect(() => {
     api()
@@ -23,10 +26,20 @@ export function PacksView() {
   const capMap = useMemo(() => new Map(caps.map((c) => [c.id, c])), [caps]);
   const target = packs.find((p) => p.packId === pendingUninstall);
 
+  // Filter chips: every module any installed pack requests.
+  const requestedModules = useMemo(() => Array.from(new Set(packs.flatMap((p) => p.requestedCapabilities))).sort(), [packs]);
+  const visiblePacks = useMemo(() => (filter ? packs.filter((p) => p.requestedCapabilities.includes(filter)) : packs), [packs, filter]);
+
   const install = async (kind: 'file' | 'directory') => {
     setInstalling(true);
-    await installPack(kind);
+    const picked = await pickAndInspectPack(kind);
     setInstalling(false);
+    if (picked) setPending(picked);
+  };
+
+  const confirmInstall = async () => {
+    if (!pending) return;
+    if (await installPackFromPath(pending.sourcePath)) setPending(null);
   };
 
   const installButtons = (
@@ -52,12 +65,43 @@ export function PacksView() {
           file or point at an unpacked pack folder (one that contains <code>pack.json</code>).
         </EmptyState>
       ) : (
-        <div className="pack-grid">
-          {packs.map((p) => (
-            <PackCard key={p.packId} pack={p} capabilities={capMap} onUninstall={() => setPendingUninstall(p.packId)} />
-          ))}
-        </div>
+        <>
+          {requestedModules.length > 0 ? (
+            <div className="chips" style={{ marginBottom: 14 }} role="group" aria-label="Filter by capability">
+              <button type="button" className={filter === null ? 'chip-btn on' : 'chip-btn'} onClick={() => setFilter(null)}>
+                All ({packs.length})
+              </button>
+              {requestedModules.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={filter === m ? 'chip-btn on' : 'chip-btn'}
+                  title={capMap.get(m)?.summary}
+                  aria-pressed={filter === m}
+                  onClick={() => setFilter(filter === m ? null : m)}
+                >
+                  {capMap.get(m)?.title ?? m} ({packs.filter((p) => p.requestedCapabilities.includes(m)).length})
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div className="pack-grid">
+            {visiblePacks.map((p) => (
+              <PackCard key={p.packId} pack={p} capabilities={capMap} onUninstall={() => setPendingUninstall(p.packId)} />
+            ))}
+            {visiblePacks.length === 0 ? <p className="muted">No installed pack requests {filter}.</p> : null}
+          </div>
+        </>
       )}
+      {pending ? (
+        <InspectModal
+          sourcePath={pending.sourcePath}
+          inspection={pending.inspection}
+          capabilities={capMap}
+          onConfirm={confirmInstall}
+          onCancel={() => setPending(null)}
+        />
+      ) : null}
       {target ? (
         <ConfirmDialog
           title={`Uninstall ${target.manifest.name}?`}

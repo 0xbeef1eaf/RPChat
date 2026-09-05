@@ -56,6 +56,16 @@ describe('base64url + hash parsing', () => {
     expect(parseCommandJson(JSON.stringify({ type: 'update', id: 'a', options: { opacity: 0.5 } }))).toEqual({ type: 'update', id: 'a', options: { opacity: 0.5 } });
     expect(parseCommandJson(JSON.stringify({ type: 'update', id: 'a' }))).toBeNull();
     expect(parseCommandJson(JSON.stringify({ type: 'close', id: 'a' }))).toEqual({ type: 'close', id: 'a' });
+    expect(parseCommandJson(JSON.stringify({ type: 'avatar-show', id: 'a', state: { imageUrl: 'x' } }))?.type).toBe('avatar-show');
+    expect(parseCommandJson(JSON.stringify({ type: 'avatar-show', id: 'a', state: {} }))).toBeNull();
+    expect(parseCommandJson(JSON.stringify({ type: 'avatar-set', id: 'a', patch: { expression: 'sad' } }))?.type).toBe('avatar-set');
+    expect(parseCommandJson(JSON.stringify({ type: 'avatar-hide', id: 'a' }))?.type).toBe('avatar-hide');
+    expect(parseCommandJson(JSON.stringify({ type: 'widget-show', id: 'w', widget: { html: '<p/>' }, options: {} }))?.type).toBe('widget-show');
+    expect(parseCommandJson(JSON.stringify({ type: 'widget-show', id: 'w', widget: {} }))).toBeNull();
+    expect(parseCommandJson(JSON.stringify({ type: 'widget-update', id: 'w', title: 't' }))?.type).toBe('widget-update');
+    expect(parseCommandJson(JSON.stringify({ type: 'draw-set', id: 'd', shapes: [] }))?.type).toBe('draw-set');
+    expect(parseCommandJson(JSON.stringify({ type: 'draw-set', id: 'd', shapes: 'no' }))).toBeNull();
+    expect(parseCommandJson(JSON.stringify({ type: 'draw-clear', id: 'd' }))?.type).toBe('draw-clear');
     expect(parseCommandJson('null')).toBeNull();
     expect(parseCommandJson('[]')).toBeNull();
   });

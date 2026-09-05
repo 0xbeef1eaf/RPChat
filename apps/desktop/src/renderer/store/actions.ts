@@ -3,7 +3,7 @@
  * store through the pure reducers. Components call these; they never call the
  * API directly except for one-off reads that do not touch shared state.
  */
-import type { CharacterRef, PermissionDecision, Session, SessionId, UiPromptAnswer } from '@rp/shared';
+import type { CharacterRef, PackInspection, PermissionDecision, Session, SessionId, UiPromptAnswer } from '@rp/shared';
 import { api, errorMessage } from '../api';
 import { truncate } from '../lib/format';
 import { newId } from '../lib/ids';
@@ -201,15 +201,29 @@ export async function setGrant(packId: string, module: string, granted: boolean)
   }
 }
 
-export async function installPack(kind: 'file' | 'directory'): Promise<void> {
+/** Step 1 of installing: pick a source and read it without installing. */
+export async function pickAndInspectPack(kind: 'file' | 'directory'): Promise<{ sourcePath: string; inspection: PackInspection } | null> {
   try {
-    const source = await api().packs.pickInstallSource(kind);
-    if (!source) return;
-    const pack = await api().packs.install(source);
+    const sourcePath = await api().packs.pickInstallSource(kind);
+    if (!sourcePath) return null;
+    const inspection = await api().packs.inspect(sourcePath);
+    return { sourcePath, inspection };
+  } catch (err) {
+    reportError('Could not read pack', err);
+    return null;
+  }
+}
+
+/** Step 2: install a previously inspected source. */
+export async function installPackFromPath(sourcePath: string): Promise<boolean> {
+  try {
+    const pack = await api().packs.install(sourcePath);
     await Promise.all([refreshPacks(), refreshCharacters()]);
     toast('success', `Installed ${pack.manifest.name} ${pack.manifest.version}`);
+    return true;
   } catch (err) {
     reportError('Install failed', err);
+    return false;
   }
 }
 

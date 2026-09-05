@@ -12,7 +12,23 @@ export interface MediaTransport {
   report(event: MediaWindowEvent): void;
 }
 
-const COMMAND_TYPES = new Set<MediaCommand['type']>(['show-image', 'play-video', 'play-audio', 'update', 'close', 'close-all']);
+const COMMAND_TYPES = new Set<MediaCommand['type']>([
+  'show-image',
+  'play-video',
+  'play-audio',
+  'update',
+  'close',
+  'close-all',
+  'avatar-show',
+  'avatar-set',
+  'avatar-hide',
+  'widget-show',
+  'widget-update',
+  'draw-set',
+  'draw-clear',
+]);
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Decode base64url (RFC 4648 §5, padding optional) into a UTF-8 string. Throws on garbage. */
 export function decodeBase64Url(input: string): string {
@@ -36,7 +52,11 @@ export function parseCommandJson(json: string): MediaCommand | null {
   if (typeof cmd.type !== 'string' || !COMMAND_TYPES.has(cmd.type as MediaCommand['type'])) return null;
   if (cmd.type !== 'close-all' && typeof cmd.id !== 'string') return null;
   if ((cmd.type === 'show-image' || cmd.type === 'play-video' || cmd.type === 'play-audio') && typeof cmd.url !== 'string') return null;
-  if (cmd.type === 'update' && (typeof cmd.options !== 'object' || cmd.options === null)) return null;
+  if (cmd.type === 'update' && !isObject(cmd.options)) return null;
+  if (cmd.type === 'avatar-show' && !(isObject(cmd.state) && typeof cmd.state.imageUrl === 'string')) return null;
+  if (cmd.type === 'avatar-set' && !isObject(cmd.patch)) return null;
+  if (cmd.type === 'widget-show' && !(isObject(cmd.widget) && typeof cmd.widget.html === 'string')) return null;
+  if (cmd.type === 'draw-set' && !Array.isArray(cmd.shapes)) return null;
   return value as MediaCommand;
 }
 

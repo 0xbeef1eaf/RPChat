@@ -151,6 +151,76 @@ describe('applyMediaLocalEvent', () => {
   });
 });
 
+describe('avatar / widget / draw pages', () => {
+  const avatarState = {
+    visible: true,
+    expression: 'neutral',
+    imageUrl: 'rp-asset://com.example.pack/characters/luna/neutral.png',
+    size: 200,
+    lookAtCursor: true,
+    overlay: { layer: 'top' as const, opacity: 1, clickThrough: false },
+  };
+
+  it('avatar show/set/hide and click reporting', () => {
+    let s = applyMediaCommand(INITIAL_MEDIA_STATE, { type: 'avatar-show', id: 'av', state: avatarState }).state;
+    expect(s.avatar?.id).toBe('av');
+    s = applyMediaCommand(s, { type: 'avatar-set', id: 'av', patch: { expression: 'happy', bubble: { text: 'hey' } } }).state;
+    expect(s.avatar?.state.expression).toBe('happy');
+    const click = applyMediaLocalEvent(s, { type: 'avatar-click', id: 'av' });
+    expect(click.reports).toEqual([{ type: 'avatar-clicked', id: 'av' }]);
+    const expired = applyMediaLocalEvent(s, { type: 'bubble-expired', id: 'av' });
+    expect(expired.state.avatar?.state.bubble).toBeUndefined();
+    const size = applyMediaLocalEvent(s, { type: 'content-size', id: 'av', width: 200, height: 260 });
+    expect(size.reports[0]?.type).toBe('content-size');
+    const hide = applyMediaCommand(s, { type: 'avatar-hide', id: 'av' });
+    expect(hide.state.avatar).toBeNull();
+    expect(hide.reports).toEqual([{ type: 'closed', id: 'av' }]);
+  });
+
+  it('update applies the visual subset to avatars and widgets', () => {
+    let s = applyMediaCommand(INITIAL_MEDIA_STATE, { type: 'avatar-show', id: 'av', state: avatarState }).state;
+    s = applyMediaCommand(s, { type: 'update', id: 'av', options: { opacity: 0.3, clickThrough: true, x: 0.5 } }).state;
+    expect(s.avatar).toMatchObject({ opacity: 0.3, clickThrough: true });
+    s = applyMediaCommand(s, { type: 'widget-show', id: 'w', widget: { id: 'w', html: '<p>x</p>', width: 100, height: 50 }, options: {} }).state;
+    s = applyMediaCommand(s, { type: 'update', id: 'w', options: { width: 300, layer: 'overlay' } }).state;
+    expect(s.widgets[0]?.options).toEqual({ width: 300 });
+  });
+
+  it('widget messages are validated before being reported, outbox drains after delivery', () => {
+    let s = applyMediaCommand(INITIAL_MEDIA_STATE, { type: 'widget-show', id: 'w', widget: { id: 'w', html: '<p>x</p>', width: 100, height: 50 }, options: {} }).state;
+    expect(applyMediaLocalEvent(s, { type: 'widget-message', id: 'w', data: { clicked: 'ok' } }).reports).toEqual([{ type: 'widget-message', id: 'w', message: { clicked: 'ok' } }]);
+    expect(applyMediaLocalEvent(s, { type: 'widget-message', id: 'w', data: () => 1 }).reports[0]?.type).toBe('error');
+    expect(applyMediaLocalEvent(s, { type: 'widget-message', id: 'nope', data: 1 }).reports).toEqual([]);
+    s = applyMediaCommand(s, { type: 'widget-update', id: 'w', postMessage: { a: 1 } }).state;
+    expect(s.widgets[0]?.outbox).toHaveLength(1);
+    s = applyMediaLocalEvent(s, { type: 'widget-delivered', id: 'w', seq: 1 }).state;
+    expect(s.widgets[0]?.outbox).toEqual([]);
+  });
+
+  it('draw-set replaces the surface, draw-clear empties it, close removes it', () => {
+    let s = applyMediaCommand(INITIAL_MEDIA_STATE, { type: 'draw-set', id: 'mon0', shapes: [{ shapeId: 'a', type: 'circle', x: 0.5, y: 0.5 }, { shapeId: '', type: 'rect', x: 1, y: 1 }] }).state;
+    expect(s.draws[0]?.shapes.map((x) => x.shapeId)).toEqual(['a']);
+    s = applyMediaCommand(s, { type: 'draw-set', id: 'mon0', shapes: [{ shapeId: 'b', type: 'text', x: 10, y: 10, text: 'hi' }] }).state;
+    expect(s.draws).toHaveLength(1);
+    expect(s.draws[0]?.shapes[0]?.shapeId).toBe('b');
+    s = applyMediaCommand(s, { type: 'draw-clear', id: 'mon0' }).state;
+    expect(s.draws[0]?.shapes).toEqual([]);
+    const r = applyMediaCommand(s, { type: 'close', id: 'mon0' });
+    expect(r.state.draws).toEqual([]);
+    expect(r.reports).toEqual([{ type: 'closed', id: 'mon0' }]);
+  });
+
+  it('close-all closes every page kind', () => {
+    let s = applyMediaCommand(INITIAL_MEDIA_STATE, img('a')).state;
+    s = applyMediaCommand(s, { type: 'avatar-show', id: 'av', state: avatarState }).state;
+    s = applyMediaCommand(s, { type: 'widget-show', id: 'w', widget: { id: 'w', html: '', width: 10, height: 10 }, options: {} }).state;
+    s = applyMediaCommand(s, { type: 'draw-set', id: 'd', shapes: [] }).state;
+    const r = applyMediaCommand(s, { type: 'close-all' });
+    expect(r.state).toEqual(INITIAL_MEDIA_STATE);
+    expect(r.reports.map((e) => e.id).sort()).toEqual(['a', 'av', 'd', 'w']);
+  });
+});
+
 describe('helpers', () => {
   it('isAllowedMediaUrl', () => {
     expect(isAllowedMediaUrl('rp-asset://com.example.pack/media/a.png')).toBe(true);
