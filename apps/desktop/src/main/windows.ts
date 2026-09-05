@@ -253,8 +253,9 @@ export class WindowManager {
     win.on('page-title-updated', (event) => event.preventDefault());
     this.track(win, 'media');
     const wrapped = new ElectronOverlayWindow(win, title);
-    this.overlays.set(win.webContents.id, wrapped);
-    win.once('closed', () => this.overlays.delete(wrapped.win.webContents.id));
+    const contentsId = win.webContents.id; // read now: webContents is gone by the time 'closed' fires
+    this.overlays.set(contentsId, wrapped);
+    win.once('closed', () => this.overlays.delete(contentsId));
     this.load(win, 'media.html');
     return wrapped;
   }
@@ -275,9 +276,10 @@ export class WindowManager {
     win.setMenuBarVisibility(false);
     this.track(win, 'media');
     const wrapped = new ElectronOverlayWindow(win, 'rp-audio');
-    this.overlays.set(win.webContents.id, wrapped);
+    const audioContentsId = win.webContents.id;
+    this.overlays.set(audioContentsId, wrapped);
     win.once('closed', () => {
-      this.overlays.delete(win.webContents.id);
+      this.overlays.delete(audioContentsId);
       if (this.audio === wrapped) this.audio = undefined;
     });
     this.audio = wrapped;

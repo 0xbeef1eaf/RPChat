@@ -95,6 +95,12 @@ pnpm dev                 # runs the Electron app with hot reload
 Try it without an API key: `RP_MOCK_LLM=1 pnpm dev` uses a scripted mock
 provider that shows an image from the sample pack and replies.
 
+`pnpm test:headful` runs the built app headful on an Xvfb display with a
+file-backed framebuffer, drives one mock-LLM turn, screenshots every window
+(chat with the action card, Packs, Settings, SDK reference, the overlays and the
+whole framebuffer) into `/tmp/rp-headful-shots`, and fails if the main process
+raised an uncaught exception. Needs `Xvfb`, `xwd`, `xdotool` and ImageMagick.
+
 ### Hyprland (and other wlr-layer-shell compositors)
 
 Build the native overlay helper once (needs Rust plus `gtk3`, `gtk-layer-shell`

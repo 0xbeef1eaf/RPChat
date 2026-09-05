@@ -507,6 +507,14 @@ textarea:disabled {
   flex-direction: column;
   gap: 2px;
 }
+.sidebar-characters {
+  flex: 0 1 auto;
+  max-height: 40%;
+}
+.sidebar-characters .sidebar-list {
+  flex: 1 1 auto;
+  min-height: 0;
+}
 .sidebar-sessions {
   flex: 1;
   min-height: 0;

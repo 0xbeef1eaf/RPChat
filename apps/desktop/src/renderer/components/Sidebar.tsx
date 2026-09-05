@@ -44,11 +44,11 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="sidebar-section">
+      <div className="sidebar-section sidebar-characters">
         <div className="sidebar-section-title">
           <span>Characters</span>
         </div>
-        <div className="sidebar-list" style={{ maxHeight: '38%' }}>
+        <div className="sidebar-list">
           {characters.length === 0 ? (
             <div className="muted small" style={{ padding: '2px 8px' }}>
               No packs installed.

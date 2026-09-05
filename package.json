@@ -13,6 +13,7 @@
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "dev": "pnpm --filter @rp/desktop run dev",
+    "test:headful": "pnpm --filter @rp/desktop run build && scripts/headful-smoke.sh",
     "clean": "pnpm -r exec rm -rf dist out node_modules/.cache"
   },
   "devDependencies": {

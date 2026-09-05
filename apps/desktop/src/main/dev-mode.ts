@@ -3,6 +3,7 @@
  * MockProvider (run_action showing a pack image, then a reply), and the Luna
  * example pack is installed on first run when nothing is installed yet.
  */
+import { BrowserWindow } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { MockProvider } from '@rp/llm';
@@ -124,9 +125,58 @@ export async function runSmokeTurn(engine: Engine, logger: Logger, mediaList: ()
     logger.info(`[smoke] open media items: ${JSON.stringify(mediaList())}`);
     const messages = await engine.sessions.messages(session.id);
     logger.info(`[smoke] transcript: ${messages.map((m) => `${m.role}: ${m.content.replace(/\s+/g, ' ').slice(0, 60)}`).join(' | ')}`);
+    await captureWindows(logger);
   } catch (err) {
     logger.error('[smoke] turn failed', err);
   } finally {
     off();
   }
+}
+
+/**
+ * `RP_SCREENSHOT_DIR=<dir>`: after the smoke turn, capture every BrowserWindow (main UI and
+ * overlays) to `<dir>/<n>-<kind>.png` via Electron, so a headful run under Xvfb can be inspected.
+ */
+export async function captureWindows(logger: Logger, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const dir = env.RP_SCREENSHOT_DIR;
+  if (!dir) return;
+  await fs.promises.mkdir(dir, { recursive: true });
+  await new Promise((r) => setTimeout(r, 800));
+  let n = 0;
+  const main = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.getTitle() === 'rp-code');
+  // Tour the main UI: open the smoke session (chat with the action card), then Packs and Settings.
+  const tour: Array<[string, string]> = [
+    ['chat-session', "document.querySelector('.session-item')?.click()"],
+    ['packs', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Packs'))?.click()"],
+    ['settings', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Settings'))?.click()"],
+    ['sdk-reference', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('SDK'))?.click()"],
+  ];
+  if (main) {
+    for (const [name, script] of tour) {
+      try {
+        await main.webContents.executeJavaScript(`(() => { ${script}; return true; })()`, true);
+        await new Promise((r) => setTimeout(r, 700));
+        const image = await main.webContents.capturePage();
+        const file = path.join(dir, `${String(++n).padStart(2, '0')}-main-${name}.png`);
+        await fs.promises.writeFile(file, image.toPNG());
+        logger.info(`[smoke] screenshot ${file}`);
+      } catch (err) {
+        logger.warn(`[smoke] tour step ${name} failed`, err);
+      }
+    }
+  }
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    const title = (win.getTitle() || 'window').replace(/[^a-z0-9._-]+/gi, '_').slice(0, 60);
+    const bounds = win.getBounds();
+    try {
+      const image = await win.webContents.capturePage();
+      const file = path.join(dir, `${String(++n).padStart(2, '0')}-${title}.png`);
+      await fs.promises.writeFile(file, image.toPNG());
+      logger.info(`[smoke] screenshot ${file} (${bounds.width}x${bounds.height} at ${bounds.x},${bounds.y}, visible=${win.isVisible()})`);
+    } catch (err) {
+      logger.warn(`[smoke] screenshot of ${title} failed`, err);
+    }
+  }
+  logger.info(`[smoke] screenshots done (${n} files in ${dir})`);
 }
