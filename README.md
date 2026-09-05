@@ -36,6 +36,17 @@ Characters, their behaviours and their media are distributed as shareable
   behaviour scripts (`onSessionStart`, `onTimer`, ...).
 - **Provider-agnostic**: Anthropic, OpenAI-compatible servers (OpenAI, Ollama,
   LM Studio, OpenRouter, ...).
+- **Real overlays on Hyprland**: a native wlr-layer-shell helper renders media
+  on the layer you choose (`background`, `bottom`, `top`, `overlay`), on the
+  monitor you choose, with opacity and click-through. Other desktops use the
+  generic Electron backend; more backends plug into the same interface.
+- **Long-term memory**: characters remember facts about you across sessions,
+  consolidated automatically and editable in the app.
+- **Initiative**: characters can schedule code to run later, wake themselves
+  with a self-written prompt, and keep a session moving without you typing,
+  within rate limits you control.
+- **External commands**: wallpaper, browser and input-lock actions run through
+  command templates you edit in Settings.
 
 ## Repository
 
@@ -48,10 +59,13 @@ Characters, their behaviours and their media are distributed as shareable
 | `packages/llm`       | `@rp/llm`      | LLM provider abstraction                         |
 | `packages/sandbox`   | `@rp/sandbox`  | QuickJS runner and host bridge                   |
 | `packages/core`      | `@rp/core`     | Chat engine, action loop, permissions, storage   |
+| `native/overlay-wlr` | `rp-overlay-wlr` | Rust wlr-layer-shell overlay helper (Hyprland, Sway, river, KDE Wayland) |
 | `examples/packs`     |                | Sample packs and the pack-author guide           |
 | `docs`               |                | Architecture and per-package specs               |
 
-Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), then the specs in
+`docs/spec/` (`overlay.md`, `overlay-helper.md`, `memory.md`, `autonomy.md`,
+and one per package).
 
 ## Getting started
 
@@ -66,6 +80,23 @@ pnpm dev                 # runs the Electron app with hot reload
 
 Try it without an API key: `RP_MOCK_LLM=1 pnpm dev` uses a scripted mock
 provider that shows an image from the sample pack and replies.
+
+### Hyprland (and other wlr-layer-shell compositors)
+
+Build the native overlay helper once (needs Rust plus `gtk3`, `gtk-layer-shell`
+and `webkit2gtk-4.1` development packages; Debian/Ubuntu:
+`libgtk-3-dev libgtk-layer-shell-dev libwebkit2gtk-4.1-dev`):
+
+```bash
+pnpm build:native
+mkdir -p apps/desktop/resources/bin
+cp native/overlay-wlr/target/release/rp-overlay-wlr apps/desktop/resources/bin/
+```
+
+The app picks the `hyprland` backend automatically under Hyprland. Without the
+helper it falls back to Hyprland IPC emulation (top/overlay only), and on other
+desktops to plain Electron windows. See `docs/spec/overlay.md` and
+`native/overlay-wlr/README.md`.
 
 To chat for real, open **Settings → Providers**, add a provider (Anthropic,
 or an OpenAI-compatible base URL such as `http://localhost:11434/v1` for

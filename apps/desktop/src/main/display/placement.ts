@@ -78,10 +78,33 @@ function explicitOffset(value: number, extent: number): number {
 
 const POSITIONS: ReadonlySet<string> = new Set(['center', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
 
+export interface PlacementInput {
+  monitor: MonitorInfo;
+  anchor: MediaPosition;
+  marginPx: number;
+  /** Already resolved to logical px on the monitor. */
+  x?: number;
+  y?: number;
+}
+
+/** Absolute bounds for a window of `size` placed per `input`, clamped to stay fully on the monitor. */
+export function placeOverlay(input: PlacementInput, size: Size): Bounds {
+  const { monitor } = input;
+  const width = clamp(Math.round(positive(size.width) ?? DEFAULT_OVERLAY_WIDTH), Math.min(MIN_OVERLAY_SIZE, monitor.width), Math.max(1, monitor.width));
+  const height = clamp(Math.round(positive(size.height) ?? DEFAULT_OVERLAY_HEIGHT), Math.min(MIN_OVERLAY_SIZE, monitor.height), Math.max(1, monitor.height));
+  const margin = Math.max(0, input.marginPx);
+  let x = typeof input.x === 'number' ? monitor.x + Math.round(input.x) : anchorX(input.anchor, monitor, width, margin);
+  let y = typeof input.y === 'number' ? monitor.y + Math.round(input.y) : anchorY(input.anchor, monitor, height, margin);
+  x = clamp(x, monitor.x, monitor.x + monitor.width - width);
+  y = clamp(y, monitor.y, monitor.y + monitor.height - height);
+  return { x, y, width, height };
+}
+
 /**
- * Resolve monitor + absolute bounds for an overlay. `size` is the content size
- * reported by the media window (or a default); explicit `width`/`height` in
- * `opts` win. The result always lies fully inside the monitor's work area.
+ * Resolve monitor + absolute bounds for an overlay from raw placement options.
+ * `size` is the content size reported by the media window (or a default);
+ * explicit `width`/`height` in `opts` win. The result always lies fully inside
+ * the monitor's work area.
  */
 export function resolvePlacement(
   opts: OverlayPlacement & { width?: number; height?: number },
@@ -89,18 +112,18 @@ export function resolvePlacement(
   size: Size,
 ): { monitor: MonitorInfo; bounds: Bounds } {
   const monitor = selectMonitor(opts.monitor, monitors);
-  const wantedW = positive(opts.width) ?? positive(size.width) ?? DEFAULT_OVERLAY_WIDTH;
-  const wantedH = positive(opts.height) ?? positive(size.height) ?? DEFAULT_OVERLAY_HEIGHT;
-  const width = clamp(Math.round(wantedW), Math.min(MIN_OVERLAY_SIZE, monitor.width), Math.max(1, monitor.width));
-  const height = clamp(Math.round(wantedH), Math.min(MIN_OVERLAY_SIZE, monitor.height), Math.max(1, monitor.height));
-  const margin = Math.max(0, positive(opts.marginPx) ?? DEFAULT_MARGIN_PX);
-  const position: MediaPosition = opts.position && POSITIONS.has(opts.position) ? opts.position : 'center';
-
-  let x = typeof opts.x === 'number' ? monitor.x + explicitOffset(opts.x, monitor.width) : anchorX(position, monitor, width, margin);
-  let y = typeof opts.y === 'number' ? monitor.y + explicitOffset(opts.y, monitor.height) : anchorY(position, monitor, height, margin);
-  x = clamp(x, monitor.x, monitor.x + monitor.width - width);
-  y = clamp(y, monitor.y, monitor.y + monitor.height - height);
-  return { monitor, bounds: { x, y, width, height } };
+  const input: PlacementInput = {
+    monitor,
+    anchor: opts.position && POSITIONS.has(opts.position) ? opts.position : 'center',
+    marginPx: positive(opts.marginPx) ?? (opts.marginPx === 0 ? 0 : DEFAULT_MARGIN_PX),
+  };
+  if (typeof opts.x === 'number') input.x = explicitOffset(opts.x, monitor.width);
+  if (typeof opts.y === 'number') input.y = explicitOffset(opts.y, monitor.height);
+  const bounds = placeOverlay(input, {
+    width: positive(opts.width) ?? positive(size.width) ?? DEFAULT_OVERLAY_WIDTH,
+    height: positive(opts.height) ?? positive(size.height) ?? DEFAULT_OVERLAY_HEIGHT,
+  });
+  return { monitor, bounds };
 }
 
 function positive(v: number | undefined): number | undefined {

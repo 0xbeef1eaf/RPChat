@@ -38,5 +38,56 @@
     "@types/dompurify": "^3",
     "typescript": "^5.9.3",
     "vitest": "^3.2.7"
+  },
+  "build": {
+    "appId": "dev.rp-code.app",
+    "productName": "rp-code",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**",
+      "resources/**",
+      "!resources/bin/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asarUnpack": [
+      "**/quickjs-emscripten*/**",
+      "**/esbuild/**",
+      "**/@esbuild/**",
+      "**/@jitl/quickjs-*/**"
+    ],
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.entertainment",
+      "identity": null
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    }
   }
 }
