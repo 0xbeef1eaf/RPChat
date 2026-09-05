@@ -13,6 +13,7 @@ export type NewMessage = Omit<ChatMessage, 'id' | 'createdAt'> & Partial<Pick<Ch
 /** Session CRUD plus the single place where messages are appended/updated (persist + event + stats). */
 export class SessionService {
   private behaviours: BehaviourHooks | undefined;
+  private beforeRemove: ((session: Session) => Promise<void>) | undefined;
 
   constructor(
     private readonly storage: Pick<Storage, 'sessions' | 'messages' | 'state'>,
@@ -26,6 +27,11 @@ export class SessionService {
 
   setBehaviours(behaviours: BehaviourHooks): void {
     this.behaviours = behaviours;
+  }
+
+  /** Runs before a session is deleted (the Engine uses it for a final memory consolidation). Failures are logged. */
+  setBeforeRemove(hook: (session: Session) => Promise<void>): void {
+    this.beforeRemove = hook;
   }
 
   async list(): Promise<Session[]> {
@@ -84,6 +90,13 @@ export class SessionService {
   async remove(sessionId: string): Promise<void> {
     const session = await this.storage.sessions.get(sessionId);
     if (!session) return;
+    if (this.beforeRemove) {
+      try {
+        await this.beforeRemove(session);
+      } catch (err) {
+        this.logger.warn(`[sessions] before-remove hook failed for ${sessionId}`, err);
+      }
+    }
     await this.runHook(session, 'onSessionEnd');
     await this.timers.removeForSession(sessionId);
     await this.storage.messages.removeForSession(sessionId);

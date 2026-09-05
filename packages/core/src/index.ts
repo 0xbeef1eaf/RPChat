@@ -38,6 +38,11 @@ export type { NewMessage } from './services/sessions.js';
 export { SettingsService } from './services/settings.js';
 export type { ProviderFactory } from './services/settings.js';
 export { TimerService } from './services/timers.js';
+export { MemoryService, memoryLine, parseJsonArray, normalizeTags, normalizeImportance, normalizeText, MEMORY_TEXT_MAX } from './services/memory.js';
+export type { AddMemoryOptions, ConsolidateOptions, MemoryServiceOptions } from './services/memory.js';
+export { rankMemories, scoreMemory, matchScore, tokenize, jaccard, promptOrder } from './memory/rank.js';
+export type { ScoredMemory } from './memory/rank.js';
+export { MemoryHandler, toSdkMemory, MEMORY_LIST_DEFAULT, MEMORY_LIST_MAX } from './handlers/memory.js';
 export type { TimerFireHandler } from './services/timers.js';
 
 export { ChatHandler } from './handlers/chat.js';

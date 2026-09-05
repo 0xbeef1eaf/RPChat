@@ -10,10 +10,12 @@ import type {
   LlmMessage,
   LoadedCharacter,
   LoadedPack,
+  MemoryEntry,
   ScheduledTimer,
   Session,
 } from '@rp/shared';
 import { ACTION_FENCE_TAG, RUN_ACTION_TOOL_NAME } from '@rp/shared';
+import { memoryLine } from './services/memory.js';
 
 export interface PromptInput {
   pack: LoadedPack;
@@ -29,6 +31,8 @@ export interface PromptInput {
   state: Record<string, Json>;
   /** Pending timers of this character. */
   timers: ScheduledTimer[];
+  /** Long-term memories selected for this turn (`MemoryService.forPrompt`), most important first. */
+  memories?: MemoryEntry[];
   userDisplayName: string;
   contextTokenBudget: number;
   /** `true` → the `run_action` tool is described; `false` → the ```action fence. */
@@ -60,6 +64,7 @@ function engineRules(name: string, useTools: boolean): string {
     'Act only when it serves the conversation. One action per intention, a few sdk calls each, and keep the code short. Never loop or wait inside an action; use sdk.timers to do something later.',
     'Results of your actions are sent back to you; read them before claiming success. If an action fails, recover gracefully in character and do not paste error text at the user.',
     'Do not narrate or explain the code you run unless the user asks; the conversation is what the user sees, the code is not.',
+    'The <memories> in <memory> are your own past with this user: let them shape what you say and bring them up naturally when relevant, but never list or recite them. When you learn something durable (facts about the user, promises, recurring themes), store it with sdk.memory.remember; correct or forget memories the user disputes.',
     'Reply in the user\'s language. Keep your visible text natural and in your own voice.',
   ].join('\n');
 }
@@ -114,7 +119,10 @@ function truncateJson(value: unknown, cap: number): string {
 }
 
 function memory(input: PromptInput): string {
-  const lines = [`Persistent state (sdk.state):\n${truncateJson(input.state, STATE_JSON_CAP)}`];
+  const lines = [`<state>\n${truncateJson(input.state, STATE_JSON_CAP)}\n</state>`];
+  const memories = input.memories ?? [];
+  const body = memories.length === 0 ? 'Nothing yet.' : `Things you remember (most important first):\n${memories.map(memoryLine).join('\n')}`;
+  lines.push(`<memories>\n${body}\n</memories>`);
   if (input.timers.length === 0) lines.push('Pending timers: none.');
   else {
     lines.push(

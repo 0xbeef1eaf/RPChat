@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   InstalledPackRecord,
   Json,
+  MemoryEntry,
   ScheduledTimer,
   Session,
   SessionId,
@@ -25,6 +26,7 @@ export class MemoryStorage implements Storage {
   private readonly messageRecords = new Map<string, ChatMessage[]>();
   private readonly stateRecords = new Map<string, Map<string, Json>>();
   private readonly timerRecords = new Map<string, ScheduledTimer>();
+  private readonly memoryRecords = new Map<string, MemoryEntry>();
   private readonly auditEntries: AuditEntry[] = [];
 
   constructor(private readonly auditCap = 5000) {}
@@ -123,6 +125,20 @@ export class MemoryStorage implements Storage {
     },
     remove: async (id) => {
       this.timerRecords.delete(id);
+    },
+  };
+
+  readonly memories: Storage['memories'] = {
+    list: async (characterRef) => [...this.memoryRecords.values()].filter((m) => m.characterRef === characterRef).map(clone),
+    get: async (id) => clone(this.memoryRecords.get(id)),
+    upsert: async (entry) => {
+      this.memoryRecords.set(entry.id, clone(entry));
+    },
+    remove: async (id) => {
+      this.memoryRecords.delete(id);
+    },
+    removeForCharacter: async (characterRef) => {
+      for (const [id, m] of this.memoryRecords) if (m.characterRef === characterRef) this.memoryRecords.delete(id);
     },
   };
 

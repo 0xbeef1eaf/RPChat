@@ -17,11 +17,13 @@ import { CapabilityDispatcher } from './dispatcher.js';
 import { TypedEmitter } from './emitter.js';
 import { ChatHandler } from './handlers/chat.js';
 import { LogHandler } from './handlers/log.js';
+import { MemoryHandler } from './handlers/memory.js';
 import { PackHandler } from './handlers/pack.js';
 import { StateHandler } from './handlers/state.js';
 import { TimersHandler } from './handlers/timers.js';
 import { AuditService } from './services/audit.js';
 import { ChatService } from './services/chat.js';
+import { MemoryService } from './services/memory.js';
 import { PackService } from './services/packs.js';
 import { PermissionService } from './services/permissions.js';
 import { SessionService } from './services/sessions.js';
@@ -63,6 +65,8 @@ export class Engine {
   readonly timers: TimerService;
   readonly packs: PackService;
   readonly sessions: SessionService;
+  /** Long-term character memories (`IpcApi.memories` maps 1:1 onto list/add/update/remove/consolidate). */
+  readonly memories: MemoryService;
   readonly dispatcher: CapabilityDispatcher;
   readonly behaviours: BehaviourRunner;
   readonly actionLoop: ActionLoop;
@@ -89,6 +93,18 @@ export class Engine {
     this.timers = new TimerService(opts.storage, now, logger);
     this.packs = new PackService(opts.storage, opts.packsDir, opts.registry, this.permissions, this.timers, now, logger);
     this.sessions = new SessionService(opts.storage, this.packs, this.permissions, this.timers, this.events, now, logger);
+    this.memories = new MemoryService({
+      storage: opts.storage,
+      settings: this.settings,
+      packs: this.packs,
+      providerFactory,
+      emitter: this.events,
+      now,
+      logger,
+    });
+    this.sessions.setBeforeRemove(async (session) => {
+      await this.memories.consolidate(session.id, { auto: true });
+    });
 
     const coreHandlers: CapabilityHandler[] = [
       new ChatHandler(this.sessions, opts.storage.messages, this.events),
@@ -96,6 +112,7 @@ export class Engine {
       new StateHandler(opts.storage.state),
       new PackHandler(this.packs),
       new TimersHandler(this.timers, now),
+      new MemoryHandler(this.memories),
     ];
     this.dispatcher = new CapabilityDispatcher({
       registry: opts.registry,
@@ -142,6 +159,7 @@ export class Engine {
       emitter: this.events,
       now,
       logger,
+      memories: this.memories,
     };
     if (opts.locale !== undefined) chatOptions.locale = opts.locale;
     this.chat = new ChatService(chatOptions);
@@ -179,6 +197,7 @@ export class Engine {
     this.started = false;
     await this.timers.stop();
     await this.chat.idle();
+    await this.memories.idle();
     await this.dispatcher.dispose();
     await this.runner.dispose();
     await this.storage.close();

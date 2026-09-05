@@ -53,6 +53,20 @@ export interface AppSettings {
   /** Wallpaper file to restore with `sdk.wallpaper.restore()`; empty = unknown. */
   wallpaperRestoreFile: string;
   memory: MemorySettings;
+  /**
+   * Limits on autonomous activity (self-wakes, code timers, prompt timers) so a character
+   * cannot run away. Consecutive = turns not separated by a user message.
+   */
+  autonomy: {
+    /** Max self-triggered LLM turns per session per hour. Default 30. */
+    maxSelfWakesPerHour: number;
+    /** Max consecutive self-triggered turns without a user message. Default 10. */
+    maxConsecutiveSelfWakes: number;
+    /** Max pending timers per session. Default 20. */
+    maxTimersPerSession: number;
+    /** Shortest repeat interval for repeating timers, ms. Default 60_000. */
+    minRepeatIntervalMs: number;
+  };
 }
 
 export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: RunLimits } = {
@@ -73,4 +87,10 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   maxInputLockMs: 5 * 60_000,
   wallpaperRestoreFile: '',
   memory: DEFAULT_MEMORY_SETTINGS,
+  autonomy: {
+    maxSelfWakesPerHour: 30,
+    maxConsecutiveSelfWakes: 10,
+    maxTimersPerSession: 20,
+    minRepeatIntervalMs: 60_000,
+  },
 };

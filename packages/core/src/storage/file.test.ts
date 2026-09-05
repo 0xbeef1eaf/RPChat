@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AuditEntry, ChatMessage, Session } from '@rp/shared';
+import type { AuditEntry, ChatMessage, MemoryEntry, Session } from '@rp/shared';
 import { makeTempDir } from '../test/helpers.js';
 import { FileStorage } from './file.js';
 
@@ -49,6 +49,11 @@ describe('FileStorage', () => {
     await a.timers.upsert({ id: 't1', sessionId: 's1', characterRef: 'p/c', fireAt: 'f', payload: null, createdAt: 't' });
     await a.audit.append(audit(1));
     await a.audit.append(audit(2, 's2'));
+    const mem = (id: string, characterRef: string): MemoryEntry => ({ id, characterRef, text: `t-${id}`, tags: [], importance: 3, source: 'user', createdAt: 't', updatedAt: 't', recallCount: 0 });
+    await a.memories.upsert(mem('me1', 'p/c'));
+    await a.memories.upsert(mem('me2', 'p/c'));
+    await a.memories.upsert(mem('me3', 'q/d'));
+    await a.memories.upsert({ ...mem('me2', 'p/c'), text: 'edited' });
     await a.close();
 
     const b = new FileStorage(dir);
@@ -63,6 +68,13 @@ describe('FileStorage', () => {
     expect((await b.audit.list()).map((e) => e.id)).toEqual(['a1', 'a2']);
     expect((await b.audit.list({ sessionId: 's2' })).map((e) => e.id)).toEqual(['a2']);
     expect((await b.audit.list({ limit: 1 })).map((e) => e.id)).toEqual(['a2']);
+    expect((await b.memories.list('p/c')).map((m) => [m.id, m.text])).toEqual([['me1', 't-me1'], ['me2', 'edited']]);
+    expect((await b.memories.get('me3'))?.characterRef).toBe('q/d');
+    expect(await b.memories.get('nope')).toBeUndefined();
+    await b.memories.remove('me1');
+    expect((await b.memories.list('p/c')).map((m) => m.id)).toEqual(['me2']);
+    await b.memories.removeForCharacter('q/d');
+    expect(await b.memories.list('q/d')).toEqual([]);
 
     await b.messages.removeForSession('s1');
     await b.state.clear('session:s1');
@@ -78,6 +90,8 @@ describe('FileStorage', () => {
     expect(await c.packs.list()).toEqual([]);
     expect(await c.grants.list()).toEqual([]);
     expect(await c.timers.list()).toEqual([]);
+    expect((await c.memories.list('p/c')).map((m) => m.id)).toEqual(['me2']);
+    expect(await c.memories.get('me3')).toBeUndefined();
   });
 
   it('writes atomically and leaves no temp files, even with concurrent writes', async () => {

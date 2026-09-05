@@ -17,5 +17,8 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   if (stored.commandTemplates && typeof stored.commandTemplates === 'object') {
     merged.commandTemplates = { ...base.commandTemplates, ...stored.commandTemplates };
   }
+  if (stored.memory && typeof stored.memory === 'object') {
+    merged.memory = { ...base.memory, ...stored.memory };
+  }
   return merged;
 }

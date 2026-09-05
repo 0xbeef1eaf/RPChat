@@ -2,6 +2,7 @@ import type { CapabilityRegistry } from '@rp/sdk';
 import type { ChatMessage, LlmProvider, ProviderConfig, ScheduledTimer, Session, Storage } from '@rp/shared';
 import { RpError, parseCharacterRef, serializeError } from '@rp/shared';
 import type { ActionLoop } from '../action-loop.js';
+import type { MemoryService } from './memory.js';
 import type { BehaviourRunner } from '../behaviours.js';
 import { PromptBuilder } from '../prompt.js';
 import type { PackService } from './packs.js';
@@ -28,6 +29,8 @@ export interface ChatServiceOptions {
   logger: Logger;
   promptBuilder?: PromptBuilder;
   locale?: string;
+  /** When present, memories are injected into the prompt and consolidated every `settings.memory.consolidateEveryTurns` turns. */
+  memories?: MemoryService;
 }
 
 /** Serialises turns per session, runs behaviours around the LLM turn, handles timer wake-ups. */
@@ -36,6 +39,7 @@ export class ChatService {
   private readonly controllers = new Map<string, AbortController>();
   private readonly providers = new Map<string, LlmProvider>();
   private readonly promptBuilder: PromptBuilder;
+  private readonly turnCounts = new Map<string, number>();
 
   constructor(private readonly o: ChatServiceOptions) {
     this.promptBuilder = o.promptBuilder ?? new PromptBuilder();
@@ -56,6 +60,7 @@ export class ChatService {
       const skip = hook?.ok === true && isSkipLlm(hook.returnValue);
       if (skip) return;
       await this.runLlmTurn(fresh, 'llm');
+      await this.afterTurn(sessionId);
     });
   }
 
@@ -106,10 +111,23 @@ export class ChatService {
         origin: 'timer',
       });
       await this.runLlmTurn(await this.o.sessions.require(session.id), 'timer');
+      await this.afterTurn(session.id);
     });
   }
 
   // ---- internals ----------------------------------------------------------
+
+  /** Count assistant turns and kick off memory consolidation (fire-and-forget) every N turns. */
+  private async afterTurn(sessionId: string): Promise<void> {
+    const memories = this.o.memories;
+    if (!memories) return;
+    const count = (this.turnCounts.get(sessionId) ?? 0) + 1;
+    this.turnCounts.set(sessionId, count);
+    const settings = await this.o.settings.get();
+    const every = Math.max(1, Math.floor(settings.memory.consolidateEveryTurns));
+    if (!settings.memory.enabled || count % every !== 0 || memories.isConsolidating(sessionId)) return;
+    void memories.consolidate(sessionId, { auto: true }).catch((err) => this.o.logger.warn('[chat] consolidation failed', err));
+  }
 
   private enqueue<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
     const prev = this.queues.get(sessionId) ?? Promise.resolve();
@@ -173,6 +191,12 @@ export class ChatService {
     const state = await this.o.storage.state.all(characterScope({ packId: pack.manifest.id, characterId: character.definition.id }));
     const timers = await this.o.timers.list({ characterRef: session.characterRef });
     const transcript = await this.o.sessions.messages(session.id);
+    let memories: import('@rp/shared').MemoryEntry[] = [];
+    if (this.o.memories && settings.memory.enabled) {
+      const lastUser = [...transcript].reverse().find((m) => m.role === 'user')?.content ?? '';
+      const lastAssistant = [...transcript].reverse().find((m) => m.role === 'assistant' && m.content.trim().length > 0)?.content ?? '';
+      memories = await this.o.memories.forPrompt(session.characterRef, `${lastUser}\n${lastAssistant}`, settings.memory.promptBudgetTokens);
+    }
 
     const promptInput: import('../prompt.js').PromptInput = {
       pack,
@@ -184,6 +208,7 @@ export class ChatService {
       transcript,
       state,
       timers,
+      memories,
       userDisplayName: settings.userDisplayName,
       contextTokenBudget: settings.contextTokenBudget,
       useTools,

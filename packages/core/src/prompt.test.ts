@@ -92,6 +92,22 @@ describe('PromptBuilder', () => {
     expect(granted).not.toContain('`sdk.wallpaper`, ');
   });
 
+  it('renders <state> and <memories> inside <memory>, with guidance in the engine rules', async () => {
+    const empty = new PromptBuilder().build(await input([])).system;
+    expect(empty).toContain('<memory>\n<state>\n{');
+    expect(empty).toContain('<memories>\nNothing yet.\n</memories>');
+    expect(empty).toContain('sdk.memory.remember');
+    expect(empty).toContain('never list or recite them');
+
+    const memories = [
+      { id: 'm1', characterRef: session.characterRef, text: 'Their cat is Miso.', tags: ['pets', 'cat'], importance: 4, source: 'character' as const, createdAt: '2026-02-01T10:00:00.000Z', updatedAt: '2026-02-01T10:00:00.000Z', recallCount: 0 },
+      { id: 'm2', characterRef: session.characterRef, text: 'They work nights.', tags: [], importance: 3, source: 'consolidation' as const, createdAt: '2026-02-02T10:00:00.000Z', updatedAt: '2026-02-02T10:00:00.000Z', recallCount: 0 },
+    ];
+    const withMemories = new PromptBuilder().build(await input([], { memories, allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'memory'] })).system;
+    expect(withMemories).toContain('<memories>\nThings you remember (most important first):\n- (4/5, 2026-02-01) Their cat is Miso. [pets, cat]\n- (3/5, 2026-02-02) They work nights.\n</memories>');
+    expect(withMemories).toContain('interface MemoryApi');
+  });
+
   it('explains the action fence instead of the tool in fenced mode', async () => {
     const { system } = new PromptBuilder().build(await input([], { useTools: false }));
     expect(system).toContain('```action');

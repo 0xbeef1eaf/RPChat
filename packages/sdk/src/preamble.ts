@@ -168,15 +168,19 @@ interface HistoryMessage {
   at: string;
 }
 
-/** A scheduled timer as returned by sdk.timers.schedule() / sdk.timers.list(). */
+/** A scheduled timer as returned by sdk.timers.* and sdk.llm.wake(). */
 interface TimerInfo {
   /** Opaque id; pass to sdk.timers.cancel(). */
   id: string;
+  /** 'wake' = onTimer behaviour or LLM wake with payload; 'code' = stored code runs; 'prompt' = you are woken with your own prompt. */
+  kind: 'wake' | 'code' | 'prompt';
   /** ISO-8601 time at which the timer fires. */
   fireAt: string;
   /** The Json payload given to schedule(); handed back to you when it fires. */
   payload: unknown;
   /** Optional human-readable label (shown in the UI). */
   label?: string;
+  /** Present for repeating timers. */
+  repeat?: { everyMs: number; remaining?: number };
 }
 `;

@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   InstalledPackRecord,
   Json,
+  MemoryEntry,
   ScheduledTimer,
   Session,
   Storage,
@@ -272,6 +273,54 @@ export class FileStorage implements Storage {
       const list = (await this.loadList<ScheduledTimer>('timers.json')).filter((t) => t.id !== id);
       await this.save('timers.json', list);
     },
+  };
+
+  // ---- memories (one file per character) ---------------------------------
+
+  private memoriesFile(characterRef: string): string {
+    return path.join('memories', `${fileNameFor(characterRef)}.json`);
+  }
+
+  /** Every character ref that has a memories file (cached or on disk). */
+  private async memoryScopes(): Promise<string[]> {
+    const refs = new Set<string>();
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(`memories${path.sep}`)) refs.add(decodeURIComponent(path.basename(key, '.json')));
+    }
+    const names = await fs.readdir(this.file('memories')).catch(() => [] as string[]);
+    for (const name of names) if (name.endsWith('.json')) refs.add(decodeURIComponent(name.slice(0, -5)));
+    return [...refs];
+  }
+
+  readonly memories: Storage['memories'] = {
+    list: async (characterRef) => [...(await this.loadList<MemoryEntry>(this.memoriesFile(characterRef)))],
+    get: async (id) => {
+      for (const ref of await this.memoryScopes()) {
+        const found = (await this.loadList<MemoryEntry>(this.memoriesFile(ref))).find((m) => m.id === id);
+        if (found) return found;
+      }
+      return undefined;
+    },
+    upsert: async (entry) => {
+      const rel = this.memoriesFile(entry.characterRef);
+      const list = await this.loadList<MemoryEntry>(rel);
+      const idx = list.findIndex((m) => m.id === entry.id);
+      if (idx >= 0) list[idx] = entry;
+      else list.push(entry);
+      await this.save(rel, list);
+    },
+    remove: async (id) => {
+      for (const ref of await this.memoryScopes()) {
+        const rel = this.memoriesFile(ref);
+        const list = await this.loadList<MemoryEntry>(rel);
+        const idx = list.findIndex((m) => m.id === id);
+        if (idx < 0) continue;
+        list.splice(idx, 1);
+        await this.save(rel, list);
+        return;
+      }
+    },
+    removeForCharacter: async (characterRef) => this.unlink(this.memoriesFile(characterRef)),
   };
 
   // ---- audit (JSONL) ----------------------------------------------------

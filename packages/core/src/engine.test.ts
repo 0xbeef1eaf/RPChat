@@ -495,6 +495,92 @@ describe('permissions', () => {
   });
 });
 
+describe('memories', () => {
+  const consolidationReply = (facts: string[]) => ({ text: '```json\n' + JSON.stringify(facts.map((text) => ({ text, tags: ['fact'], importance: 3 }))) + '\n```' });
+
+  it('consolidates every N assistant turns after turn-finished and on session removal, and exposes engine.memories', async () => {
+    let consolidations = 0;
+    const FACTS = ['Their cat is called Miso.', 'They work night shifts as a nurse.', 'They grew up by the sea in Cornwall.'];
+    t = await createTestEngine({
+      respond: (request) => {
+        if (request.tools === undefined && request.system.startsWith('You maintain the long-term memory')) {
+          consolidations += 1;
+          return consolidationReply([FACTS[consolidations - 1] ?? `Extra fact ${consolidations}.`]);
+        }
+        return { text: `reply ${request.messages.length}` };
+      },
+    });
+    await t.engine.settings.update({ memory: { enabled: true, consolidateEveryTurns: 4, maxEntriesPerCharacter: 500, promptBudgetTokens: 1500 } });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+
+    // explicit consolidation (IpcApi.memories.consolidate) once ≥ 4 fresh messages exist
+    await t.engine.chat.send(session.id, 'I am a nurse');
+    await t.engine.chat.send(session.id, 'and I have a cat');
+    expect(consolidations).toBe(0);
+    const explicit = await t.engine.memories.consolidate(session.id);
+    expect(explicit.map((m) => [m.text, m.source, m.sessionId])).toEqual([[FACTS[0], 'consolidation', session.id]]);
+    expect(consolidations).toBe(1);
+
+    // automatic: the 4th assistant turn triggers a pass after turn-finished (fire-and-forget)
+    await t.engine.chat.send(session.id, 'c');
+    await t.engine.chat.send(session.id, 'd');
+    await t.engine.memories.idle();
+    expect(consolidations).toBe(2);
+    const types = t.events.map((e) => e.type);
+    expect(types.lastIndexOf('memory-added')).toBeGreaterThan(types.lastIndexOf('turn-finished'));
+    expect((await t.engine.memories.list(ECHO_REF)).map((m) => m.text).sort()).toEqual([FACTS[0], FACTS[1]].sort());
+
+    // the next turn sees the memories in its prompt
+    await t.engine.chat.send(session.id, 'what do you remember?');
+    const last = t.provider.requests.filter((r) => r.tools !== undefined).at(-1)!;
+    expect(last.system).toContain(`- (3/5, 2026-01-01) ${FACTS[0]} [fact]`);
+    expect(last.system).toContain(FACTS[1]);
+
+    // IpcApi.memories surface: add (source user) / update / remove
+    const mine = await t.engine.memories.add(ECHO_REF, 'User-written note', { tags: ['Note'], importance: 5 });
+    expect(mine).toMatchObject({ source: 'user', tags: ['note'], importance: 5 });
+    const edited = await t.engine.memories.update({ ...mine, text: 'Edited note' });
+    expect(edited.text).toBe('Edited note');
+    expect((await t.engine.memories.list(ECHO_REF)).find((m) => m.id === mine.id)?.text).toBe('Edited note');
+    expect(await t.engine.memories.remove(mine.id)).toBe(true);
+
+    // too few fresh messages since the marker → explicit call is a no-op without a provider call
+    expect(await t.engine.memories.consolidate(session.id)).toEqual([]);
+    expect(consolidations).toBe(2);
+
+    // removal runs a final pass (4 fresh messages by now) before deleting the session
+    await t.engine.chat.send(session.id, 'one last thing');
+    expect(consolidations).toBe(2);
+    await t.engine.sessions.remove(session.id);
+    expect(consolidations).toBe(3);
+    expect((await t.engine.memories.list(ECHO_REF)).map((m) => m.text).sort()).toEqual([...FACTS].sort());
+    expect(await t.engine.sessions.get(session.id)).toBeUndefined();
+  });
+
+  it('does nothing when memory is disabled', async () => {
+    let consolidations = 0;
+    t = await createTestEngine({
+      respond: (request) => {
+        if (request.tools === undefined) {
+          consolidations += 1;
+          return consolidationReply(['x']);
+        }
+        return { text: 'ok' };
+      },
+    });
+    await t.engine.settings.update({ memory: { enabled: false, consolidateEveryTurns: 1, maxEntriesPerCharacter: 500, promptBudgetTokens: 1500 } });
+    await t.engine.packs.install(MINIMAL_DIR);
+    await t.engine.memories.add(ECHO_REF, 'hidden fact');
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    await t.engine.chat.send(session.id, 'a');
+    await t.engine.chat.send(session.id, 'b');
+    await t.engine.memories.idle();
+    expect(consolidations).toBe(0);
+    expect(t.provider.requests.at(-1)!.system).toContain('<memories>\nNothing yet.');
+  });
+});
+
 describe('timers', () => {
   it('fires due timers into onTimer behaviours and re-arms from the script', async () => {
     const runs: string[] = [];

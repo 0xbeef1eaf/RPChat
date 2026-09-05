@@ -2,16 +2,17 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const timersModule: CapabilityModuleSpec = {
   id: 'timers',
-  version: '1.0.0',
+  version: '1.1.0',
   title: 'Timers',
-  summary: 'Schedule a future wake-up for yourself (follow-ups, reminders, check-ins).',
+  summary: 'Schedule future wake-ups or code to run later (setTimeout-style), once or repeating.',
   permission: 'trusted',
   apiTypeName: 'TimersApi',
   typings: `/**
- * Wake yourself up later. When a timer fires, the pack's onTimer behaviour runs if
- * it has one; otherwise you are woken with a system message containing the payload
- * and can decide what to say or do. Timers persist across app restarts.
- * This is the only way to do something after a delay: never loop or wait inside an action.
+ * Do things later. Timers persist across app restarts and fire even when the user is away.
+ * Three kinds: schedule() wakes you (onTimer behaviour or an LLM turn with your payload);
+ * runLater() executes a piece of code you write now, later, without an LLM turn (like setTimeout);
+ * sdk.llm.wake() (see the llm module) wakes you with a prompt you wrote for your future self.
+ * An action cannot sleep or wait; a timer is the only way to act after a delay.
  */
 interface TimersApi {
   /**
@@ -24,6 +25,18 @@ interface TimersApi {
    * @example await sdk.timers.schedule(15 * 60 * 1000, { reason: "check if they took a break" }, { label: "break check" });
    */
   schedule(delayMs: number, payload: Json, opts?: { label?: string }): Promise<TimerInfo>;
+  /**
+   * Run code later, like setTimeout, without waking the LLM. The code is the body of an async function
+   * with the full sdk available and \`input\` in scope; it runs with your permissions when the timer fires.
+   * Write it as a string (there are no closures across runs) and keep everything it needs in \`input\`.
+   * @param delayMs Delay from now in ms. Minimum 1000, maximum 604800000 (7 days).
+   * @param code TypeScript action body, e.g. 'await sdk.media.showImage(input.pic, { durationMs: 5000 });'.
+   * @param opts input: Json passed to the code as \`input\`; label; repeatEveryMs (>= 60000) and maxRuns to repeat.
+   * @returns The created timer.
+   * @example await sdk.timers.runLater(10 * 60 * 1000, 'await sdk.media.closeAll(); await sdk.chat.say("Break is over!");', { label: "end break" });
+   * @example await sdk.timers.runLater(60_000, 'await sdk.media.showImage(input.pic, { durationMs: 3000, layer: "background", opacity: 0.4 });', { input: { pic: "media/images/star.png" }, repeatEveryMs: 5 * 60_000, maxRuns: 6 });
+   */
+  runLater(delayMs: number, code: string, opts?: { input?: Json; label?: string; repeatEveryMs?: number; maxRuns?: number }): Promise<TimerInfo>;
   /**
    * Cancel a pending timer.
    * @param id Timer id from schedule() or list().
@@ -38,6 +51,8 @@ interface TimersApi {
 - \`delayMs\` is 1 second to 7 days. Put everything you will need into the \`payload\` — when the timer fires you only get that payload (plus your normal context).
 - Check \`list()\` before scheduling repeated timers so you do not stack duplicates; \`cancel(id)\` to remove one.
 - An action cannot sleep or wait; a timer is the only way to act after a delay.
+- \`runLater(delayMs, code, { input })\` is your setTimeout: the code runs later with the sdk and \`input\`, no LLM turn needed. Use \`sdk.llm.wake\` instead when you want to *think* later.
+- Repeating timers (\`repeatEveryMs\`, at least 1 minute) keep going until \`maxRuns\` or \`cancel(id)\`; do not create more than a handful.
 
 \`\`\`ts
 const pending = await sdk.timers.list();
@@ -47,6 +62,7 @@ if (!pending.some(t => t.label === "water")) {
 \`\`\``,
   methods: {
     schedule: { description: 'Schedule a timer that wakes the character later.' },
+    runLater: { description: 'Run stored code later (setTimeout-style), optionally repeating.' },
     cancel: { description: 'Cancel a pending timer.' },
     list: { description: 'List pending timers.' },
   },
