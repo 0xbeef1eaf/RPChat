@@ -2,12 +2,11 @@ import type { CapabilityGrant, PermissionDecision, PermissionRequest } from './c
 import type { AuditEntry, ChatEvent, ChatMessage, CreateSessionInput, Session } from './chat.js';
 import type { ModelInfo, ProviderConfig } from './llm.js';
 import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo } from './media.js';
-import type { CharacterSummary, InstalledPackRecord, PackManifest, TagSummary } from './pack.js';
+import type { CharacterSummary, InstalledPackRecord, MediaManifest, PackManifest, TagSummary } from './pack.js';
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, SaveCharacterInput } from './editor.js';
-import type { MediaManifest, PackManifest } from './pack.js';
 
 export type Unsubscribe = () => void;
 
