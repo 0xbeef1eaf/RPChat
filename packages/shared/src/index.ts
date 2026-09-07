@@ -10,4 +10,5 @@ export * from './media.js';
 export * from './storage.js';
 export * from './memory.js';
 export * from './senses.js';
+export * from './editor.js';
 export * from './ipc.js';

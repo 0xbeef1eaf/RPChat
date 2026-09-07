@@ -6,6 +6,8 @@ import type { CharacterSummary, InstalledPackRecord, PackManifest, TagSummary } 
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
+import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, SaveCharacterInput } from './editor.js';
+import type { MediaManifest, PackManifest } from './pack.js';
 
 export type Unsubscribe = () => void;
 
@@ -156,6 +158,40 @@ export interface IpcApi {
   display: {
     backend(): Promise<DisplayBackendInfo>;
     monitors(): Promise<MonitorInfo[]>;
+  };
+  /** Pack editor: projects are pack folders; every write goes straight to disk. */
+  editor: {
+    workspaceDir(): Promise<string>;
+    listProjects(): Promise<EditorProjectSummary[]>;
+    create(input: CreateProjectInput): Promise<EditorProject>;
+    /** Register an existing pack folder (picker when `dir` is omitted). */
+    open(dir?: string): Promise<EditorProject | null>;
+    /** Copy an installed pack into the workspace for editing. */
+    importInstalled(packId: string): Promise<EditorProject>;
+    forget(key: string): Promise<void>;
+    read(key: string): Promise<EditorProject>;
+    saveManifest(key: string, manifest: PackManifest): Promise<EditorProject>;
+    addCharacter(key: string, characterId: string, name: string): Promise<EditorProject>;
+    saveCharacter(key: string, input: SaveCharacterInput): Promise<EditorProject>;
+    removeCharacter(key: string, dir: string): Promise<EditorProject>;
+    /** Native picker → copies the image into the character dir and sets `avatar`. */
+    pickAvatar(key: string, dir: string): Promise<EditorProject>;
+    /** Native picker → copies the image/video into the character dir and adds an `avatarSet` expression. */
+    pickExpression(key: string, dir: string, expression: string): Promise<EditorProject>;
+    /** Native multi-file picker → copies into `media/<kind>/`. */
+    addMedia(key: string): Promise<EditorProject>;
+    /** Copy given absolute files into `media/<kind>/` (drag and drop). */
+    addMediaFiles(key: string, files: string[]): Promise<EditorProject>;
+    removeMedia(key: string, assetPath: string): Promise<EditorProject>;
+    saveMediaManifest(key: string, manifest: MediaManifest): Promise<EditorProject>;
+    saveReadme(key: string, text: string): Promise<EditorProject>;
+    validate(key: string): Promise<EditorValidation>;
+    /** Save dialog → writes the .rppack; returns the file path or null when cancelled. */
+    exportPack(key: string): Promise<string | null>;
+    /** Install (or replace) the pack in the app from the project folder. */
+    installToApp(key: string): Promise<InstalledPackView>;
+    revealInFolder(key: string): Promise<void>;
+    behaviourTemplates(): Promise<BehaviourTemplate[]>;
   };
 }
 
