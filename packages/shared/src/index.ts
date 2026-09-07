@@ -11,4 +11,5 @@ export * from './storage.js';
 export * from './memory.js';
 export * from './senses.js';
 export * from './editor.js';
+export * from './plugin.js';
 export * from './ipc.js';

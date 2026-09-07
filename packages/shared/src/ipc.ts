@@ -7,6 +7,7 @@ import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.
 import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, SaveCharacterInput } from './editor.js';
+import type { PluginInfo } from './plugin.js';
 
 export type Unsubscribe = () => void;
 
@@ -157,6 +158,18 @@ export interface IpcApi {
   display: {
     backend(): Promise<DisplayBackendInfo>;
     monitors(): Promise<MonitorInfo[]>;
+  };
+  /** SDK plugins: folders under the app's plugins dir adding capability modules. */
+  plugins: {
+    pluginsDir(): Promise<string>;
+    list(): Promise<PluginInfo[]>;
+    /** Native folder picker (when `dir` is omitted) → copies the plugin into the plugins dir and loads it. */
+    install(dir?: string): Promise<PluginInfo | null>;
+    remove(id: string): Promise<void>;
+    setEnabled(id: string, enabled: boolean): Promise<PluginInfo>;
+    /** Re-import the entry module and re-register its modules (for plugin development). */
+    reload(id: string): Promise<PluginInfo>;
+    openFolder(): Promise<void>;
   };
   /** Pack editor: projects are pack folders; every write goes straight to disk. */
   editor: {
