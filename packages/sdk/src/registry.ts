@@ -28,6 +28,15 @@ export class CapabilityRegistry {
     this.specs.set(spec.id, spec);
   }
 
+  /**
+   * Remove a module (used to disable or reload plugins). Returns false when no such module
+   * is registered. The remaining modules keep their relative order; re-registering the same
+   * id appends it at the end.
+   */
+  unregister(id: string): boolean {
+    return this.specs.delete(id);
+  }
+
   get(id: string): CapabilityModuleSpec | undefined {
     return this.specs.get(id);
   }

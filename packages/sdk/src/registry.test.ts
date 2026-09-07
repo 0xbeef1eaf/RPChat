@@ -97,6 +97,23 @@ describe('CapabilityRegistry', () => {
     }
   });
 
+  it('unregister removes a module, keeps the order of the rest, and allows re-registration', () => {
+    const r = new CapabilityRegistry();
+    r.register(spec({ id: 'a' }));
+    r.register(spec({ id: 'b' }));
+    r.register(spec({ id: 'c' }));
+    expect(r.unregister('b')).toBe(true);
+    expect(r.unregister('b')).toBe(false);
+    expect(r.unregister('never')).toBe(false);
+    expect(r.has('b')).toBe(false);
+    expect(r.list().map((m) => m.id)).toEqual(['a', 'c']);
+    expect(() => r.permissionFor('b', 'ping')).toThrowError(RpError);
+    r.register(spec({ id: 'b', version: '2.0.0' }));
+    expect(r.list().map((m) => m.id)).toEqual(['a', 'c', 'b']);
+    expect(r.get('b')?.version).toBe('2.0.0');
+    expect(r.permissionFor('b', 'wipe')).toBe('prompt');
+  });
+
   it('resolves nested (dotted) method names', () => {
     const r = createStandardRegistry();
     expect(r.permissionFor('state', 'session.get')).toBe('trusted');

@@ -12,6 +12,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
-  "dependencies": { "@rp/shared": "workspace:*" },
+  "dependencies": { "@rp/shared": "workspace:*", "zod": "^4.5.4" },
   "devDependencies": { "typescript": "^5.9.3", "vitest": "^3.2.7", "@types/node": "^22" }
 }
