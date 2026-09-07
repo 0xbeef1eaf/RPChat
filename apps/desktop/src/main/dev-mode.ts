@@ -81,6 +81,8 @@ export async function ensureMockProvider(engine: Engine, logger: Logger): Promis
 export function findExamplePack(appRoot: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   const candidates: string[] = [];
   if (env.RP_EXAMPLE_PACK) candidates.push(env.RP_EXAMPLE_PACK);
+  // Packaged builds ship the sample pack as an extra resource (see electron-builder `extraResources`).
+  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'packs', 'luna'));
   let dir = path.resolve(appRoot);
   for (let i = 0; i < 6; i += 1) {
     candidates.push(path.join(dir, 'examples', 'packs', 'luna'));

@@ -14,6 +14,7 @@
     "test": "pnpm -r run test",
     "dev": "pnpm --filter @rp/desktop run dev",
     "test:headful": "pnpm --filter @rp/desktop run build && scripts/headful-smoke.sh",
+    "test:packaged": "pnpm --filter @rp/desktop run build && pnpm --filter @rp/desktop exec electron-builder --linux dir --publish never && RP_APP_BIN=apps/desktop/release/linux-unpacked/rp-code scripts/headful-smoke.sh /tmp/rp-packaged-shots",
     "test:wlr": "pnpm --filter @rp/desktop run build && pnpm run build:native && scripts/wlr-smoke.sh",
     "clean": "pnpm -r exec rm -rf dist out node_modules/.cache"
   },

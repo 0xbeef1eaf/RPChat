@@ -6,9 +6,13 @@
 #
 # Requires: Xvfb, xwd, xdotool, ImageMagick `convert`, and a built app (`pnpm --filter @rp/desktop build`).
 # Usage: scripts/headful-smoke.sh [output-dir]   (default: /tmp/rp-headful-shots)
+# Set RP_APP_BIN=<path to a packaged executable> to smoke a packaged build (electron-builder output)
+# instead of the development entry point.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-/tmp/rp-headful-shots}"
+# Resolve a packaged binary relative to the caller's directory before we cd anywhere.
+if [ -n "${RP_APP_BIN:-}" ]; then RP_APP_BIN="$(cd "$(dirname "$RP_APP_BIN")" && pwd)/$(basename "$RP_APP_BIN")"; fi
 DISPLAY_NUM="${RP_DISPLAY:-:97}"
 USERDATA="$(mktemp -d /tmp/rp-headful-data.XXXX)"
 FBDIR="$(mktemp -d /tmp/rp-headful-fb.XXXX)"
@@ -20,8 +24,13 @@ trap 'kill $XVFB_PID 2>/dev/null; rm -rf "$USERDATA" "$FBDIR"' EXIT
 sleep 1.5
 
 cd "$ROOT/apps/desktop"
+if [ -n "${RP_APP_BIN:-}" ]; then
+  APP_CMD=("$RP_APP_BIN" --no-sandbox)
+else
+  APP_CMD=(./node_modules/.bin/electron --no-sandbox out/main/index.js)
+fi
 DISPLAY="$DISPLAY_NUM" RP_MOCK_LLM=1 RP_SMOKE=1 RP_USER_DATA="$USERDATA" RP_SCREENSHOT_DIR="$OUT" \
-  timeout "${RP_SMOKE_SECONDS:-45}" ./node_modules/.bin/electron --no-sandbox out/main/index.js >"$OUT/app.log" 2>&1 &
+  timeout "${RP_SMOKE_SECONDS:-45}" "${APP_CMD[@]}" >"$OUT/app.log" 2>&1 &
 APP_PID=$!
 
 # Wait for the smoke turn to finish (screenshots are its last step), max ~40 s.

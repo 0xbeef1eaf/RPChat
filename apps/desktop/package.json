@@ -59,6 +59,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "../../examples/packs/luna",
+        "to": "packs/luna",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "asarUnpack": [
@@ -86,9 +93,26 @@
     },
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "deb"
       ],
-      "category": "Utility"
-    }
+      "category": "Utility",
+      "executableName": "rp-code",
+      "maintainer": "rp-code contributors"
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "publish": null
+  },
+  "author": {
+    "name": "rp-code contributors"
+  },
+  "homepage": "https://github.com/0xbeef1eaf/llm-rp-code",
+  "optionalDependencies": {
+    "@esbuild/linux-x64": "0.28.2",
+    "@esbuild/linux-arm64": "0.28.2",
+    "@esbuild/win32-x64": "0.28.2",
+    "@esbuild/win32-arm64": "0.28.2",
+    "@esbuild/darwin-x64": "0.28.2",
+    "@esbuild/darwin-arm64": "0.28.2"
   }
 }
