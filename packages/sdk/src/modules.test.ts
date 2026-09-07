@@ -8,7 +8,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
     permission: 'trusted',
     methods: ['get', 'set', 'delete', 'keys', 'all', 'session.get', 'session.set', 'session.delete', 'session.keys', 'session.all'],
   },
-  pack: { permission: 'trusted', methods: ['asset', 'listAssets', 'readText', 'info'] },
+  pack: { permission: 'trusted', methods: ['asset', 'listAssets', 'findAssets', 'tags', 'readText', 'info'] },
   timers: { permission: 'trusted', methods: ['schedule', 'runLater', 'cancel', 'list'] },
   llm: { permission: 'trusted', methods: ['ask', 'wake'] },
   memory: { permission: 'trusted', methods: ['remember', 'recall', 'recent', 'update', 'forget'] },

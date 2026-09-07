@@ -79,6 +79,42 @@ export interface AssetEntry {
   kind: AssetKind;
   bytes: number;
   mime: string;
+  /**
+   * Lower-case tags: the asset's folder names (implicit) plus whatever `media.json` assigns.
+   * Sorted, deduplicated. Empty when neither applies.
+   */
+  tags: string[];
+  /** Author-written one-liner from `media.json`, if any. */
+  description?: string;
+}
+
+export const MEDIA_MANIFEST_FILENAME = 'media.json';
+
+/** One rule in `media.json`: applies tags/description to every asset matching `match`. */
+export interface MediaManifestEntry {
+  /** Pack-relative path or glob (`*`, `**`, `?`; a bare directory matches everything under it). */
+  match: string;
+  tags?: string[];
+  description?: string;
+}
+
+/**
+ * Optional `media.json` at the pack root describing the media so a character can pick assets
+ * by meaning. Tags from all matching entries and from the asset's folder names are merged.
+ */
+export interface MediaManifest {
+  entries: MediaManifestEntry[];
+  /** Tag vocabulary: tag → short meaning, shown to the model. */
+  tags?: Record<string, string>;
+  /** When false, folder names are not turned into tags. Default true. */
+  folderTags?: boolean;
+}
+
+/** A tag as summarised for the prompt and `sdk.pack.tags()`. */
+export interface TagSummary {
+  tag: string;
+  count: number;
+  description?: string;
 }
 
 /** A fully loaded, validated pack (manifest + characters + resolved persona text + asset index). */
@@ -87,6 +123,8 @@ export interface LoadedPack {
   manifest: PackManifest;
   characters: LoadedCharacter[];
   assets: AssetEntry[];
+  /** Tag vocabulary from `media.json`, if present. */
+  tagDescriptions?: Record<string, string>;
   readme?: string;
 }
 

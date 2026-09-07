@@ -23,6 +23,17 @@ interface AssetRef {
   readonly mime: string;
   /** File size in bytes. */
   readonly bytes: number;
+  /** Lower-case tags describing the asset: its folder names plus the pack author's tags from media.json. */
+  readonly tags: readonly string[];
+  /** The pack author's one-line description of this asset, if any. */
+  readonly description?: string;
+}
+
+/** A tag in use in the pack, with how many assets carry it and what the author says it means. */
+interface AssetTag {
+  tag: string;
+  count: number;
+  description?: string;
 }
 
 /** Anchor preset on the chosen monitor. */

@@ -2,7 +2,7 @@ import type { CapabilityGrant, PermissionDecision, PermissionRequest } from './c
 import type { AuditEntry, ChatEvent, ChatMessage, CreateSessionInput, Session } from './chat.js';
 import type { ModelInfo, ProviderConfig } from './llm.js';
 import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo } from './media.js';
-import type { CharacterSummary, InstalledPackRecord, PackManifest } from './pack.js';
+import type { CharacterSummary, InstalledPackRecord, PackManifest, TagSummary } from './pack.js';
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
@@ -42,6 +42,9 @@ export interface InstalledPackView extends InstalledPackRecord {
   effectiveCapabilities: string[];
   /** Requested modules the global policy denies (the per-pack toggle cannot override these). */
   blockedByPolicy: string[];
+  /** Tags used across the pack's media, most common first. */
+  assetTags: TagSummary[];
+  assetCounts: Record<string, number>;
 }
 
 /** What a pack asks for, computed before installing it (for browsing/comparing packs). */
@@ -56,6 +59,7 @@ export interface PackInspection {
   unknownCapabilities: string[];
   readme?: string;
   assetCounts: Record<string, number>;
+  assetTags: TagSummary[];
 }
 
 /**
