@@ -27,6 +27,16 @@ export interface UiPromptRequest {
 
 export type UiPromptAnswer = boolean | string | null;
 
+/** Options for adding media through the editor. */
+export interface AddMediaOptions {
+  /** Sub-folder under `media/<kind>/`, e.g. `wallpapers` (its name becomes a tag). */
+  subfolder?: string;
+  /** Restrict the picker to these kinds (default: all media). */
+  kinds?: Array<'image' | 'video' | 'audio'>;
+  /** Picker title. */
+  title?: string;
+}
+
 export interface CapabilityInfo {
   id: string;
   title: string;
@@ -190,10 +200,10 @@ export interface IpcApi {
     pickAvatar(key: string, dir: string): Promise<EditorProject>;
     /** Native picker → copies the image/video into the character dir and adds an `avatarSet` expression. */
     pickExpression(key: string, dir: string, expression: string): Promise<EditorProject>;
-    /** Native multi-file picker → copies into `media/<kind>/`. */
-    addMedia(key: string): Promise<EditorProject>;
+    /** Native multi-file picker → copies into `media/<kind>/` (or `media/<kind>/<subfolder>/`). */
+    addMedia(key: string, options?: AddMediaOptions): Promise<EditorProject>;
     /** Copy given absolute files into `media/<kind>/` (drag and drop). */
-    addMediaFiles(key: string, files: string[]): Promise<EditorProject>;
+    addMediaFiles(key: string, files: string[], options?: AddMediaOptions): Promise<EditorProject>;
     removeMedia(key: string, assetPath: string): Promise<EditorProject>;
     saveMediaManifest(key: string, manifest: MediaManifest): Promise<EditorProject>;
     saveReadme(key: string, text: string): Promise<EditorProject>;
