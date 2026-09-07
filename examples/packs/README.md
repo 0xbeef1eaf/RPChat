@@ -142,7 +142,7 @@ file name:
   that matches it. When several matching entries set a `description`, the last
   one wins. Descriptions are at most 200 characters.
 - Folder tags skip the kind folders (`media`, `images`, `image`, `video`,
-  `videos`, `audio`, `sounds`, `characters`) and the media root's own name;
+  `videos`, `audio`, `sounds`, `text`, `other`, `characters`) and the media root's own name;
   every other directory segment counts. Set `folderTags: false` to opt out.
 - `validatePack` warns about entries that match no asset and vocabulary tags
   no asset uses; neither stops the pack from loading.
@@ -167,13 +167,16 @@ Only request what the character needs; users see the list at install time.
 A character may bind TypeScript (or JavaScript) files to hooks. They run in the
 same sandbox and with the same permissions as code the model writes:
 
-| hook             | when                                                                  | return value                                   |
-|------------------|-----------------------------------------------------------------------|------------------------------------------------|
-| `onInstall`      | once, after the user accepted the capability grants                   | ignored                                        |
-| `onSessionStart` | when a new chat session starts, before the first model turn           | ignored (use `sdk.chat.say` to speak)          |
-| `onUserMessage`  | after each user message, before the model turn                        | `{ skipLlm: true }` to fully script the reply  |
-| `onTimer`        | when a timer scheduled with `sdk.timers.schedule` fires               | ignored                                        |
-| `onSessionEnd`   | when the session is closed                                            | ignored                                        |
+| hook             | when                                                                  | `input`                                         | return value                                   |
+|------------------|-----------------------------------------------------------------------|-------------------------------------------------|------------------------------------------------|
+| `onInstall`      | once, after the user accepted the capability grants                   | `null`                                          | ignored                                        |
+| `onSessionStart` | when a new chat session starts, before the first model turn           | `null`                                          | ignored (use `sdk.chat.say` to speak)          |
+| `onUserMessage`  | after each user message, before the model turn                        | `{ text }`                                      | `{ skipLlm: true }` to fully script the reply  |
+| `onTimer`        | when a timer scheduled with `sdk.timers.schedule` fires               | `{ timer: { id, payload, label? } }`            | ignored                                        |
+| `onEvent`        | when a host event fires that no `sdk.events.on` subscription handled  | `{ event, data }`                               | ignored                                        |
+| `onSessionEnd`   | when the session is closed                                            | `null`                                          | ignored                                        |
+
+Each script sees the hook's input as a constant named `input`.
 
 If no `onTimer` script exists, a firing timer instead wakes the model with a
 system message describing the timer payload.

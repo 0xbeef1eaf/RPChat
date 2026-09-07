@@ -1,6 +1,7 @@
 export {
   BEHAVIOUR_HOOKS,
   BEHAVIOUR_SCRIPT_EXTENSIONS,
+  EXPRESSION_EXTENSIONS,
   CAPABILITY_ID_PATTERN,
   CHARACTER_ID_PATTERN,
   PACK_ID_PATTERN,
@@ -53,6 +54,26 @@ export {
 
 export { PACK_README_FILENAME, inspectPack, loadPack, requestedCapabilities, validatePack } from './loader.js';
 export type { PackInspection } from './loader.js';
+
+export {
+  behaviourScriptPath,
+  behaviourTemplates,
+  hookFileStem,
+  personaTemplate,
+} from './templates.js';
+
+export {
+  addAssetFile,
+  removeAsset,
+  scaffoldPack,
+  slugify,
+  writeCharacter,
+  writeFileAtomic,
+  writeManifest,
+  writeMediaManifest,
+  writeReadme,
+} from './write.js';
+export type { AddAssetOptions, ScaffoldOptions } from './write.js';
 
 export {
   MAX_ARCHIVE_BYTES,

@@ -128,6 +128,18 @@ describe('characterDefinitionSchema', () => {
     expect(BEHAVIOUR_HOOKS).toEqual(['onInstall', 'onSessionStart', 'onUserMessage', 'onTimer', 'onEvent', 'onSessionEnd']);
   });
 
+  it('validates avatarSet and mood', () => {
+    const ok = { ...goodCharacter(), avatarSet: { expressions: { neutral: 'faces/neutral.png', talk: 'faces/talk.webm' }, defaultExpression: 'neutral', size: 240 }, mood: { baseline: 0.2, energyBaseline: -0.1 } };
+    const parsed = validateCharacter(ok);
+    expect(parsed.avatarSet?.expressions.talk).toBe('faces/talk.webm');
+    expect(parsed.mood).toEqual({ baseline: 0.2, energyBaseline: -0.1 });
+    expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), avatarSet: { expressions: {} } }).success).toBe(false);
+    expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), avatarSet: { expressions: { neutral: 'n.mp3' } } }).success).toBe(false);
+    expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), avatarSet: { expressions: { neutral: '../n.png' } } }).success).toBe(false);
+    expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), avatarSet: { expressions: { neutral: 'n.png' }, defaultExpression: 'sad' } }).success).toBe(false);
+    expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), mood: { baseline: 2 } }).success).toBe(false);
+  });
+
   it('requires the avatar to be an image by extension', () => {
     expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), avatar: 'avatar.txt' }).success).toBe(false);
     expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), avatar: 'img/avatar.WEBP' }).success).toBe(true);

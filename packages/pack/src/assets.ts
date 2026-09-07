@@ -85,7 +85,7 @@ async function entryFor(rootAbs: string, rel: string): Promise<AssetEntry | null
  * never become implicit tags. The media root's own segments are skipped too.
  */
 export const KIND_FOLDER_NAMES: ReadonlySet<string> = new Set([
-  'media', 'images', 'image', 'video', 'videos', 'audio', 'sounds', 'characters',
+  'media', 'images', 'image', 'video', 'videos', 'audio', 'sounds', 'text', 'other', 'characters',
 ]);
 
 /**
@@ -166,9 +166,10 @@ export function summariseTags(assets: readonly AssetEntry[], tagDescriptions?: R
 }
 
 /**
- * Best-effort discovery of character avatar paths (relative to the pack root)
- * by reading `pack.json` and each `character.json`. Any unreadable or malformed
- * file is ignored here; the loader reports such problems separately.
+ * Best-effort discovery of character avatar and `avatarSet` expression paths
+ * (relative to the pack root) by reading `pack.json` and each `character.json`.
+ * Any unreadable or malformed file is ignored here; the loader reports such
+ * problems separately.
  */
 async function discoverAvatarPaths(rootAbs: string): Promise<string[]> {
   const out: string[] = [];
@@ -184,8 +185,17 @@ async function discoverAvatarPaths(rootAbs: string): Promise<string[]> {
     if (typeof dir !== 'string' || !isSafeRelativePath(dir)) continue;
     try {
       const defPath = resolveAssetPath(rootAbs, joinRelative(dir, CHARACTER_MANIFEST_FILENAME));
-      const def = JSON.parse(await fs.readFile(defPath, 'utf8')) as { avatar?: unknown };
+      const def = JSON.parse(await fs.readFile(defPath, 'utf8')) as {
+        avatar?: unknown;
+        avatarSet?: { expressions?: unknown };
+      };
       if (typeof def.avatar === 'string' && isSafeRelativePath(def.avatar)) out.push(joinRelative(dir, def.avatar));
+      const expressions = def.avatarSet?.expressions;
+      if (expressions && typeof expressions === 'object') {
+        for (const rel of Object.values(expressions as Record<string, unknown>)) {
+          if (typeof rel === 'string' && isSafeRelativePath(rel)) out.push(joinRelative(dir, rel));
+        }
+      }
     } catch {
       // ignored: reported by validatePack/loadPack
     }

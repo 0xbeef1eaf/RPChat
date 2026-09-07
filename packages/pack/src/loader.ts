@@ -137,6 +137,14 @@ async function loadCharacter(
     }
   }
 
+  // avatarSet expressions (optional; each must exist)
+  for (const [name, rel] of Object.entries(definition.avatarSet?.expressions ?? {})) {
+    const abs = safeResolve(rootAbs, joinRelative(dir, rel), problems, defRel);
+    if (abs && (await kindOf(abs)) !== 'file') {
+      problems.push(`${defRel}: avatarSet expression "${name}" file "${rel}" not found`);
+    }
+  }
+
   // behaviour scripts (optional; each must exist)
   const behaviourSources: Partial<Record<BehaviourHook, string>> = {};
   for (const hook of BEHAVIOUR_HOOKS) {

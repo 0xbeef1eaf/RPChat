@@ -24,8 +24,11 @@ export const BEHAVIOUR_HOOKS = [
 
 // Compile-time exhaustiveness: fails to build if `BehaviourHook` gains a member missing above.
 type MissingHook = Exclude<BehaviourHook, (typeof BEHAVIOUR_HOOKS)[number]>;
-const _hooksExhaustive: MissingHook extends never ? true : never = true;
+const _hooksExhaustive: [MissingHook] extends [never] ? true : false = true;
 void _hooksExhaustive;
+
+/** Extensions allowed for `avatarSet.expressions` (still images or short looping video). */
+export const EXPRESSION_EXTENSIONS = ['png', 'gif', 'webp', 'apng', 'webm'] as const;
 
 export const BEHAVIOUR_SCRIPT_EXTENSIONS = ['ts', 'js'] as const;
 
@@ -44,6 +47,42 @@ const avatarPathSchema = relativePathSchema.check((ctx) => {
   if (assetKindFor(ctx.value) !== 'image') {
     ctx.issues.push({ code: 'custom', message: `avatar "${ctx.value}" is not an image file`, input: ctx.value });
   }
+});
+
+const expressionPathSchema = relativePathSchema.check((ctx) => {
+  if (!(EXPRESSION_EXTENSIONS as readonly string[]).includes(extensionOf(ctx.value))) {
+    ctx.issues.push({
+      code: 'custom',
+      message: `expression "${ctx.value}" must be a png/gif/webp/apng image or a webm video`,
+      input: ctx.value,
+    });
+  }
+});
+
+const avatarSetSchema = z
+  .object({
+    expressions: z.record(z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, 'expression names are lower-case slugs'), expressionPathSchema),
+    defaultExpression: z.string().min(1).optional(),
+    size: z.number().int().min(32).max(2048).optional(),
+  })
+  .check((ctx) => {
+    const { expressions, defaultExpression } = ctx.value;
+    if (Object.keys(expressions).length === 0) {
+      ctx.issues.push({ code: 'custom', message: 'avatarSet.expressions must not be empty', input: expressions, path: ['expressions'] });
+    }
+    if (defaultExpression !== undefined && !(defaultExpression in expressions)) {
+      ctx.issues.push({
+        code: 'custom',
+        message: `defaultExpression "${defaultExpression}" is not one of the expressions`,
+        input: defaultExpression,
+        path: ['defaultExpression'],
+      });
+    }
+  });
+
+const moodSchema = z.object({
+  baseline: z.number().min(-1).max(1).optional(),
+  energyBaseline: z.number().min(-1).max(1).optional(),
 });
 
 const semverSchema = z.string().regex(SEMVER_PATTERN, 'must be a semver version like 1.2.3');
@@ -106,6 +145,8 @@ const characterDefinitionObject = z.object({
   greeting: z.string().optional(),
   exampleDialogue: z.array(exampleDialogueTurnSchema).optional(),
   behaviours: z.partialRecord(z.enum(BEHAVIOUR_HOOKS), behaviourPathSchema).optional(),
+  avatarSet: avatarSetSchema.optional(),
+  mood: moodSchema.optional(),
   capabilities: z.array(capabilityIdSchema).optional(),
   modelHints: modelHintsSchema.optional(),
 });
