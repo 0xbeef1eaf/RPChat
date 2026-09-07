@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { CapabilityInfo, PackInspection } from '@rp/shared';
 import { Markdown } from '../common/Markdown';
 import { Modal } from '../common/Modal';
+import { MediaSummary } from './MediaSummary';
 
 interface InspectModalProps {
   sourcePath: string;
@@ -16,7 +17,6 @@ export function InspectModal({ sourcePath, inspection, capabilities, onConfirm, 
   const [busy, setBusy] = useState(false);
   const [readme, setReadme] = useState(false);
   const m = inspection.manifest;
-  const assets = Object.entries(inspection.assetCounts).filter(([, n]) => n > 0);
 
   const confirm = async () => {
     setBusy(true);
@@ -81,11 +81,7 @@ export function InspectModal({ sourcePath, inspection, capabilities, onConfirm, 
         ) : null}
       </div>
 
-      {assets.length > 0 ? (
-        <div className="muted small">
-          Assets: {assets.map(([k, n]) => `${n} ${k}`).join(', ')}
-        </div>
-      ) : null}
+      <MediaSummary assetCounts={inspection.assetCounts} assetTags={inspection.assetTags} />
 
       {inspection.readme ? (
         <div>

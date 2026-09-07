@@ -1383,3 +1383,12 @@ table.table {
 .char-status .badge {
   font-weight: 500;
 }
+.media-summary {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+}
+.chip-count {
+  opacity: 0.75;
+  font-size: 11px;
+}

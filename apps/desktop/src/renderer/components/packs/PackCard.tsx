@@ -5,6 +5,7 @@ import { createSession, openMemories, setGrant } from '../../store/actions';
 import { Avatar } from '../common/Avatar';
 import { Markdown } from '../common/Markdown';
 import { Toggle } from '../common/Toggle';
+import { MediaSummary } from './MediaSummary';
 
 interface PackCardProps {
   pack: InstalledPackView;
@@ -46,6 +47,7 @@ export function PackCard({ pack, capabilities, onUninstall }: PackCardProps) {
             {m.license ? `${m.license} · ` : ''}installed {formatDateTime(pack.installedAt)}
             {m.tags && m.tags.length > 0 ? ` · ${m.tags.join(', ')}` : ''}
           </p>
+          <MediaSummary assetCounts={pack.assetCounts} assetTags={pack.assetTags} />
         </div>
         <div className="row">
           {pack.readme ? (
