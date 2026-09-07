@@ -13,7 +13,7 @@ export interface PackWriters {
   writeCharacter(dir: string, charDir: string, definition: CharacterDefinition, personaText: string, behaviours: Partial<Record<BehaviourHook, string>>): Promise<void>;
   writeMediaManifest(dir: string, manifest: MediaManifest): Promise<void>;
   writeReadme(dir: string, text: string): Promise<void>;
-  addAssetFile(dir: string, sourceFile: string, opts?: { kind?: AssetEntry['kind'] }): Promise<AssetEntry>;
+  addAssetFile(dir: string, sourceFile: string, opts?: { kind?: AssetEntry['kind']; subdir?: string }): Promise<AssetEntry>;
   removeAsset(dir: string, assetPath: string): Promise<void>;
   personaTemplate(name: string): string;
   behaviourTemplates(): BehaviourTemplate[];

@@ -2,6 +2,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type {
+  AddMediaOptions,
   AssetEntry,
   BehaviourTemplate,
   CharacterDefinition,
@@ -19,6 +20,7 @@ import type {
 } from '@rp/shared';
 import { CHARACTER_MANIFEST_FILENAME, MEDIA_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME, RpError, assetUrl } from '@rp/shared';
 import {
+  ASSET_KIND_BY_EXTENSION,
   CHARACTER_ID_PATTERN,
   DEFAULT_MEDIA_ROOT,
   PACK_ID_PATTERN,
@@ -64,7 +66,44 @@ export interface EditorServiceDeps {
 
 const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'apng'];
 const EXPRESSION_EXT = [...IMAGE_EXT, 'webm', 'mp4'];
-const MEDIA_EXT = [...IMAGE_EXT, 'svg', 'webm', 'mp4', 'mp3', 'ogg', 'wav', 'flac', 'm4a', 'txt', 'md', 'json'];
+const MEDIA_KINDS = ['image', 'video', 'audio'] as const;
+type MediaKind = (typeof MEDIA_KINDS)[number];
+
+/** Extensions per kind from @rp/pack's table (image/video/audio). */
+export function extensionsFor(kind: MediaKind): string[] {
+  return Object.entries(ASSET_KIND_BY_EXTENSION)
+    .filter(([, k]) => k === kind)
+    .map(([ext]) => ext)
+    .sort();
+}
+
+/** Picker filters for the requested kinds (default: every media kind plus text). */
+export function mediaFilters(kinds: AddMediaOptions['kinds']): Array<{ name: string; extensions: string[] }> {
+  const wanted = Array.isArray(kinds) ? MEDIA_KINDS.filter((k) => kinds.includes(k)) : [];
+  if (wanted.length === 0) {
+    return [
+      { name: 'Media', extensions: [...MEDIA_KINDS.flatMap(extensionsFor), 'txt', 'md', 'json'] },
+      ...MEDIA_KINDS.map((k) => ({ name: kindLabel(k), extensions: extensionsFor(k) })),
+    ];
+  }
+  const filters = wanted.map((k) => ({ name: kindLabel(k), extensions: extensionsFor(k) }));
+  return wanted.length > 1 ? [{ name: 'Media', extensions: wanted.flatMap(extensionsFor) }, ...filters] : filters;
+}
+
+function kindLabel(kind: MediaKind): string {
+  return kind === 'image' ? 'Images' : kind === 'video' ? 'Videos' : 'Audio';
+}
+
+/** Validate `subfolder` (relative, no `..`, folder-name-safe segments) → normalised path or undefined. */
+export function normalizeSubfolder(v: unknown): string | undefined {
+  if (typeof v !== 'string' || v.trim().length === 0) return undefined;
+  const n = normalizeRelativePath(v.trim());
+  if (!n.ok) throw new RpError('INVALID_ARGUMENT', `Invalid subfolder "${v}": ${n.reason}`);
+  if (!n.path.split('/').every((seg) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(seg))) {
+    throw new RpError('INVALID_ARGUMENT', `Invalid subfolder "${v}": use letters, digits, ".", "_" and "-"`);
+  }
+  return n.path;
+}
 
 export class EditorService {
   private readonly writers: PackWriters;
@@ -392,21 +431,47 @@ export class EditorService {
     return this.read(key);
   }
 
-  async addMedia(key: string): Promise<EditorProject> {
-    const files = await this.deps.dialogs.openFiles('Add media files', [{ name: 'Media', extensions: MEDIA_EXT }], true);
-    return this.addMediaFiles(key, files);
+  async addMedia(key: string, options: AddMediaOptions = {}): Promise<EditorProject> {
+    const o = options && typeof options === 'object' ? options : {};
+    const title = typeof o.title === 'string' && o.title.trim().length > 0 ? o.title.trim() : 'Add media files';
+    const files = await this.deps.dialogs.openFiles(title, mediaFilters(o.kinds), true);
+    return this.addMediaFiles(key, files, o);
   }
 
-  async addMediaFiles(key: string, files: string[]): Promise<EditorProject> {
+  async addMediaFiles(key: string, files: string[], options: AddMediaOptions = {}): Promise<EditorProject> {
     const { dir } = this.entry(key);
+    const o = options && typeof options === 'object' ? options : {};
     if (!Array.isArray(files)) throw new RpError('INVALID_ARGUMENT', 'files must be an array of absolute paths');
+    const subfolder = normalizeSubfolder(o.subfolder);
+    const allowedKinds = Array.isArray(o.kinds) ? new Set(o.kinds) : undefined;
+    const manifest = await this.readManifestTolerant(dir);
+    const mediaRoot = normalizeRelativePath(manifest.mediaRoot ?? DEFAULT_MEDIA_ROOT);
     for (const file of files) {
       if (typeof file !== 'string' || !path.isAbsolute(file)) throw new RpError('INVALID_ARGUMENT', `Not an absolute path: ${String(file)}`);
       const st = await fs.stat(file).catch(() => undefined);
       if (!st?.isFile()) throw new RpError('NOT_FOUND', `${file} is not a file`);
-      await this.writers.addAssetFile(dir, file);
+      const kind = assetKindFor(file);
+      if (allowedKinds && !allowedKinds.has(kind as MediaKind)) throw new RpError('INVALID_ARGUMENT', `${path.basename(file)} is not one of: ${[...allowedKinds].join(', ')}`);
+      const entry = await this.writers.addAssetFile(dir, file, subfolder ? { subdir: subfolder } : {});
+      // Older @rp/pack builds ignore `subdir`: move the file into the sub-folder ourselves.
+      if (subfolder && mediaRoot.ok) await this.moveIntoSubfolder(dir, entry, mediaRoot.path, subfolder);
     }
     return this.read(key);
+  }
+
+  private async moveIntoSubfolder(dir: string, entry: AssetEntry, mediaRoot: string, subfolder: string): Promise<void> {
+    const parts = entry.path.split('/');
+    const name = parts.pop() ?? '';
+    const currentDir = parts.join('/');
+    const kindDir = currentDir.startsWith(`${mediaRoot}/`) ? currentDir.slice(mediaRoot.length + 1).split('/')[0] : undefined;
+    if (!kindDir) return;
+    const wantedDir = `${mediaRoot}/${kindDir}/${subfolder}`;
+    if (currentDir === wantedDir || currentDir.startsWith(`${wantedDir}/`)) return;
+    const from = resolveAssetPath(dir, entry.path);
+    const targetDir = resolveAssetPath(dir, wantedDir);
+    await fs.mkdir(targetDir, { recursive: true });
+    const to = await uniqueName(targetDir, name);
+    await fs.rename(from, to);
   }
 
   async removeMedia(key: string, assetPath: string): Promise<EditorProject> {

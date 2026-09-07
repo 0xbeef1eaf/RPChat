@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ProjectRegistry, editorAssetHost, isProjectKey, keyFromAssetHost, projectKey } from './registry.js';
-import { EditorService } from './service.js';
+import { EditorService, extensionsFor, mediaFilters, normalizeSubfolder } from './service.js';
 import { parseAssetUrl } from '../asset-protocol.js';
 
 describe('project registry', () => {
@@ -110,5 +110,55 @@ describe('EditorService tolerant read', () => {
     expect(p2.characters).toEqual([]);
     await svc.forget(p2.summary.key);
     await expect(svc.read(p2.summary.key)).rejects.toThrow(/No open project/);
+  });
+});
+
+describe('EditorService media options', () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-editor-media-'));
+  });
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('builds picker filters from the kind table and validates sub-folders', () => {
+    expect(extensionsFor('image')).toEqual(expect.arrayContaining(['png', 'jpg', 'webp']));
+    expect(extensionsFor('audio')).not.toContain('png');
+    expect(mediaFilters(['image'])).toEqual([{ name: 'Images', extensions: extensionsFor('image') }]);
+    expect(mediaFilters(['image', 'audio'])[0]?.name).toBe('Media');
+    expect(mediaFilters(undefined)[0]?.extensions).toEqual(expect.arrayContaining(['png', 'mp4', 'mp3', 'txt']));
+    expect(normalizeSubfolder(undefined)).toBeUndefined();
+    expect(normalizeSubfolder(' wallpapers/night ')).toBe('wallpapers/night');
+    expect(() => normalizeSubfolder('../x')).toThrow(/Invalid subfolder/);
+    expect(() => normalizeSubfolder('a b')).toThrow(/Invalid subfolder/);
+  });
+
+  it('adds files into media/<kind>/<subfolder> and honours kind restrictions', async () => {
+    const svc = new EditorService({
+      userData: tmp,
+      registry: new ProjectRegistry(path.join(tmp, 'data', 'editor-projects.json')),
+      packs: { install: async () => { throw new Error('not in test'); }, tryGetLoaded: () => undefined, installedIds: async () => [] },
+      dialogs: { openDirectory: async () => undefined, openFiles: async () => [], saveFile: async () => undefined },
+      reveal: () => undefined,
+      logger: { warn: () => undefined, debug: () => undefined },
+    });
+    const project = await svc.create({ packId: 'com.test.media', name: 'Media', characterId: 'mia', characterName: 'Mia' });
+    const png = path.join(tmp, 'night sky.png');
+    fs.writeFileSync(png, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const wav = path.join(tmp, 'chime.wav');
+    fs.writeFileSync(wav, Buffer.from('RIFF'));
+    const key = project.summary.key;
+    const dir = project.summary.dir;
+    expect(dir).toBe(path.join(tmp, 'workspace', 'com.test.media'));
+    const after = await svc.addMediaFiles(key, [png], { subfolder: 'wallpapers' });
+    const added = after.assets.find((a) => a.path.startsWith('media/images/wallpapers/'));
+    expect(added).toBeDefined();
+    expect(added?.kind).toBe('image');
+    expect(added?.folderTags).toContain('wallpapers');
+    expect(fs.existsSync(path.join(dir, ...added!.path.split('/')))).toBe(true);
+    const again = await svc.addMediaFiles(key, [png], { subfolder: 'wallpapers' });
+    expect(again.assets.filter((a) => a.path.startsWith('media/images/wallpapers/'))).toHaveLength(2);
+    await expect(svc.addMediaFiles(key, [wav], { kinds: ['image'] })).rejects.toThrow(/not one of: image/);
+    const plain = await svc.addMediaFiles(key, [wav]);
+    expect(plain.assets.some((a) => a.path === 'media/audio/chime.wav')).toBe(true);
   });
 });
