@@ -4,6 +4,7 @@ import { createProvider } from '@rp/llm';
 import type {
   CapabilityHandler,
   CapabilityInfo,
+  CapabilityModuleSpec,
   CodeRunner,
   EventSubscription,
   HostEvent,
@@ -16,6 +17,7 @@ import type {
   RoutineStatus,
   Storage,
 } from '@rp/shared';
+import { RpError } from '@rp/shared';
 import { ActionLoop } from './action-loop.js';
 import { BehaviourRunner } from './behaviours.js';
 import { CapabilityDispatcher } from './dispatcher.js';
@@ -96,7 +98,17 @@ export class Engine {
   readonly behaviours: BehaviourRunner;
   readonly actionLoop: ActionLoop;
   readonly chat: ChatService;
-  readonly capabilities: { list(): CapabilityInfo[]; typings(): string };
+  /**
+   * The live capability surface. `list()`/`typings()` read the registry at call time;
+   * `register`/`unregister` add or remove a plugin-provided module (spec + host handler) at runtime —
+   * prompts, permissions, `packs.inspect`/`install` and the sandbox surface see the change immediately.
+   */
+  readonly capabilities: {
+    list(): CapabilityInfo[];
+    typings(): string;
+    register(spec: CapabilityModuleSpec, handler: CapabilityHandler): void;
+    unregister(id: string): Promise<boolean>;
+  };
 
   private readonly logger: Logger;
   private readonly senses: SensesProvider | undefined;
@@ -267,6 +279,24 @@ export class Engine {
           })),
         })),
       typings: () => generateSdkTypings(opts.registry),
+      register: (spec, handler) => {
+        if (!spec || typeof spec.id !== 'string') throw new RpError('INVALID_ARGUMENT', 'A capability module spec with an id is required');
+        if (opts.registry.has(spec.id)) {
+          throw new RpError('INVALID_ARGUMENT', `Capability module "${spec.id}" is already registered`, { module: spec.id });
+        }
+        if (handler.moduleId !== spec.id) {
+          throw new RpError('INVALID_ARGUMENT', `Handler moduleId "${handler.moduleId}" does not match spec id "${spec.id}"`, { module: spec.id });
+        }
+        opts.registry.register(spec); // validates the spec; throws INVALID_ARGUMENT
+        this.dispatcher.addHandler(handler);
+        this.logger.info(`[engine] registered capability module "${spec.id}"`);
+      },
+      unregister: async (id) => {
+        const hadSpec = opts.registry.unregister(id);
+        const hadHandler = await this.dispatcher.removeHandler(id);
+        if (hadSpec || hadHandler) this.logger.info(`[engine] unregistered capability module "${id}"`);
+        return hadSpec || hadHandler;
+      },
     };
   }
 

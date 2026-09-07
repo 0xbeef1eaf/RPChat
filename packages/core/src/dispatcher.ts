@@ -90,6 +90,24 @@ export class CapabilityDispatcher implements CapabilityInvoker {
     return this.handlers.get(moduleId);
   }
 
+  /** Alias of `registerHandler` for runtime (plugin) registration. */
+  addHandler(handler: CapabilityHandler): void {
+    this.registerHandler(handler);
+  }
+
+  /** Remove a handler and await its `dispose`. Resolves `false` when no handler was registered. */
+  async removeHandler(moduleId: string): Promise<boolean> {
+    const handler = this.handlers.get(moduleId);
+    if (!handler) return false;
+    this.handlers.delete(moduleId);
+    try {
+      await handler.dispose?.();
+    } catch (err) {
+      this.logger.warn(`[dispatcher] dispose of ${moduleId} failed`, err);
+    }
+    return true;
+  }
+
   /** Modules that have both a registry spec and a handler. */
   availableModules(): string[] {
     return this.registry
