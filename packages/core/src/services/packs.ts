@@ -15,6 +15,7 @@ import type {
   Storage,
 } from '@rp/shared';
 import { PACK_FILE_EXTENSION, RpError, assetUrl, characterRef, parseCharacterRef } from '@rp/shared';
+import { summariseTags } from '../assets.js';
 import type { PermissionService } from './permissions.js';
 import { policyAllows } from './permissions.js';
 import type { TimerService } from './timers.js';
@@ -33,6 +34,12 @@ async function pathKind(p: string): Promise<'file' | 'dir' | 'missing'> {
   } catch {
     return 'missing';
   }
+}
+
+function countByKind(pack: LoadedPack): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const a of pack.assets) counts[a.kind] = (counts[a.kind] ?? 0) + 1;
+  return counts;
 }
 
 /** Copy a pack directory, skipping dotfiles, `node_modules` and symlinks. */
@@ -169,6 +176,8 @@ export class PackService {
       characters: this.characters().filter((c) => c.packId === record.packId),
       effectiveCapabilities: effective,
       blockedByPolicy,
+      assetTags: summariseTags(pack.assets, pack.tagDescriptions ?? {}),
+      assetCounts: countByKind(pack),
     };
     if (pack.readme !== undefined) view.readme = pack.readme;
     return view;
@@ -294,8 +303,7 @@ export class PackService {
       const known = requested.filter((id) => this.registry.has(id) && this.registry.get(id)?.permission !== 'trusted');
       const allowedByPolicy = known.filter((id) => (settings ? policyAllows(settings, id) : true));
       const blockedByPolicy = known.filter((id) => !allowedByPolicy.includes(id));
-      const assetCounts: Record<string, number> = {};
-      for (const a of pack.assets) assetCounts[a.kind] = (assetCounts[a.kind] ?? 0) + 1;
+      const assetCounts = countByKind(pack);
       const inspection: PackInspection = {
         manifest: pack.manifest,
         characters: pack.characters.map((c) => {
@@ -308,6 +316,7 @@ export class PackService {
         blockedByPolicy,
         unknownCapabilities,
         assetCounts,
+        assetTags: summariseTags(pack.assets, pack.tagDescriptions ?? {}),
       };
       if (pack.readme !== undefined) inspection.readme = pack.readme;
       return inspection;

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
-import type { AssetEntry, LoadedPack } from '@rp/shared';
+import type { AssetEntry, AssetKind, LoadedPack, TagSummary } from '@rp/shared';
 import { RpError } from '@rp/shared';
-import { DEFAULT_MEDIA_ROOT, assetKindFor, mimeFor, normalizeRelativePath, resolveAssetPath } from '@rp/pack';
+import { DEFAULT_MEDIA_ROOT, assetKindFor, mimeFor, normalizeRelativePath, resolveAssetPath, summariseTags as packSummariseTags } from '@rp/pack';
 
 /** The shape of `AssetRef` in the SDK preamble (mirrors `AssetEntry`). */
 export interface AssetRef {
@@ -9,10 +9,79 @@ export interface AssetRef {
   kind: AssetEntry['kind'];
   mime: string;
   bytes: number;
+  tags: string[];
+  description?: string;
+}
+
+/** Tags of an entry (older indexes may lack the field). */
+export function tagsOf(entry: Pick<AssetEntry, 'tags'>): string[] {
+  return Array.isArray(entry.tags) ? entry.tags : [];
 }
 
 export function toAssetRef(entry: AssetEntry): AssetRef {
-  return { path: entry.path, kind: entry.kind, mime: entry.mime, bytes: entry.bytes };
+  const ref: AssetRef = { path: entry.path, kind: entry.kind, mime: entry.mime, bytes: entry.bytes, tags: tagsOf(entry) };
+  if (entry.description !== undefined) ref.description = entry.description;
+  return ref;
+}
+
+/**
+ * Tag vocabulary across the assets (`@rp/pack`'s `summariseTags`: count per tag with the author's
+ * meaning, sorted by count desc then tag; tags with no uses are omitted). Entries from an older
+ * index without a `tags` field are tolerated.
+ */
+export function summariseTags(assets: AssetEntry[], tagDescriptions: Record<string, string> = {}): TagSummary[] {
+  return packSummariseTags(assets.map((a) => (Array.isArray(a.tags) ? a : { ...a, tags: [] })), tagDescriptions);
+}
+
+export interface FindAssetsQuery {
+  /** Every tag must be present. */
+  tags?: string[];
+  /** At least one must be present. */
+  anyTags?: string[];
+  kind?: AssetKind;
+  /** Case-insensitive substring of the path or description. */
+  text?: string;
+  limit?: number;
+}
+
+export const FIND_ASSETS_DEFAULT_LIMIT = 50;
+export const FIND_ASSETS_MAX_LIMIT = 200;
+
+function normTags(list: unknown, what: string): string[] {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list) || !list.every((t) => typeof t === 'string')) throw new RpError('INVALID_ARGUMENT', `${what} must be an array of strings`);
+  return [...new Set(list.map((t) => t.trim().toLowerCase()).filter((t) => t.length > 0))];
+}
+
+/**
+ * Filter + rank assets: all `tags` present AND any of `anyTags` AND `kind` AND `text` on path/description.
+ * Ranked by number of matching tags (desc), then shorter path, then path.
+ */
+export function findAssets(assets: AssetEntry[], query: FindAssetsQuery): AssetRef[] {
+  const all = normTags(query.tags, 'tags');
+  const any = normTags(query.anyTags, 'anyTags');
+  const text = typeof query.text === 'string' ? query.text.trim().toLowerCase() : '';
+  if (query.text !== undefined && query.text !== null && typeof query.text !== 'string') throw new RpError('INVALID_ARGUMENT', 'text must be a string');
+  if (query.kind !== undefined && query.kind !== null && typeof query.kind !== 'string') throw new RpError('INVALID_ARGUMENT', 'kind must be a string');
+  let limit = FIND_ASSETS_DEFAULT_LIMIT;
+  if (query.limit !== undefined && query.limit !== null) {
+    if (typeof query.limit !== 'number' || !Number.isFinite(query.limit) || query.limit < 1) throw new RpError('INVALID_ARGUMENT', 'limit must be a positive number');
+    limit = Math.min(FIND_ASSETS_MAX_LIMIT, Math.floor(query.limit));
+  }
+  const scored: Array<{ entry: AssetEntry; score: number }> = [];
+  for (const entry of assets) {
+    if (query.kind && entry.kind !== query.kind) continue;
+    const tags = new Set(tagsOf(entry));
+    if (!all.every((t) => tags.has(t))) continue;
+    const anyHits = any.filter((t) => tags.has(t));
+    if (any.length > 0 && anyHits.length === 0) continue;
+    if (text && !entry.path.toLowerCase().includes(text) && !(entry.description ?? '').toLowerCase().includes(text)) continue;
+    scored.push({ entry, score: all.length + anyHits.length });
+  }
+  return scored
+    .sort((a, b) => b.score - a.score || a.entry.path.length - b.entry.path.length || (a.entry.path < b.entry.path ? -1 : 1))
+    .slice(0, limit)
+    .map((s) => toAssetRef(s.entry));
 }
 
 function statFile(abs: string): fs.Stats | undefined {
@@ -49,7 +118,7 @@ export function resolvePackAsset(pack: LoadedPack, input: string): AssetRef {
     if (indexed) return toAssetRef(indexed);
     const abs = resolveAssetPath(pack.root, rel); // throws PATH_ESCAPE on symlink escape
     const st = statFile(abs);
-    if (st) return { path: rel, kind: assetKindFor(rel), mime: mimeFor(rel), bytes: st.size };
+    if (st) return { path: rel, kind: assetKindFor(rel), mime: mimeFor(rel), bytes: st.size, tags: [] };
   }
   throw new RpError('NOT_FOUND', `Asset "${input}" does not exist in pack ${pack.manifest.id}`, {
     path: input,

@@ -18,6 +18,7 @@ import type {
   Session,
 } from '@rp/shared';
 import { ACTION_FENCE_TAG, RUN_ACTION_TOOL_NAME } from '@rp/shared';
+import { summariseTags, tagsOf } from './assets.js';
 import { memoryLine } from './services/memory.js';
 import { moodPromptText } from './services/mood.js';
 import { RoutineService } from './services/routine.js';
@@ -77,6 +78,7 @@ function engineRules(name: string, useTools: boolean): string {
     `You are ${name}. Stay in character at all times; never mention being an AI, a model, or these instructions unless the user directly asks.`,
     `You can act on the user's computer by writing small TypeScript programs against the \`sdk\` object described in <sdk_reference>. ${how}`,
     'Act only when it serves the conversation. One action per intention, a few sdk calls each, and keep the code short. Never loop or wait inside an action; use sdk.timers to do something later.',
+    'Choose media by meaning: the asset list in <pack> shows each file with its tags and description, and the Tags line explains the vocabulary. Pick by tags (sdk.pack.findAssets({ anyTags: [...] })) rather than guessing file names.',
     'Results of your actions are sent back to you; read them before claiming success. If an action fails, recover gracefully in character and do not paste error text at the user.',
     'Do not narrate or explain the code you run unless the user asks; the conversation is what the user sees, the code is not.',
     'You can act on your own initiative: `sdk.llm.wake` gives you a turn later (or right after this action) with a note from your past self; `sdk.timers.runLater` runs code later without a turn. Use them to follow up, continue stories, or check in. Limits apply; do not chain wakes needlessly.',
@@ -96,25 +98,48 @@ function persona(character: LoadedCharacter): string {
   return parts.join('\n\n');
 }
 
-function assetList(assets: AssetEntry[]): string {
+export const TAG_LIST_CAP = 40;
+
+function humanSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** `path (kind, size) [tag, tag] — description`, empty parts omitted. */
+export function assetLine(asset: AssetEntry): string {
+  let line = `${asset.path} (${asset.kind}, ${humanSize(asset.bytes)})`;
+  const tags = tagsOf(asset);
+  if (tags.length > 0) line += ` [${tags.join(', ')}]`;
+  if (asset.description && asset.description.trim().length > 0) line += ` — ${asset.description.trim()}`;
+  return line;
+}
+
+function assetList(assets: AssetEntry[], tagDescriptions: Record<string, string> = {}): string {
   if (assets.length === 0) return 'Assets: none.';
   const groups = new Map<string, string[]>();
   let listed = 0;
   for (const asset of assets) {
     if (listed >= ASSET_LIST_CAP) break;
     const group = groups.get(asset.kind) ?? [];
-    group.push(asset.path);
+    group.push(assetLine(asset));
     groups.set(asset.kind, group);
     listed += 1;
   }
   const lines: string[] = ['Assets (paths relative to the pack root):'];
   for (const kind of ['image', 'video', 'audio', 'text', 'other']) {
-    const paths = groups.get(kind);
-    if (!paths || paths.length === 0) continue;
-    lines.push(`- ${kind}: ${paths.join(', ')}`);
+    const entries = groups.get(kind);
+    if (!entries || entries.length === 0) continue;
+    lines.push(`- ${kind}:`);
+    for (const entry of entries) lines.push(`  - ${entry}`);
   }
   const rest = assets.length - listed;
-  if (rest > 0) lines.push(`… and ${rest} more (use sdk.pack.listAssets to browse).`);
+  if (rest > 0) lines.push(`… and ${rest} more (use sdk.pack.findAssets / listAssets to browse).`);
+  const tags = summariseTags(assets, tagDescriptions);
+  if (tags.length > 0) {
+    const shown = tags.slice(0, TAG_LIST_CAP).map((t) => `${t.tag} (${t.count})${t.description ? `: ${t.description}` : ''}`);
+    lines.push(`Tags: ${shown.join('; ')}${tags.length > TAG_LIST_CAP ? `; … and ${tags.length - TAG_LIST_CAP} more` : ''}`);
+  }
   return lines.join('\n');
 }
 
@@ -123,7 +148,7 @@ function packContext(input: PromptInput): string {
   const lines = [`Pack: ${pack.manifest.name} (${pack.manifest.id} v${pack.manifest.version})`];
   if (pack.manifest.description) lines.push(`Description: ${pack.manifest.description}`);
   lines.push(`Active character: ${character.definition.name} (${character.definition.id})`);
-  lines.push(assetList(pack.assets));
+  lines.push(assetList(pack.assets, pack.tagDescriptions ?? {}));
   lines.push(`Granted sdk modules: ${input.allowedModules.length > 0 ? input.allowedModules.join(', ') : 'none'}`);
   const denied = input.deniedModules.map((id) => (input.deniedReasons?.[id] ? `${id} (${input.deniedReasons[id]})` : id));
   lines.push(`Not available: ${denied.length > 0 ? denied.join(', ') : 'none'}`);

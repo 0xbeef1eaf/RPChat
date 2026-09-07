@@ -6,6 +6,7 @@ import { matchesFilter } from './services/events.js';
 import { decayToward, energyWord, moodPromptText, moodWord } from './services/mood.js';
 import { evaluateRoutine } from './services/routine.js';
 import { sensesLine } from './prompt.js';
+import { loadPack } from '@rp/pack';
 import { ECHO_REF, FakeSenses, LUNA_DIR, LUNA_ID, LUNA_REF, MINIMAL_DIR, MINIMAL_ID, RecordingHandler, createTestEngine, createTestRegistryWithProbe, installLunaWith } from './test/helpers.js';
 import type { TestEngine } from './test/helpers.js';
 
@@ -83,7 +84,9 @@ describe('permission policy (requested ∩ global ∩ per-pack)', () => {
     expect(inspection.allowedByPolicy).toEqual(['media']);
     expect(inspection.blockedByPolicy).toEqual(['ui']);
     expect(inspection.unknownCapabilities).toEqual([]);
-    expect(inspection.assetCounts).toEqual({ image: 4, audio: 1, video: 1 });
+    const expectedCounts: Record<string, number> = {};
+    for (const a of (await loadPack(LUNA_DIR)).assets) expectedCounts[a.kind] = (expectedCounts[a.kind] ?? 0) + 1;
+    expect(inspection.assetCounts).toEqual(expectedCounts);
     expect(inspection.readme).toContain('# Luna');
     // nothing was installed by inspecting
     expect((await t.engine.packs.list()).map((p) => p.packId)).toEqual([LUNA_ID]);

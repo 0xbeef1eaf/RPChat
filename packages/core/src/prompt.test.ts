@@ -64,8 +64,9 @@ describe('PromptBuilder', () => {
     expect(system).toContain('You are Luna.');
     expect(system).toContain('run_action');
     expect(system).toContain('## Example dialogue');
-    expect(system).toContain('- image: characters/luna/avatar.png, media/images/luna-smile.png, media/images/luna-wave.png');
-    expect(system).toContain('- audio: media/audio/chime.wav');
+    expect(system).toMatch(/- image:\n  - characters\/luna\/avatar\.png \(image, \d+ (B|KB)\)/);
+    expect(system).toMatch(/  - media\/images\/luna-smile\.png \(image, \d+ (B|KB)\)/);
+    expect(system).toMatch(/- audio:\n  - media\/audio\/chime\.wav \(audio, \d+ (B|KB)\)/);
     expect(system).toContain('Granted sdk modules: chat, log, state, pack, timers, media');
     expect(system).toContain('interface MediaApi');
     expect(system).not.toContain('interface SystemApi');
