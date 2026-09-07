@@ -1,0 +1,41 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor:
+        update-types: [minor, patch]
+  - package-ecosystem: cargo
+    directory: /native/overlay-wlr
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ['*']
+    ignore:
+      # The gtk-rs 0.18 family (gtk/gdk/glib/gio/cairo/pango/webkit2gtk 2.0) must move together;
+      # bumping glib alone breaks the build. Update them deliberately as a set.
+      - dependency-name: glib
+        update-types: [version-update:semver-minor, version-update:semver-major]
+      - dependency-name: gio
+        update-types: [version-update:semver-minor, version-update:semver-major]
+      - dependency-name: gdk
+        update-types: [version-update:semver-minor, version-update:semver-major]
+      - dependency-name: gtk
+        update-types: [version-update:semver-minor, version-update:semver-major]
+      - dependency-name: cairo-rs
+        update-types: [version-update:semver-minor, version-update:semver-major]
+      - dependency-name: pango
+        update-types: [version-update:semver-minor, version-update:semver-major]
+      - dependency-name: webkit2gtk
+        update-types: [version-update:semver-minor, version-update:semver-major]
+      - dependency-name: javascriptcore-rs
+        update-types: [version-update:semver-minor, version-update:semver-major]
+      - dependency-name: gtk-layer-shell
+        update-types: [version-update:semver-minor, version-update:semver-major]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
