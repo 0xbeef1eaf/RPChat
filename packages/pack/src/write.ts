@@ -239,6 +239,32 @@ const FOLDER_BY_KIND: Record<AssetKind, string> = {
 export interface AddAssetOptions {
   /** Override the kind inferred from the extension. Required for files of unknown type (`other`). */
   kind?: AssetKind;
+  /**
+   * Sub-folder below the kind folder, e.g. `wallpapers` or `outfits/summer`. Each segment must be
+   * lower-case letters, digits, `-` or `_`; the folder names become tags via the folder-tag rules.
+   */
+  subdir?: string;
+}
+
+const SUBDIR_SEGMENT = /^[a-z0-9][a-z0-9_-]*$/;
+
+/** Validates `subdir` (see {@link AddAssetOptions.subdir}) and returns it in canonical `a/b` form. */
+function normalizeSubdir(subdir: string): string {
+  if (/[^a-z0-9_/-]/.test(subdir)) {
+    throw new RpError('INVALID_ARGUMENT', `Invalid subdir "${subdir}": only lower-case letters, digits, "-", "_" and "/" are allowed`, { subdir });
+  }
+  const n = normalizeRelativePath(subdir);
+  if (!n.ok) throw new RpError('INVALID_ARGUMENT', `Invalid subdir "${subdir}": ${n.reason}`, { subdir });
+  for (const seg of n.path.split('/')) {
+    if (!SUBDIR_SEGMENT.test(seg)) {
+      throw new RpError(
+        'INVALID_ARGUMENT',
+        `Invalid subdir "${subdir}": segment "${seg}" must be lower-case letters, digits, "-" or "_"`,
+        { subdir },
+      );
+    }
+  }
+  return n.path;
 }
 
 /** Splits off the extension, then keeps letters, digits, `.`, `_` and `-` in the stem; runs of anything else become one `-`. */
@@ -252,7 +278,7 @@ function safeFileName(base: string): { stem: string; ext: string } {
 }
 
 /**
- * Copies `sourceFile` into `<mediaRoot>/<images|video|audio|text|other>/`,
+ * Copies `sourceFile` into `<mediaRoot>/<images|video|audio|text|other>/[<subdir>/]`,
  * choosing a free name (`name.png`, `name-2.png`, …). Returns the resulting
  * asset entry with tags computed as the loader would (folder tags + `media.json`).
  */
@@ -283,7 +309,9 @@ export async function addAssetFile(dir: string, sourceFile: string, options: Add
     );
   }
 
-  const folderRel = joinRelative(mediaRoot, FOLDER_BY_KIND[kind]);
+  const subdir = options.subdir !== undefined ? normalizeSubdir(options.subdir) : undefined;
+  const kindFolderRel = joinRelative(mediaRoot, FOLDER_BY_KIND[kind]);
+  const folderRel = subdir === undefined ? kindFolderRel : joinRelative(kindFolderRel, subdir);
   const folderAbs = resolveAssetPath(rootAbs, folderRel);
   await fs.mkdir(folderAbs, { recursive: true });
 

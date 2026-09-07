@@ -210,6 +210,31 @@ describe('addAssetFile / removeAsset', () => {
     await expectRpError(addAssetFile(path.join(dir, 'characters'), bin, { kind: 'other' }), 'NOT_FOUND');
   });
 
+  it('places files in a subdir whose folder names become tags', async () => {
+    const dir = await scaffolded();
+    const src = path.join(await temp(), 'sunset.jpg');
+    await fs.writeFile(src, 'jpg');
+    const a = await addAssetFile(dir, src, { subdir: 'wallpapers' });
+    expect(a).toMatchObject({ path: 'media/images/wallpapers/sunset.jpg', kind: 'image', tags: ['wallpapers'] });
+    const b = await addAssetFile(dir, src, { subdir: 'outfits/summer/' });
+    expect(b).toMatchObject({ path: 'media/images/outfits/summer/sunset.jpg', tags: ['outfits', 'summer'] });
+    const c = await addAssetFile(dir, src, { subdir: 'wallpapers' });
+    expect(c.path).toBe('media/images/wallpapers/sunset-2.jpg');
+    const pack = await loadPack(dir);
+    expect(pack.assets.find((x) => x.path === a.path)).toMatchObject({ tags: ['wallpapers'] });
+    expect(pack.assets.find((x) => x.path === b.path)).toMatchObject({ tags: ['outfits', 'summer'] });
+  });
+
+  it('rejects invalid subdirs without copying', async () => {
+    const dir = await scaffolded();
+    const src = path.join(await temp(), 'x.png');
+    await fs.writeFile(src, 'x');
+    for (const subdir of ['../escape', '/abs', 'Wallpapers', 'wall papers', 'a/../b', '', '.', 'wall\\papers', 'ünïcode', '-lead']) {
+      await expectRpError(addAssetFile(dir, src, { subdir }), 'INVALID_ARGUMENT');
+    }
+    expect(await listFiles(path.join(dir, 'media'))).toEqual([]);
+  });
+
   it('removes the file and exact-path media.json entries only', async () => {
     const dir = await scaffolded();
     const src = path.join(await temp(), 'a.png');
