@@ -33,9 +33,11 @@ interface WallpaperApi {
 
 - Use it sparingly and purposefully (a scene change, a reward, a mood), and offer \`restore()\` when the moment passes.
 - Prefer large images; check \`sdk.display.monitors()\` for resolutions if the pack has several sizes.
+- Pack authors mark suitable images with the \`wallpaper\` tag (folder \`media/images/wallpapers/\` or media.json); pick with \`sdk.pack.findAssets({ tags: ["wallpaper"] })\` rather than using a portrait or a small picture.
 
 \`\`\`ts
-await sdk.wallpaper.set("media/images/forest-dawn.png");
+const [pick] = await sdk.pack.findAssets({ tags: ["wallpaper", "night"], kind: "image" });
+if (pick) await sdk.wallpaper.set(pick);
 await sdk.timers.schedule(30 * 60 * 1000, { restoreWallpaper: true }, { label: "restore wallpaper" });
 \`\`\``,
   methods: {

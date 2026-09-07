@@ -150,6 +150,29 @@ file name:
 In the sandbox, `sdk.pack.listAssets()` returns each asset with its tags and
 description, and `sdk.pack.tags()` summarises the vocabulary with counts.
 
+### Wallpapers
+
+There is no special wallpaper file type. Put full-screen images under
+`media/images/wallpapers/` (the folder name becomes the `wallpaper` tag
+automatically) or tag them in `media.json`, add a description that says what
+scene or mood they suit, and request the `wallpaper` capability in `pack.json`.
+Characters then choose with `sdk.pack.findAssets({ tags: ["wallpaper"] })` and
+apply with `sdk.wallpaper.set(asset)`. The user's wallpaper command (Settings →
+Commands; auto-detected for swww/hyprpaper, GNOME, macOS and Windows) does the
+actual switch, and `sdk.wallpaper.restore()` puts back the file the user chose
+as their default in Settings.
+
+```jsonc
+// media.json
+{
+  "tags": { "wallpaper": "Full-screen scene meant to be set as the desktop background" },
+  "entries": [
+    { "match": "media/images/wallpapers/**", "tags": ["wallpaper"] },
+    { "match": "media/images/wallpapers/night-harbour.png", "tags": ["night", "calm"], "description": "Harbour lights at night; use for late, quiet moments" }
+  ]
+}
+```
+
 ## 6. Capabilities and permissions
 
 The SDK is made of modules, each with a permission level:
