@@ -2,8 +2,9 @@ name: Release
 
 # Every push to main becomes a tagged release: v<major>.<minor>.<N> where major.minor come from the
 # root package.json and N is the number of commits on main, so versions are monotonic and need no
-# version-bump commits. Installers for Linux (AppImage, deb, with the native layer-shell helper),
-# Windows (NSIS) and macOS (dmg, unsigned) are attached with generated release notes.
+# version-bump commits. Linux installers (AppImage and deb, with the native layer-shell helper)
+# are attached with generated release notes. Windows and macOS builds are intentionally not
+# produced for now; re-add matrix entries here when they are wanted.
 
 on:
   push:
@@ -45,20 +46,10 @@ jobs:
           fi
 
   build:
-    name: Build (${{ matrix.name }})
+    name: Build (linux)
     needs: version
     if: needs.version.outputs.exists == 'false'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: linux
-            os: ubuntu-24.04
-          - name: windows
-            os: windows-latest
-          - name: macos
-            os: macos-latest
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -67,41 +58,34 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - if: matrix.name == 'linux'
-        uses: dtolnay/rust-toolchain@stable
-      - if: matrix.name == 'linux'
-        uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: native/overlay-wlr
-      - if: matrix.name == 'linux'
-        name: Install system packages (native helper build)
+      - name: Install system packages (native helper build)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libgtk-3-dev libgtk-layer-shell-dev libwebkit2gtk-4.1-dev pkg-config
       - run: pnpm install --frozen-lockfile
       - name: Stamp version
-        shell: bash
         run: |
           cd apps/desktop
           npm pkg set version="${{ needs.version.outputs.version }}"
       - name: Build
         run: pnpm build
         env:
-          RP_REQUIRE_NATIVE: ${{ matrix.name == 'linux' && '1' || '0' }}
+          RP_REQUIRE_NATIVE: '1'
       - run: pnpm test
       - name: Package
         run: pnpm --filter @rp/desktop exec electron-builder --publish never
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Collect artifacts
-        shell: bash
         run: |
           mkdir -p dist-out
-          find apps/desktop/release -maxdepth 1 -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' \) -exec cp {} dist-out/ \;
+          find apps/desktop/release -maxdepth 1 -type f \( -name '*.AppImage' -o -name '*.deb' \) -exec cp {} dist-out/ \;
           ls -la dist-out
       - uses: actions/upload-artifact@v7
         with:
-          name: installers-${{ matrix.name }}
+          name: installers-linux
           path: dist-out/*
           if-no-files-found: error
 
@@ -134,5 +118,4 @@ jobs:
             Automated release of `${{ github.sha }}` from `main`.
 
             - **Linux**: AppImage or `.deb` (the wlr-layer-shell overlay helper for Hyprland/Sway is bundled; it needs `gtk3`, `gtk-layer-shell` and `webkit2gtk-4.1` runtime libraries).
-            - **Windows**: NSIS installer (unsigned).
-            - **macOS**: DMG (unsigned; right-click → Open on first launch).
+            - Windows and macOS builds are not produced yet.

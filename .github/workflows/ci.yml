@@ -58,27 +58,3 @@ jobs:
             ${{ runner.temp }}/wlr/*.png
             ${{ runner.temp }}/packaged/*.png
           if-no-files-found: ignore
-
-  package-check:
-    name: Package (${{ matrix.os }})
-    needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm test
-      - name: Package (unsigned, not published)
-        run: pnpm --filter @rp/desktop exec electron-builder --publish never
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'

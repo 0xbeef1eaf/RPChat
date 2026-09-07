@@ -138,15 +138,16 @@ start a session.
 Every push to `main` is tagged and released automatically
 (`.github/workflows/release.yml`): the version is `v<major>.<minor>.<N>` with
 `major.minor` from the root `package.json` and `N` the number of commits on
-`main`, so no version-bump commits are needed. The workflow builds installers
-for Linux (AppImage and `.deb`, with the layer-shell helper bundled), Windows
-(NSIS) and macOS (DMG, unsigned), attaches them with SHA-256 checksums and
-generated release notes, and skips silently if the tag already exists.
+`main`, so no version-bump commits are needed. The workflow builds Linux
+installers (AppImage and `.deb`, with the layer-shell helper bundled), attaches
+them with SHA-256 checksums and generated release notes, and skips silently if
+the tag already exists. Windows and macOS builds are switched off for now; the
+electron-builder targets for them remain configured.
 
 Every other push and pull request runs `.github/workflows/ci.yml`: build,
 typecheck, all unit tests, the helper's cargo tests, the Xvfb headful smoke and
-the nested-Sway layer-shell smoke (screenshots are uploaded as artifacts), plus
-an unsigned packaging check on Windows and macOS.
+the nested-Sway layer-shell smoke and a smoke run of the packaged app
+(screenshots are uploaded as artifacts).
 
 ## Writing a pack
 
