@@ -350,6 +350,9 @@ class RunSession implements TerminationState {
       if (err instanceof IsolateCrash) {
         return { ok: false, error: mapHostCrash(err.cause) };
       }
+      // An abort/timeout interrupt can land while the bootstrap or the entry call is still
+      // evaluating; that surfaces as an evaluation error, but the termination is the real cause.
+      if (this.termination) return this.timeoutOutcome();
       if (this.crashed === undefined) this.crashed = err;
       return { ok: false, error: mapHostCrash(err) };
     } finally {

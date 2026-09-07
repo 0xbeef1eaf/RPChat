@@ -320,19 +320,38 @@ describe('QuickJsRunner', () => {
   it('rejects with SANDBOX_TIMEOUT when signal.abort() fires mid-await, without waiting for the host call', async () => {
     const controller = new AbortController();
     let resolveHost: ((r: CapabilityResult) => void) | undefined;
-    const invoker = makeInvoker(() => new Promise<CapabilityResult>((resolve) => (resolveHost = resolve)));
-    const started = Date.now();
+    let hostCallStarted!: () => void;
+    const started = new Promise<void>((resolve) => (hostCallStarted = resolve));
+    const invoker = makeInvoker(() => {
+      hostCallStarted();
+      return new Promise<CapabilityResult>((resolve) => (resolveHost = resolve));
+    });
+    const startedAt = Date.now();
     const pending = runner.run(req(`console.log("before"); const v = await sdk.state.get("k"); console.log("after"); return v;`, { invoker, signal: controller.signal }));
-    await sleep(30);
+    // Abort only once the isolate is parked in the host call, so the test exercises the
+    // mid-await path deterministically (slow CI runners otherwise abort during bootstrap).
+    await started;
+    await sleep(10);
     controller.abort();
     const result = await pending;
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(Date.now() - startedAt).toBeLessThan(1000);
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('SANDBOX_TIMEOUT');
     expect(result.error?.message).toMatch(/abort/);
     expect(result.logs.map((l) => l.message)).toEqual(['before']);
     expect(result.calls).toHaveLength(0);
     resolveHost?.({ ok: true, value: 'late' });
+    const after = await runner.run(req(`return "still alive";`));
+    expect(after.returnValue).toBe('still alive');
+  });
+
+  it('reports SANDBOX_TIMEOUT when the abort lands during bootstrap (before any host call)', async () => {
+    const controller = new AbortController();
+    const pending = runner.run(req(`console.log("x"); return 1;`, { signal: controller.signal }));
+    controller.abort(); // fires while the run is still starting up
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('SANDBOX_TIMEOUT');
     const after = await runner.run(req(`return "still alive";`));
     expect(after.returnValue).toBe('still alive');
   });
