@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import type { AppSettings, CapabilityInfo } from '@rp/shared';
-import { api, errorMessage } from '../../api';
+import { useAppState } from '../../store/store';
 import { Toggle } from '../common/Toggle';
 
 interface PermissionsSectionProps {
@@ -15,20 +15,13 @@ const LEVELS: Array<{ level: CapabilityInfo['permission']; title: string; hint: 
 
 /** Global policy: which non-trusted modules any pack may ever use. */
 export function PermissionsSection({ settings, onPatch }: PermissionsSectionProps) {
-  const [caps, setCaps] = useState<CapabilityInfo[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api()
-      .capabilities.list()
-      .then(setCaps)
-      .catch((err) => setError(errorMessage(err)));
-  }, []);
+  const caps = useAppState((s) => s.capabilities);
+  const error: string | null = null;
 
   const allow = settings.permissions?.moduleAllow ?? {};
   const grouped = useMemo(() => {
     const m = new Map<CapabilityInfo['permission'], CapabilityInfo[]>();
-    for (const c of caps ?? []) {
+    for (const c of caps) {
       if (c.permission === 'trusted') continue;
       m.set(c.permission, [...(m.get(c.permission) ?? []), c]);
     }
@@ -48,11 +41,7 @@ export function PermissionsSection({ settings, onPatch }: PermissionsSectionProp
         {deniedCount > 0 ? ` Currently ${deniedCount} module${deniedCount === 1 ? '' : 's'} denied.` : ''}
       </div>
       {error ? <div className="callout callout-danger small">{error}</div> : null}
-      {caps === null && !error ? (
-        <div className="row muted small">
-          <span className="spinner" /> Loading…
-        </div>
-      ) : null}
+      {caps.length === 0 ? <p className="muted small">No capability modules reported.</p> : null}
       {LEVELS.map(({ level, title, hint }) => {
         const list = grouped.get(level) ?? [];
         if (list.length === 0) return null;

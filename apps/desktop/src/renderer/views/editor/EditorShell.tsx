@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import type { CapabilityInfo, EditorProject } from '@rp/shared';
+import type { EditorProject } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { Modal } from '../../components/common/Modal';
 import { suggestCharacterId as suggestId } from '../../lib/editor';
@@ -24,7 +24,7 @@ export function EditorShell({ projectKey, active }: EditorShellProps) {
   const section = useAppState((s) => s.editor.section);
   const characterDir = useAppState((s) => s.editor.characterDir);
   const [project, setProjectState] = useState<EditorProject | null>(null);
-  const [caps, setCaps] = useState<CapabilityInfo[]>([]);
+  const caps = useAppState((s) => s.capabilities);
   const [error, setError] = useState<string | null>(null);
   const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -37,11 +37,9 @@ export function EditorShell({ projectKey, active }: EditorShellProps) {
   }, []);
 
   useEffect(() => {
-    Promise.all([api().editor.read(projectKey), api().capabilities.list()])
-      .then(([p, c]) => {
-        setProjectState(p);
-        setCaps(c);
-      })
+    api()
+      .editor.read(projectKey)
+      .then(setProjectState)
       .catch((err) => setError(errorMessage(err)));
   }, [projectKey]);
 

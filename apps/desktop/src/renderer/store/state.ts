@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  CapabilityInfo,
   ChatMessage,
   CharacterSummary,
   InstalledPackView,
@@ -54,6 +55,8 @@ export interface AppState {
   booting: boolean;
   bootError: string | null;
   characters: CharacterSummary[];
+  /** Live SDK registry (built-in + plugin modules); refreshed after plugin changes. */
+  capabilities: CapabilityInfo[];
   packs: InstalledPackView[];
   sessions: Session[];
   activeSessionId: SessionId | null;
@@ -92,6 +95,7 @@ export function initialState(): AppState {
     booting: true,
     bootError: null,
     characters: [],
+    capabilities: [],
     packs: [],
     sessions: [],
     activeSessionId: null,

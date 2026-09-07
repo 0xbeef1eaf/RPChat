@@ -65,6 +65,11 @@ export async function refreshSettings(): Promise<void> {
   applyTheme(settings.theme);
 }
 
+export async function refreshCapabilities(): Promise<void> {
+  const capabilities = await api().capabilities.list();
+  update((s) => ({ ...s, capabilities }));
+}
+
 export async function refreshPacks(): Promise<void> {
   const packs = await api().packs.list();
   update((s) => ({ ...s, packs }));
@@ -109,7 +114,7 @@ export async function bootstrap(): Promise<void> {
   rp.ui.onPrompt((request) => update((s) => enqueueUiPrompt(s, request)));
 
   try {
-    const [version] = await Promise.all([rp.app.version(), refreshSettings(), refreshPacks(), refreshCharacters(), refreshSessions()]);
+    const [version] = await Promise.all([rp.app.version(), refreshSettings(), refreshPacks(), refreshCharacters(), refreshSessions(), refreshCapabilities()]);
     update((s) => ({ ...s, appVersion: version, booting: false, bootError: null }));
   } catch (err) {
     update((s) => ({ ...s, booting: false, bootError: errorMessage(err) }));

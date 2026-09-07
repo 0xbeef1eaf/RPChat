@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { CapabilityInfo } from '@rp/shared';
 import { api, errorMessage } from '../api';
+import { useAppState } from '../store/store';
 
 const PERMISSION_LABEL: Record<CapabilityInfo['permission'], { text: string; cls: string; hint: string }> = {
   trusted: { text: 'always on', cls: 'badge badge-success', hint: 'Effects stay inside the app; never needs a grant.' },
@@ -9,18 +10,17 @@ const PERMISSION_LABEL: Record<CapabilityInfo['permission'], { text: string; cls
 };
 
 export function SdkReferenceView() {
-  const [caps, setCaps] = useState<CapabilityInfo[] | null>(null);
+  const caps: CapabilityInfo[] | null = useAppState((s) => s.capabilities);
   const [typings, setTypings] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Typings follow the registry: re-fetch whenever the module list changes (e.g. plugins).
   useEffect(() => {
-    Promise.all([api().capabilities.list(), api().capabilities.typings()])
-      .then(([c, t]) => {
-        setCaps(c);
-        setTypings(t);
-      })
+    api()
+      .capabilities.typings()
+      .then(setTypings)
       .catch((err) => setError(errorMessage(err)));
-  }, []);
+  }, [caps]);
 
   return (
     <div className="view">
@@ -32,11 +32,7 @@ export function SdkReferenceView() {
         modules below, subject to the permissions you grant per pack. This is exactly what the model is shown.
       </p>
       {error ? <div className="callout callout-danger">{error}</div> : null}
-      {caps === null && !error ? (
-        <div className="row muted">
-          <span className="spinner" /> Loading…
-        </div>
-      ) : null}
+
       {caps ? (
         <section className="section">
           <h2>Capability modules</h2>

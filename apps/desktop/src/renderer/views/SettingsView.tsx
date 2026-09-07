@@ -5,6 +5,7 @@ import { CommandsSection } from '../components/settings/CommandsSection';
 import { DisplayInfo } from '../components/settings/DisplayInfo';
 import { IntegrationsSection } from '../components/settings/IntegrationsSection';
 import { PermissionsSection } from '../components/settings/PermissionsSection';
+import { PluginsSection } from '../components/settings/PluginsSection';
 import { SensesSection } from '../components/settings/SensesSection';
 import { ProviderEditor } from '../components/settings/ProviderEditor';
 import { ConfirmDialog } from '../components/common/Modal';
@@ -74,7 +75,7 @@ function NumberField({
   );
 }
 
-type SettingsTab = 'general' | 'providers' | 'permissions' | 'senses' | 'integrations' | 'commands' | 'display';
+type SettingsTab = 'general' | 'providers' | 'permissions' | 'senses' | 'integrations' | 'commands' | 'plugins' | 'display';
 
 const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'providers', label: 'Providers' },
@@ -83,6 +84,7 @@ const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'senses', label: 'Senses' },
   { id: 'integrations', label: 'Integrations' },
   { id: 'commands', label: 'Commands' },
+  { id: 'plugins', label: 'Plugins' },
   { id: 'display', label: 'Display' },
 ];
 
@@ -305,6 +307,13 @@ export function SettingsView() {
           </div>
         </div>
       </section>
+
+      {tab === 'plugins' ? (
+        <section className="section">
+          <h2>Plugins</h2>
+          <PluginsSection />
+        </section>
+      ) : null}
 
       {tab === 'display' ? (
         <section className="section">

@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { CapabilityInfo, PackInspection } from '@rp/shared';
-import { api } from '../api';
+import { useMemo, useState } from 'react';
+import type { PackInspection } from '@rp/shared';
 import { EmptyState } from '../components/common/EmptyState';
 import { ConfirmDialog } from '../components/common/Modal';
 import { InspectModal } from '../components/packs/InspectModal';
@@ -10,18 +9,11 @@ import { useAppState } from '../store/store';
 
 export function PacksView() {
   const packs = useAppState((s) => s.packs);
-  const [caps, setCaps] = useState<CapabilityInfo[]>([]);
+  const caps = useAppState((s) => s.capabilities);
   const [pendingUninstall, setPendingUninstall] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [pending, setPending] = useState<{ sourcePath: string; inspection: PackInspection } | null>(null);
   const [filter, setFilter] = useState<string | null>(null);
-
-  useEffect(() => {
-    api()
-      .capabilities.list()
-      .then(setCaps)
-      .catch((err) => console.error('capabilities.list failed', err));
-  }, []);
 
   const capMap = useMemo(() => new Map(caps.map((c) => [c.id, c])), [caps]);
   const target = packs.find((p) => p.packId === pendingUninstall);
