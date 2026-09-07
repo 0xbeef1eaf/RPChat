@@ -2,7 +2,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { app, screen, shell } from 'electron';
+import { app, dialog, screen, shell } from 'electron';
 import { Engine, FileStorage } from '@rp/core';
 import type { Logger, ProviderFactory } from '@rp/core';
 import { createStandardRegistry } from '@rp/sdk';
@@ -24,6 +24,8 @@ import { TTS_PACK_ID, VoiceHandler } from './capabilities/voice.js';
 import { WebHandler } from './capabilities/web.js';
 import { WidgetsHandler } from './capabilities/widgets.js';
 import { electronCapturer } from './capture.js';
+import { ProjectRegistry, keyFromAssetHost } from './editor/registry.js';
+import { EditorService } from './editor/service.js';
 import { createHyprTransport } from './display/hyprland.js';
 import type { HyprTransport } from './display/hyprland.js';
 import { detectWindowSystem, isHyprland } from './display/layers.js';
@@ -49,6 +51,7 @@ export interface AppServices {
   engine: Engine;
   media: MediaManager;
   senses: Senses;
+  editor: EditorService;
   commands: CommandRunner;
   permissionPrompts: PendingPrompts<PermissionDecision>;
   uiPrompts: PendingPrompts<UiPromptAnswer>;
@@ -90,7 +93,12 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   /** Extra roots served by rp-asset:// besides installed packs (generated speech files). */
   const ttsDir = path.join(opts.userData, 'tts');
   const extraRoots: Record<string, string> = { [TTS_PACK_ID]: ttsDir };
-  const packRootFor = (packId: string): string | undefined => extraRoots[packId] ?? engine.packs.tryGetLoaded(packId)?.root;
+  const registry = new ProjectRegistry(path.join(dataDir, 'editor-projects.json'));
+  const packRootFor = (packId: string): string | undefined => {
+    const editorKey = keyFromAssetHost(packId);
+    if (editorKey) return registry.get(editorKey)?.dir;
+    return extraRoots[packId] ?? engine.packs.tryGetLoaded(packId)?.root;
+  };
 
   // ---- display backend ----------------------------------------------------
   let loopback: LoopbackServer | undefined;
@@ -183,6 +191,32 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const web = new WebHandler({ settings: async () => (await settingsOf()).web });
   const calendar = new CalendarHandler({ sources: async () => (await settingsOf()).senses.calendarSources, logger });
 
+  const editor = new EditorService({
+    userData: opts.userData,
+    registry,
+    packs: {
+      install: (dir) => engine.packs.install(dir),
+      tryGetLoaded: (packId) => engine.packs.tryGetLoaded(packId),
+      installedIds: async () => (await engine.storage.packs.list()).map((p) => p.packId),
+    },
+    dialogs: {
+      openDirectory: async (title) => {
+        const r = await dialog.showOpenDialog({ title, properties: ['openDirectory', 'createDirectory'] });
+        return r.canceled ? undefined : r.filePaths[0];
+      },
+      openFiles: async (title, filters, multi) => {
+        const r = await dialog.showOpenDialog({ title, filters, properties: multi ? ['openFile', 'multiSelections'] : ['openFile'] });
+        return r.canceled ? [] : r.filePaths;
+      },
+      saveFile: async (title, defaultPath, filters) => {
+        const r = await dialog.showSaveDialog({ title, defaultPath, filters });
+        return r.canceled || !r.filePath ? undefined : r.filePath;
+      },
+    },
+    reveal: (absolute) => shell.showItemInFolder(absolute),
+    logger,
+  });
+
   const mock = isMockLlm(env);
   const providerFactory: ProviderFactory = mock ? mockProviderFactory() : createProvider;
   engine = new Engine({
@@ -243,6 +277,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     engine,
     media,
     senses,
+    editor,
     commands,
     permissionPrompts,
     uiPrompts,

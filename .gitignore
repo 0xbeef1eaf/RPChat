@@ -14,3 +14,4 @@ coverage/
 *.rppack
 !examples/**/*.rppack
 native/overlay-wlr/target/
+apps/desktop/resources/bin/

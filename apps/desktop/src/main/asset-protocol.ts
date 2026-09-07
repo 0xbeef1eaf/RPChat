@@ -9,7 +9,8 @@ import { Readable } from 'node:stream';
 import { mimeFor, normalizeRelativePath, resolveAssetPath } from '@rp/pack';
 import { ASSET_PROTOCOL, RpError } from '@rp/shared';
 
-const PACK_ID = /^[a-z0-9]+(\.[a-z0-9-]+)+$/;
+/** Installed pack ids (reverse-DNS) plus editor project roots (`editor-<12 hex>`). */
+const PACK_ID = /^([a-z0-9]+(\.[a-z0-9-]+)+|editor-[a-f0-9]{12})$/;
 
 export interface ParsedAssetUrl {
   packId: string;

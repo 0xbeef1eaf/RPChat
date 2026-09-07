@@ -6,11 +6,12 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "node scripts/build-native.mjs && electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "package": "electron-vite build && electron-builder"
+    "package": "node scripts/build-native.mjs && electron-vite build && electron-builder",
+    "build:native": "node scripts/build-native.mjs"
   },
   "dependencies": {
     "@rp/shared": "workspace:*",
