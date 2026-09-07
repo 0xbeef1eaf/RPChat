@@ -28,18 +28,21 @@ function compile(files: Record<string, string>, opts: { nodeResolution?: boolean
       ? { module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext }
       : { module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler }),
   };
-  const virtual = new Map(Object.entries(files).map(([name, text]) => [path.join(VDIR, name), text]));
+  // TypeScript always asks for files with forward slashes; `path.join` produces backslashes on
+  // Windows, so normalise both the virtual keys and every lookup (and ignore drive-letter case).
+  const norm = (f: string): string => f.replace(/\\/g, '/').replace(/^([a-zA-Z]):/, (_, d: string) => `${d.toLowerCase()}:`);
+  const virtual = new Map(Object.entries(files).map(([name, text]) => [norm(path.join(VDIR, name)), text]));
   const host = ts.createCompilerHost(options, true);
   const realGetSourceFile = host.getSourceFile.bind(host);
   const realFileExists = host.fileExists.bind(host);
   const realReadFile = host.readFile.bind(host);
   host.getSourceFile = (fileName, languageVersionOrOptions, onError, shouldCreate) => {
-    const text = virtual.get(fileName);
+    const text = virtual.get(norm(fileName));
     if (text !== undefined) return ts.createSourceFile(fileName, text, languageVersionOrOptions, true);
     return realGetSourceFile(fileName, languageVersionOrOptions, onError, shouldCreate);
   };
-  host.fileExists = (f) => virtual.has(f) || realFileExists(f);
-  host.readFile = (f) => virtual.get(f) ?? realReadFile(f);
+  host.fileExists = (f) => virtual.has(norm(f)) || realFileExists(f);
+  host.readFile = (f) => virtual.get(norm(f)) ?? realReadFile(f);
   host.writeFile = () => undefined;
 
   const program = ts.createProgram([...virtual.keys()], options, host);
