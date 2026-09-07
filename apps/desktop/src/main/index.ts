@@ -116,7 +116,16 @@ async function main(): Promise<void> {
   win.once('ready-to-show', () => logger.info(`[main] window opened (userData: ${app.getPath('userData')})`));
   logger.info(`[main] rp-code ${version} ready; ${engine.packs.characters().length} character(s) available`);
   if (isSmokeRun(env)) {
-    setTimeout(() => void runSmokeTurn(active.engine, logger, () => active.media.list()), 1500);
+    setTimeout(
+      () =>
+        void runSmokeTurn(active.engine, logger, () => active.media.list(), async () => {
+          // Give the editor tour a project to open: the installed Luna pack copied into the workspace.
+          const packs = await active.engine.packs.list();
+          const luna = packs.find((p) => p.packId === 'com.example.luna');
+          if (luna && !(await active.editor.listProjects()).some((p) => p.packId === luna.packId)) await active.editor.importInstalled(luna.packId);
+        }),
+      1500,
+    );
   }
 }
 

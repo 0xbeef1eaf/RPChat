@@ -117,7 +117,7 @@ export function isSmokeRun(env: NodeJS.ProcessEnv = process.env): boolean {
  * `RP_SMOKE=1`: drive one mock turn through the engine (session → message → run_action →
  * media overlay) and log what happened, so a headless run can prove the whole path.
  */
-export async function runSmokeTurn(engine: Engine, logger: Logger, mediaList: () => unknown[]): Promise<void> {
+export async function runSmokeTurn(engine: Engine, logger: Logger, mediaList: () => unknown[], prepareTour?: () => Promise<void>): Promise<void> {
   const character = engine.packs.characters()[0];
   if (!character) {
     logger.warn('[smoke] no character available');
@@ -137,6 +137,7 @@ export async function runSmokeTurn(engine: Engine, logger: Logger, mediaList: ()
     logger.info(`[smoke] open media items: ${JSON.stringify(mediaList())}`);
     const messages = await engine.sessions.messages(session.id);
     logger.info(`[smoke] transcript: ${messages.map((m) => `${m.role}: ${m.content.replace(/\s+/g, ' ').slice(0, 60)}`).join(' | ')}`);
+    if (prepareTour) await prepareTour().catch((err: unknown) => logger.warn('[smoke] tour preparation failed', err));
     await captureWindows(logger, mediaList);
   } catch (err) {
     logger.error('[smoke] turn failed', err);
@@ -164,6 +165,11 @@ export async function captureWindows(logger: Logger, mediaList: () => unknown[] 
     ['packs', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Packs'))?.click()"],
     ['settings', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Settings'))?.click()"],
     ['sdk-reference', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('SDK'))?.click()"],
+    ['editor-projects', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Pack editor'))?.click()"],
+    ['editor-pack', "document.querySelector('.project-card .btn-primary')?.click()"],
+    ['editor-character', "[...document.querySelectorAll('.editor-rail button')].find(b => /luna/i.test(b.textContent))?.click()"],
+    ['editor-media', "[...document.querySelectorAll('.editor-rail button')].find(b => b.textContent.trim().startsWith('Media'))?.click()"],
+    ['editor-publish', "[...document.querySelectorAll('.editor-rail button')].find(b => /Check/.test(b.textContent))?.click()"],
   ];
   if (main) {
     for (const [name, script] of tour) {

@@ -8,6 +8,7 @@ import { Avatar } from './common/Avatar';
 const NAV: Array<{ route: RouteName; label: string }> = [
   { route: 'chat', label: 'Chat' },
   { route: 'packs', label: 'Packs' },
+  { route: 'editor', label: 'Pack editor' },
   { route: 'settings', label: 'Settings' },
   { route: 'log', label: 'Action log' },
   { route: 'sdk', label: 'SDK reference' },

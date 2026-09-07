@@ -22,7 +22,7 @@ import {
   setSessions,
   upsertSession,
 } from './reducers';
-import type { MemoriesPanelTarget, RouteName, Toast } from './state';
+import type { AppState, MemoriesPanelTarget, RouteName, Toast } from './state';
 import { appStore, update } from './store';
 
 export function toast(kind: Toast['kind'], text: string, ttlMs = kind === 'error' ? 8000 : 3500): void {
@@ -42,7 +42,15 @@ export function reportError(context: string, err: unknown): void {
 }
 
 export function navigate(route: RouteName): void {
-  update((s) => (s.route === route ? s : { ...s, route }));
+  update((s) => {
+    if (s.route === route) return s;
+    const editor = route === 'editor' && !s.editor.visited ? { ...s.editor, visited: true } : s.editor;
+    return { ...s, route, editor };
+  });
+}
+
+export function setEditorLocation(patch: Partial<Omit<AppState['editor'], 'visited'>>): void {
+  update((s) => ({ ...s, editor: { ...s.editor, ...patch } }));
 }
 
 export function applyTheme(theme: 'system' | 'light' | 'dark'): void {

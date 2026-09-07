@@ -61,6 +61,10 @@ Characters, their behaviours and their media are distributed as shareable
   wake-ups on transitions, and long-term memory.
 - **Permissions are an intersection**: what a pack asks for ∩ what your global
   policy allows ∩ the per-pack toggle. Inspect any pack before installing it.
+- **Built-in pack editor**: create or import a pack, edit the manifest,
+  characters (persona, greeting, behaviours, avatar and expressions), media with
+  tags and descriptions, and the README, with live validation, then install it
+  into the app or export an `.rppack` to share.
 
 ## Repository
 
@@ -111,15 +115,13 @@ Needs `sway`, `grim`, `Xvfb`, ImageMagick, and the built helper.
 
 ### Hyprland (and other wlr-layer-shell compositors)
 
-Build the native overlay helper once (needs Rust plus `gtk3`, `gtk-layer-shell`
-and `webkit2gtk-4.1` development packages; Debian/Ubuntu:
-`libgtk-3-dev libgtk-layer-shell-dev libwebkit2gtk-4.1-dev`):
-
-```bash
-pnpm build:native
-mkdir -p apps/desktop/resources/bin
-cp native/overlay-wlr/target/release/rp-overlay-wlr apps/desktop/resources/bin/
-```
+The desktop build compiles and bundles the native overlay helper automatically
+when Rust and the `gtk3`, `gtk-layer-shell` and `webkit2gtk-4.1` development
+packages are present (Debian/Ubuntu: `libgtk-3-dev libgtk-layer-shell-dev
+libwebkit2gtk-4.1-dev`; Arch: `gtk3 gtk-layer-shell webkit2gtk-4.1`). It lands in
+`apps/desktop/resources/bin/rp-overlay-wlr` and ships inside packaged builds.
+Without those tools the build prints a notice and skips it (set
+`RP_REQUIRE_NATIVE=1` to make that a failure).
 
 The app picks the `hyprland` backend automatically under Hyprland. Without the
 helper it falls back to Hyprland IPC emulation (top/overlay only), and on other
@@ -133,7 +135,11 @@ start a session.
 
 ## Writing a pack
 
-See [examples/packs/README.md](examples/packs/README.md) for the format, the
+The quickest way is the **Pack editor** inside the app (sidebar → Pack editor →
+New pack): it scaffolds the folder, lets you fill in everything through forms,
+validates as you go, and installs or exports with one click.
+
+For the on-disk format, see [examples/packs/README.md](examples/packs/README.md), the
 behaviour hooks and a tour of the SDK. The SDK reference the characters see is
 also available inside the app under **SDK Reference**.
 

@@ -10,7 +10,9 @@ import type {
   UiPromptRequest,
 } from '@rp/shared';
 
-export type RouteName = 'chat' | 'packs' | 'settings' | 'log' | 'sdk';
+export type RouteName = 'chat' | 'packs' | 'settings' | 'log' | 'sdk' | 'editor';
+
+export type EditorSection = 'pack' | 'character' | 'media' | 'readme' | 'publish';
 
 export interface Toast {
   id: string;
@@ -69,6 +71,16 @@ export interface AppState {
   memoryVersion: number;
   /** Per character: bumped on `mood-changed` / `routine-changed` so the chat header re-fetches `characters.status`. */
   characterStatusVersion: Record<string, number>;
+  /** Pack editor navigation (drafts live in the editor components, which stay mounted). */
+  editor: {
+    /** Open project key, or null for the project list. */
+    projectKey: string | null;
+    section: EditorSection;
+    /** Character dir when `section` is `character`. */
+    characterDir: string | null;
+    /** Set once the editor route was visited so it stays mounted (and keeps drafts) afterwards. */
+    visited: boolean;
+  };
 }
 
 export const EMPTY_RUNTIME: SessionRuntime = { turnId: null, status: null, error: null, eventMarkers: [], eventsVersion: 0 };
@@ -92,6 +104,7 @@ export function initialState(): AppState {
     memoriesPanel: null,
     memoryVersion: 0,
     characterStatusVersion: {},
+    editor: { projectKey: null, section: 'pack', characterDir: null, visited: false },
   };
 }
 

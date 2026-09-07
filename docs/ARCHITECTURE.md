@@ -380,6 +380,9 @@ JSONL, size-capped).
 - **Permission prompt** modal for `prompt`-level calls (allow once / allow for
   session / deny).
 - **Action log** view (audit entries).
+- **Pack editor**: projects are pack folders (workspace or any folder); forms for
+  manifest, characters, media tags and README with live validation, export and
+  install-to-app. See `docs/spec/editor.md`.
 - **Media window**: separate frameless BrowserWindow that renders one or many
   media items (image, video, audio) driven by IPC commands.
 

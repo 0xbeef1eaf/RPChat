@@ -3,6 +3,7 @@ import { bootstrap, navigate } from '../store/actions';
 import { useAppState } from '../store/store';
 import { ActionLogView } from '../views/ActionLogView';
 import { ChatView } from '../views/ChatView';
+import { EditorView } from '../views/editor/EditorView';
 import { PacksView } from '../views/PacksView';
 import { SdkReferenceView } from '../views/SdkReferenceView';
 import { SettingsView } from '../views/SettingsView';
@@ -12,12 +13,13 @@ import { UiPromptModal } from './modals/UiPromptModal';
 import { Sidebar } from './Sidebar';
 import { Toasts } from './common/Toasts';
 
-const SHORTCUTS: Record<string, Parameters<typeof navigate>[0]> = { '1': 'chat', '2': 'packs', '3': 'settings', '4': 'log', '5': 'sdk' };
+const SHORTCUTS: Record<string, Parameters<typeof navigate>[0]> = { '1': 'chat', '2': 'packs', '3': 'editor', '4': 'settings', '5': 'log', '6': 'sdk' };
 
 export function App() {
   const route = useAppState((s) => s.route);
   const booting = useAppState((s) => s.booting);
   const bootError = useAppState((s) => s.bootError);
+  const editorVisited = useAppState((s) => s.editor.visited);
 
   useEffect(() => {
     void bootstrap();
@@ -56,6 +58,7 @@ export function App() {
         ) : null}
         {route === 'chat' ? <ChatView /> : null}
         {route === 'packs' ? <PacksView /> : null}
+        {editorVisited ? <EditorView active={route === 'editor'} /> : null}
         {route === 'settings' ? <SettingsView /> : null}
         {route === 'log' ? <ActionLogView /> : null}
         {route === 'sdk' ? <SdkReferenceView /> : null}
