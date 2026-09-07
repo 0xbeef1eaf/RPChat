@@ -1,0 +1,45 @@
+{
+  "folderTags": true,
+  "tags": {
+    "portrait": "A picture of Luna herself",
+    "smile": "Luna smiling",
+    "happy": "Cheerful mood; good for celebrating or cheering someone up",
+    "wave": "Luna waving",
+    "greeting": "Suitable for hello / welcome-back moments",
+    "chime": "A short bell-like sound",
+    "notification": "Use to get the user's attention when a reminder fires",
+    "gentle": "Quiet and unobtrusive",
+    "test": "Placeholder test media, not a picture of Luna; only show if asked",
+    "solid": "A single flat colour",
+    "card": "A test card / calibration image",
+    "colour-bars": "Colour-bar test pattern"
+  },
+  "entries": [
+    { "match": "media/images/luna-*.png", "tags": ["portrait"] },
+    {
+      "match": "media/images/luna-smile.png",
+      "tags": ["smile", "happy"],
+      "description": "Luna grinning in warm light; the one where the lighting finally came out right."
+    },
+    {
+      "match": "media/images/luna-wave.png",
+      "tags": ["wave", "greeting"],
+      "description": "Luna waving hello, cool blue background."
+    },
+    {
+      "match": "media/images/teal-card.png",
+      "tags": ["test", "solid", "card"],
+      "description": "A flat teal test card."
+    },
+    {
+      "match": "media/audio/chime.wav",
+      "tags": ["chime", "notification", "gentle"],
+      "description": "A soft two-tone chime, about half a second long."
+    },
+    {
+      "match": "media/video/**",
+      "tags": ["test", "colour-bars"],
+      "description": "Colour-bar test pattern clip."
+    }
+  ]
+}

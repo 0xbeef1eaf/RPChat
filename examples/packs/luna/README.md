@@ -9,6 +9,8 @@ Contents:
 - `characters/luna/` — character definition, persona, avatar and two behaviour scripts
 - `media/images/` — two tiny generated PNGs Luna can show
 - `media/audio/chime.wav` — a short generated chime (16 kHz, mono, 0.6 s)
+- `media/images/teal-card.png`, `media/video/testcard.webm` — placeholder test media
+- `media.json` — tags and one-line descriptions for the media, plus a tag vocabulary
 
 Requested capabilities: `media` (show images, play the chime) and `ui`
 (desktop notifications). Everything else Luna uses (`chat`, `state`, `timers`,

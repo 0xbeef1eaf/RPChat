@@ -45,6 +45,9 @@ describe('packDirectory → extractPack', () => {
     const extractedFiles = await listFiles(dest);
     expect(extractedFiles).toEqual(originalFiles);
     expect(originalFiles).toContain('media/audio/chime.wav');
+    expect(originalFiles).toContain('media.json');
+    expect(pack.assets.find((a) => a.path === 'media/images/luna-smile.png')!.tags).toEqual(['happy', 'portrait', 'smile']);
+    expect(pack.tagDescriptions?.portrait).toBe('A picture of Luna herself');
     for (const rel of originalFiles) {
       const a = await fs.readFile(path.join(LUNA_DIR, rel));
       const b = await fs.readFile(path.join(dest, rel));

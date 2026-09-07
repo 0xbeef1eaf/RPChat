@@ -1,8 +1,11 @@
 import { z } from 'zod';
 import type { BehaviourHook, CharacterDefinition, PackManifest } from '@rp/shared';
-import { PACK_FORMAT_VERSION, RpError } from '@rp/shared';
+import { PACK_FORMAT_VERSION } from '@rp/shared';
 import { assetKindFor, extensionOf } from './assets.js';
-import { normalizeRelativePath } from './paths.js';
+import { invalidError, relativePathSchema } from './zod-common.js';
+
+export { relativePathSchema, issuesOf } from './zod-common.js';
+export type { ValidationIssue } from './zod-common.js';
 
 export const PACK_ID_PATTERN = /^[a-z0-9]+(\.[a-z0-9-]+)+$/;
 export const CHARACTER_ID_PATTERN = /^[a-z0-9][a-z0-9-_]*$/;
@@ -25,15 +28,6 @@ const _hooksExhaustive: MissingHook extends never ? true : never = true;
 void _hooksExhaustive;
 
 export const BEHAVIOUR_SCRIPT_EXTENSIONS = ['ts', 'js'] as const;
-
-/** A path relative to the pack (or character) directory that cannot escape it. */
-export const relativePathSchema = z
-  .string()
-  .min(1, 'path must not be empty')
-  .check((ctx) => {
-    const n = normalizeRelativePath(ctx.value);
-    if (!n.ok) ctx.issues.push({ code: 'custom', message: `unsafe path "${ctx.value}": ${n.reason}`, input: ctx.value });
-  });
 
 const behaviourPathSchema = relativePathSchema.check((ctx) => {
   const ext = extensionOf(ctx.value);
@@ -118,35 +112,16 @@ const characterDefinitionObject = z.object({
 
 export const characterDefinitionSchema: z.ZodType<CharacterDefinition> = characterDefinitionObject;
 
-/** One validation problem, JSON-safe, as carried in `RpError.details.issues`. */
-export interface ValidationIssue {
-  path: string;
-  message: string;
-}
-
-export function issuesOf(error: z.ZodError): ValidationIssue[] {
-  return error.issues.map((issue) => ({
-    path: issue.path.map(String).join('.') || '(root)',
-    message: issue.message,
-  }));
-}
-
-function invalid(what: string, error: z.ZodError): RpError {
-  const issues = issuesOf(error);
-  const summary = issues.map((i) => `${i.path}: ${i.message}`).join('; ');
-  return new RpError('PACK_INVALID', `Invalid ${what}: ${summary}`, { issues });
-}
-
 /** Validates the parsed contents of `pack.json`. Throws `RpError('PACK_INVALID', msg, { issues })`. */
 export function validateManifest(json: unknown): PackManifest {
   const result = packManifestSchema.safeParse(json);
-  if (!result.success) throw invalid('pack.json', result.error);
+  if (!result.success) throw invalidError('pack.json', result.error);
   return result.data;
 }
 
 /** Validates the parsed contents of `character.json`. Throws `RpError('PACK_INVALID', msg, { issues })`. */
 export function validateCharacter(json: unknown): CharacterDefinition {
   const result = characterDefinitionSchema.safeParse(json);
-  if (!result.success) throw invalid('character.json', result.error);
+  if (!result.success) throw invalidError('character.json', result.error);
   return result.data;
 }

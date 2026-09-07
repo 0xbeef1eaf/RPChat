@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RpError } from '@rp/shared';
-import { loadPack, requestedCapabilities, validatePack } from './index.js';
+import { loadPack, requestedCapabilities, summariseTags, validatePack } from './index.js';
 import { LUNA_DIR, MINIMAL_DIR, makeTempDir, minimalPackFiles, writeTree } from './test/helpers.js';
 
 describe('loadPack', () => {
@@ -47,9 +47,10 @@ describe('loadPack', () => {
     expect(pack.characters[0]!.avatarPath).toBeUndefined();
     expect(pack.characters[0]!.behaviourSources).toEqual({});
     expect(pack.assets).toEqual([]);
+    expect(pack.tagDescriptions).toBeUndefined();
     expect(pack.readme).toBeUndefined();
     expect(requestedCapabilities(pack)).toEqual([]);
-    expect(await validatePack(MINIMAL_DIR)).toEqual({ ok: true, problems: [] });
+    expect(await validatePack(MINIMAL_DIR)).toEqual({ ok: true, problems: [], warnings: [] });
   });
 
   it('merges pack and character capabilities, deduplicated and sorted', async () => {
@@ -150,6 +151,51 @@ describe('validatePack / loadPack problems', () => {
     const { ok, problems } = await validatePack(dir);
     expect(ok).toBe(false);
     expect(problems[0]).toMatch(/symlink/);
+  });
+
+  it('reports an invalid or unparsable media.json as a problem', async () => {
+    const bad = await packWith({ ...minimalPackFiles(), 'media.json': '{ nope' });
+    expect((await validatePack(bad)).problems).toEqual([expect.stringMatching(/^media\.json: not valid JSON/)]);
+    const invalid = await packWith({ ...minimalPackFiles(), 'media.json': JSON.stringify({ entries: [{ match: '../x' }] }) });
+    const result = await validatePack(invalid);
+    expect(result.ok).toBe(false);
+    expect(result.problems[0]).toMatch(/^media\.json: Invalid media\.json: entries\.0\.match/);
+    await expect(loadPack(invalid)).rejects.toMatchObject({ code: 'PACK_INVALID' });
+  });
+
+  it('warns about media.json entries matching nothing and unused vocabulary tags, without failing', async () => {
+    const dir = await packWith({
+      ...minimalPackFiles(),
+      'media/images/a.png': 'x',
+      'media.json': JSON.stringify({
+        entries: [
+          { match: 'media/images/a.png', tags: ['used'] },
+          { match: 'media/video/**', tags: ['never'] },
+        ],
+        tags: { used: 'is used', orphan: 'is not' },
+      }),
+    });
+    const result = await validatePack(dir);
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([
+      'warning: media.json entry 1 ("media/video/**") matches no asset',
+      'info: media.json vocabulary tag "orphan" is not used by any asset',
+    ]);
+    expect(result.problems).toEqual(result.warnings);
+    const pack = await loadPack(dir);
+    expect(pack.assets[0]).toMatchObject({ path: 'media/images/a.png', tags: ['used'] });
+    expect(pack.tagDescriptions).toEqual({ used: 'is used', orphan: 'is not' });
+  });
+
+  it('rejects an asset that ends up with more than 20 tags after merging', async () => {
+    const entries = Array.from({ length: 3 }, (_, e) => ({
+      match: 'media/**',
+      tags: Array.from({ length: 8 }, (_, i) => `t${e}-${i}`),
+    }));
+    const dir = await packWith({ ...minimalPackFiles(), 'media/x.png': 'x', 'media.json': JSON.stringify({ entries }) });
+    const result = await validatePack(dir);
+    expect(result.ok).toBe(false);
+    expect(result.problems).toEqual(['asset "media/x.png" has 24 tags (max 20)']);
   });
 
   it('loadPack throws RpError(PACK_INVALID) carrying the problems', async () => {

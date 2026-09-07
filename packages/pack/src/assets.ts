@@ -1,7 +1,10 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { AssetEntry, AssetKind } from '@rp/shared';
-import { CHARACTER_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME } from '@rp/shared';
+import type { AssetEntry, AssetKind, MediaManifest, TagSummary } from '@rp/shared';
+import { CHARACTER_MANIFEST_FILENAME, MEDIA_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME } from '@rp/shared';
+import { globToRegExp } from './glob.js';
+import { validateMediaManifest } from './media-manifest.js';
+import { normalizeTag } from './tags.js';
 import { isSafeRelativePath, joinRelative, normalizeRelativePath, resolveAssetPath } from './paths.js';
 
 export const DEFAULT_MEDIA_ROOT = 'media';
@@ -74,7 +77,92 @@ export async function walkFiles(rootAbs: string, dirAbs: string, out: string[] =
 async function entryFor(rootAbs: string, rel: string): Promise<AssetEntry | null> {
   const st = await statOrNull(path.join(rootAbs, ...rel.split('/')));
   if (!st || !st.isFile()) return null;
-  return { path: rel, kind: assetKindFor(rel), bytes: st.size, mime: mimeFor(rel) };
+  return { path: rel, kind: assetKindFor(rel), bytes: st.size, mime: mimeFor(rel), tags: [] };
+}
+
+/**
+ * Folder names that only say what *kind* of thing lives inside and therefore
+ * never become implicit tags. The media root's own segments are skipped too.
+ */
+export const KIND_FOLDER_NAMES: ReadonlySet<string> = new Set([
+  'media', 'images', 'image', 'video', 'videos', 'audio', 'sounds', 'characters',
+]);
+
+/**
+ * Implicit tags for an asset: every directory segment of its path, except the
+ * kind folders above and the media root's segments. `media/images/outfits/summer/x.png`
+ * → `['outfits', 'summer']`. Segments that are not valid tags are dropped.
+ */
+export function folderTagsFor(assetPath: string, mediaRoot: string = DEFAULT_MEDIA_ROOT): string[] {
+  const n = normalizeRelativePath(assetPath);
+  if (!n.ok) return [];
+  const skip = new Set(KIND_FOLDER_NAMES);
+  const m = normalizeRelativePath(mediaRoot);
+  if (m.ok) for (const seg of m.path.split('/')) skip.add(seg.toLowerCase());
+  const segments = n.path.split('/');
+  segments.pop(); // file name
+  const tags = new Set<string>();
+  for (const seg of segments) {
+    if (skip.has(seg.toLowerCase())) continue;
+    const tag = normalizeTag(seg);
+    if (tag !== undefined) tags.add(tag);
+  }
+  return [...tags].sort();
+}
+
+/**
+ * Fills `tags` (and `description`) on each asset from folder names and the
+ * matching `media.json` entries. Tags are merged, deduplicated and sorted; when
+ * several entries set a description, the last one wins. Returns new entries.
+ */
+export function applyMediaTags(
+  assets: readonly AssetEntry[],
+  manifest: MediaManifest | null | undefined,
+  mediaRoot: string = DEFAULT_MEDIA_ROOT,
+): AssetEntry[] {
+  const useFolderTags = manifest?.folderTags !== false;
+  const rules = (manifest?.entries ?? []).map((entry) => ({ entry, re: globToRegExp(entry.match) }));
+  return assets.map((asset) => {
+    const tags = new Set<string>(useFolderTags ? folderTagsFor(asset.path, mediaRoot) : []);
+    let description = asset.description;
+    for (const { entry, re } of rules) {
+      if (!re.test(asset.path)) continue;
+      for (const t of entry.tags ?? []) tags.add(t);
+      if (entry.description !== undefined) description = entry.description;
+    }
+    const out: AssetEntry = { ...asset, tags: [...tags].sort() };
+    if (description !== undefined) out.description = description;
+    else delete out.description;
+    return out;
+  });
+}
+
+/** Reads and validates `media.json` under `rootAbs`; `null` when absent or invalid (loader reports that). */
+async function discoverMediaManifest(rootAbs: string): Promise<MediaManifest | null> {
+  try {
+    return validateMediaManifest(JSON.parse(await fs.readFile(path.join(rootAbs, MEDIA_MANIFEST_FILENAME), 'utf8')));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Tags used across `assets`, most frequent first (ties by name), with the
+ * vocabulary description when one exists. Only tags carried by at least one asset appear.
+ */
+export function summariseTags(assets: readonly AssetEntry[], tagDescriptions?: Record<string, string>): TagSummary[] {
+  const counts = new Map<string, number>();
+  for (const asset of assets) {
+    for (const tag of asset.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+  }
+  const out: TagSummary[] = [];
+  for (const [tag, count] of counts) {
+    const summary: TagSummary = { tag, count };
+    const description = tagDescriptions?.[tag];
+    if (description !== undefined) summary.description = description;
+    out.push(summary);
+  }
+  return out.sort((a, b) => b.count - a.count || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0));
 }
 
 /**
@@ -106,11 +194,18 @@ async function discoverAvatarPaths(rootAbs: string): Promise<string[]> {
 }
 
 /**
- * Indexes every file under `mediaRoot` (recursively) plus each character's avatar.
- * A missing media directory yields no media entries (a pack may have no media).
- * Entries are sorted by path and deduplicated.
+ * Indexes every file under `mediaRoot` (recursively) plus each character's avatar,
+ * then assigns tags from folder names and `media.json`. A missing media directory
+ * yields no media entries (a pack may have no media). Entries are sorted by path.
+ *
+ * `manifest`: the validated `media.json`; `undefined` reads it from the pack root
+ * when present (best effort), `null` applies no manifest.
  */
-export async function indexAssets(root: string, mediaRoot: string = DEFAULT_MEDIA_ROOT): Promise<AssetEntry[]> {
+export async function indexAssets(
+  root: string,
+  mediaRoot: string = DEFAULT_MEDIA_ROOT,
+  manifest?: MediaManifest | null,
+): Promise<AssetEntry[]> {
   const rootAbs = path.resolve(root);
   const byPath = new Map<string, AssetEntry>();
 
@@ -135,5 +230,7 @@ export async function indexAssets(root: string, mediaRoot: string = DEFAULT_MEDI
     if (entry) byPath.set(entry.path, entry);
   }
 
-  return [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const resolvedManifest = manifest === undefined ? await discoverMediaManifest(rootAbs) : manifest;
+  const sorted = [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return applyMediaTags(sorted, resolvedManifest, mediaRoot);
 }

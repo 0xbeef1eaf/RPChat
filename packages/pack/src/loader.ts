@@ -1,17 +1,32 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { BehaviourHook, CharacterDefinition, LoadedCharacter, LoadedPack, PackManifest } from '@rp/shared';
-import { CHARACTER_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME, RpError } from '@rp/shared';
+import type {
+  BehaviourHook,
+  CharacterDefinition,
+  LoadedCharacter,
+  LoadedPack,
+  MediaManifest,
+  PackManifest,
+} from '@rp/shared';
+import { CHARACTER_MANIFEST_FILENAME, MEDIA_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME, RpError } from '@rp/shared';
 import { DEFAULT_MEDIA_ROOT, assetKindFor, indexAssets } from './assets.js';
+import { globToRegExp } from './glob.js';
+import { validateMediaManifest } from './media-manifest.js';
 import { joinRelative, normalizeRelativePath, resolveAssetPath } from './paths.js';
 import { BEHAVIOUR_HOOKS, validateCharacter, validateManifest } from './schema.js';
+import { MAX_TAGS_PER_ASSET } from './tags.js';
 
 export const PACK_README_FILENAME = 'README.md';
 
-/** Result of inspecting a pack directory: the pack (when loadable) plus every problem found. */
+/**
+ * Result of inspecting a pack directory: the pack (when loadable), every
+ * problem that makes it unloadable, and non-fatal warnings (`warning: …` /
+ * `info: …` texts, e.g. a `media.json` rule that matches nothing).
+ */
 export interface PackInspection {
   pack?: LoadedPack;
   problems: string[];
+  warnings: string[];
 }
 
 type FileKind = 'file' | 'dir' | 'missing' | 'other';
@@ -148,24 +163,25 @@ async function loadCharacter(
  */
 export async function inspectPack(root: string): Promise<PackInspection> {
   const problems: string[] = [];
+  const warnings: string[] = [];
   const rootAbs = path.resolve(root);
 
   if ((await kindOf(rootAbs)) !== 'dir') {
-    return { problems: [`pack root "${rootAbs}" is not a directory`] };
+    return { problems: [`pack root "${rootAbs}" is not a directory`], warnings };
   }
 
   const manifestAbs = path.join(rootAbs, PACK_MANIFEST_FILENAME);
   if ((await kindOf(manifestAbs)) !== 'file') {
-    return { problems: [`${PACK_MANIFEST_FILENAME}: missing`] };
+    return { problems: [`${PACK_MANIFEST_FILENAME}: missing`], warnings };
   }
   const raw = await readJson(manifestAbs);
-  if (!raw.ok) return { problems: [`${PACK_MANIFEST_FILENAME}: ${raw.error}`] };
+  if (!raw.ok) return { problems: [`${PACK_MANIFEST_FILENAME}: ${raw.error}`], warnings };
 
   let manifest: PackManifest;
   try {
     manifest = validateManifest(raw.value);
   } catch (err) {
-    return { problems: [`${PACK_MANIFEST_FILENAME}: ${RpError.from(err).message}`] };
+    return { problems: [`${PACK_MANIFEST_FILENAME}: ${RpError.from(err).message}`], warnings };
   }
 
   const characters: LoadedCharacter[] = [];
@@ -192,16 +208,53 @@ export async function inspectPack(root: string): Promise<PackInspection> {
     }
   }
 
+  // media.json (optional)
+  let mediaManifest: MediaManifest | null = null;
+  const mediaManifestAbs = path.join(rootAbs, MEDIA_MANIFEST_FILENAME);
+  if ((await kindOf(mediaManifestAbs)) === 'file') {
+    const rawMedia = await readJson(mediaManifestAbs);
+    if (!rawMedia.ok) {
+      problems.push(`${MEDIA_MANIFEST_FILENAME}: ${rawMedia.error}`);
+    } else {
+      try {
+        mediaManifest = validateMediaManifest(rawMedia.value);
+      } catch (err) {
+        problems.push(`${MEDIA_MANIFEST_FILENAME}: ${RpError.from(err).message}`);
+      }
+    }
+  }
+
   let readme: string | undefined;
   const readmeAbs = path.join(rootAbs, PACK_README_FILENAME);
   if ((await kindOf(readmeAbs)) === 'file') readme = await fs.readFile(readmeAbs, 'utf8');
 
-  if (problems.length > 0) return { problems };
+  if (problems.length > 0) return { problems, warnings };
 
-  const assets = await indexAssets(rootAbs, mediaRoot);
+  const assets = await indexAssets(rootAbs, mediaRoot, mediaManifest);
+
+  for (const asset of assets) {
+    if (asset.tags.length > MAX_TAGS_PER_ASSET) {
+      problems.push(`asset "${asset.path}" has ${asset.tags.length} tags (max ${MAX_TAGS_PER_ASSET})`);
+    }
+  }
+  if (mediaManifest) {
+    mediaManifest.entries.forEach((entry, i) => {
+      const re = globToRegExp(entry.match);
+      if (!assets.some((a) => re.test(a.path))) {
+        warnings.push(`warning: ${MEDIA_MANIFEST_FILENAME} entry ${i} ("${entry.match}") matches no asset`);
+      }
+    });
+    const used = new Set(assets.flatMap((a) => a.tags));
+    for (const tag of Object.keys(mediaManifest.tags ?? {})) {
+      if (!used.has(tag)) warnings.push(`info: ${MEDIA_MANIFEST_FILENAME} vocabulary tag "${tag}" is not used by any asset`);
+    }
+  }
+  if (problems.length > 0) return { problems, warnings };
+
   const pack: LoadedPack = { root: rootAbs, manifest, characters, assets };
+  if (mediaManifest?.tags !== undefined) pack.tagDescriptions = mediaManifest.tags;
   if (readme !== undefined) pack.readme = readme;
-  return { pack, problems };
+  return { pack, problems, warnings };
 }
 
 /**
@@ -217,13 +270,18 @@ export async function loadPack(root: string): Promise<LoadedPack> {
   return pack;
 }
 
-/** Like {@link loadPack} but reports problems instead of throwing. Never throws for content errors. */
-export async function validatePack(root: string): Promise<{ ok: boolean; problems: string[] }> {
+/**
+ * Like {@link loadPack} but reports problems instead of throwing. Never throws
+ * for content errors. `problems` lists errors followed by non-fatal
+ * `warning:` / `info:` lines (also returned separately as `warnings`);
+ * `ok` is `true` when there are no errors, even if there are warnings.
+ */
+export async function validatePack(root: string): Promise<{ ok: boolean; problems: string[]; warnings: string[] }> {
   try {
-    const { problems } = await inspectPack(root);
-    return { ok: problems.length === 0, problems };
+    const { problems, warnings } = await inspectPack(root);
+    return { ok: problems.length === 0, problems: [...problems, ...warnings], warnings };
   } catch (err) {
-    return { ok: false, problems: [RpError.from(err).message] };
+    return { ok: false, problems: [RpError.from(err).message], warnings: [] };
   }
 }
 

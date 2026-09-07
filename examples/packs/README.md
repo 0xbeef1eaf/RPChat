@@ -25,6 +25,7 @@ my-pack/
 │       └── scripts/
 │           ├── on-session-start.ts
 │           └── on-timer.ts
+├── media.json                    optional, tags + descriptions for the media (see §5)
 └── media/                        optional; `mediaRoot` in pack.json, default "media"
     ├── images/…  video/…  audio/…
 ```
@@ -105,7 +106,51 @@ files exist, grouped by kind. Kind is decided by extension:
 
 Dotfiles, `node_modules` and symlinks are not indexed and are not packed.
 
-## 5. Capabilities and permissions
+Every indexed asset also carries **tags**. Folder names become tags
+automatically (`media/images/outfits/summer/x.png` → `outfits`, `summer`), so a
+sensible directory layout already lets the character pick media by meaning;
+`media.json` adds explicit tags and descriptions on top.
+
+## 5. Describing media with `media.json`
+
+An optional `media.json` at the pack root tells the character what each piece
+of media *is*, so it can choose "a happy portrait" rather than guessing from a
+file name:
+
+```jsonc
+{
+  "folderTags": true,                 // default true: folder names become tags
+  "tags": {                           // vocabulary: tag → short meaning, shown to the model
+    "portrait": "A picture of Luna herself",
+    "happy": "Cheerful mood; good for cheering someone up"
+  },
+  "entries": [
+    { "match": "media/images/luna-*.png", "tags": ["portrait"] },
+    { "match": "media/images/luna-smile.png", "tags": ["smile", "happy"],
+      "description": "Luna grinning in warm light." },
+    { "match": "media/audio", "tags": ["sound"] }
+  ]
+}
+```
+
+- `match` is a pack-relative path or glob: `*` matches within one path
+  segment, `**` matches across segments, `?` matches one character, and a bare
+  directory (no wildcards) matches everything under it.
+- Tags are lower-case `[a-z0-9][a-z0-9_-]*`, at most 32 characters, at most 20
+  per asset; they are trimmed, lower-cased and deduplicated for you.
+- An asset gets the union of its folder tags and the tags of **every** entry
+  that matches it. When several matching entries set a `description`, the last
+  one wins. Descriptions are at most 200 characters.
+- Folder tags skip the kind folders (`media`, `images`, `image`, `video`,
+  `videos`, `audio`, `sounds`, `characters`) and the media root's own name;
+  every other directory segment counts. Set `folderTags: false` to opt out.
+- `validatePack` warns about entries that match no asset and vocabulary tags
+  no asset uses; neither stops the pack from loading.
+
+In the sandbox, `sdk.pack.listAssets()` returns each asset with its tags and
+description, and `sdk.pack.tags()` summarises the vocabulary with counts.
+
+## 6. Capabilities and permissions
 
 The SDK is made of modules, each with a permission level:
 
@@ -117,7 +162,7 @@ The SDK is made of modules, each with a permission level:
 
 Only request what the character needs; users see the list at install time.
 
-## 6. Behaviour hooks
+## 7. Behaviour hooks
 
 A character may bind TypeScript (or JavaScript) files to hooks. They run in the
 same sandbox and with the same permissions as code the model writes:
@@ -137,7 +182,7 @@ A script is the **body of an async function**: a global `sdk` object and
 `console` are in scope, top-level `await` and `return` are allowed, and there
 are no imports. The same is true of the code the model writes.
 
-## 7. SDK usage example
+## 8. SDK usage example
 
 ```ts
 // Show a picture, remember it, and set a reminder — the body of one action.
@@ -164,7 +209,7 @@ Standard modules (v1):
 | `chat`   | trusted    | `say(text)`, `emote(text)`, `history(limit)`, `setStatus(text)`                                  |
 | `log`    | trusted    | `debug/info/warn/error(...args)`                                                                 |
 | `state`  | trusted    | `get/set/delete/keys` (per character, persistent), `session.get/set/delete/keys`                 |
-| `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `readText(path)`, `info()`                                 |
+| `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `tags()`, `readText(path)`, `info()`                       |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `cancel(id)`, `list()`                                      |
 | `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `close(id)`, `closeAll()`, `list()` |
 | `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`                       |
@@ -173,7 +218,7 @@ Standard modules (v1):
 Every run is limited (wall-clock timeout, CPU budget, memory, number of host
 calls, log and result size), so keep scripts short and never loop forever.
 
-## 8. Sharing a pack
+## 9. Sharing a pack
 
 Package a directory with `packDirectory(dir, "my-pack.rppack")` from `@rp/pack`
 (the app exposes this in its packs view). The archive is a plain zip with
