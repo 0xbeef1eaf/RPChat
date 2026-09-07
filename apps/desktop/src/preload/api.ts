@@ -30,6 +30,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   audit: ['list'],
   memories: ['list', 'add', 'update', 'remove', 'consolidate'],
   ui: ['respondPrompt'],
+  plugins: ['pluginsDir', 'list', 'install', 'remove', 'setEnabled', 'reload', 'openFolder'],
   editor: [
     'workspaceDir', 'listProjects', 'create', 'open', 'importInstalled', 'forget', 'read', 'saveManifest', 'addCharacter', 'saveCharacter', 'removeCharacter',
     'pickAvatar', 'pickExpression', 'addMedia', 'addMediaFiles', 'removeMedia', 'saveMediaManifest', 'saveReadme', 'validate', 'exportPack', 'installToApp',

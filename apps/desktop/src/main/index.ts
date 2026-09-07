@@ -11,7 +11,7 @@ import { handleAssetRequest } from './asset-protocol.js';
 import { isHyprland } from './display/layers.js';
 import { createApp } from './engine.js';
 import type { AppServices } from './engine.js';
-import { isSmokeRun, runSmokeTurn } from './dev-mode.js';
+import { isSmokeRun, runSmokeTurn, smokeLoadPlugin } from './dev-mode.js';
 import { registerIpc } from './ipc.js';
 import { createLogger } from './logger.js';
 import { WindowManager } from './windows.js';
@@ -130,6 +130,7 @@ async function main(): Promise<void> {
   win.once('ready-to-show', () => logger.info(`[main] window opened (userData: ${app.getPath('userData')})`));
   logger.info(`[main] rp-code ${version} ready; ${engine.packs.characters().length} character(s) available`);
   if (isSmokeRun(env)) {
+    await smokeLoadPlugin(active.plugins, APP_ROOT, logger, env);
     setTimeout(
       () =>
         void runSmokeTurn(active.engine, logger, () => active.media.list(), async () => {

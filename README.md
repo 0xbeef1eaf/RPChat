@@ -61,6 +61,11 @@ Characters, their behaviours and their media are distributed as shareable
   wake-ups on transitions, and long-term memory.
 - **Permissions are an intersection**: what a pack asks for ∩ what your global
   policy allows ∩ the per-pack toggle. Inspect any pack before installing it.
+- **SDK plugins**: drop a folder with `plugin.json`, a `.d.ts` with TSDoc, a
+  markdown guide and a `main.js` into the plugins directory and the app adds
+  the module to the SDK: it shows up in the reference, the prompt, the
+  permission policy and pack capability requests like any built-in. See
+  [docs/plugins.md](docs/plugins.md) and `examples/plugins/clock`.
 - **Built-in pack editor**: create or import a pack, edit the manifest,
   characters (persona, greeting, behaviours, avatar and expressions), media with
   tags and descriptions, and the README, with live validation, then install it

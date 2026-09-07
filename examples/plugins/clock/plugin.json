@@ -1,0 +1,26 @@
+{
+  "id": "dev.rp-code.clock",
+  "name": "Clock",
+  "version": "1.0.0",
+  "description": "Tells characters the exact time and lets them set a countdown that fires a custom event.",
+  "author": { "name": "rp-code examples", "url": "https://github.com/rp-code" },
+  "main": "main.js",
+  "minAppVersion": "0.1.0",
+  "modules": [
+    {
+      "id": "clock",
+      "version": "1.0.0",
+      "title": "Clock",
+      "summary": "Exact current time and simple countdowns that raise a custom:countdown event.",
+      "permission": "trusted",
+      "apiTypeName": "ClockApi",
+      "typings": "modules/clock.d.ts",
+      "docs": "modules/clock.md",
+      "methods": {
+        "now": { "description": "The current date and time on the user's computer." },
+        "countdown": { "description": "Start a countdown that raises the custom:countdown event when it ends." },
+        "pending": { "description": "Countdowns that have not fired yet." }
+      }
+    }
+  ]
+}

@@ -111,6 +111,36 @@ export async function ensureExamplePack(engine: Engine, appRoot: string, logger:
   }
 }
 
+/** Locate `examples/plugins/clock`: `RP_EXAMPLE_PLUGIN`, else walk upward from the app root (dev checkout). */
+export function findExamplePlugin(appRoot: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const candidates: string[] = [];
+  if (env.RP_EXAMPLE_PLUGIN) candidates.push(env.RP_EXAMPLE_PLUGIN);
+  let dir = path.resolve(appRoot);
+  for (let i = 0; i < 6; i += 1) {
+    candidates.push(path.join(dir, 'examples', 'plugins', 'clock'));
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return candidates.find((p) => fs.existsSync(path.join(p, 'plugin.json')));
+}
+
+/** Smoke: install the example plugin (when available) and log its state so CI proves plugin loading. */
+export async function smokeLoadPlugin(plugins: { install(dir?: string): Promise<{ state: string; error?: string } | null>; list(): Array<{ id: string; state: string; error?: string }> }, appRoot: string, logger: Logger, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const source = findExamplePlugin(appRoot, env);
+  if (!source) {
+    logger.info('[smoke] plugin clock: skipped (examples/plugins/clock not found)');
+    return;
+  }
+  try {
+    const info = plugins.list().find((p) => p.id === 'dev.rp-code.clock') ?? (await plugins.install(source));
+    if (!info) logger.warn('[smoke] plugin clock: install returned nothing');
+    else logger[info.state === 'active' ? 'info' : 'error'](`[smoke] plugin clock: ${info.state}${info.error ? ` (${info.error})` : ''}`);
+  } catch (err) {
+    logger.error(`[smoke] plugin clock: error (${(err as Error).message})`);
+  }
+}
+
 export function isSmokeRun(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.RP_SMOKE === '1';
 }

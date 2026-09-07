@@ -237,6 +237,15 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       revealInFolder: (_e, key) => services.editor.revealInFolder(requireString(key, 'key')),
       behaviourTemplates: async () => services.editor.behaviourTemplates(),
     },
+    plugins: {
+      pluginsDir: async () => services.plugins.pluginsDir,
+      list: async () => services.plugins.list(),
+      install: (_e, dir) => services.plugins.install(typeof dir === 'string' ? dir : undefined),
+      remove: (_e, id) => services.plugins.remove(requireString(id, 'id')),
+      setEnabled: (_e, id, enabled) => services.plugins.setEnabled(requireString(id, 'id'), Boolean(enabled)),
+      reload: (_e, id) => services.plugins.reload(requireString(id, 'id')),
+      openFolder: () => services.plugins.openFolder(),
+    },
     ui: {
       respondPrompt: async (_e, promptId, answer: UiPromptAnswer) => {
         const clean: UiPromptAnswer = typeof answer === 'boolean' || typeof answer === 'string' ? answer : null;

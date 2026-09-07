@@ -2,7 +2,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { app, dialog, screen, shell } from 'electron';
+import { Notification, app, dialog, screen, shell } from 'electron';
 import { Engine, FileStorage } from '@rp/core';
 import type { Logger, ProviderFactory } from '@rp/core';
 import { createStandardRegistry } from '@rp/sdk';
@@ -26,6 +26,8 @@ import { WidgetsHandler } from './capabilities/widgets.js';
 import { electronCapturer } from './capture.js';
 import { ProjectRegistry, keyFromAssetHost } from './editor/registry.js';
 import { EditorService } from './editor/service.js';
+import { PluginRegistry } from './plugins/registry.js';
+import { PluginService } from './plugins/service.js';
 import { createHyprTransport } from './display/hyprland.js';
 import type { HyprTransport } from './display/hyprland.js';
 import { detectWindowSystem, isHyprland } from './display/layers.js';
@@ -52,6 +54,7 @@ export interface AppServices {
   media: MediaManager;
   senses: Senses;
   editor: EditorService;
+  plugins: PluginService;
   commands: CommandRunner;
   permissionPrompts: PendingPrompts<PermissionDecision>;
   uiPrompts: PendingPrompts<UiPromptAnswer>;
@@ -253,6 +256,26 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   });
 
   await engine.start();
+  const builtinIds = new Set(createStandardRegistry().list().map((m) => m.id));
+  const plugins = new PluginService({
+    pluginsDir: path.join(opts.userData, 'plugins'),
+    dataDir: path.join(opts.userData, 'plugin-data'),
+    registry: new PluginRegistry(path.join(dataDir, 'plugins.json')),
+    engine: engine as unknown as ConstructorParameters<typeof PluginService>[0]['engine'],
+    builtinIds,
+    appVersion: opts.appVersion,
+    logger,
+    notify: (title, body) => {
+      if (Notification.isSupported()) new Notification({ title, body }).show();
+      else logger.info(`[plugins] notification: ${title} — ${body}`);
+    },
+    openDirectory: async () => {
+      const r = await dialog.showOpenDialog({ title: 'Choose a plugin folder (contains plugin.json)', properties: ['openDirectory'] });
+      return r.canceled ? undefined : r.filePaths[0];
+    },
+    openPath: (dir) => shell.openPath(dir),
+  });
+  await plugins.loadAll();
   await senses.refresh().catch((err: unknown) => logger.warn('[senses] initial settings read failed', err));
   if (mock) await ensureMockProvider(engine, logger);
   if (mock || !app.isPackaged) await ensureExamplePack(engine, opts.appRoot, logger, env);
@@ -278,6 +301,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     media,
     senses,
     editor,
+    plugins,
     commands,
     permissionPrompts,
     uiPrompts,
@@ -300,6 +324,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       permissionPrompts.rejectAll();
       uiPrompts.rejectAll();
       await senses.dispose().catch((err: unknown) => logger.warn('[senses] dispose failed', err));
+      await plugins.dispose().catch((err: unknown) => logger.warn('[plugins] dispose failed', err));
       await engine.stop().catch((err: unknown) => logger.warn('[engine] stop failed', err));
       await backend.dispose().catch((err: unknown) => logger.warn('[display] dispose failed', err));
       await loopback?.close().catch(() => undefined);
