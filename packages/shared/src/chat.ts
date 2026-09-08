@@ -21,6 +21,8 @@ export interface ChatMessage {
   kind?: 'text' | 'emote';
   /** Provider usage for the turn that produced this message. */
   usage?: { inputTokens: number; outputTokens: number };
+  /** Set on user messages that were rewritten by an active gag (chat-level fallback or record of the daemon gag). */
+  gag?: { original: string };
   error?: SerializedError;
 }
 

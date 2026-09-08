@@ -17,7 +17,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   ui: { permission: 'pack', methods: ['notify', 'confirm', 'choose', 'ask', 'pickFile', 'pickFolder'] },
   wallpaper: { permission: 'pack', methods: ['set', 'restore', 'current'] },
   browser: { permission: 'pack', methods: ['open'] },
-  input: { permission: 'pack', methods: ['lock', 'unlock', 'status', 'type', 'key', 'click', 'moveMouse'] },
+  input: { permission: 'pack', methods: ['lock', 'unlock', 'gag', 'ungag', 'status', 'type', 'key', 'click', 'moveMouse'] },
   presence: { permission: 'pack', methods: ['status', 'nowPlaying', 'activeWindow', 'idleMs'] },
   screen: { permission: 'pack', methods: ['look', 'draw', 'clear'] },
   calendar: { permission: 'pack', methods: ['upcoming', 'today'] },
@@ -47,7 +47,7 @@ const OVERRIDES: Record<string, { prompt?: string[]; dangerous?: string[] }> = {
   desktop: { dangerous: ['launch'] },
   files: { dangerous: ['open'] },
   messaging: { dangerous: ['send'] },
-  input: { dangerous: ['lock', 'unlock', 'type', 'key', 'click', 'moveMouse'] },
+  input: { dangerous: ['lock', 'unlock', 'gag', 'ungag', 'type', 'key', 'click', 'moveMouse'] },
   system: { dangerous: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead'] },
 };
 
@@ -104,7 +104,7 @@ describe('standard modules', () => {
       expect(dangerous, `${spec.id} dangerous`).toEqual(exp.dangerous ?? []);
       for (const name of exp.prompt ?? []) expect(r.permissionFor(spec.id, name)).toBe('prompt');
     }
-    expect(modules.inputModule.version).toBe('1.1.0');
+    expect(modules.inputModule.version).toBe('1.2.0');
     expect(modules.systemModule.version).toBe('1.1.0');
   });
 
