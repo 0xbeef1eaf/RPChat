@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 export const EXAMPLES_DIR = fileURLToPath(new URL('../../../../examples/packs/', import.meta.url));
 export const LUNA_DIR = path.join(EXAMPLES_DIR, 'luna');
 export const MINIMAL_DIR = path.join(EXAMPLES_DIR, 'minimal');
+export const MAKIMA_DIR = path.join(EXAMPLES_DIR, 'makima');
 
 export async function makeTempDir(prefix = 'rp-pack-'): Promise<string> {
   // realpath so macOS /var → /private/var does not confuse path comparisons in tests

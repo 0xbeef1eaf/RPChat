@@ -1,0 +1,15 @@
+{
+  "formatVersion": 1,
+  "id": "com.example.makima",
+  "name": "Makima",
+  "version": "1.0.0",
+  "description": "Unofficial fan-made roleplay persona of Makima (Chainsaw Man): calm, polite, watchful. Uses avatar expressions, wallpapers, timers, routine, mood, memory and desktop events.",
+  "author": { "name": "rp-code examples", "url": "https://example.com/rp-code" },
+  "license": "CC0-1.0",
+  "homepage": "https://example.com/rp-code",
+  "tags": ["fan-made", "roleplay", "example", "control"],
+  "characters": ["characters/makima"],
+  "capabilities": ["media", "ui", "wallpaper", "avatar", "presence", "events"],
+  "mediaRoot": "media",
+  "minAppVersion": "0.1.0"
+}

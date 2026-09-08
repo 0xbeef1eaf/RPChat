@@ -1,0 +1,34 @@
+{
+  "folderTags": true,
+  "tags": {
+    "wallpaper": "Full-screen 1920x1080 scene meant to be set as the desktop background",
+    "control": "A scene for calling in a promise or setting terms; red-tinted, deliberate",
+    "work": "Working hours; muted, ordinary, she is 'at the office'",
+    "quiet": "Late, still, low light; for the last conversation of the night",
+    "dusk": "Evening light, city, red sky",
+    "office": "An indoor office scene",
+    "ring": "The yellow ringed-eye motif",
+    "portrait": "An abstract stand-in for Makima's face (placeholder art)",
+    "expression": "Avatar expression frame used by the avatarSet",
+    "attention": "Sound played once before making a request of the user",
+    "acknowledge": "Sound for a small acknowledgement",
+    "low": "Low-pitched, calm",
+    "soft": "Quiet and unobtrusive",
+    "pulse": "Slow looping ring animation, decorative"
+  },
+  "entries": [
+    { "match": "characters/makima/avatar.png", "tags": ["portrait"], "description": "Placeholder avatar: auburn hair mass, pale oval, ringed yellow eyes." },
+    { "match": "characters/makima/expressions/**", "tags": ["portrait", "expression"] },
+    { "match": "characters/makima/expressions/neutral.png", "description": "Neutral: level ringed eyes, flat mouth. The default face." },
+    { "match": "characters/makima/expressions/smile.png", "description": "Smile: eyes narrowed a touch, a small upward curve. Approval." },
+    { "match": "characters/makima/expressions/stare.png", "description": "Stare: larger eyes with more rings, no mouth. When the user hesitates." },
+    { "match": "characters/makima/expressions/displeased.png", "description": "Displeased: half-lidded eyes, slight downward curve, cooler tint. Rare." },
+    { "match": "media/images/wallpapers/**", "tags": ["wallpaper"] },
+    { "match": "media/images/wallpapers/red-dusk.png", "tags": ["control", "dusk"], "description": "Red-tinted city dusk with a low sun; for control scenes and calling in promises." },
+    { "match": "media/images/wallpapers/dim-office.png", "tags": ["work", "office"], "description": "A dim office with blinds and evening light; for working hours." },
+    { "match": "media/images/wallpapers/ring-motif.png", "tags": ["quiet", "ring"], "description": "Thin yellow rings on near-black with a red vignette; for late, quiet talk." },
+    { "match": "media/audio/attention.wav", "tags": ["attention", "low"], "description": "Low two-tone chime, under a second; play once before a request." },
+    { "match": "media/audio/click.wav", "tags": ["acknowledge", "soft"], "description": "A soft click; a small acknowledgement." },
+    { "match": "media/video/ring-pulse.webm", "tags": ["ring", "pulse"], "description": "Two-second slow ring pulse, 256x256; decorative, e.g. behind windows at low opacity." }
+  ]
+}

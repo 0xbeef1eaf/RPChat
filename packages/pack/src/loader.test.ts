@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RpError } from '@rp/shared';
 import { loadPack, requestedCapabilities, summariseTags, validatePack } from './index.js';
-import { LUNA_DIR, MINIMAL_DIR, makeTempDir, minimalPackFiles, writeTree } from './test/helpers.js';
+import { LUNA_DIR, MAKIMA_DIR, MINIMAL_DIR, makeTempDir, minimalPackFiles, writeTree } from './test/helpers.js';
 
 describe('loadPack', () => {
   it('loads the luna example pack', async () => {
@@ -38,6 +38,61 @@ describe('loadPack', () => {
     const wav = pack.assets.find((a) => a.path === 'media/audio/chime.wav')!;
     expect(wav.bytes).toBeLessThan(100 * 1024);
     expect(requestedCapabilities(pack)).toEqual(['media', 'ui']);
+  });
+
+  it('loads the makima example pack (every pack feature)', async () => {
+    const pack = await loadPack(MAKIMA_DIR);
+    expect(pack.manifest.id).toBe('com.example.makima');
+    expect(requestedCapabilities(pack)).toEqual(['avatar', 'events', 'media', 'presence', 'ui', 'wallpaper']);
+    expect(pack.readme).toMatch(/Tatsuki Fujimoto/);
+    expect(pack.readme).toMatch(/placeholder/i);
+
+    const makima = pack.characters[0]!;
+    expect(makima.definition).toMatchObject({
+      id: 'makima',
+      mood: { baseline: 0.1, energyBaseline: 0.6 },
+      modelHints: { temperature: 0.8 },
+      avatarSet: { defaultExpression: 'neutral' },
+    });
+    expect(Object.keys(makima.definition.avatarSet!.expressions).sort()).toEqual(['displeased', 'neutral', 'smile', 'stare']);
+    expect(makima.definition.exampleDialogue).toHaveLength(6);
+    expect(Object.keys(makima.behaviourSources).sort()).toEqual(['onEvent', 'onSessionStart', 'onTimer', 'onUserMessage']);
+    expect(makima.behaviourSources.onSessionStart).toContain('sdk.avatar.show(');
+    expect(makima.behaviourSources.onUserMessage).toContain('sdk.mood.nudge(');
+    expect(makima.behaviourSources.onUserMessage).not.toMatch(/skipLlm: true/);
+    expect(makima.behaviourSources.onTimer).toContain("media/audio/attention.wav");
+    expect(makima.behaviourSources.onEvent).toContain("'user-back'");
+    expect(makima.behaviourSources.onEvent).toContain("'window-changed'");
+    expect(makima.personaText).toMatch(/\*\*chainsaw\*\*/);
+    expect(makima.personaText).toContain('sdk.wallpaper');
+    const words = makima.personaText.split(/\s+/).filter(Boolean).length;
+    expect(words).toBeGreaterThan(550);
+    expect(words).toBeLessThan(950);
+
+    const byPath = new Map(pack.assets.map((a) => [a.path, a]));
+    expect([...byPath.keys()]).toEqual([
+      'characters/makima/avatar.png',
+      'characters/makima/expressions/displeased.png',
+      'characters/makima/expressions/neutral.png',
+      'characters/makima/expressions/smile.png',
+      'characters/makima/expressions/stare.png',
+      'media/audio/attention.wav',
+      'media/audio/click.wav',
+      'media/images/wallpapers/dim-office.png',
+      'media/images/wallpapers/red-dusk.png',
+      'media/images/wallpapers/ring-motif.png',
+      'media/video/ring-pulse.webm',
+    ]);
+    expect(byPath.get('media/images/wallpapers/red-dusk.png')).toMatchObject({ kind: 'image', tags: ['control', 'dusk', 'wallpaper', 'wallpapers'] });
+    expect(byPath.get('characters/makima/expressions/stare.png')).toMatchObject({ kind: 'image', tags: ['expression', 'expressions', 'makima', 'portrait'] });
+    expect(byPath.get('media/video/ring-pulse.webm')).toMatchObject({ kind: 'video', mime: 'video/webm', tags: ['pulse', 'ring'] });
+    expect(byPath.get('media/audio/attention.wav')!.bytes).toBeLessThan(100 * 1024);
+    for (const a of pack.assets) expect(a.description ?? (a.tags.length > 0 ? 'x' : '')).not.toBe('');
+    expect(summariseTags(pack.assets, pack.tagDescriptions).slice(0, 2)).toEqual([
+      { tag: 'makima', count: 5 },
+      { tag: 'portrait', count: 5, description: expect.stringContaining('placeholder') },
+    ]);
+    expect(await validatePack(MAKIMA_DIR)).toEqual({ ok: true, problems: [], warnings: [] });
   });
 
   it('loads the minimal example pack', async () => {
