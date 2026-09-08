@@ -12,6 +12,7 @@
     "build": "pnpm -r --filter \"@rp/*\" --filter \"!@rp/desktop\" run build && pnpm --filter @rp/desktop run build",
     "build:packages": "pnpm -r --filter \"@rp/*\" --filter \"!@rp/desktop\" run build",
     "build:native": "cargo build --release --manifest-path native/overlay-wlr/Cargo.toml",
+    "build:daemon": "cargo build --release --manifest-path native/rp-coded/Cargo.toml",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "dev": "pnpm --filter @rp/desktop run dev",

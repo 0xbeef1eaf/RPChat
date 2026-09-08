@@ -24,7 +24,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: native/overlay-wlr
+          workspaces: |
+            native/overlay-wlr
+            native/rp-coded
       - name: Install system packages (helper build, Xvfb and nested Sway for smoke tests)
         run: |
           sudo apt-get update
@@ -40,6 +42,12 @@ jobs:
       - run: pnpm test
       - name: Helper unit tests
         run: cargo test --manifest-path native/overlay-wlr/Cargo.toml
+      - name: Daemon unit tests and lint
+        run: |
+          cargo test --manifest-path native/rp-coded/Cargo.toml
+          cargo clippy --manifest-path native/rp-coded/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path native/rp-coded/Cargo.toml --check
+          native/rp-coded/target/release/rp-coded --check-devices || true
       - name: Headful smoke (Xvfb, mock LLM, pixel checks)
         run: scripts/headful-smoke.sh "$RUNNER_TEMP/headful"
       - name: Layer-shell smoke (nested Sway, native helper)

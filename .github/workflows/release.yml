@@ -61,7 +61,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: native/overlay-wlr
+          workspaces: |
+            native/overlay-wlr
+            native/rp-coded
       - name: Install system packages (native helper build)
         run: |
           sudo apt-get update

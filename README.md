@@ -83,6 +83,7 @@ Characters, their behaviours and their media are distributed as shareable
 | `packages/sandbox`   | `@rp/sandbox`  | QuickJS runner and host bridge                   |
 | `packages/core`      | `@rp/core`     | Chat engine, action loop, permissions, storage   |
 | `native/overlay-wlr` | `rp-overlay-wlr` | Rust wlr-layer-shell overlay helper (Hyprland, Sway, river, KDE Wayland) |
+| `native/rp-coded`    | `rp-coded`     | Rust root daemon: input locking, injection, locked policy; installer and udev/systemd files |
 | `examples/packs`     |                | Sample packs and the pack-author guide           |
 | `docs`               |                | Architecture and per-package specs               |
 
@@ -132,6 +133,24 @@ The app picks the `hyprland` backend automatically under Hyprland. Without the
 helper it falls back to Hyprland IPC emulation (top/overlay only), and on other
 desktops to plain Electron windows. See `docs/spec/overlay.md` and
 `native/overlay-wlr/README.md`.
+
+### System integration (input locking, run on login, locked settings)
+
+Locking the keyboard or mouse needs access to `/dev/input`, which desktop users
+do not have. The `rp-coded` daemon (built alongside the helper and shipped under
+`resources/bin`, with its udev rules, systemd units and installer under
+`resources/system`) runs as a hardened root service and performs those actions
+on the app's behalf over a group-restricted socket. Run the installer once:
+
+```bash
+sudo resources/system/install.sh          # or native/rp-coded/install.sh from a checkout
+```
+
+It creates the `rp-code` group, installs the udev rule and service, sets the app
+to start on login, and creates `/etc/rp-code/policy.json`, a root-owned file that
+can cap lock durations, pin settings the user cannot change and disable modules
+outright. The app shows the daemon and policy state under **Settings → System**.
+See [docs/system-integration.md](docs/system-integration.md).
 
 To chat for real, open **Settings → Providers**, add a provider (Anthropic,
 or an OpenAI-compatible base URL such as `http://localhost:11434/v1` for

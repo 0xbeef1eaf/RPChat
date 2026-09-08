@@ -23,8 +23,9 @@ pub const INPUT_DIR: &str = "/dev/input";
 pub const VIRTUAL_DEVICE_NAME: &str = "rp-coded virtual input";
 /// Where connector modes are read from.
 pub const DRM_DIR: &str = "/sys/class/drm";
-/// Time a key is held down when injecting (some toolkits drop press+release in the same frame).
-pub const KEY_HOLD: Duration = Duration::from_millis(2);
+/// Time a key is held down when injecting (slept after each press, not after releases, so a
+/// 2000-character `type` stays well inside the app's 10 s request timeout).
+pub const KEY_HOLD: Duration = Duration::from_millis(1);
 /// Pause between pointer move and button press when clicking.
 pub const CLICK_SETTLE: Duration = Duration::from_millis(5);
 
@@ -335,10 +336,12 @@ impl Injector for UinputInjector {
     fn play(&mut self, actions: &[KeyAction]) -> io::Result<()> {
         for a in actions {
             match *a {
-                KeyAction::Press(code) => self.key(code, 1)?,
+                KeyAction::Press(code) => {
+                    self.key(code, 1)?;
+                    thread::sleep(KEY_HOLD);
+                }
                 KeyAction::Release(code) => self.key(code, 0)?,
             }
-            thread::sleep(KEY_HOLD);
         }
         Ok(())
     }
