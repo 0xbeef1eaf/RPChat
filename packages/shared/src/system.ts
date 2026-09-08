@@ -27,8 +27,6 @@ export interface PolicyFile {
     emergencyHoldMs?: number;
     /** When false, `lock` is refused entirely. */
     enabled?: boolean;
-    /** When false, `gag` is refused (default: follows `enabled`). */
-    gagEnabled?: boolean;
   };
   /** Free text shown in Settings → System explaining who manages this machine. */
   managedBy?: string;
@@ -45,7 +43,6 @@ export interface DaemonStatus {
   /** Whether the daemon runs with device access (root) and found input devices. */
   devices?: { keyboards: number; pointers: number; uinput: boolean };
   locked?: { until: string; reason?: string } | null;
-  gagged?: { until: string; phrases: string[]; mode: 'word' | 'line'; reason?: string } | null;
   error?: string;
 }
 
@@ -68,13 +65,6 @@ export type DaemonRequest =
   | { op: 'policy' }
   | { op: 'lock'; durationMs: number; reason?: string }
   | { op: 'unlock' }
-  /**
-   * Gag: keep the keyboard grabbed but, at every word (`mode: 'word'`, on space/enter) or line
-   * (`mode: 'line'`, on enter) boundary, type one of `phrases` (cycling) instead of what the user
-   * typed. Modifier chords, navigation keys and backspace pass through so the PC stays usable.
-   */
-  | { op: 'gag'; durationMs: number; phrases: string[]; mode?: 'word' | 'line'; reason?: string }
-  | { op: 'ungag' }
   | { op: 'type'; text: string }
   | { op: 'key'; combo: string }
   | { op: 'click'; x: number; y: number; button?: 'left' | 'right' | 'middle' }
@@ -82,11 +72,10 @@ export type DaemonRequest =
 
 export type DaemonResponse =
   | { ok: true; op: 'hello'; version: string; protocol: 1; devices: { keyboards: number; pointers: number; uinput: boolean } }
-  | { ok: true; op: 'status'; locked: { until: string; reason?: string } | null; gagged: { until: string; phrases: string[]; mode: 'word' | 'line'; reason?: string } | null }
+  | { ok: true; op: 'status'; locked: { until: string; reason?: string } | null }
   | { ok: true; op: 'policy'; policy: PolicyFile | null; path: string }
   | { ok: true; op: 'lock'; until: string; durationMs: number }
-  | { ok: true; op: 'gag'; until: string; durationMs: number }
-  | { ok: true; op: 'unlock' | 'ungag' | 'type' | 'key' | 'click' | 'move' }
+  | { ok: true; op: 'unlock' | 'type' | 'key' | 'click' | 'move' }
   | { ok: false; error: string; code: 'REFUSED' | 'POLICY' | 'NO_DEVICES' | 'BUSY' | 'INVALID' | 'INTERNAL' };
 
 export const DAEMON_SOCKET_PATH = '/run/rp-code/daemon.sock';

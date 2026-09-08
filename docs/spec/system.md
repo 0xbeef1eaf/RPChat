@@ -107,19 +107,3 @@ current user.
 `docs/system-integration.md`: why the daemon, what the installer changes, the policy file reference,
 emergency unlock chord, uninstall, security notes (group membership means "may lock input and inject
 keys", so treat `rp-code` group like `input`).
-
-## Gag (added)
-
-`gag` keeps the keyboard grabbed like `lock` but substitutes: the daemon buffers printable keys,
-passes through modifier chords (any key with ctrl/alt/super held), navigation keys, backspace,
-delete, tab, escape and function keys, and at a boundary (space or enter in `word` mode, enter in
-`line` mode) it types the next phrase from `phrases` (cycling) followed by the boundary key through
-uinput. Policy: `inputLock.gagEnabled` (defaults to `enabled`), same `maxDurationMs`, same
-emergency chord. `status` reports `gagged`. At most one of lock/gag at a time (`BUSY`).
-
-App: `InputHandler.gag/ungag` → daemon when connected (`scope: 'system'`); always also records the
-gag in core (`engine.input.setGag(sessionId, { phrases, mode, until })`) so `ChatService.send`
-rewrites the user's chat message when the daemon is absent (`scope: 'chat'`): the message content
-becomes the next phrase (word mode: one phrase per word of the original; line mode: one phrase per
-line), the original text is kept in `message.gag.original`, and the LLM sees the rewritten text.
-Renderer shows a small "gagged" marker on such messages with the original in a tooltip.
