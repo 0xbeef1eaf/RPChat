@@ -26,10 +26,11 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   sessions: ['list', 'create', 'get', 'update', 'remove', 'messages'],
   chat: ['send', 'abort'],
   permissions: ['respond'],
-  settings: ['get', 'update', 'testProvider', 'listModels', 'testCommand', 'defaultCommands'],
+  settings: ['get', 'managed', 'update', 'testProvider', 'listModels', 'testCommand', 'defaultCommands'],
   audit: ['list'],
   memories: ['list', 'add', 'update', 'remove', 'consolidate'],
   ui: ['respondPrompt'],
+  system: ['status', 'install', 'setAutostart', 'installerPath'],
   plugins: ['pluginsDir', 'list', 'install', 'remove', 'setEnabled', 'reload', 'openFolder'],
   editor: [
     'workspaceDir', 'listProjects', 'create', 'open', 'importInstalled', 'forget', 'read', 'saveManifest', 'addCharacter', 'saveCharacter', 'removeCharacter',

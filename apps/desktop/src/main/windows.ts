@@ -188,9 +188,12 @@ export class WindowManager {
     return Boolean(dev && url.startsWith(dev));
   }
 
-  createMainWindow(): BrowserWindow {
+  createMainWindow(options: { hidden?: boolean } = {}): BrowserWindow {
     if (this.main && !this.main.isDestroyed()) {
-      this.main.focus();
+      if (!options.hidden) {
+        this.main.show();
+        this.main.focus();
+      }
       return this.main;
     }
     const win = new BrowserWindow({
@@ -207,7 +210,7 @@ export class WindowManager {
     });
     this.main = win;
     this.track(win, 'main');
-    win.once('ready-to-show', () => win.show());
+    if (!options.hidden) win.once('ready-to-show', () => win.show());
     win.on('closed', () => {
       if (this.main === win) this.main = undefined;
       this.opts.onMainClosed?.();

@@ -28,6 +28,9 @@ import { ProjectRegistry, keyFromAssetHost } from './editor/registry.js';
 import { EditorService } from './editor/service.js';
 import { PluginRegistry } from './plugins/registry.js';
 import { PluginService } from './plugins/service.js';
+import { DaemonClient } from './system/daemon-client.js';
+import { SystemIntegration } from './system/integration.js';
+import { PolicyWatcher, applyPolicy, stripManagedPatch } from './system/policy.js';
 import { createHyprTransport } from './display/hyprland.js';
 import type { HyprTransport } from './display/hyprland.js';
 import { detectWindowSystem, isHyprland } from './display/layers.js';
@@ -55,6 +58,9 @@ export interface AppServices {
   senses: Senses;
   editor: EditorService;
   plugins: PluginService;
+  system: SystemIntegration;
+  policy: PolicyWatcher;
+  daemon: DaemonClient;
   commands: CommandRunner;
   permissionPrompts: PendingPrompts<PermissionDecision>;
   uiPrompts: PendingPrompts<UiPromptAnswer>;
@@ -167,7 +173,10 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     logger,
   });
   const wallpaper = new WallpaperHandler({ commands, packs, backend: () => backend, restoreFile: async () => (await settingsOf()).wallpaperRestoreFile });
-  const input = new InputHandler({ commands, maxLockMs: async () => (await settingsOf()).maxInputLockMs, logger });
+  // ---- system integration (Linux daemon + root-owned policy) --------------------
+  const daemon = new DaemonClient({ ...(env.RP_DAEMON_SOCKET ? { socketPath: env.RP_DAEMON_SOCKET } : {}), logger });
+  const policy = new PolicyWatcher(env.RP_POLICY_FILE, logger);
+  const input = new InputHandler({ commands, maxLockMs: async () => (await settingsOf()).maxInputLockMs, logger, ...(process.platform === 'linux' ? { daemon } : {}) });
 
   // ---- phase 2: senses + handlers ------------------------------------------
   const senses = createSenses({ settings: settingsOf, commands, ...(hypr ? { hypr } : {}), logger });
@@ -255,6 +264,24 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     ...({ senses: senses.provider } as object),
   });
 
+  // Every settings read (ours and core's) goes through the policy; updates cannot touch managed paths.
+  const rawGet = engine.settings.get.bind(engine.settings);
+  const rawUpdate = engine.settings.update.bind(engine.settings);
+  engine.settings.get = async () => applyPolicy(await rawGet(), (await policy.current()).policy).settings;
+  engine.settings.update = async (patch) => {
+    const state = await policy.current();
+    await rawUpdate(stripManagedPatch(patch ?? {}, state.managed));
+    return engine.settings.get();
+  };
+  const system = new SystemIntegration({
+    platform: process.platform,
+    daemon,
+    policy,
+    resourcesDirs,
+    appBin: env.APPIMAGE ?? process.execPath,
+    logger,
+  });
+
   await engine.start();
   const builtinIds = new Set(createStandardRegistry().list().map((m) => m.id));
   const plugins = new PluginService({
@@ -302,6 +329,9 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     senses,
     editor,
     plugins,
+    system,
+    policy,
+    daemon,
     commands,
     permissionPrompts,
     uiPrompts,
@@ -325,6 +355,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       uiPrompts.rejectAll();
       await senses.dispose().catch((err: unknown) => logger.warn('[senses] dispose failed', err));
       await plugins.dispose().catch((err: unknown) => logger.warn('[plugins] dispose failed', err));
+      daemon.close();
       await engine.stop().catch((err: unknown) => logger.warn('[engine] stop failed', err));
       await backend.dispose().catch((err: unknown) => logger.warn('[display] dispose failed', err));
       await loopback?.close().catch(() => undefined);

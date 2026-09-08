@@ -50,7 +50,8 @@
     "files": [
       "out/**",
       "resources/**",
-      "!resources/bin/**"
+      "!resources/bin/**",
+      "!resources/system/**"
     ],
     "extraResources": [
       {
@@ -59,6 +60,17 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources/system",
+        "to": "system",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/tray.png",
+        "to": "tray.png"
       },
       {
         "from": "../../examples/packs/luna",
@@ -101,7 +113,21 @@
       "maintainer": "rp-code contributors"
     },
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
-    "publish": null
+    "publish": null,
+    "deb": {
+      "afterInstall": "resources/deb-after-install.sh",
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0"
+      ]
+    }
   },
   "author": {
     "name": "rp-code contributors"

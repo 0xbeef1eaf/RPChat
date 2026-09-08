@@ -145,6 +145,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
     },
     settings: {
       get: () => engine.settings.get(),
+      managed: async () => (await services.policy.current()).managed,
       update: async (_e, patch: Partial<AppSettings>) => {
         const next = await engine.settings.update(patch ?? {});
         if (patch && patch.displayBackend !== undefined) {
@@ -236,6 +237,12 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       installToApp: (_e, key) => services.editor.installToApp(requireString(key, 'key')),
       revealInFolder: (_e, key) => services.editor.revealInFolder(requireString(key, 'key')),
       behaviourTemplates: async () => services.editor.behaviourTemplates(),
+    },
+    system: {
+      status: () => services.system.status(),
+      install: (_e, options) => services.system.install(options && typeof options === 'object' ? options : {}),
+      setAutostart: (_e, enabled) => services.system.setAutostart(Boolean(enabled)),
+      installerPath: () => services.system.installerPath(),
     },
     plugins: {
       pluginsDir: async () => services.plugins.pluginsDir,

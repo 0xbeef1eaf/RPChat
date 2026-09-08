@@ -5,7 +5,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BrowserWindow, app, protocol, session } from 'electron';
+import { BrowserWindow, Menu, Tray, app, nativeImage, protocol, session } from 'electron';
 import { ASSET_PROTOCOL } from '@rp/shared';
 import { handleAssetRequest } from './asset-protocol.js';
 import { isHyprland } from './display/layers.js';
@@ -21,6 +21,9 @@ const OUT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 /** apps/desktop in a dev checkout, the asar root when packaged. */
 const APP_ROOT = path.resolve(OUT_DIR, '..');
 const env = process.env;
+/** `rp-code --hidden` (autostart): start minimized to the tray, no window until Show. */
+const START_HIDDEN = process.argv.includes('--hidden');
+let tray: Tray | undefined;
 
 /** `app.getVersion()` is Electron's own version when launched as `electron out/main/index.js`; prefer our package.json. */
 function resolveAppVersion(): string {
@@ -91,7 +94,8 @@ async function main(): Promise<void> {
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+    // With a tray icon the app keeps running in the background (autostart mode).
+    if (process.platform !== 'darwin' && !tray) app.quit();
   });
 
   app.on('activate', () => {
@@ -126,8 +130,9 @@ async function main(): Promise<void> {
   protocol.handle(ASSET_PROTOCOL, (request) => handleAssetRequest(request, { packRootFor: (packId) => active.packRootFor(packId), logger }));
 
   registerIpc({ services, windows, logger, version });
-  const win = windows.createMainWindow();
-  win.once('ready-to-show', () => logger.info(`[main] window opened (userData: ${app.getPath('userData')})`));
+  if (START_HIDDEN) tray = createTray(windows, () => void shutdown().finally(() => app.quit()));
+  const win = windows.createMainWindow({ hidden: START_HIDDEN });
+  win.once('ready-to-show', () => logger.info(`[main] window ${START_HIDDEN ? 'ready (hidden, tray)' : 'opened'} (userData: ${app.getPath('userData')})`));
   logger.info(`[main] rp-code ${version} ready; ${engine.packs.characters().length} character(s) available`);
   if (isSmokeRun(env)) {
     await smokeLoadPlugin(active.plugins, APP_ROOT, logger, env);
@@ -141,6 +146,27 @@ async function main(): Promise<void> {
         }),
       1500,
     );
+  }
+}
+
+/** Tray icon with Show / Quit (used by `--hidden`). */
+function createTray(windows: WindowManager, quit: () => void): Tray | undefined {
+  try {
+    const iconFile = [path.join(APP_ROOT, 'resources', 'tray.png'), path.join(process.resourcesPath ?? '', 'tray.png')].find((f) => fs.existsSync(f));
+    const icon = iconFile ? nativeImage.createFromPath(iconFile) : nativeImage.createEmpty();
+    const t = new Tray(icon.isEmpty() ? icon : icon.resize({ width: 22, height: 22 }));
+    t.setToolTip('rp-code');
+    const show = (): void => {
+      const w = windows.getMainWindow() ?? windows.createMainWindow();
+      w.show();
+      w.focus();
+    };
+    t.setContextMenu(Menu.buildFromTemplate([{ label: 'Show rp-code', click: show }, { type: 'separator' }, { label: 'Quit', click: quit }]));
+    t.on('click', show);
+    return t;
+  } catch (err) {
+    logger.warn('[main] tray icon unavailable', err);
+    return undefined;
   }
 }
 
