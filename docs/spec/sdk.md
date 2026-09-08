@@ -18,6 +18,9 @@ export function createStandardRegistry(): CapabilityRegistry;          // all v1
 export function validateModuleSpec(spec: CapabilityModuleSpec): string[]; // list of problems, [] = valid
 export function generateSdkTypings(registry, options?: { modules?: string[] }): string;
 export function generateSdkDocs(registry, options?: { modules?: string[]; deniedModules?: string[] }): string;
+// Abridged reference for the prompt: rules, then per module `- name(sig): ret — first TSDoc sentence`,
+// helper types on one line, one example; shared preamble types only when referenced. ~1/3 of typings+docs.
+export function generateSdkIndex(registry, options?: { modules?: string[]; deniedModules?: string[]; helperTypes?: boolean }): string;
 export function describeSurface(registry, options?: { modules?: string[] }): SdkSurface;
 export const SDK_PREAMBLE_TYPINGS: string;  // shared helper types (AssetRef, MediaHandle, ...)
 export * as modules from './modules/index.js';   // chatModule, logModule, stateModule, packModule, timersModule, mediaModule, uiModule, systemModule
@@ -103,6 +106,8 @@ system (prompt) — every method `dangerous: true`
 - `clipboardWrite(text: string): Promise<void>`
 
 ## Docs for the LLM
+
+The prompt builder injects `generateSdkIndex` (not the full typings + docs); the `help` module (`sdk.help.modules()`, `sdk.help.module(id)`, trusted) returns a granted module's complete `typings` and `docs` on demand. The first code fence of `docs` doubles as the module's example in the index, so keep it short and representative.
 
 Each module's `docs` is 5–20 lines of markdown: purpose, when to use, 1–2 short code examples, pitfalls. `generateSdkDocs` prefixes a general section: code is the body of an async function, `sdk` is global, `await` every call, return small JSON, keep actions short, do not busy-loop, prefer one action per intention, denied modules list.
 

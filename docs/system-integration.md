@@ -50,8 +50,10 @@ system-wide steps (group, daemon, udev rule, policy directory) and leaves group 
 autostart for you or the Settings button.
 
 Flags: `--user <name>` (default: the user behind `sudo`/`pkexec`), `--app-bin <path>` (the
-executable or AppImage the autostart entry should launch), `--autostart xdg|systemd|none`
-(default `xdg`), `--policy-template` (write the example policy if none exists), `--dry-run`
+executable or AppImage the autostart and menu entries should launch), `--autostart xdg|systemd|none`
+(default `xdg`), `--menu-entry yes|no` (default `yes`: an application menu entry and icon under
+`/usr/local/share`, so an AppImage shows up in launchers; the `.deb` passes `no` because the
+package ships its own), `--policy-template` (write the example policy if none exists), `--dry-run`
 (print the steps without changing anything), `--uninstall`.
 
 ### What the installer changes
@@ -65,8 +67,9 @@ re-running is safe.
 | 2 | Installs the daemon to `/usr/local/libexec/rp-code/rp-coded` (plus `README.md`, `POLICY.md`, `policy.example.json`), the unit `/etc/systemd/system/rp-coded.service`, and runs `systemctl enable --now rp-coded`. |
 | 3 | Installs `/etc/udev/rules.d/70-rp-code.rules` (makes `/dev/uinput` group-writable for `rp-code` — only needed by fallback tools such as `ydotool`; the daemon itself is root), `/etc/modules-load.d/rp-code.conf` (`uinput` at boot), loads the module now and reloads udev. |
 | 4 | Creates `/etc/rp-code` (`0755`). With `--policy-template`, writes `/etc/rp-code/policy.json` from the example **only if it does not exist**; an existing file is never modified (its ownership is corrected to `root:root 0644` if needed). |
-| 5 | Autostart for your user: `~/.config/autostart/rp-code.desktop` (`Exec=<app> --hidden`, XDG) or `~/.config/systemd/user/rp-code.service` (enabled with `systemctl --user` when a session bus is reachable, otherwise it prints the command). Switching methods removes the other entry. It also prints the Hyprland `exec-once = <app> --hidden` line for people who prefer that. |
-| 6 | Runs `rp-coded --check-devices` and prints what the daemon can see. |
+| 5 | Application menu entry `/usr/local/share/applications/rp-code.desktop` (`Exec=<app> %U`) and icon `/usr/local/share/icons/hicolor/512x512/apps/rp-code.png`, refreshed with `update-desktop-database`/`gtk-update-icon-cache` when present. Skipped with `--menu-entry no` (the `.deb` does this, it ships its own entry). |
+| 6 | Autostart for your user: `~/.config/autostart/rp-code.desktop` (`Exec=<app> --hidden`, XDG) or `~/.config/systemd/user/rp-code.service` (enabled with `systemctl --user` when a session bus is reachable, otherwise it prints the command). Switching methods removes the other entry. It also prints the Hyprland `exec-once = <app> --hidden` line for people who prefer that. |
+| 7 | Runs `rp-coded --check-devices` and prints what the daemon can see. |
 
 The daemon creates `/run/rp-code/` (`0750 root:rp-code`) and the socket
 `/run/rp-code/daemon.sock` (`0660 root:rp-code`) when it starts. Logs: `journalctl -u rp-coded`.

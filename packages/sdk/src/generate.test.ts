@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createStandardRegistry, describeSurface, generateSdkDocs, generateSdkTypings, SDK_PREAMBLE_TYPINGS } from './index.js';
+import { createStandardRegistry, describeSurface, docSummary, generateSdkDocs, generateSdkIndex, generateSdkTypings, indexMethods, indexTypes, SDK_PREAMBLE_TYPINGS } from './index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** Virtual files live "inside" this package so `@rp/shared` resolves through node_modules when needed. */
@@ -251,7 +251,7 @@ describe('describeSurface', () => {
   it('lists modules with their method names, dotted for nested members', () => {
     const surface = describeSurface(registry);
     expect(surface.modules.map((m) => m.id)).toEqual([
-      'chat', 'log', 'state', 'pack', 'timers', 'llm', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input',
+      'chat', 'log', 'help', 'state', 'pack', 'timers', 'llm', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input',
       'presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging',
       'system',
     ]);
@@ -301,5 +301,49 @@ describe('generateSdkDocs', () => {
     expect(docs).toContain('## Not available');
     expect(docs).toContain('`sdk.system`, `sdk.ui`.');
     expect(docs.indexOf('## Not available')).toBeGreaterThan(docs.indexOf('## sdk.media'));
+  });
+});
+
+describe('generateSdkIndex', () => {
+  const registry = createStandardRegistry();
+
+  it('is a fraction of the size of the full typings + docs and lists every method once', () => {
+    const index = generateSdkIndex(registry);
+    const full = generateSdkTypings(registry) + generateSdkDocs(registry);
+    expect(index.length).toBeLessThan(full.length / 2.5);
+    for (const spec of registry.list()) {
+      expect(index).toContain(`## sdk.${spec.id} — ${spec.title} (${spec.permission})`);
+      for (const method of Object.keys(spec.methods)) {
+        const occurrences = index.split(`\n- ${method}(`).length - 1 + (index.split(`\n- ${method}<`).length - 1);
+        expect(occurrences, `${spec.id}.${method}`).toBeGreaterThanOrEqual(1);
+      }
+    }
+  });
+
+  it('renders one-line signatures with the first TSDoc sentence and helper types', () => {
+    const index = generateSdkIndex(registry, { modules: ['media', 'state'], deniedModules: ['system', 'system'] });
+    expect(index).toContain('- showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle> — Show an image asset in an overlay.');
+    expect(index).toContain('- session.get(key: string): Promise<Json | undefined>');
+    expect(index).toContain('ShowImageOptions extends OverlayOptions { durationMs?: number; caption?: string }');
+    expect(index).toContain('## Shared types');
+    expect(index).not.toContain('PresenceSnapshot'); // unreferenced shared types are dropped
+    expect(index).toContain('## Not available\nThese modules are not granted in this session and do not exist on `sdk`: `sdk.system`.');
+    expect(index).toContain('sdk.help.module("<id>")');
+    expect(index).toContain('```ts\nconst pic = await sdk.pack.asset("media/images/luna-smile.png");');
+    expect(index).not.toContain('sdk.timers —');
+  });
+
+  it('index helpers handle nested groups, arrows and type aliases', () => {
+    expect(indexMethods('a(x: number): Promise<void>; grp: { b(): void; c(f: (v: string) => void): Promise<number> }; readonly d?: string;')).toEqual([
+      'a(x: number): Promise<void>',
+      'grp.b(): void',
+      'grp.c(f: (v: string) => void): Promise<number>',
+    ]);
+    expect(indexTypes('type Mode = "a" | "b";\n/** doc */\ninterface Opts extends Base { /** x */ x?: number; y: Mode }\ninterface Api { m(): void }', 'Api')).toEqual([
+      'Mode = "a" | "b"',
+      'Opts extends Base { x?: number; y: Mode }',
+    ]);
+    expect(docSummary('interface Api {\n  /** Does a thing. Then more. @param x y */\n  m(x: number): void;\n}', 'm')).toBe('Does a thing.');
+    expect(docSummary('interface Api {\n  m(x: number): void;\n}', 'm')).toBeUndefined();
   });
 });

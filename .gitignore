@@ -17,3 +17,4 @@ native/*/target/
 apps/desktop/resources/bin/
 !native/rp-coded/dist/
 apps/desktop/resources/system/
+!apps/desktop/build/

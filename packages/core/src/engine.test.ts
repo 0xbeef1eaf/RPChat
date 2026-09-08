@@ -231,8 +231,8 @@ describe('ChatService turns', () => {
     // The system prompt carries the persona and the filtered SDK reference.
     expect(second.system).toContain('You are Echo');
     expect(second.system).toContain('<sdk_reference>');
-    expect(second.system).toContain('interface StateApi');
-    expect(second.system).not.toContain('interface MediaApi');
+    expect(second.system).toContain('## sdk.state —');
+    expect(second.system).not.toContain('## sdk.media —');
     expect(second.system).toContain('`sdk.media`');
     expect(second.system).toContain('"mood": "happy"');
     expect(second.messages[0]!.role).toBe('user');

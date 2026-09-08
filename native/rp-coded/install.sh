@@ -2,14 +2,14 @@
 # rp-code system integration installer (Linux).
 #
 # Installs the rp-coded daemon (input lock + injection), its systemd unit, the rp-code group,
-# the udev rule / uinput module for fallback tools, the policy directory, and an autostart entry
-# for one user. Idempotent: every step prints "[ok] ..." when it changed something and
+# the udev rule / uinput module for fallback tools, the policy directory, an application menu
+# entry + icon for the app (AppImage users get one this way), and an autostart entry for one user. Idempotent: every step prints "[ok] ..." when it changed something and
 # "[skip] ..." when it was already done. Run as root (sudo or pkexec; the app runs it with
 # pkexec and passes --app-bin). See docs/system-integration.md.
 #
 # Usage:
 #   install.sh [--app-bin <path>] [--user <name>] [--autostart xdg|systemd|none]
-#              [--policy-template] [--daemon-bin <path>] [--dry-run]
+#              [--menu-entry yes|no] [--policy-template] [--daemon-bin <path>] [--dry-run]
 #   install.sh --uninstall [--user <name>] [--dry-run]
 set -euo pipefail
 
@@ -22,10 +22,13 @@ MODULES_DST=/etc/modules-load.d/rp-code.conf
 POLICY_DIR=/etc/rp-code
 POLICY_DST="$POLICY_DIR/policy.json"
 RUN_DIR=/run/rp-code
+MENU_DST=/usr/local/share/applications/rp-code.desktop
+ICON_DST=/usr/local/share/icons/hicolor/512x512/apps/rp-code.png
 
 APP_BIN=""
 TARGET_USER=""
 AUTOSTART=xdg
+MENU_ENTRY=yes
 POLICY_TEMPLATE=false
 DAEMON_BIN=""
 UNINSTALL=false
@@ -41,6 +44,7 @@ while [ $# -gt 0 ]; do
     --app-bin) APP_BIN="${2:?--app-bin needs a path}"; shift 2 ;;
     --user) TARGET_USER="${2:?--user needs a name}"; shift 2 ;;
     --autostart) AUTOSTART="${2:?--autostart needs xdg|systemd|none}"; shift 2 ;;
+    --menu-entry) MENU_ENTRY="${2:?--menu-entry needs yes|no}"; shift 2 ;;
     --policy-template) POLICY_TEMPLATE=true; shift ;;
     --daemon-bin) DAEMON_BIN="${2:?--daemon-bin needs a path}"; shift 2 ;;
     --uninstall) UNINSTALL=true; shift ;;
@@ -50,6 +54,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$AUTOSTART" in xdg|systemd|none) ;; *) echo "install.sh: --autostart must be xdg, systemd or none" >&2; exit 64 ;; esac
+case "$MENU_ENTRY" in yes|no) ;; *) echo "install.sh: --menu-entry must be yes or no" >&2; exit 64 ;; esac
 
 ok()   { printf '[ok]   %s\n' "$*"; }
 skip() { printf '[skip] %s\n' "$*"; }
@@ -96,6 +101,10 @@ if [ -z "$APP_BIN" ]; then
   done
 fi
 APP_EXEC="${APP_BIN:-rp-code}"
+ICON_SRC=""
+for c in "$SCRIPT_DIR/rp-code.png" "$SCRIPT_DIR/../../apps/desktop/build/icon.png"; do
+  if [ -f "$c" ]; then ICON_SRC="$c"; break; fi
+done
 
 # install <src> <dst> <mode>: copy only when content differs; prints ok/skip.
 install_file() {
@@ -108,6 +117,12 @@ install_file() {
   run install -D -m "$mode" -o root -g root "$src" "$dst"
   ok "installed $dst"
   return 0
+}
+
+# Refresh the desktop menu and icon caches when the tools exist (never fatal).
+refresh_menus() {
+  if have update-desktop-database; then run update-desktop-database "$(dirname "$MENU_DST")" 2>/dev/null || true; fi
+  if have gtk-update-icon-cache; then run gtk-update-icon-cache -q -t /usr/local/share/icons/hicolor 2>/dev/null || true; fi
 }
 
 # Run systemctl --user as the target user when a session bus exists; prints otherwise.
@@ -143,9 +158,13 @@ if $UNINSTALL; then
   for f in "$UNIT_DST" "$UDEV_DST" "$MODULES_DST"; do
     if [ -e "$f" ]; then run rm -f "$f"; ok "removed $f"; else skip "$f absent"; fi
   done
-  have systemctl && run systemctl daemon-reload
+  if have systemctl; then run systemctl daemon-reload 2>/dev/null || true; fi
   if have udevadm; then run udevadm control --reload || true; fi
   if [ -d "$LIBEXEC" ]; then run rm -rf "$LIBEXEC"; ok "removed $LIBEXEC"; else skip "$LIBEXEC absent"; fi
+  for f in "$MENU_DST" "$ICON_DST"; do
+    if [ -e "$f" ]; then run rm -f "$f"; ok "removed $f"; else skip "$f absent"; fi
+  done
+  refresh_menus
   if [ -d "$RUN_DIR" ]; then run rm -rf "$RUN_DIR"; ok "removed $RUN_DIR"; fi
   if [ -n "$TARGET_USER" ]; then
     xdg="$USER_HOME/.config/autostart/rp-code.desktop"
@@ -256,7 +275,28 @@ else
   skip "no policy file (defaults apply; --policy-template writes $POLICY_DST, see $LIBEXEC/POLICY.md)"
 fi
 
-# 5. autostart for the user ------------------------------------------------------------------------
+# 5. application menu entry and icon (system-wide, so AppImage users get a launcher) ----------------
+if [ "$MENU_ENTRY" = yes ]; then
+  content="$(sed "s|^Exec=.*|Exec=$APP_EXEC %U|; s|^TryExec=.*|TryExec=$APP_EXEC|" "$DIST/rp-code.desktop")"
+  if [ -f "$MENU_DST" ] && [ "$(cat "$MENU_DST")" = "$content" ]; then
+    skip "$MENU_DST is up to date"
+    changed=false
+  else
+    if $DRY_RUN; then note "+ write $MENU_DST"; else install -D -m 0644 -o root -g root /dev/null "$MENU_DST" && printf '%s\n' "$content" > "$MENU_DST"; fi
+    ok "wrote $MENU_DST"
+    changed=true
+  fi
+  if [ -n "$ICON_SRC" ]; then
+    if install_file "$ICON_SRC" "$ICON_DST" 0644; then changed=true; fi
+  else
+    warn "app icon not found next to the installer; the menu entry will show a generic icon"
+  fi
+  if $changed; then refresh_menus; fi
+else
+  skip "application menu entry (--menu-entry no)"
+fi
+
+# 6. autostart for the user ------------------------------------------------------------------------
 if [ -n "$TARGET_USER" ]; then
   xdg="$USER_HOME/.config/autostart/rp-code.desktop"
   unit="$USER_HOME/.config/systemd/user/rp-code.service"
@@ -296,7 +336,7 @@ else
   skip "autostart (no user)"
 fi
 
-# 6. device check ----------------------------------------------------------------------------------
+# 7. device check ----------------------------------------------------------------------------------
 if [ -x "$DAEMON_DST" ] && ! $DRY_RUN; then
   echo "device check ($DAEMON_DST --check-devices):"
   "$DAEMON_DST" --check-devices 2>&1 | sed 's/^/       /' || true

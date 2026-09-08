@@ -4,6 +4,7 @@ import { createStandardRegistry, validateModuleSpec, modules } from './index.js'
 const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   chat: { permission: 'trusted', methods: ['say', 'emote', 'history', 'setStatus'] },
   log: { permission: 'trusted', methods: ['debug', 'info', 'warn', 'error'] },
+  help: { permission: 'trusted', methods: ['modules', 'module'] },
   state: {
     permission: 'trusted',
     methods: ['get', 'set', 'delete', 'keys', 'all', 'session.get', 'session.set', 'session.delete', 'session.keys', 'session.all'],

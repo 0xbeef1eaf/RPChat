@@ -109,6 +109,7 @@
         "deb"
       ],
       "category": "Utility",
+      "icon": "build/icon.png",
       "executableName": "rp-code",
       "maintainer": "rp-code contributors"
     },

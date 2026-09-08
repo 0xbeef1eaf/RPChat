@@ -51,3 +51,21 @@ describe('StateHandler', () => {
     await expect(handler.invoke('nope', [], ctx())).rejects.toMatchObject({ code: 'CAPABILITY_UNKNOWN' });
   });
 });
+
+describe('HelpHandler', () => {
+  it('returns the full reference of granted modules only', async () => {
+    const { HelpHandler } = await import('./help.js');
+    const { createStandardRegistry } = await import('@rp/sdk');
+    const registry = createStandardRegistry();
+    const handler = new HelpHandler(registry, { allowedModules: async () => ['chat', 'log', 'help', 'media'] });
+    const context = { packId: 'p', characterId: 'c', sessionId: 's', packRoot: '/x', trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
+    const modules = (await handler.invoke('modules', [], context)) as Array<{ id: string }>;
+    expect(modules.map((m) => m.id)).toEqual(['chat', 'log', 'help', 'media']);
+    const media = (await handler.invoke('module', ['sdk.media'], context)) as { id: string; typings: string; docs: string };
+    expect(media.id).toBe('media');
+    expect(media.typings).toContain('interface MediaApi');
+    expect(media.docs).toContain('overlay');
+    await expect(handler.invoke('module', ['system'], context)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(handler.invoke('module', [''], context)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+  });
+});

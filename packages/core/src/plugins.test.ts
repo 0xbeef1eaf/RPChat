@@ -60,7 +60,7 @@ describe('engine.capabilities.register / unregister', () => {
 
     await t.engine.chat.send(session.id, 'what time is it?');
     let system = t.provider.requests.at(-1)!.system;
-    expect(system).toContain('interface ClockApi');
+    expect(system).toContain('## sdk.clock —');
     expect(system).toContain('## sdk.clock');
     expect(system).toContain('Granted sdk modules: ');
     expect(system).toMatch(/Granted sdk modules: .*\bclock\b/);
@@ -80,7 +80,7 @@ describe('engine.capabilities.register / unregister', () => {
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.some((m) => m.id === 'clock')).toBe(false);
     await t.engine.chat.send(session.id, 'and now?');
     system = t.provider.requests.at(-1)!.system;
-    expect(system).not.toContain('interface ClockApi');
+    expect(system).not.toContain('## sdk.clock —');
     expect(system).not.toContain('sdk.clock');
     expect((await t.engine.packs.view(LUNA_ID)).effectiveCapabilities).toEqual([]);
 

@@ -251,8 +251,14 @@ System prompt sections, in order (each a stable `<section>` block):
 2. **Character persona** – `persona.md` verbatim, plus example dialogue.
 3. **Pack context** – pack name/description, list of assets grouped by kind
    (so the model knows which files exist), granted capabilities, denied ones.
-4. **SDK reference** – generated `sdk.d.ts` + module docs, filtered to granted
-   modules (denied modules are listed by name with "not available").
+4. **SDK reference** – the abridged SDK index (`generateSdkIndex`): general
+   rules, then per granted module one line per method (signature + first TSDoc
+   sentence), its helper types on one line each and one example, then only the
+   shared types those modules reference. Denied modules are listed by name with
+   "not available". The full `sdk.d.ts` + docs of one module are available on
+   demand through `sdk.help.module(id)`. With every module granted the section is
+   about 8k tokens (the full reference is about 23k, which used to crowd the
+   transcript out of the default budget).
 5. **Memory** – current character `state` (JSON, truncated), active timers.
 6. **Session notes** – time, locale, user display name, any user-configured
    scenario text.

@@ -383,7 +383,14 @@ export class ChatService {
     }
     if (this.o.mood) promptInput.mood = await this.o.mood.get(session.characterRef);
     if (this.o.routine) promptInput.routine = await this.o.routine.status(session.characterRef);
-    const { system, messages } = this.promptBuilder.build(promptInput);
+    const { system, messages, stats } = this.promptBuilder.build(promptInput);
+    if (stats.systemTokens * 2 > stats.budgetTokens || stats.droppedMessages > 0) {
+      this.o.logger.warn(
+        `[chat] prompt budget: system ~${stats.systemTokens} tokens (sdk reference ~${stats.sdkReferenceTokens}) of ${stats.budgetTokens}; ` +
+          `${stats.transcriptBudgetTokens} left for the transcript, ${stats.droppedMessages} older message(s) dropped` +
+          (stats.systemTokens * 2 > stats.budgetTokens ? ' — raise Settings → General → context token budget or grant fewer modules' : ''),
+      );
+    }
 
     const controller = new AbortController();
     this.controllers.set(session.id, controller);

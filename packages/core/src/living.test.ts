@@ -72,8 +72,8 @@ describe('permission policy (requested ∩ global ∩ per-pack)', () => {
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     await t.engine.chat.send(session.id, 'hi');
     const system = t.provider.requests.at(-1)!.system;
-    expect(system).toContain('interface MediaApi');
-    expect(system).not.toContain('interface UiApi');
+    expect(system).toContain('## sdk.media —');
+    expect(system).not.toContain('## sdk.ui —');
     expect(system).toContain('ui (denied by your settings)');
     expect(system).toContain('system (not requested by the pack)');
 

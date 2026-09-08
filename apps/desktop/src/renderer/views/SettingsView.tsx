@@ -232,7 +232,7 @@ export function SettingsView() {
             value={settings.contextTokenBudget}
             min={1000}
             step={1000}
-            hint="Approximate transcript window sent to the model."
+            hint="Approximate size of the whole request (system prompt plus transcript). The system prompt with all modules is about 10k tokens; leave the rest for conversation."
             onCommit={(v) => patchSettings({ contextTokenBudget: Math.round(v) })}
           />
           <div className="field">

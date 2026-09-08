@@ -57,7 +57,7 @@ async function input(transcript: ChatMessage[], overrides: Partial<PromptInput> 
 
 describe('PromptBuilder', () => {
   it('assembles the six sections in order with filtered SDK reference', async () => {
-    const { system, messages } = new PromptBuilder().build(await input([msg(1, 'user', 'hi')]));
+    const { system, messages, stats } = new PromptBuilder().build(await input([msg(1, 'user', 'hi')]));
     const order = ['engine_rules', 'persona', 'pack', 'sdk_reference', 'memory', 'session'].map((tag) => system.search(new RegExp(`^<${tag}>$`, 'm')));
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(order[0]).toBeGreaterThanOrEqual(0);
@@ -68,9 +68,14 @@ describe('PromptBuilder', () => {
     expect(system).toMatch(/  - media\/images\/luna-smile\.png \(image, \d+ (B|KB)\)/);
     expect(system).toMatch(/- audio:\n  - media\/audio\/chime\.wav \(audio, \d+ (B|KB)\)/);
     expect(system).toContain('Granted sdk modules: chat, log, state, pack, timers, media');
-    expect(system).toContain('interface MediaApi');
-    expect(system).not.toContain('interface SystemApi');
+    expect(system).toContain('## sdk.media — Media playback (pack)');
+    expect(system).toContain('- showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>');
+    expect(system).not.toContain('interface MediaApi'); // abridged index, not the full d.ts
+    expect(system).not.toContain('sdk.system —');
     expect(system).toContain('`sdk.ui`, `sdk.system`');
+    expect(stats.sdkReferenceTokens).toBeLessThan(3000);
+    expect(stats.systemTokens).toBeLessThan(stats.budgetTokens / 2);
+    expect(stats.droppedMessages).toBe(0);
     expect(system).toContain('"userName": "Sam"');
     expect(system).toContain('t1 fires at 2026-01-01T12:00:00.000Z (L)');
     expect(system).toContain('A rainy evening.');
@@ -80,14 +85,12 @@ describe('PromptBuilder', () => {
 
   it('includes the new modules when granted and lists them as not available otherwise', async () => {
     const denied = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display'], deniedModules: ['media', 'ui', 'system', 'wallpaper', 'browser', 'input'] })).system;
-    expect(denied).toContain('interface DisplayApi');
     expect(denied).toContain('## sdk.display');
-    for (const api of ['WallpaperApi', 'BrowserApi', 'InputApi', 'MediaApi']) expect(denied).not.toContain(`interface ${api}`);
+    for (const id of ['wallpaper', 'browser', 'input', 'media']) expect(denied).not.toContain(`## sdk.${id} —`);
     expect(denied).toContain('`sdk.wallpaper`, `sdk.browser`, `sdk.input`');
     expect(denied).toContain('Not available: media, ui, system, wallpaper, browser, input');
 
     const granted = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display', 'wallpaper', 'browser', 'input'], deniedModules: ['media', 'ui', 'system'] })).system;
-    for (const api of ['DisplayApi', 'WallpaperApi', 'BrowserApi', 'InputApi']) expect(granted).toContain(`interface ${api}`);
     for (const id of ['display', 'wallpaper', 'browser', 'input']) expect(granted).toContain(`## sdk.${id}`);
     expect(granted).toContain('Granted sdk modules: chat, log, state, pack, timers, display, wallpaper, browser, input');
     expect(granted).not.toContain('`sdk.wallpaper`, ');
@@ -106,7 +109,7 @@ describe('PromptBuilder', () => {
     ];
     const withMemories = new PromptBuilder().build(await input([], { memories, allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'memory'] })).system;
     expect(withMemories).toContain('<memories>\nThings you remember (most important first):\n- (4/5, 2026-02-01) Their cat is Miso. [pets, cat]\n- (3/5, 2026-02-02) They work nights.\n</memories>');
-    expect(withMemories).toContain('interface MemoryApi');
+    expect(withMemories).toContain('## sdk.memory —');
   });
 
   it('explains the action fence instead of the tool in fenced mode', async () => {

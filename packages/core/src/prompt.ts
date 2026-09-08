@@ -1,5 +1,5 @@
 import type { CapabilityRegistry } from '@rp/sdk';
-import { generateSdkDocs, generateSdkTypings } from '@rp/sdk';
+import { generateSdkIndex } from '@rp/sdk';
 import { estimateTokens, windowMessages } from '@rp/llm';
 import type {
   ActionRecord,
@@ -55,9 +55,25 @@ export interface PromptInput {
   locale?: string;
 }
 
+export interface PromptStats {
+  /** Estimated tokens of the whole system prompt. */
+  systemTokens: number;
+  /** Estimated tokens of the `<sdk_reference>` section. */
+  sdkReferenceTokens: number;
+  /** `contextTokenBudget` the prompt was built for. */
+  budgetTokens: number;
+  /** Tokens left for the transcript after the system prompt (never below the floor). */
+  transcriptBudgetTokens: number;
+  /** Estimated tokens of the transcript messages actually included. */
+  transcriptTokens: number;
+  /** Transcript messages dropped by the window. */
+  droppedMessages: number;
+}
+
 export interface BuiltPrompt {
   system: string;
   messages: LlmMessage[];
+  stats: PromptStats;
 }
 
 /** Content prefix of the `role: 'system'` message a self-wake appends to the transcript. */
@@ -276,21 +292,30 @@ function hasToolUse(msg: LlmMessage): boolean {
 /** Builds the system prompt (ARCHITECTURE §6) and the windowed transcript. */
 export class PromptBuilder {
   build(input: PromptInput): BuiltPrompt {
-    const typings = generateSdkTypings(input.registry, { modules: input.allowedModules });
-    const docs = generateSdkDocs(input.registry, { modules: input.allowedModules, deniedModules: input.deniedModules });
+    const reference = generateSdkIndex(input.registry, { modules: input.allowedModules, deniedModules: input.deniedModules });
     const system = [
       section('engine_rules', engineRules(input.character.definition.name, input.useTools)),
       section('persona', persona(input.character)),
       section('pack', packContext(input)),
-      section('sdk_reference', `\`\`\`ts\n${typings.trim()}\n\`\`\`\n\n${docs.trim()}`),
+      section('sdk_reference', reference),
       section('memory', memory(input)),
       ...(input.mood ? [section('mood', moodPromptText(input.mood))] : []),
       ...(input.routine ? [section('routine', RoutineService.promptText(input.routine))] : []),
       section('session', sessionNotes(input)),
     ].join('\n\n');
 
-    const budget = Math.max(MIN_TRANSCRIPT_BUDGET, input.contextTokenBudget - estimateTokens(system));
-    const messages = windowMessages(transcriptToMessages(input.transcript, input.useTools), budget);
-    return { system, messages };
+    const systemTokens = estimateTokens(system);
+    const budget = Math.max(MIN_TRANSCRIPT_BUDGET, input.contextTokenBudget - systemTokens);
+    const all = transcriptToMessages(input.transcript, input.useTools);
+    const messages = windowMessages(all, budget);
+    const stats: PromptStats = {
+      systemTokens,
+      sdkReferenceTokens: estimateTokens(reference),
+      budgetTokens: input.contextTokenBudget,
+      transcriptBudgetTokens: budget,
+      transcriptTokens: messages.reduce((n, m) => n + estimateTokens(JSON.stringify(m.content)), 0),
+      droppedMessages: all.length - messages.length,
+    };
+    return { system, messages, stats };
   }
 }

@@ -69,6 +69,8 @@ function buildDaemon() {
   const distDir = resolve(daemonDir, 'dist');
   const files = readdirSync(distDir).map((f) => join(distDir, f));
   files.push(resolve(daemonDir, 'install.sh'), resolve(daemonDir, 'README.md'));
+  const icon = resolve(appDir, 'build/icon.png');
+  if (existsSync(icon)) copyFileSync(icon, join(systemDir, 'rp-code.png'));
   for (const src of files) {
     const dst = join(systemDir, src.split('/').pop());
     copyFileSync(src, dst);

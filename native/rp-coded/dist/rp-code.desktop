@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=rp-code
+GenericName=Roleplay chat
+Comment=LLM roleplay characters that act on your desktop
+# install.sh replaces the executable with the detected app path (--app-bin).
+Exec=rp-code %U
+TryExec=rp-code
+Icon=rp-code
+Terminal=false
+Categories=Utility;Network;Chat;
+Keywords=roleplay;chat;character;llm;ai;
+StartupNotify=true
+StartupWMClass=rp-code

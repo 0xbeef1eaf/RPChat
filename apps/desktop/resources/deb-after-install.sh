@@ -1,6 +1,6 @@
 #!/bin/sh
 # electron-builder `deb.afterInstall`: set up the rp-coded daemon, udev rule and policy template
-# (no user-specific steps: --autostart none). Tolerant: never fails the package installation.
+# (no user-specific steps: --autostart none; the package ships its own menu entry: --menu-entry no). Tolerant: never fails the package installation.
 set -u
 APP_DIR="/opt/rp-code"
 INSTALLER="$APP_DIR/resources/system/install.sh"
@@ -17,5 +17,5 @@ if [ "$(id -u)" != "0" ]; then
   echo "rp-code: not running as root; run: sudo $INSTALLER --app-bin $APP_BIN --autostart none"
   exit 0
 fi
-sh "$INSTALLER" --app-bin "$APP_BIN" --autostart none --policy-template || echo "rp-code: system integration setup reported a problem (see above); the app still works without the daemon"
+sh "$INSTALLER" --app-bin "$APP_BIN" --autostart none --menu-entry no --policy-template || echo "rp-code: system integration setup reported a problem (see above); the app still works without the daemon"
 exit 0

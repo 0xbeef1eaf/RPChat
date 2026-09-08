@@ -17,6 +17,8 @@ export {
   TYPINGS_HEADER,
 } from './generate.js';
 export type { GenerateTypingsOptions, GenerateDocsOptions, DescribeSurfaceOptions } from './generate.js';
+export { generateSdkIndex, indexModule, indexMethods, indexTypes, docSummary, INDEX_INTRO } from './index-gen.js';
+export type { GenerateIndexOptions } from './index-gen.js';
 export { SDK_PREAMBLE_TYPINGS } from './preamble.js';
 export {
   pluginManifestSchema,

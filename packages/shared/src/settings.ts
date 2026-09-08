@@ -67,7 +67,7 @@ export interface AppSettings {
   defaultProviderId?: string;
   /** Max LLM ⇄ action rounds per user message. Default 4. */
   maxActionRounds: number;
-  /** Approximate token budget for the transcript window. Default 24_000. */
+  /** Approximate token budget for the whole request (system prompt + transcript window). Default 64_000. */
   contextTokenBudget: number;
   runLimits: RunLimits;
   /** Prefer native tool calling when the provider supports it. Default true. */
@@ -137,7 +137,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: RunLimits } = {
   providers: [],
   maxActionRounds: 4,
-  contextTokenBudget: 24_000,
+  contextTokenBudget: 64_000,
   useToolCalling: true,
   userDisplayName: 'You',
   theme: 'system',

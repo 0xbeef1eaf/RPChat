@@ -26,6 +26,7 @@ import { ChatHandler } from './handlers/chat.js';
 import { LlmHandler } from './handlers/llm.js';
 import { EventsHandler, MoodHandler, RoutineHandler } from './handlers/living.js';
 import { LogHandler } from './handlers/log.js';
+import { HelpHandler } from './handlers/help.js';
 import { MemoryHandler } from './handlers/memory.js';
 import { PackHandler } from './handlers/pack.js';
 import { StateHandler } from './handlers/state.js';
@@ -164,6 +165,7 @@ export class Engine {
     const coreHandlers: CapabilityHandler[] = [
       new ChatHandler(this.sessions, opts.storage.messages, this.events),
       new LogHandler(logger),
+      new HelpHandler(opts.registry, this.permissions),
       new StateHandler(opts.storage.state),
       new PackHandler(this.packs),
       new TimersHandler(this.timers),
