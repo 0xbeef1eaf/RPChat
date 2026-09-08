@@ -2,12 +2,12 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ActionContext, ChatEvent, EventSubscription, HostEvent, Json } from '@rp/shared';
-import { matchesFilter } from './services/events.js';
+import { HOST_EVENT_NAMES, matchesFilter } from './services/events.js';
 import { decayToward, energyWord, moodPromptText, moodWord } from './services/mood.js';
 import { evaluateRoutine } from './services/routine.js';
 import { sensesLine } from './prompt.js';
 import { loadPack } from '@rp/pack';
-import { ECHO_REF, FakeSenses, LUNA_DIR, LUNA_ID, LUNA_REF, MINIMAL_DIR, MINIMAL_ID, RecordingHandler, createTestEngine, createTestRegistryWithProbe, installLunaWith } from './test/helpers.js';
+import { ECHO_REF, EXAMPLES_DIR, FakeSenses, LUNA_DIR, LUNA_ID, LUNA_REF, MINIMAL_DIR, MINIMAL_ID, RecordingHandler, createTestEngine, createTestRegistryWithProbe, installLunaWith } from './test/helpers.js';
 import type { TestEngine } from './test/helpers.js';
 
 let t: TestEngine | undefined;
@@ -290,6 +290,49 @@ describe('event matching', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+describe('event interest with onEvent behaviours (Makima)', () => {
+  it('asks the host for every event while a session with an onEvent character exists, and runs the script on user-back', async () => {
+    const senses = new FakeSenses();
+    const onEventRuns: string[] = [];
+    t = await createTestEngine({
+      senses,
+      hostHandlers: ['media', 'ui', 'wallpaper', 'avatar', 'presence'].map((id) => new RecordingHandler(id, null)),
+      runnerHandler: async (request, runner) => {
+        const trig = request.context.trigger;
+        if (trig.kind === 'behaviour' && trig.hook === 'onEvent') {
+          onEventRuns.push(request.code.slice(0, request.code.indexOf('; ') + 1));
+          await runner.call(request, 'chat', 'say', 'There you are.');
+        }
+        return null;
+      },
+    });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const echo = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    expect(senses.interests.at(-1)).toEqual(['time']); // Echo has no onEvent script
+
+    await t.engine.packs.install(path.join(EXAMPLES_DIR, 'makima'));
+    expect(senses.interests.at(-1)).toEqual(['time']); // installed, but no session yet
+    const session = await t.engine.sessions.create({ characterRef: 'com.example.makima/makima' });
+    expect(senses.interests.at(-1)).toEqual([...HOST_EVENT_NAMES]);
+
+    senses.push('user-back', { idleMs: 35 * 60_000 });
+    await t.engine.eventService.idle();
+    expect(onEventRuns).toEqual(['const input = {"event":"user-back","data":{"idleMs":2100000}};']);
+    expect((await t.engine.sessions.messages(session.id)).at(-1)).toMatchObject({ role: 'assistant', origin: 'behaviour', content: 'There you are.' });
+
+    // Echo's session is untouched; removing Makima's session narrows the interest again
+    expect((await t.engine.sessions.messages(echo.id)).some((m) => m.content === 'There you are.')).toBe(false);
+    await t.engine.sessions.remove(session.id);
+    expect(senses.interests.at(-1)).toEqual(['time']);
+    // …and uninstalling the pack while a session exists also narrows it
+    const again = await t.engine.sessions.create({ characterRef: 'com.example.makima/makima' });
+    expect(senses.interests.at(-1)).toEqual([...HOST_EVENT_NAMES]);
+    await t.engine.packs.uninstall('com.example.makima');
+    expect(senses.interests.at(-1)).toEqual(['time']);
+    expect(await t.engine.sessions.get(again.id)).toBeDefined();
+  });
+});
+
 describe('routine', () => {
   const entries = [
     { at: '23:00', state: 'asleep' as const, label: 'night' },

@@ -15,6 +15,7 @@ export class SessionService {
   private behaviours: BehaviourHooks | undefined;
   private beforeRemove: ((session: Session) => Promise<void>) | undefined;
   private afterRemove: ((session: Session) => Promise<void>) | undefined;
+  private afterCreate: ((session: Session) => Promise<void>) | undefined;
 
   constructor(
     private readonly storage: Pick<Storage, 'sessions' | 'messages' | 'state'>,
@@ -38,6 +39,11 @@ export class SessionService {
   /** Runs after a session was deleted (the Engine removes its event subscriptions). */
   setAfterRemove(hook: (session: Session) => Promise<void>): void {
     this.afterRemove = hook;
+  }
+
+  /** Runs after a session was created and its `onSessionStart` behaviour ran (the Engine recomputes event interest). Failures are logged. */
+  setAfterCreate(hook: (session: Session) => Promise<void>): void {
+    this.afterCreate = hook;
   }
 
   async list(): Promise<Session[]> {
@@ -75,6 +81,13 @@ export class SessionService {
       await this.addMessage({ sessionId: session.id, role: 'assistant', content: character.definition.greeting, origin: 'greeting' });
     }
     await this.runHook(session, 'onSessionStart');
+    if (this.afterCreate) {
+      try {
+        await this.afterCreate(session);
+      } catch (err) {
+        this.logger.warn(`[sessions] after-create hook failed for ${session.id}`, err);
+      }
+    }
     return this.require(session.id);
   }
 

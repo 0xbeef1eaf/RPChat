@@ -67,6 +67,7 @@ async function copyPackDir(src: string, dest: string): Promise<void> {
 export class PackService {
   private readonly loaded = new Map<string, LoadedPack>();
   private readonly installChecks = new Map<string, Promise<boolean>>();
+  private readonly changeListeners = new Set<(packId: string) => void | Promise<void>>();
   private installHooks: InstallHookRunner | undefined;
 
   constructor(
@@ -89,6 +90,22 @@ export class PackService {
   /** Wired by the Engine: how to run `onInstall` behaviours. */
   setInstallHookRunner(runner: InstallHookRunner): void {
     this.installHooks = runner;
+  }
+
+  /** Called after a pack was installed, replaced or uninstalled. */
+  onPacksChanged(listener: (packId: string) => void | Promise<void>): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private async notifyChanged(packId: string): Promise<void> {
+    for (const listener of this.changeListeners) {
+      try {
+        await listener(packId);
+      } catch (err) {
+        this.logger.warn('[packs] change listener failed', err);
+      }
+    }
   }
 
   /** Load every installed pack from disk. Broken installs are logged and skipped. */
@@ -262,6 +279,7 @@ export class PackService {
       }
     }
     if (hasInstallHooks) await this.maybeRunInstallHooks(manifest.id);
+    await this.notifyChanged(manifest.id);
 
     return this.view(manifest.id);
   }
@@ -282,6 +300,7 @@ export class PackService {
       const remaining = await fs.readdir(idDir).catch(() => null);
       if (remaining && remaining.length === 0) await fs.rm(idDir, { recursive: true, force: true }).catch(() => undefined);
     }
+    await this.notifyChanged(packId);
   }
 
   /** Read a pack directory or `.rppack` without installing it and report what it asks for. */

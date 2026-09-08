@@ -180,11 +180,27 @@ export class EventService {
     await this.updateInterest();
   }
 
-  /** Union of event names live subscriptions need (always includes `time`). */
+  /**
+   * Event names the host should sample: every `HostEventName` when any session's character has an
+   * `onEvent` behaviour (it reacts without subscribing), otherwise the union of live subscriptions
+   * plus `time`.
+   */
   async interest(): Promise<HostEventName[]> {
+    if (await this.anyOnEventBehaviour()) return [...HOST_EVENT_NAMES];
     const names = new Set<HostEventName>(['time']);
     for (const s of await this.o.storage.subscriptions.list()) if (!isCustomEvent(s.event)) names.add(s.event as HostEventName);
     return [...names];
+  }
+
+  private async anyOnEventBehaviour(): Promise<boolean> {
+    const seen = new Set<string>();
+    for (const session of await this.o.storage.sessions.list()) {
+      if (seen.has(session.characterRef)) continue;
+      seen.add(session.characterRef);
+      if (!this.o.packs.tryGetLoaded(parseCharacterRef(session.characterRef).packId)) continue;
+      if (this.o.behaviours.has(session, 'onEvent')) return true;
+    }
+    return false;
   }
 
   async updateInterest(): Promise<void> {
