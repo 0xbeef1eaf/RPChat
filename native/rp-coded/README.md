@@ -33,7 +33,10 @@ sudo native/rp-coded/install.sh --uninstall --user "$USER"
 ```
 
 The desktop app ships the script and `dist/` under `resources/system/` and runs it through
-`pkexec` from Settings → System.
+`pkexec` from Settings → System, after copying everything to `~/.cache/rp-code/system-install/`
+(root cannot read inside an AppImage's FUSE mount). From an AppImage by hand, extract first:
+`./rp-code-*.AppImage --appimage-extract 'resources/system/*' 'resources/bin/rp-coded'`, then
+run `sudo squashfs-root/resources/system/install.sh --app-bin "$(readlink -f rp-code-*.AppImage)"`.
 
 ## CLI
 

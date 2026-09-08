@@ -23,13 +23,26 @@ command templates, or without the `input` module) when the daemon is not install
 
 **From the app:** Settings → System → *Install system integration…*. It explains what will
 change, asks for your password through `pkexec`, runs the bundled installer for your user and
-shows its output. Log out and back in afterwards (group membership).
+shows its output. Log out and back in afterwards (group membership). The app first copies the
+installer, its support files and the daemon binary to `~/.cache/rp-code/system-install/` and
+runs that copy, because root cannot read files inside a running AppImage (see below).
 
 **From a terminal** (source checkout or the extracted package):
 
 ```sh
 cd native/rp-coded && cargo build --release        # skip with the packaged app
 sudo ./install.sh --user "$USER" --app-bin /path/to/rp-code   # or the AppImage
+```
+
+**From the AppImage:** a running AppImage is a FUSE mount under `/tmp/.mount_*` that only the
+user who launched it can traverse, so `sudo /tmp/.mount_…/resources/system/install.sh` fails
+with "permission denied" even for root. Either use the Settings button (which stages a copy
+for you), or extract the files first:
+
+```sh
+./rp-code-*.AppImage --appimage-extract 'resources/system/*' 'resources/bin/rp-coded'
+sudo squashfs-root/resources/system/install.sh --user "$USER" --app-bin "$(readlink -f rp-code-*.AppImage)"
+rm -r squashfs-root
 ```
 
 The `.deb` package runs `install.sh --autostart none` on installation, which does the

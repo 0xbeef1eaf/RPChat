@@ -28,6 +28,13 @@ export interface SystemIntegrationDeps {
   homeDir?: string;
   /** `process.env.APPIMAGE ?? process.execPath`. */
   appBin: string;
+  /**
+   * Where the installer and daemon are copied before running them as root. Defaults to
+   * `~/.cache/rp-code/system-install`. Needed because an AppImage is a FUSE mount under
+   * `/tmp/.mount_*` that only the mounting user can traverse: root (sudo/pkexec) cannot even
+   * read `install.sh` from there.
+   */
+  stageDir?: string;
   userName?: string;
   run?: ProcessRunner;
   logger: Pick<Console, 'info' | 'warn' | 'debug'>;
@@ -105,6 +112,35 @@ export class SystemIntegration {
     return null;
   }
 
+  get stageDir(): string {
+    return this.deps.stageDir ?? path.join(this.homeDir, '.cache', 'rp-code', 'system-install');
+  }
+
+  /**
+   * Copy the bundled installer, its support files and the daemon binary into `stageDir` (a
+   * plain directory root can read) and return the staged `install.sh`. The stage is rebuilt on
+   * every call so it always matches this build. `install.sh` finds `rp-coded` next to itself.
+   */
+  async stageInstaller(): Promise<string> {
+    const installer = await this.installerPath();
+    if (!installer) throw new RpError('NOT_FOUND', 'The installer script is not bundled with this build (resources/system/install.sh)');
+    const systemDir = path.dirname(installer);
+    const stage = this.stageDir;
+    await fs.rm(stage, { recursive: true, force: true });
+    await fs.mkdir(stage, { recursive: true, mode: 0o755 });
+    const sources: string[] = [];
+    for (const name of await fs.readdir(systemDir)) sources.push(path.join(systemDir, name));
+    const daemon = path.join(path.dirname(systemDir), 'bin', 'rp-coded');
+    if (await exists(daemon)) sources.push(daemon);
+    for (const src of sources) {
+      const dst = path.join(stage, path.basename(src));
+      await fs.copyFile(src, dst);
+      await fs.chmod(dst, dst.endsWith('.sh') || path.basename(dst) === 'rp-coded' ? 0o755 : 0o644);
+    }
+    this.deps.logger.debug(`[system] staged ${sources.length} installer file(s) in ${stage}`);
+    return path.join(stage, INSTALLER_FILENAME);
+  }
+
   private userName(): string {
     if (this.deps.userName) return this.deps.userName;
     try {
@@ -159,8 +195,7 @@ export class SystemIntegration {
   /** Run the bundled installer through pkexec (Linux only), streaming its output to the log. */
   async install(options: { autostart?: boolean } = {}, onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
     if (this.deps.platform !== 'linux') throw new RpError('CAPABILITY_FAILED', 'System integration is only available on Linux');
-    const installer = await this.installerPath();
-    if (!installer) throw new RpError('NOT_FOUND', 'The installer script is not bundled with this build (resources/system/install.sh)');
+    const installer = await this.stageInstaller();
     const args = [installer, '--app-bin', this.deps.appBin, '--user', this.userName(), '--autostart', options.autostart === false ? 'none' : 'xdg'];
     this.deps.logger.info(`[system] pkexec ${args.join(' ')}`);
     let output = '';

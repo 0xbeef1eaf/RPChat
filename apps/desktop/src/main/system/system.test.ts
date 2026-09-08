@@ -168,6 +168,9 @@ describe('SystemIntegration', () => {
     const resources = path.join(tmp, 'resources');
     fs.mkdirSync(path.join(resources, 'system'), { recursive: true });
     fs.writeFileSync(path.join(resources, 'system', 'install.sh'), '#!/bin/sh\necho ok\n');
+    fs.writeFileSync(path.join(resources, 'system', 'rp-coded.service'), '[Unit]\n');
+    fs.mkdirSync(path.join(resources, 'bin'));
+    fs.writeFileSync(path.join(resources, 'bin', 'rp-coded'), 'ELF');
     const commands: string[][] = [];
     const integration = new SystemIntegration({
       platform: 'linux',
@@ -197,7 +200,13 @@ describe('SystemIntegration', () => {
     expect((await integration.setAutostart(false)).autostart.enabled).toBe(false);
     const result = await integration.install({ autostart: false });
     expect(result).toEqual({ ok: true, output: '[ok] group\n' });
-    expect(commands.at(-1)).toEqual(['pkexec', path.join(resources, 'system', 'install.sh'), '--app-bin', '/opt/rp code/rp-code', '--user', 'alice', '--autostart', 'none']);
+    // The installer runs from a staged copy (an AppImage's FUSE mount is unreadable to root).
+    const stage = path.join(tmp, 'home', '.cache', 'rp-code', 'system-install');
+    expect(commands.at(-1)).toEqual(['pkexec', path.join(stage, 'install.sh'), '--app-bin', '/opt/rp code/rp-code', '--user', 'alice', '--autostart', 'none']);
+    expect(fs.readdirSync(stage).sort()).toEqual(['install.sh', 'rp-coded', 'rp-coded.service']);
+    expect(fs.statSync(path.join(stage, 'install.sh')).mode & 0o111).toBe(0o111);
+    expect(fs.statSync(path.join(stage, 'rp-coded')).mode & 0o111).toBe(0o111);
+    expect(fs.readFileSync(path.join(stage, 'rp-coded.service'), 'utf8')).toBe('[Unit]\n');
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 });
