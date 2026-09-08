@@ -86,6 +86,10 @@ export class InputHandler implements CapabilityHandler {
     }
   }
 
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
+
   private async daemonIfAvailable(): Promise<DaemonClient | undefined> {
     const d = this.deps.daemon;
     if (!d) return undefined;
