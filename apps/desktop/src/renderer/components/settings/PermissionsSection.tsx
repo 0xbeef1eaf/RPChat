@@ -1,7 +1,9 @@
 import { useMemo } from 'react';
 import type { AppSettings, CapabilityInfo } from '@rp/shared';
+import { isManaged } from '../../lib/managed';
 import { useAppState } from '../../store/store';
 import { Toggle } from '../common/Toggle';
+import { ManagedBadge } from './Managed';
 
 interface PermissionsSectionProps {
   settings: AppSettings;
@@ -16,6 +18,7 @@ const LEVELS: Array<{ level: CapabilityInfo['permission']; title: string; hint: 
 /** Global policy: which non-trusted modules any pack may ever use. */
 export function PermissionsSection({ settings, onPatch }: PermissionsSectionProps) {
   const caps = useAppState((s) => s.capabilities);
+  const managed = useAppState((s) => s.managed);
   const error: string | null = null;
 
   const allow = settings.permissions?.moduleAllow ?? {};
@@ -55,6 +58,7 @@ export function PermissionsSection({ settings, onPatch }: PermissionsSectionProp
               {list.map((c) => {
                 const allowed = allow[c.id] !== false;
                 const dangerous = c.methods.some((m) => m.dangerous);
+                const forced = isManaged(managed, `permissions.moduleAllow.${c.id}`);
                 return (
                   <div key={c.id} className="cap-row">
                     <div className="item-text">
@@ -70,10 +74,11 @@ export function PermissionsSection({ settings, onPatch }: PermissionsSectionProp
                             denied for all packs
                           </span>
                         ) : null}
+                        <ManagedBadge show={forced} />
                       </span>
                       <span className="item-sub">{c.summary}</span>
                     </div>
-                    <Toggle checked={allowed} aria-label={`Allow ${c.id} globally`} onChange={(v) => setModule(c.id, v)} />
+                    <Toggle checked={allowed} disabled={forced} aria-label={`Allow ${c.id} globally`} onChange={(v) => setModule(c.id, v)} />
                   </div>
                 );
               })}

@@ -60,8 +60,15 @@ export function applyTheme(theme: 'system' | 'light' | 'dark'): void {
 }
 
 export async function refreshSettings(): Promise<void> {
-  const settings = await api().settings.get();
-  update((s) => ({ ...s, settings }));
+  const rp = api();
+  const [settings, managed] = await Promise.all([
+    rp.settings.get(),
+    rp.settings.managed().catch((err: unknown) => {
+      console.warn('settings.managed failed', err);
+      return [] as string[];
+    }),
+  ]);
+  update((s) => ({ ...s, settings, managed }));
   applyTheme(settings.theme);
 }
 

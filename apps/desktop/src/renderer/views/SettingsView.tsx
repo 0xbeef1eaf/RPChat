@@ -6,6 +6,8 @@ import { DisplayInfo } from '../components/settings/DisplayInfo';
 import { IntegrationsSection } from '../components/settings/IntegrationsSection';
 import { PermissionsSection } from '../components/settings/PermissionsSection';
 import { PluginsSection } from '../components/settings/PluginsSection';
+import { ManagedBadge, useManaged } from '../components/settings/Managed';
+import { SystemSection } from '../components/settings/SystemSection';
 import { SensesSection } from '../components/settings/SensesSection';
 import { ProviderEditor } from '../components/settings/ProviderEditor';
 import { ConfirmDialog } from '../components/common/Modal';
@@ -26,23 +28,20 @@ async function patchSettings(patch: Partial<AppSettings>): Promise<boolean> {
   }
 }
 
-function NumberField({
-  id,
-  label,
-  value,
-  hint,
-  min,
-  step,
-  onCommit,
-}: {
+export interface NumberFieldProps {
   id: string;
   label: string;
   value: number;
   hint?: string;
   min?: number;
   step?: number;
+  /** Dotted settings path; when forced by policy the field renders disabled with a badge. */
+  path?: string;
   onCommit: (v: number) => void;
-}) {
+}
+
+function NumberField({ id, label, value, hint, min, step, path, onCommit }: NumberFieldProps) {
+  const managed = useManaged(path ?? '');
   const [text, setText] = useState(String(value));
   const [last, setLast] = useState(value);
   if (last !== value) {
@@ -59,13 +58,17 @@ function NumberField({
   };
   return (
     <div className="field">
-      <label htmlFor={id}>{label}</label>
+      <label htmlFor={id}>
+        {label}
+        <ManagedBadge show={managed} />
+      </label>
       <input
         id={id}
         type="number"
         min={min}
         step={step}
         value={text}
+        disabled={managed}
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => e.key === 'Enter' && commit()}
@@ -75,7 +78,7 @@ function NumberField({
   );
 }
 
-type SettingsTab = 'general' | 'providers' | 'permissions' | 'senses' | 'integrations' | 'commands' | 'plugins' | 'display';
+type SettingsTab = 'general' | 'providers' | 'permissions' | 'senses' | 'integrations' | 'commands' | 'plugins' | 'system' | 'display';
 
 const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'providers', label: 'Providers' },
@@ -85,6 +88,7 @@ const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'integrations', label: 'Integrations' },
   { id: 'commands', label: 'Commands' },
   { id: 'plugins', label: 'Plugins' },
+  { id: 'system', label: 'System' },
   { id: 'display', label: 'Display' },
 ];
 
@@ -95,6 +99,8 @@ export function SettingsView() {
   const [removing, setRemoving] = useState<ProviderConfig | null>(null);
   const [name, setName] = useState<string | null>(null);
   const [restoreFile, setRestoreFile] = useState<string | null>(null);
+  const displayBackendManaged = useManaged('displayBackend');
+  const memoryEnabledManaged = useManaged('memory.enabled');
 
   if (!settings) {
     return (
@@ -274,6 +280,38 @@ export function SettingsView() {
       </section>
 
       <section className="section" hidden={tab !== 'general'}>
+        <h2>Autonomy</h2>
+        <p className="muted small" style={{ marginBottom: 10 }}>
+          Caps on self-triggered activity (timers, self-wakes, routines) so a character cannot run away.
+        </p>
+        <div className="field-grid">
+          <NumberField id="au-wakes" label="Max self-wakes per hour" path="autonomy.maxSelfWakesPerHour" value={settings.autonomy.maxSelfWakesPerHour} min={0} onCommit={(v) => patchSettings({ autonomy: { ...settings.autonomy, maxSelfWakesPerHour: Math.round(v) } })} />
+          <NumberField id="au-consec" label="Max consecutive self-wakes" path="autonomy.maxConsecutiveSelfWakes" value={settings.autonomy.maxConsecutiveSelfWakes} min={0} hint="Turns without a message from you in between." onCommit={(v) => patchSettings({ autonomy: { ...settings.autonomy, maxConsecutiveSelfWakes: Math.round(v) } })} />
+          <NumberField id="au-timers" label="Max pending timers per session" path="autonomy.maxTimersPerSession" value={settings.autonomy.maxTimersPerSession} min={0} onCommit={(v) => patchSettings({ autonomy: { ...settings.autonomy, maxTimersPerSession: Math.round(v) } })} />
+          <NumberField id="au-repeat" label="Min repeat interval (seconds)" path="autonomy.minRepeatIntervalMs" value={Math.round(settings.autonomy.minRepeatIntervalMs / 1000)} min={1} onCommit={(v) => patchSettings({ autonomy: { ...settings.autonomy, minRepeatIntervalMs: Math.round(v) * 1000 } })} />
+        </div>
+      </section>
+
+      <section className="section" hidden={tab !== 'general'}>
+        <h2>Memory</h2>
+        <div className="field-grid">
+          <div className="field">
+            <span className="field-label">
+              Long-term memory
+              <ManagedBadge show={memoryEnabledManaged} />
+            </span>
+            <label className="check">
+              <input type="checkbox" checked={settings.memory.enabled} disabled={memoryEnabledManaged} onChange={(e) => patchSettings({ memory: { ...settings.memory, enabled: e.target.checked } })} />
+              Consolidate memories automatically and inject them into prompts
+            </label>
+          </div>
+          <NumberField id="mem-every" label="Consolidate every N turns" path="memory.consolidateEveryTurns" value={settings.memory.consolidateEveryTurns} min={1} onCommit={(v) => patchSettings({ memory: { ...settings.memory, consolidateEveryTurns: Math.round(v) } })} />
+          <NumberField id="mem-max" label="Max memories per character" path="memory.maxEntriesPerCharacter" value={settings.memory.maxEntriesPerCharacter} min={10} step={10} onCommit={(v) => patchSettings({ memory: { ...settings.memory, maxEntriesPerCharacter: Math.round(v) } })} />
+          <NumberField id="mem-budget" label="Prompt budget (tokens)" path="memory.promptBudgetTokens" value={settings.memory.promptBudgetTokens} min={100} step={100} onCommit={(v) => patchSettings({ memory: { ...settings.memory, promptBudgetTokens: Math.round(v) } })} />
+        </div>
+      </section>
+
+      <section className="section" hidden={tab !== 'general'}>
         <h2>Appearance & media</h2>
         <div className="field-grid">
           <div className="field">
@@ -293,10 +331,14 @@ export function SettingsView() {
             <span className="field-hint">Default overlay layer: above (top) or below (bottom) normal windows.</span>
           </div>
           <div className="field">
-            <label htmlFor="display-backend">Display backend</label>
+            <label htmlFor="display-backend">
+              Display backend
+              <ManagedBadge show={displayBackendManaged} />
+            </label>
             <select
               id="display-backend"
               value={settings.displayBackend}
+              disabled={displayBackendManaged}
               onChange={(e) => patchSettings({ displayBackend: e.target.value as AppSettings['displayBackend'] })}
             >
               <option value="auto">Auto (Hyprland when detected)</option>
@@ -307,6 +349,13 @@ export function SettingsView() {
           </div>
         </div>
       </section>
+
+      {tab === 'system' ? (
+        <section className="section">
+          <h2>System integration</h2>
+          <SystemSection />
+        </section>
+      ) : null}
 
       {tab === 'plugins' ? (
         <section className="section">
@@ -350,6 +399,7 @@ export function SettingsView() {
           <NumberField
             id="max-input-lock"
             label="Max input lock (seconds)"
+            path="maxInputLockMs"
             value={Math.round(settings.maxInputLockMs / 1000)}
             min={1}
             hint="Hard cap for sdk.input.lock, whatever a character asks for."

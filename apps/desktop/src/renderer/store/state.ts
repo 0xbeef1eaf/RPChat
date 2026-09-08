@@ -64,6 +64,8 @@ export interface AppState {
   messages: Record<SessionId, ChatMessage[]>;
   runtime: Record<SessionId, SessionRuntime>;
   settings: AppSettings | null;
+  /** Dotted settings paths forced by the system policy (`settings.managed()`). */
+  managed: string[];
   /** FIFO queues; the first entry is the one being shown. */
   permissionRequests: PermissionRequest[];
   uiPrompts: UiPromptRequest[];
@@ -102,6 +104,7 @@ export function initialState(): AppState {
     messages: {},
     runtime: {},
     settings: null,
+    managed: [],
     permissionRequests: [],
     uiPrompts: [],
     toasts: [],

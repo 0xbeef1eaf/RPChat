@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import type { AppSettings, MessagingChannel } from '@rp/shared';
 import { StringListEditor } from '../common/StringListEditor';
+import { ManagedBadge, useManaged } from './Managed';
 
 interface IntegrationsSectionProps {
   settings: AppSettings;
   onPatch: (patch: Partial<AppSettings>) => Promise<boolean>;
-  NumberField: (props: { id: string; label: string; value: number; hint?: string; min?: number; step?: number; onCommit: (v: number) => void }) => React.JSX.Element;
+  NumberField: (props: { id: string; label: string; value: number; hint?: string; min?: number; step?: number; path?: string; onCommit: (v: number) => void }) => React.JSX.Element;
 }
 
 const KINDS: Array<{ value: MessagingChannel['kind']; label: string; hint: string }> = [
@@ -20,6 +21,8 @@ export function IntegrationsSection({ settings, onPatch, NumberField }: Integrat
   const web = settings.web;
   const desktop = settings.desktop;
   const channels = settings.messaging?.channels ?? [];
+  const webManaged = useManaged('web.allowlist');
+  const launchManaged = useManaged('desktop.launchAllowlist');
 
   return (
     <div className="stack" style={{ gap: 22 }}>
@@ -31,10 +34,13 @@ export function IntegrationsSection({ settings, onPatch, NumberField }: Integrat
         </p>
         <div className="field-grid">
           <div className="field" style={{ gridColumn: '1 / -1' }}>
-            <label htmlFor="web-allow">Allowlist</label>
-            <StringListEditor id="web-allow" values={web.allowlist} placeholder="*.wikipedia.org" onChange={(allowlist) => onPatch({ web: { ...web, allowlist } })} />
+            <label htmlFor="web-allow">
+              Allowlist
+              <ManagedBadge show={webManaged} />
+            </label>
+            <StringListEditor id="web-allow" values={web.allowlist} disabled={webManaged} placeholder="*.wikipedia.org" onChange={(allowlist) => onPatch({ web: { ...web, allowlist } })} />
           </div>
-          <NumberField id="web-max" label="Max response size (KiB)" value={Math.round(web.maxBytes / 1024)} min={16} onCommit={(v) => onPatch({ web: { ...web, maxBytes: Math.round(v) * 1024 } })} />
+          <NumberField id="web-max" label="Max response size (KiB)" path="web.maxBytes" value={Math.round(web.maxBytes / 1024)} min={16} onCommit={(v) => onPatch({ web: { ...web, maxBytes: Math.round(v) * 1024 } })} />
         </div>
       </section>
 

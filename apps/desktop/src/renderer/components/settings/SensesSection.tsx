@@ -3,15 +3,19 @@ import type { AppSettings, PresenceSnapshot } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { formatDuration } from '../../lib/format';
 import { StringListEditor } from '../common/StringListEditor';
+import { ManagedBadge, useManaged } from './Managed';
 
 interface SensesSectionProps {
   settings: AppSettings;
   onPatch: (patch: Partial<AppSettings>) => Promise<boolean>;
-  NumberField: (props: { id: string; label: string; value: number; hint?: string; min?: number; step?: number; onCommit: (v: number) => void }) => React.JSX.Element;
+  NumberField: (props: { id: string; label: string; value: number; hint?: string; min?: number; step?: number; path?: string; onCommit: (v: number) => void }) => React.JSX.Element;
 }
 
 export function SensesSection({ settings, onPatch, NumberField }: SensesSectionProps) {
   const senses = settings.senses;
+  const promptManaged = useManaged('senses.includeInPrompt');
+  const calendarsManaged = useManaged('senses.calendarSources');
+  const watchManaged = useManaged('senses.watchDirs');
   const patch = (p: Partial<AppSettings['senses']>) => onPatch({ senses: { ...senses, ...p } });
 
   return (
@@ -23,17 +27,21 @@ export function SensesSection({ settings, onPatch, NumberField }: SensesSectionP
       <LiveSnapshot />
       <div className="field-grid">
         <div className="field">
-          <span className="field-label">Prompt</span>
+          <span className="field-label">
+            Prompt
+            <ManagedBadge show={promptManaged} />
+          </span>
           <label className="check">
-            <input type="checkbox" checked={senses.includeInPrompt} onChange={(e) => patch({ includeInPrompt: e.target.checked })} />
+            <input type="checkbox" checked={senses.includeInPrompt} disabled={promptManaged} onChange={(e) => patch({ includeInPrompt: e.target.checked })} />
             Include a one-line presence summary in every prompt
           </label>
           <span className="field-hint">Only for packs whose effective capabilities include presence.</span>
         </div>
-        <NumberField id="senses-poll" label="Poll interval (ms)" value={senses.pollMs} min={1000} step={500} hint="How often the host samples presence while something needs it." onCommit={(v) => patch({ pollMs: Math.round(v) })} />
+        <NumberField id="senses-poll" label="Poll interval (ms)" path="senses.pollMs" value={senses.pollMs} min={1000} step={500} hint="How often the host samples presence while something needs it." onCommit={(v) => patch({ pollMs: Math.round(v) })} />
         <NumberField
           id="senses-idle"
           label="Idle threshold (seconds)"
+          path="senses.idleThresholdMs"
           value={Math.round(senses.idleThresholdMs / 1000)}
           min={10}
           hint="No input for this long counts as away (user-idle / user-back events)."
@@ -41,14 +49,20 @@ export function SensesSection({ settings, onPatch, NumberField }: SensesSectionP
         />
       </div>
       <div className="field">
-        <label htmlFor="senses-calendars">Calendar sources</label>
+        <label htmlFor="senses-calendars">
+          Calendar sources
+          <ManagedBadge show={calendarsManaged} />
+        </label>
         <span className="field-hint">ICS files or http(s) URLs read by sdk.calendar (cached 5 min).</span>
-        <StringListEditor id="senses-calendars" values={senses.calendarSources} placeholder="/home/me/calendar.ics or https://…/basic.ics" onChange={(calendarSources) => patch({ calendarSources })} />
+        <StringListEditor id="senses-calendars" values={senses.calendarSources} disabled={calendarsManaged} placeholder="/home/me/calendar.ics or https://…/basic.ics" onChange={(calendarSources) => patch({ calendarSources })} />
       </div>
       <div className="field">
-        <label htmlFor="senses-watch">Watched directories</label>
+        <label htmlFor="senses-watch">
+          Watched directories
+          <ManagedBadge show={watchManaged} />
+        </label>
         <span className="field-hint">Directories that raise file-added events (e.g. your Downloads folder). Dotfiles and partial downloads are ignored.</span>
-        <StringListEditor id="senses-watch" values={senses.watchDirs} placeholder="/home/me/Downloads" onChange={(watchDirs) => patch({ watchDirs })} />
+        <StringListEditor id="senses-watch" values={senses.watchDirs} disabled={watchManaged} placeholder="/home/me/Downloads" onChange={(watchDirs) => patch({ watchDirs })} />
       </div>
     </div>
   );
