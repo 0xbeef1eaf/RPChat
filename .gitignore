@@ -13,5 +13,6 @@ coverage/
 .vite/
 *.rppack
 !examples/**/*.rppack
-native/overlay-wlr/target/
+native/*/target/
 apps/desktop/resources/bin/
+!native/rp-coded/dist/

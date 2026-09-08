@@ -1,0 +1,54 @@
+# rp-coded — input lock / injection daemon for the rp desktop app.
+# Installed to /etc/systemd/system/rp-coded.service by native/rp-coded/install.sh.
+[Unit]
+Description=rp-code input lock and injection daemon
+Documentation=file:///usr/local/libexec/rp-code/README.md
+After=systemd-udevd.service systemd-modules-load.service
+Wants=systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/rp-code/rp-coded
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# Runs as root: EVIOCGRAB on /dev/input/event* and /dev/uinput need it. Everything else is
+# locked down.
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# chown is in @privileged; the daemon needs it to hand the socket to the rp-code group.
+SystemCallFilter=@chown
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
+RestrictAddressFamilies=AF_UNIX
+# Socket directory: created 0750 and chowned root:rp-code by the daemon. /etc/rp-code stays
+# read-only through ProtectSystem=strict.
+RuntimeDirectory=rp-code
+RuntimeDirectoryMode=0750
+ReadWritePaths=/run/rp-code
+# Input devices (char major 13 = "input", covers hot-plugged ones) and /dev/uinput (misc).
+DevicePolicy=closed
+DeviceAllow=char-input rw
+DeviceAllow=/dev/input/* rw
+DeviceAllow=/dev/uinput rw
+
+[Install]
+WantedBy=multi-user.target

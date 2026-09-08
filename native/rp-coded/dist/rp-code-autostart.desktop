@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=rp-code
+Comment=Start the rp desktop app minimised to the tray
+# install.sh replaces the executable with the detected app path (--app-bin).
+Exec=rp-code --hidden
+Icon=rp-code
+Terminal=false
+Categories=Utility;
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
+OnlyShowIn=GNOME;KDE;XFCE;LXQt;MATE;Cinnamon;Budgie;Pantheon;Hyprland;sway;river;wayfire;niri;COSMIC;Unity;X-Cinnamon;
+StartupNotify=false

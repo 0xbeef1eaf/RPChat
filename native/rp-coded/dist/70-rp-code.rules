@@ -1,0 +1,5 @@
+# rp-code: let members of the rp-code group use /dev/uinput directly.
+# The daemon (rp-coded) runs as root and does not need this rule; it exists for the
+# fallback command templates (ydotool, dotool, ...) a user may configure in the app.
+# Installed to /etc/udev/rules.d/70-rp-code.rules by native/rp-coded/install.sh.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="rp-code", MODE="0660", OPTIONS+="static_node=uinput"

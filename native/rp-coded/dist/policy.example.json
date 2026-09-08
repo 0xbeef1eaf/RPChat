@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "managedBy": "Example: the household admin (edit or remove this line)",
+  "settings": {
+    "maxInputLockMs": 120000,
+    "autonomy": {
+      "maxSelfWakesPerHour": 30,
+      "maxConsecutiveSelfWakes": 10,
+      "maxTimersPerSession": 20,
+      "minRepeatIntervalMs": 60000
+    },
+    "permissions": {
+      "moduleAllow": {
+        "input": true
+      }
+    },
+    "web": {
+      "allowlist": []
+    },
+    "desktop": {
+      "launchAllowlist": []
+    },
+    "memory": {},
+    "senses": {
+      "includeInPrompt": true,
+      "watchDirs": [],
+      "calendarSources": []
+    },
+    "displayBackend": "auto"
+  },
+  "inputLock": {
+    "enabled": true,
+    "maxDurationMs": 120000,
+    "emergencyKey": "esc",
+    "emergencyHoldMs": 5000
+  }
+}
