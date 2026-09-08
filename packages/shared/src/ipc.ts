@@ -8,6 +8,7 @@ import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, SaveCharacterInput } from './editor.js';
 import type { PluginInfo } from './plugin.js';
+import type { ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
 
 export type Unsubscribe = () => void;
 
@@ -134,6 +135,8 @@ export interface IpcApi {
   };
   settings: {
     get(): Promise<AppSettings>;
+    /** Settings paths forced by the system policy file; the UI shows these as managed (read-only). */
+    managed(): Promise<ManagedSettingsPaths>;
     update(patch: Partial<AppSettings>): Promise<AppSettings>;
     testProvider(config: ProviderConfig): Promise<{ ok: boolean; message?: string }>;
     listModels(config: ProviderConfig): Promise<ModelInfo[]>;
@@ -168,6 +171,15 @@ export interface IpcApi {
   display: {
     backend(): Promise<DisplayBackendInfo>;
     monitors(): Promise<MonitorInfo[]>;
+  };
+  /** System integration (Linux): root daemon for input lock/injection, policy file, udev, autostart. */
+  system: {
+    status(): Promise<SystemIntegrationStatus>;
+    /** Runs the bundled installer with elevated privileges (pkexec). Resolves with the installer's output. */
+    install(options?: { autostart?: boolean }): Promise<{ ok: boolean; output: string }>;
+    setAutostart(enabled: boolean): Promise<SystemIntegrationStatus>;
+    /** Path of the bundled installer script, for users who prefer to run it themselves. */
+    installerPath(): Promise<string | null>;
   };
   /** SDK plugins: folders under the app's plugins dir adding capability modules. */
   plugins: {
