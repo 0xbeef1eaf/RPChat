@@ -1,5 +1,5 @@
 /** `sdk.input`: bounded keyboard/mouse lock through the user's command templates. */
-import type { ActionContext, CapabilityHandler, DaemonRequest, DaemonResponse, Json } from '@rp/shared';
+import type { ActionContext, CapabilityHandler, DaemonRequest, DaemonResponse, Json, LockDevices } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import type { Logger } from '@rp/core';
 import type { CommandRunner } from './commands-runner.js';
@@ -22,6 +22,15 @@ export function pointArgs(x: unknown, y: unknown): { x: number; y: number } {
   return { x: Math.round(x), y: Math.round(y) };
 }
 
+const LOCK_DEVICES: ReadonlySet<string> = new Set(['keyboard', 'mouse', 'both']);
+
+/** `devices` option of `lock`: keyboard | mouse | both (default both). */
+export function lockDevicesArg(v: unknown): LockDevices {
+  if (v === undefined || v === null) return 'both';
+  if (typeof v !== 'string' || !LOCK_DEVICES.has(v)) throw new RpError('INVALID_ARGUMENT', "devices must be 'keyboard', 'mouse' or 'both'");
+  return v as LockDevices;
+}
+
 export function buttonArg(v: unknown): { button: string; buttonNum: string; buttonHex: string } {
   const name = typeof v === 'string' ? v.toLowerCase() : 'left';
   const b = BUTTONS[name];
@@ -41,6 +50,7 @@ export interface InputHandlerDeps {
 export class InputHandler implements CapabilityHandler {
   readonly moduleId = 'input';
   private until: number | undefined;
+  private lockedDevices: LockDevices = 'both';
   private timer: NodeJS.Timeout | undefined;
 
   constructor(private readonly deps: InputHandlerDeps) {}
@@ -108,9 +118,9 @@ export class InputHandler implements CapabilityHandler {
     }
   }
 
-  private async daemonStatus(daemon: DaemonClient): Promise<{ locked: boolean; until?: string }> {
+  private async daemonStatus(daemon: DaemonClient): Promise<{ locked: boolean; until?: string; devices?: LockDevices }> {
     const res = await this.viaDaemon<StatusResponse>(daemon, { op: 'status' });
-    if (res.locked) return { locked: true, until: res.locked.until };
+    if (res.locked) return { locked: true, until: res.locked.until, devices: res.locked.devices ?? 'both' };
     return { locked: false };
   }
 
@@ -119,35 +129,39 @@ export class InputHandler implements CapabilityHandler {
     if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `${what} command exited with ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
   }
 
-  status(): { locked: boolean; until?: string } {
-    if (this.until !== undefined && this.until > this.now()) return { locked: true, until: new Date(this.until).toISOString() };
+  status(): { locked: boolean; until?: string; devices?: LockDevices } {
+    if (this.until !== undefined && this.until > this.now()) return { locked: true, until: new Date(this.until).toISOString(), devices: this.lockedDevices };
     return { locked: false };
   }
 
-  private async lock(durationArg: unknown, optionsArg: unknown, daemon?: DaemonClient): Promise<{ until: string; durationMs: number }> {
+  private async lock(durationArg: unknown, optionsArg: unknown, daemon?: DaemonClient): Promise<{ until: string; durationMs: number; devices: LockDevices }> {
     if (typeof durationArg !== 'number' || !Number.isFinite(durationArg)) throw new RpError('INVALID_ARGUMENT', 'durationMs must be a number');
     const max = Math.max(INPUT_LOCK_MIN_MS, await this.deps.maxLockMs());
     const durationMs = Math.min(max, Math.max(INPUT_LOCK_MIN_MS, Math.round(durationArg)));
-    const reason = optionsArg && typeof optionsArg === 'object' && typeof (optionsArg as { reason?: unknown }).reason === 'string' ? (optionsArg as { reason: string }).reason : '';
+    const options = optionsArg && typeof optionsArg === 'object' ? (optionsArg as { reason?: unknown; devices?: unknown }) : {};
+    const reason = typeof options.reason === 'string' ? options.reason : '';
+    const devices = lockDevicesArg(options.devices);
     if (daemon) {
       // The daemon clamps again against the root-owned policy and unlocks by itself.
-      const res = await this.viaDaemon<LockResponse>(daemon, { op: 'lock', durationMs, ...(reason ? { reason } : {}) });
+      const res = await this.viaDaemon<LockResponse>(daemon, { op: 'lock', durationMs, devices, ...(reason ? { reason } : {}) });
       this.clearTimer();
       this.until = new Date(res.until).getTime();
-      this.deps.logger.info(`[input] locked via rp-coded for ${res.durationMs} ms${reason ? ` (${reason})` : ''}`);
-      return { until: res.until, durationMs: res.durationMs };
+      this.lockedDevices = res.devices ?? devices;
+      this.deps.logger.info(`[input] locked ${this.lockedDevices} via rp-coded for ${res.durationMs} ms${reason ? ` (${reason})` : ''}`);
+      return { until: res.until, durationMs: res.durationMs, devices: this.lockedDevices };
     }
     const seconds = String(Math.ceil(durationMs / 1000));
-    const result = await this.deps.commands.run('inputLock', { seconds, durationMs: String(durationMs), reason }, 'input lock');
+    const result = await this.deps.commands.run('inputLock', { seconds, durationMs: String(durationMs), reason, devices }, 'input lock');
     if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `Input lock command exited with ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
     this.clearTimer();
     this.until = this.now() + durationMs;
-    this.deps.logger.info(`[input] locked for ${durationMs} ms${reason ? ` (${reason})` : ''}`);
+    this.lockedDevices = devices;
+    this.deps.logger.info(`[input] locked ${devices} for ${durationMs} ms${reason ? ` (${reason})` : ''}`);
     this.timer = setTimeout(() => {
       void this.release('timer');
     }, durationMs);
     this.timer.unref?.();
-    return { until: new Date(this.until).toISOString(), durationMs };
+    return { until: new Date(this.until).toISOString(), durationMs, devices };
   }
 
   private async unlock(daemon?: DaemonClient): Promise<void> {
@@ -162,10 +176,11 @@ export class InputHandler implements CapabilityHandler {
   }
 
   private async release(why: string): Promise<void> {
+    const devices = this.lockedDevices;
     this.until = undefined;
     if (!(await this.deps.commands.isConfigured('inputUnlock'))) return;
     try {
-      const result = await this.deps.commands.run('inputUnlock', {}, 'input unlock');
+      const result = await this.deps.commands.run('inputUnlock', { devices }, 'input unlock');
       if (result.code !== 0) this.deps.logger.warn(`[input] unlock (${why}) exited with ${result.code}: ${result.stderr.trim()}`);
     } catch (err) {
       this.deps.logger.warn(`[input] unlock (${why}) failed`, err);

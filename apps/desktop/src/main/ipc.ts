@@ -170,6 +170,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
           durationMs: '3000',
           monitor: '',
           reason: 'test',
+          devices: 'both',
           newWindow: '',
           text: 'Hello from rp-code',
           level: '50',

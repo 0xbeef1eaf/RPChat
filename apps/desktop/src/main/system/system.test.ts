@@ -11,7 +11,7 @@ import { PolicyWatcher, applyPolicy, loadPolicy, managedPaths, parsePolicy, stri
 
 /** Fake rp-coded: answers the protocol from an in-memory lock state. */
 function fakeDaemon(socketPath: string, opts: { hang?: boolean } = {}) {
-  let locked: { until: string; reason?: string } | null = null;
+  let locked: { until: string; reason?: string; devices: 'keyboard' | 'mouse' | 'both' } | null = null;
   const seen: DaemonRequest[] = [];
   const conns = new Set<net.Socket>();
   const server = net.createServer((conn) => {
@@ -38,8 +38,8 @@ function fakeDaemon(socketPath: string, opts: { hang?: boolean } = {}) {
             break;
           case 'lock': {
             const durationMs = Math.min(req.durationMs, 60_000);
-            locked = { until: new Date(Date.now() + durationMs).toISOString(), ...(req.reason ? { reason: req.reason } : {}) };
-            res = { ok: true, op: 'lock', until: locked.until, durationMs };
+            locked = { until: new Date(Date.now() + durationMs).toISOString(), devices: req.devices ?? 'both', ...(req.reason ? { reason: req.reason } : {}) };
+            res = { ok: true, op: 'lock', until: locked.until, durationMs, devices: locked.devices };
             break;
           }
           case 'unlock':
@@ -83,9 +83,9 @@ describe('DaemonClient', () => {
     expect(client.connected).toBe(false);
     expect(await client.isAvailable()).toBe(true);
     expect(client.connected).toBe(true);
-    const [lock, status] = await Promise.all([client.request({ op: 'lock', durationMs: 120_000, reason: 'tea' }), client.request({ op: 'status' })]);
-    expect(lock).toMatchObject({ op: 'lock', durationMs: 60_000 });
-    expect(status).toMatchObject({ op: 'status', locked: { reason: 'tea' } });
+    const [lock, status] = await Promise.all([client.request({ op: 'lock', durationMs: 120_000, reason: 'tea', devices: 'mouse' }), client.request({ op: 'status' })]);
+    expect(lock).toMatchObject({ op: 'lock', durationMs: 60_000, devices: 'mouse' });
+    expect(status).toMatchObject({ op: 'status', locked: { reason: 'tea', devices: 'mouse' } });
     expect(daemon.seen.map((r) => r.op)).toEqual(['hello', 'lock', 'status']);
     await expect(client.request({ op: 'key', combo: 'bad' })).rejects.toBeInstanceOf(DaemonError);
     expect(await client.status()).toMatchObject({ connected: true, version: '0.1.0', devices: { keyboards: 1 }, locked: { reason: 'tea' } });
