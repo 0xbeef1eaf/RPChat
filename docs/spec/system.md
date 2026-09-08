@@ -18,7 +18,9 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
 - **Policy**: reads `/etc/rp-code/policy.json` at start and on every `policy` request (mtime cache);
   validates shape; refuses `lock` when `inputLock.enabled === false`; clamps `lock` durations to
   `inputLock.maxDurationMs` (default 300 000). Never trusts the app's numbers.
-- **Lock**: opens every `/dev/input/event*` that reports EV_KEY or EV_REL/EV_ABS, `EVIOCGRAB`s
+- **Lock**: `devices` selects the set (`keyboard`: devices with EV_KEY and a typing key set such as
+  KEY_A; `mouse`: devices with EV_REL or EV_ABS and BTN_LEFT/BTN_TOUCH; `both`, the default: all of
+  them); opens every matching `/dev/input/event*`, `EVIOCGRAB`s
   them (compositor stops receiving input), keeps reading their events so the grab does not fill
   the kernel buffer, and watches for the emergency chord: `inputLock.emergencyKey` (default Esc)
   held for `emergencyHoldMs` (default 5000) → unlock immediately and respond to the next

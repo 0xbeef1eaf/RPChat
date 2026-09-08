@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const inputModule: CapabilityModuleSpec = {
   id: 'input',
-  version: '1.1.0',
+  version: '1.2.0',
   title: 'Input control',
   summary: "Lock the user's keyboard/mouse for a set duration, or type, press keys, click and move the mouse for them; each call needs user approval.",
   permission: 'pack',
@@ -19,15 +19,16 @@ interface InputApi {
    * Lock input for a duration. Resolves once the lock is active; it is released automatically
    * when the duration elapses (or by unlock()).
    * @param durationMs 1000 .. the user's configured maximum (default 5 minutes). Longer requests are clamped.
-   * @param options reason: shown in the action log.
-   * @returns until: ISO time the lock ends; durationMs: the effective (possibly clamped) duration.
+   * @param options reason: shown in the action log; devices: 'keyboard', 'mouse' or 'both' (default 'both').
+   * @returns until: ISO time the lock ends; durationMs: the effective (possibly clamped) duration; devices: what was locked.
    * @example await sdk.input.lock(30_000, { reason: "hold still for the surprise" });
+   * @example await sdk.input.lock(20_000, { devices: "mouse", reason: "hands off the mouse while I show you this" });
    */
-  lock(durationMs: number, options?: { reason?: string }): Promise<{ until: string; durationMs: number }>;
+  lock(durationMs: number, options?: { reason?: string; devices?: 'keyboard' | 'mouse' | 'both' }): Promise<{ until: string; durationMs: number; devices: 'keyboard' | 'mouse' | 'both' }>;
   /** Release an active lock early. No error when nothing is locked. */
   unlock(): Promise<void>;
-  /** Whether a lock is active and when it ends. */
-  status(): Promise<{ locked: boolean; until?: string }>;
+  /** Whether a lock is active, when it ends and which devices it covers. */
+  status(): Promise<{ locked: boolean; until?: string; devices?: 'keyboard' | 'mouse' | 'both' }>;
   /**
    * Type text into the focused window as if on the keyboard.
    * @param text Text to type (newlines press Enter). Keep it short; long text is slow.

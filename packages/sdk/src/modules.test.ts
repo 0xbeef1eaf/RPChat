@@ -104,7 +104,7 @@ describe('standard modules', () => {
       expect(dangerous, `${spec.id} dangerous`).toEqual(exp.dangerous ?? []);
       for (const name of exp.prompt ?? []) expect(r.permissionFor(spec.id, name)).toBe('prompt');
     }
-    expect(modules.inputModule.version).toBe('1.1.0');
+    expect(modules.inputModule.version).toBe('1.2.0');
     expect(modules.systemModule.version).toBe('1.1.0');
   });
 

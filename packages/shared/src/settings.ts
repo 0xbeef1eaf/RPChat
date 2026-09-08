@@ -25,7 +25,7 @@ export interface CommandTemplates {
   wallpaper: CommandTemplate;
   /** Open a browser window. Placeholders: {url}. */
   browser: CommandTemplate;
-  /** Lock keyboard/mouse input. Placeholders: {seconds}, {durationMs}. */
+  /** Lock keyboard/mouse input. Placeholders: {seconds}, {durationMs}, {devices} (keyboard|mouse|both). */
   inputLock: CommandTemplate;
   /** Unlock input early (optional; leave empty if the lock command unlocks itself after the duration). */
   inputUnlock: CommandTemplate;

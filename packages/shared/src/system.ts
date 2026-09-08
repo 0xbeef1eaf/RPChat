@@ -42,7 +42,7 @@ export interface DaemonStatus {
   socketPath?: string;
   /** Whether the daemon runs with device access (root) and found input devices. */
   devices?: { keyboards: number; pointers: number; uinput: boolean };
-  locked?: { until: string; reason?: string } | null;
+  locked?: { until: string; reason?: string; devices: LockDevices } | null;
   error?: string;
 }
 
@@ -58,12 +58,16 @@ export interface SystemIntegrationStatus {
   installerAvailable: boolean;
 }
 
+/** Which input devices a lock covers. */
+export type LockDevices = 'keyboard' | 'mouse' | 'both';
+
 /** JSON-lines protocol between the app and `rp-coded` over the unix socket. */
 export type DaemonRequest =
   | { op: 'hello'; version: 1 }
   | { op: 'status' }
   | { op: 'policy' }
-  | { op: 'lock'; durationMs: number; reason?: string }
+  /** `devices` defaults to `both`; `keyboard` grabs keyboards only, `mouse` grabs pointers/touchpads only. */
+  | { op: 'lock'; durationMs: number; reason?: string; devices?: LockDevices }
   | { op: 'unlock' }
   | { op: 'type'; text: string }
   | { op: 'key'; combo: string }
@@ -72,9 +76,9 @@ export type DaemonRequest =
 
 export type DaemonResponse =
   | { ok: true; op: 'hello'; version: string; protocol: 1; devices: { keyboards: number; pointers: number; uinput: boolean } }
-  | { ok: true; op: 'status'; locked: { until: string; reason?: string } | null }
+  | { ok: true; op: 'status'; locked: { until: string; reason?: string; devices: LockDevices } | null }
   | { ok: true; op: 'policy'; policy: PolicyFile | null; path: string }
-  | { ok: true; op: 'lock'; until: string; durationMs: number }
+  | { ok: true; op: 'lock'; until: string; durationMs: number; devices: LockDevices }
   | { ok: true; op: 'unlock' | 'type' | 'key' | 'click' | 'move' }
   | { ok: false; error: string; code: 'REFUSED' | 'POLICY' | 'NO_DEVICES' | 'BUSY' | 'INVALID' | 'INTERNAL' };
 
