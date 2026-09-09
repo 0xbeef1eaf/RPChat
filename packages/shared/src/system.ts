@@ -17,6 +17,8 @@ export interface PolicyFile {
     memory?: Partial<AppSettings['memory']>;
     senses?: Partial<Pick<AppSettings['senses'], 'includeInPrompt' | 'watchDirs' | 'calendarSources'>>;
     displayBackend?: AppSettings['displayBackend'];
+    /** `enabled: false` switches update checks off entirely; `automatic` pins the background check toggle. */
+    updates?: { automatic?: boolean; enabled?: boolean };
   };
   /** Input-lock hard limits enforced by the daemon regardless of app settings. */
   inputLock?: {

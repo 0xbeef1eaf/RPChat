@@ -27,6 +27,7 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   if (stored.web && typeof stored.web === 'object') merged.web = { ...base.web, ...stored.web };
   if (stored.desktop && typeof stored.desktop === 'object') merged.desktop = { ...base.desktop, ...stored.desktop };
   if (stored.messaging && typeof stored.messaging === 'object') merged.messaging = { ...base.messaging, ...stored.messaging };
+  if (stored.updates && typeof stored.updates === 'object') merged.updates = { ...base.updates, ...stored.updates };
   if (stored.permissions && typeof stored.permissions === 'object') {
     merged.permissions = { ...base.permissions, ...stored.permissions, moduleAllow: { ...base.permissions.moduleAllow, ...(stored.permissions.moduleAllow ?? {}) } };
   }

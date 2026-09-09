@@ -152,6 +152,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
           await services.selectBackend(next.displayBackend).catch((err) => logger.warn('[display] backend switch failed', err));
         }
         if (patch && patch.senses !== undefined) await services.senses.refresh().catch((err) => logger.warn('[senses] refresh failed', err));
+        if (patch && patch.updates !== undefined) services.updates.refreshSchedule();
         return next;
       },
       testProvider: (_e, config: ProviderConfig) => engine.settings.testProvider(config),
@@ -245,6 +246,16 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       setAutostart: (_e, enabled) => services.system.setAutostart(Boolean(enabled)),
       installerPath: () => services.system.installerPath(),
     },
+    updates: {
+      status: () => services.updates.status(),
+      check: () => services.updates.check(),
+      download: () => services.updates.download(),
+      install: () => services.updates.install(),
+      setToken: (_e, token) => {
+        if (token !== null && typeof token !== 'string') throw new RpError('INVALID_ARGUMENT', 'token must be a string or null');
+        return services.updates.setToken(token);
+      },
+    },
     plugins: {
       pluginsDir: async () => services.plugins.pluginsDir,
       list: async () => services.plugins.list(),
@@ -299,10 +310,14 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
   const offChat = engine.events.on('chat', (event) => {
     if (!windows.sendToMain(IPC_EVENT_CHANNELS.chatEvent, event)) logger.debug(`[ipc] dropped chat event ${event.type} (no main window)`);
   });
+  const offUpdates = services.updates.subscribe((status) => {
+    windows.sendToMain(IPC_EVENT_CHANNELS.updateStatus, status);
+  });
 
   logger.info(`[ipc] ${channels.length} channels registered (app ${opts.version})`);
   return () => {
     offChat();
+    offUpdates();
     for (const channel of channels) ipcMain.removeHandler(channel);
   };
 }

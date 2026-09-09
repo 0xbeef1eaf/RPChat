@@ -84,6 +84,9 @@ jobs:
         run: |
           mkdir -p dist-out
           find apps/desktop/release -maxdepth 1 -type f \( -name '*.AppImage' -o -name '*.deb' \) -exec cp {} dist-out/ \;
+          # The in-app updater reads this manifest from the release assets; a release without it cannot be updated to.
+          if [ ! -f apps/desktop/release/latest-linux.yml ]; then echo "latest-linux.yml was not produced (check build.publish in apps/desktop/package.json)"; exit 1; fi
+          cp apps/desktop/release/latest-linux.yml dist-out/
           ls -la dist-out
       - uses: actions/upload-artifact@v7
         with:
@@ -120,4 +123,5 @@ jobs:
             Automated release of `${{ github.sha }}` from `main`.
 
             - **Linux**: AppImage or `.deb` (the wlr-layer-shell overlay helper for Hyprland/Sway is bundled; it needs `gtk3`, `gtk-layer-shell` and `webkit2gtk-4.1` runtime libraries).
+            - `latest-linux.yml` is the update manifest read by the app's in-place updater (Settings → Updates); leave it attached.
             - Windows and macOS builds are not produced yet.

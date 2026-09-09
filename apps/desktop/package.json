@@ -14,30 +14,31 @@
     "build:native": "node scripts/build-native.mjs"
   },
   "dependencies": {
-    "@rp/shared": "workspace:*",
-    "@rp/sdk": "workspace:*",
-    "@rp/pack": "workspace:*",
-    "@rp/llm": "workspace:*",
-    "@rp/sandbox": "workspace:*",
     "@rp/core": "workspace:*",
-    "quickjs-emscripten": "^0.32.0",
+    "@rp/llm": "workspace:*",
+    "@rp/pack": "workspace:*",
+    "@rp/sandbox": "workspace:*",
+    "@rp/sdk": "workspace:*",
+    "@rp/shared": "workspace:*",
+    "dompurify": "^3.2.0",
+    "electron-updater": "^6.8.9",
     "esbuild": "^0.28.2",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
     "marked": "^15.0.0",
-    "dompurify": "^3.2.0"
+    "quickjs-emscripten": "^0.32.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "electron": "^44.2.0",
-    "electron-vite": "^5.0.0",
-    "electron-builder": "^26.15.3",
-    "vite": "^7.0.0",
-    "@vitejs/plugin-react": "^5.2.0",
+    "@types/dompurify": "^3",
+    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@types/node": "^22",
-    "@types/dompurify": "^3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.2.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
     "typescript": "^5.9.3",
+    "vite": "^7.0.0",
     "vitest": "^3.2.7"
   },
   "build": {
@@ -114,7 +115,13 @@
       "maintainer": "rp-code contributors"
     },
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "owner": "0xbeef1eaf",
+      "repo": "llm-rp-code",
+      "private": true,
+      "releaseType": "release"
+    },
     "deb": {
       "afterInstall": "resources/deb-after-install.sh",
       "depends": [
@@ -135,11 +142,11 @@
   },
   "homepage": "https://github.com/0xbeef1eaf/llm-rp-code",
   "optionalDependencies": {
-    "@esbuild/linux-x64": "0.28.2",
-    "@esbuild/linux-arm64": "0.28.2",
-    "@esbuild/win32-x64": "0.28.2",
-    "@esbuild/win32-arm64": "0.28.2",
+    "@esbuild/darwin-arm64": "0.28.2",
     "@esbuild/darwin-x64": "0.28.2",
-    "@esbuild/darwin-arm64": "0.28.2"
+    "@esbuild/linux-arm64": "0.28.2",
+    "@esbuild/linux-x64": "0.28.2",
+    "@esbuild/win32-arm64": "0.28.2",
+    "@esbuild/win32-x64": "0.28.2"
   }
 }

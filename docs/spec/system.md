@@ -92,7 +92,23 @@ current user.
 - Bundling: `resources/bin/rp-coded` (built by `scripts/build-native.mjs` alongside the helper) and
   `resources/system/{install.sh,rp-coded.service,70-rp-code.rules,...}`; electron-builder
   `extraResources` + `deb.afterInstall` script that calls the installer.
-- IPC `system.*` and `settings.managed`.
+- IPC `system.*`, `settings.managed` and `updates.*` (the update service reads `settings.updates` from the same policy state).
+
+### Policy `settings` keys
+
+Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and the daemon (`SETTINGS_KEYS` + `validate()` in `policy.rs`) must know every key, so extend both together.
+
+| Key | Managed paths | Notes |
+|---|---|---|
+| `autonomy` | `autonomy.maxSelfWakesPerHour`, `autonomy.maxConsecutiveSelfWakes`, `autonomy.maxTimersPerSession`, `autonomy.minRepeatIntervalMs` | non-negative numbers |
+| `maxInputLockMs` | `maxInputLockMs` | ≥ 1000; also capped by `inputLock.maxDurationMs` |
+| `permissions` | `permissions.moduleAllow.<module>` | booleans per module |
+| `web` | `web.allowlist` | string[] |
+| `desktop` | `desktop.launchAllowlist` | string[] |
+| `memory` | `memory.enabled`, `memory.consolidateEveryTurns`, `memory.maxEntriesPerCharacter`, `memory.promptBudgetTokens` | |
+| `senses` | `senses.includeInPrompt`, `senses.watchDirs`, `senses.calendarSources` | |
+| `displayBackend` | `displayBackend` | `auto` \| `electron` \| `hyprland` |
+| `updates` | `updates.automatic`, `updates.enabled` | booleans. `enabled: false` switches update checks off entirely (`UpdateStatus.state === 'disabled'`, token field hidden, `automatic` forced off); `automatic` pins the background-check toggle. |
 
 ## Renderer
 

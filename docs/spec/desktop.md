@@ -12,6 +12,7 @@ Depends on: every package. Built with electron-vite 5 (three entries: `src/main`
 - `capabilities/system.ts`: `openExternal` (http/https only via `shell.openExternal`), `exec` (`child_process.spawn`, no shell, timeout default 30 s, output capped 64 KiB), `readFile`/`writeFile` (absolute path required; cap 1 MiB), `clipboardWrite`. All permission gating is done by core's dispatcher (level `prompt`); these handlers just execute.
 - `windows.ts`: `createMainWindow`, `createMediaWindow(position)`; `webPreferences: { preload, contextIsolation: true, sandbox: true, nodeIntegration: false }`; CSP header via `session.defaultSession.webRequest.onHeadersReceived` (`default-src 'self' rp-asset:; media-src rp-asset:; img-src rp-asset: data:; style-src 'self' 'unsafe-inline'`).
 - `dev-mode`: if env `RP_MOCK_LLM=1`, `providerFactory` returns a `MockProvider` that answers with a scripted `run_action` showing an image then text, so the app can be exercised without an API key.
+- `updates/service.ts`: `UpdateService` around `electron-updater`'s `autoUpdater` (injected as `UpdaterLike`, so tests use a fake emitter). Feed: the private GitHub releases of this repository (`build.publish` in `package.json` makes electron-builder emit `latest-linux.yml`; the release workflow attaches it). Per-user GitHub token in `<userData>/update-token.bin`, encrypted with `safeStorage` (plaintext `0600` fallback with a warning), never in settings or logs. Packaging detection: `APPIMAGE` env → `appimage` (in-place install only when the file and its directory are writable), `execPath` under `/opt` or `/usr` → `deb` (check and notify only; the UI links to the release page), `!app.isPackaged` → `dev` (state `unsupported`, updater untouched). `start()` runs the first check ~30 s after the window is ready and then every `settings.updates.checkIntervalHours` while `settings.updates.automatic` is on, a token exists and the policy has not set `updates.enabled: false`; `check()` is always allowed manually with a token; `download()` / `install()` (`quitAndInstall(false, true)`) are explicit; `autoDownload` = automatic ∧ can install in place; `autoInstallOnAppQuit` is on. Status transitions (`UpdateStatus` in `@rp/shared/updates`) are pushed on `updates:status`; `index.ts` shows a native "Restart now / Later" dialog when the update is downloaded and the window is visible, otherwise a notification (tray mode), and the tray menu has "Check for updates…".
 
 ## Preload (`src/preload/index.ts`)
 
@@ -26,6 +27,7 @@ Main UI (React, one small store with `useSyncExternalStore` or plain context; no
 - Chat: message list with streaming text (markdown rendering via a tiny safe renderer — use `marked` + `DOMPurify`? Keep deps small: use `marked` with `sanitize` via `dompurify`; both are on cdnjs but we bundle from npm), action cards (purpose, collapsible code, result/logs/error, duration), emote styling, status line, composer (Enter to send, Shift+Enter newline), abort button while a turn runs, "new session" for a character, scenario editor in session settings.
 - Packs: list with capability toggles (pack-level grants), install button → `pickInstallSource`, uninstall confirm, README view, characters list with "Start chat".
 - Settings: provider list (add/edit/remove; kind select; base URL; API key masked; model text + "fetch models" button; "test" button), default provider, maxActionRounds, contextTokenBudget, run limits, useToolCalling, userDisplayName, theme, mediaAlwaysOnTop.
+- Settings → Updates (`components/settings/UpdatesSection.tsx`): current version, status line with download progress, Check now / Download / Restart to update, the GitHub token field (save/remove, shows keyring vs file storage), the "check automatically" toggle (managed badge when the policy pins it), explanations for `deb` (notified only, link to the release page) and `dev` (unsupported); hidden token field when the policy disables updates.
 - Permission modal: driven by `permissions.onRequest`; shows module.method, args JSON, dangerous warning; buttons allow once / allow for session / deny.
 - UI prompt modal for `ui.confirm` / `ui.choose`.
 - Action log: table of audit entries with filter by session.
@@ -34,7 +36,7 @@ Media window: full-viewport React page listening to `media.onCommand`; renders i
 
 ## Packaging
 
-`electron-builder` config in `package.json` (`build` key) for win (nsis), mac (dmg), linux (AppImage). `pnpm build` must succeed in CI without signing. Do not run electron-builder in tests.
+`electron-builder` config in `package.json` (`build` key) for win (nsis), mac (dmg), linux (AppImage, deb). `build.publish` points at the private GitHub repository (`0xbeef1eaf/llm-rp-code`, `private: true`) so `latest-linux.yml` is generated next to the AppImage; the release workflow still runs with `--publish never` and attaches the manifest itself. `pnpm build` must succeed in CI without signing. Do not run electron-builder in tests.
 
 ## Tests
 

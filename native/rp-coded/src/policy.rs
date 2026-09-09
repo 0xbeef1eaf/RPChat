@@ -87,7 +87,7 @@ pub struct PolicyFile {
 }
 
 /// Keys allowed under `settings` (documented in `docs/spec/system.md`).
-pub const SETTINGS_KEYS: [&str; 8] = [
+pub const SETTINGS_KEYS: [&str; 9] = [
     "autonomy",
     "maxInputLockMs",
     "permissions",
@@ -96,6 +96,7 @@ pub const SETTINGS_KEYS: [&str; 8] = [
     "memory",
     "senses",
     "displayBackend",
+    "updates",
 ];
 
 impl PolicyFile {
@@ -127,10 +128,21 @@ impl PolicyFile {
                 "desktop",
                 "memory",
                 "senses",
+                "updates",
             ] {
                 if let Some(v) = map.get(key) {
                     if !v.is_object() {
                         return Err(format!("settings.{key} must be an object"));
+                    }
+                }
+            }
+            if let Some(updates) = map.get("updates").and_then(Value::as_object) {
+                for (key, value) in updates {
+                    if !matches!(key.as_str(), "automatic" | "enabled") {
+                        return Err(format!("settings.updates.{key} is not a managed setting"));
+                    }
+                    if !value.is_boolean() {
+                        return Err(format!("settings.updates.{key} must be a boolean"));
                     }
                 }
             }
@@ -351,7 +363,8 @@ mod tests {
                 "desktop": {"launchAllowlist": []},
                 "memory": {},
                 "senses": {"includeInPrompt": false},
-                "displayBackend": "electron"
+                "displayBackend": "electron",
+                "updates": {"automatic": false, "enabled": true}
             },
             "inputLock": {"maxDurationMs": 60000, "emergencyKey": "f12", "emergencyHoldMs": 2000, "enabled": true}
         }))
@@ -383,6 +396,9 @@ mod tests {
             json!({"version": 1, "settings": {"maxInputLockMs": -1}}),
             json!({"version": 1, "settings": {"web": "x"}}),
             json!({"version": 1, "settings": {"displayBackend": "wayland"}}),
+            json!({"version": 1, "settings": {"updates": true}}),
+            json!({"version": 1, "settings": {"updates": {"enabled": "no"}}}),
+            json!({"version": 1, "settings": {"updates": {"checkIntervalHours": 1}}}),
             json!({"version": 1, "inputLock": {"emergencyKey": "space"}}),
             json!({"version": 1, "inputLock": {"maxDurationMs": -5}}),
             json!({"version": 1, "inputLock": {"foo": 1}}),

@@ -39,6 +39,7 @@ Only these keys are accepted; each maps to a dotted settings path shown in the U
 | `memory` | object | Any field of the app's memory settings. |
 | `senses` | object | `includeInPrompt` (boolean), `watchDirs` (string[]), `calendarSources` (string[]). |
 | `displayBackend` | `"auto"` \| `"electron"` \| `"hyprland"` | Which overlay backend the app uses. |
+| `updates` | `{ "automatic": boolean, "enabled": boolean }` | In-place app updates. `enabled: false` switches update checks off entirely (the Updates tab shows "disabled by policy" and hides the token field); `automatic` pins the "check automatically" toggle. Both optional. |
 
 The daemon only validates that these are objects/numbers/strings of the right kind; the app
 validates the inner values against its settings schema and ignores what it cannot apply.
@@ -68,6 +69,12 @@ Disable locking entirely, keep everything else at the user's choice:
 
 ```json
 { "version": 1, "inputLock": { "enabled": false } }
+```
+
+Keep the app at the version the administrator installed (no update checks, no token field):
+
+```json
+{ "version": 1, "settings": { "updates": { "enabled": false } } }
 ```
 
 Cap locks at 30 s with F12 as the panic key, and forbid the `desktop` module:

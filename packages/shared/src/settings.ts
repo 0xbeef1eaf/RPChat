@@ -118,6 +118,13 @@ export interface AppSettings {
   permissions: {
     moduleAllow: Record<string, boolean>;
   };
+  /** In-place application updates (docs: README "Updating"). */
+  updates: {
+    /** Check the release feed on a schedule and download AppImage updates in the background. Default true. */
+    automatic: boolean;
+    /** Hours between automatic checks. Default 6. */
+    checkIntervalHours: number;
+  };
   /**
    * Limits on autonomous activity (self-wakes, code timers, prompt timers) so a character
    * cannot run away. Consecutive = turns not separated by a user message.
@@ -172,6 +179,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   maxInputLockMs: 5 * 60_000,
   wallpaperRestoreFile: '',
   memory: DEFAULT_MEMORY_SETTINGS,
+  updates: { automatic: true, checkIntervalHours: 6 },
   autonomy: {
     maxSelfWakesPerHour: 30,
     maxConsecutiveSelfWakes: 10,

@@ -46,6 +46,7 @@ describe('buildApi', () => {
     }
     expect(invokeChannels()).toContain('display:monitors');
     expect(invokeChannels()).toContain('memories:consolidate');
+    expect(invokeChannels()).toContain('updates:setToken');
   });
 
   it('wires push events with unsubscribe', () => {
@@ -56,15 +57,17 @@ describe('buildApi', () => {
     const offPerm = api.permissions.onRequest((r) => got.push(r));
     api.ui.onPrompt((p) => got.push(p));
     api.media.onCommand((c) => got.push(c));
+    api.updates.onStatus((s) => got.push(s));
     ipc.emit(IPC_EVENT_CHANNELS.chatEvent, { type: 'status' });
     ipc.emit(IPC_EVENT_CHANNELS.permissionRequest, { requestId: 'r' });
     ipc.emit(IPC_EVENT_CHANNELS.uiPrompt, { promptId: 'p' });
     ipc.emit(IPC_EVENT_CHANNELS.mediaCommand, { type: 'close-all' });
-    expect(got).toEqual([{ type: 'status' }, { requestId: 'r' }, { promptId: 'p' }, { type: 'close-all' }]);
+    ipc.emit(IPC_EVENT_CHANNELS.updateStatus, { state: 'ready' });
+    expect(got).toEqual([{ type: 'status' }, { requestId: 'r' }, { promptId: 'p' }, { type: 'close-all' }, { state: 'ready' }]);
     off();
     offPerm();
     ipc.emit(IPC_EVENT_CHANNELS.chatEvent, { type: 'again' });
-    expect(got).toHaveLength(4);
+    expect(got).toHaveLength(5);
     expect(ipc.listeners.get(IPC_EVENT_CHANNELS.chatEvent)?.size).toBe(0);
   });
 });

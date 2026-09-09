@@ -127,6 +127,21 @@ describe('policy', () => {
     expect(() => parsePolicy({ version: 1, settings: { maxInputLockMs: 'x' } })).toThrow(/maxInputLockMs/);
     expect(() => parsePolicy({ version: 1, settings: { displayBackend: 'kde' } })).toThrow(/displayBackend/);
     expect(managedPaths(null)).toEqual([]);
+    const updates = parsePolicy({ version: 1, settings: { updates: { enabled: false, automatic: true } } });
+    expect(updates.settings?.updates).toEqual({ enabled: false, automatic: true });
+    expect(managedPaths(updates)).toEqual(['updates.automatic', 'updates.enabled']);
+    expect(managedPaths(parsePolicy({ version: 1, settings: { updates: {} } }))).toEqual([]);
+    expect(() => parsePolicy({ version: 1, settings: { updates: { enabled: 'no' } } })).toThrow(/updates.enabled must be a boolean/);
+  });
+
+  it('applyPolicy pins updates.automatic and switches it off when updates are disabled', () => {
+    const pinned = applyPolicy({ ...base, updates: { automatic: true, checkIntervalHours: 6 } }, parsePolicy({ version: 1, settings: { updates: { automatic: false } } }));
+    expect(pinned.settings.updates).toEqual({ automatic: false, checkIntervalHours: 6 });
+    expect(pinned.managed).toEqual(['updates.automatic']);
+    const disabled = applyPolicy({ ...base, updates: { automatic: true, checkIntervalHours: 6 } }, parsePolicy({ version: 1, settings: { updates: { enabled: false } } }));
+    expect(disabled.settings.updates.automatic).toBe(false);
+    expect(disabled.managed).toEqual(['updates.enabled']);
+    expect(stripManagedPatch({ updates: { automatic: true, checkIntervalHours: 1 } }, ['updates.automatic'])).toEqual({ updates: { checkIntervalHours: 1 } });
   });
 
   it('applyPolicy forces keys and caps the lock; stripManagedPatch drops managed paths', () => {

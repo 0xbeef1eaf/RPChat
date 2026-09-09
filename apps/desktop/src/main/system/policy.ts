@@ -9,6 +9,7 @@ import { POLICY_FILE_PATH, RpError } from '@rp/shared';
 const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTimersPerSession', 'minRepeatIntervalMs'] as const;
 const MEMORY_KEYS = ['enabled', 'consolidateEveryTurns', 'maxEntriesPerCharacter', 'promptBudgetTokens'] as const;
 const SENSES_KEYS = ['includeInPrompt', 'watchDirs', 'calendarSources'] as const;
+const UPDATES_KEYS = ['automatic', 'enabled'] as const;
 const BACKENDS = new Set(['auto', 'electron', 'hyprland']);
 
 function isNumber(v: unknown): v is number {
@@ -94,6 +95,16 @@ export function parsePolicy(json: unknown): PolicyFile {
       if (typeof s.displayBackend === 'string' && BACKENDS.has(s.displayBackend)) settings.displayBackend = s.displayBackend as AppSettings['displayBackend'];
       else problems.push('settings.displayBackend must be auto, electron or hyprland');
     }
+    if (s.updates && typeof s.updates === 'object') {
+      const u: NonNullable<NonNullable<PolicyFile['settings']>['updates']> = {};
+      for (const k of UPDATES_KEYS) {
+        const v = (s.updates as Record<string, unknown>)[k];
+        if (v === undefined) continue;
+        if (typeof v === 'boolean') u[k] = v;
+        else problems.push(`settings.updates.${k} must be a boolean`);
+      }
+      settings.updates = u;
+    }
     out.settings = settings;
   }
   if (raw.inputLock && typeof raw.inputLock === 'object') {
@@ -134,6 +145,7 @@ export function managedPaths(policy: PolicyFile | null | undefined): ManagedSett
   for (const k of MEMORY_KEYS) if (s.memory?.[k] !== undefined) out.add(`memory.${k}`);
   for (const k of SENSES_KEYS) if (s.senses?.[k] !== undefined) out.add(`senses.${k}`);
   if (s.displayBackend !== undefined) out.add('displayBackend');
+  for (const k of UPDATES_KEYS) if (s.updates?.[k] !== undefined) out.add(`updates.${k}`);
   return [...out].sort();
 }
 
@@ -150,6 +162,10 @@ export function applyPolicy(settings: AppSettings, policy: PolicyFile | null | u
   if (s.memory) next.memory = { ...settings.memory, ...definedOnly(s.memory) };
   if (s.senses) next.senses = { ...settings.senses, ...definedOnly(s.senses) };
   if (s.displayBackend !== undefined) next.displayBackend = s.displayBackend;
+  // `updates.enabled` has no settings counterpart (the update service reads it from the policy);
+  // `enabled: false` also switches the background toggle off so the UI reflects the effective state.
+  if (s.updates?.automatic !== undefined) next.updates = { ...settings.updates, automatic: s.updates.automatic };
+  if (s.updates?.enabled === false) next.updates = { ...next.updates, automatic: false };
   const hardMax = policy.inputLock?.maxDurationMs;
   if (hardMax !== undefined && next.maxInputLockMs > hardMax) next.maxInputLockMs = hardMax;
   if (policy.inputLock?.enabled === false) next.maxInputLockMs = Math.min(next.maxInputLockMs, 1000);

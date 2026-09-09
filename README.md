@@ -168,6 +168,26 @@ them with SHA-256 checksums and generated release notes, and skips silently if
 the tag already exists. Windows and macOS builds are switched off for now; the
 electron-builder targets for them remain configured.
 
+### Updating
+
+The packaged app updates itself from those releases (**Settings → Updates**).
+Because the repository is private, each user needs their own fine-grained
+personal access token with read-only *Contents* access to
+`0xbeef1eaf/llm-rp-code` (create it at github.com/settings/personal-access-tokens
+and paste it into the Updates tab). The token is stored encrypted through the
+OS keyring (Electron `safeStorage`; a `0600` file when no keyring is available),
+never in the settings JSON or the binary. The **AppImage** checks about 30 s
+after launch and every 6 hours (configurable, or switch automatic checks off),
+downloads the new release in the background when the AppImage lives in a
+folder you can write to, and offers *Restart now / Later*; a downloaded update
+is also applied on quit. The **`.deb`** install is notified only: the app
+announces new releases and links to the release page, where you install the
+package as usual. Development runs never check. Administrators can pin the
+"check automatically" toggle or switch update checks off entirely with the
+`settings.updates` key of the root-owned policy file (`native/rp-coded/dist/POLICY.md`).
+Each release carries `latest-linux.yml`, the manifest `electron-updater` reads;
+keep it attached.
+
 Every other push and pull request runs `.github/workflows/ci.yml`: build,
 typecheck, all unit tests, the helper's cargo tests, the Xvfb headful smoke and
 the nested-Sway layer-shell smoke and a smoke run of the packaged app

@@ -8,6 +8,7 @@ import { PermissionsSection } from '../components/settings/PermissionsSection';
 import { PluginsSection } from '../components/settings/PluginsSection';
 import { ManagedBadge, useManaged } from '../components/settings/Managed';
 import { SystemSection } from '../components/settings/SystemSection';
+import { UpdatesSection } from '../components/settings/UpdatesSection';
 import { SensesSection } from '../components/settings/SensesSection';
 import { ProviderEditor } from '../components/settings/ProviderEditor';
 import { ConfirmDialog } from '../components/common/Modal';
@@ -78,7 +79,7 @@ function NumberField({ id, label, value, hint, min, step, path, onCommit }: Numb
   );
 }
 
-type SettingsTab = 'general' | 'providers' | 'permissions' | 'senses' | 'integrations' | 'commands' | 'plugins' | 'system' | 'display';
+type SettingsTab = 'general' | 'providers' | 'permissions' | 'senses' | 'integrations' | 'commands' | 'plugins' | 'system' | 'updates' | 'display';
 
 const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'providers', label: 'Providers' },
@@ -89,6 +90,7 @@ const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'commands', label: 'Commands' },
   { id: 'plugins', label: 'Plugins' },
   { id: 'system', label: 'System' },
+  { id: 'updates', label: 'Updates' },
   { id: 'display', label: 'Display' },
 ];
 
@@ -354,6 +356,13 @@ export function SettingsView() {
         <section className="section">
           <h2>System integration</h2>
           <SystemSection />
+        </section>
+      ) : null}
+
+      {tab === 'updates' ? (
+        <section className="section">
+          <h2>Updates</h2>
+          <UpdatesSection settings={settings} onPatch={patchSettings} />
         </section>
       ) : null}
 

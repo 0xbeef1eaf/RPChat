@@ -9,6 +9,7 @@ import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, Rout
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, SaveCharacterInput } from './editor.js';
 import type { PluginInfo } from './plugin.js';
 import type { ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
+import type { UpdateStatus } from './updates.js';
 
 export type Unsubscribe = () => void;
 
@@ -181,6 +182,19 @@ export interface IpcApi {
     /** Path of the bundled installer script, for users who prefer to run it themselves. */
     installerPath(): Promise<string | null>;
   };
+  /** In-place app updates from the private GitHub releases (see `UpdateStatus`). */
+  updates: {
+    status(): Promise<UpdateStatus>;
+    /** Manual check; allowed whenever a token exists and policy has not disabled updates. */
+    check(): Promise<UpdateStatus>;
+    /** Start downloading the available update (AppImage in a writable location only). */
+    download(): Promise<UpdateStatus>;
+    /** Quit and relaunch into the downloaded update. */
+    install(): Promise<void>;
+    /** Store (or with `null` remove) the per-user GitHub token used to read the private release feed. */
+    setToken(token: string | null): Promise<UpdateStatus>;
+    onStatus(listener: (status: UpdateStatus) => void): Unsubscribe;
+  };
   /** SDK plugins: folders under the app's plugins dir adding capability modules. */
   plugins: {
     pluginsDir(): Promise<string>;
@@ -235,6 +249,7 @@ export const IPC_EVENT_CHANNELS = {
   permissionRequest: 'permissions:request',
   mediaCommand: 'media:command',
   uiPrompt: 'ui:prompt',
+  updateStatus: 'updates:status',
 } as const;
 
 declare global {

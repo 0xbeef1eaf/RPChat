@@ -13,4 +13,5 @@ export * from './senses.js';
 export * from './editor.js';
 export * from './plugin.js';
 export * from './system.js';
+export * from './updates.js';
 export * from './ipc.js';

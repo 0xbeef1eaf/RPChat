@@ -129,6 +129,9 @@ Points worth knowing:
   the problem.
 - No policy file at all means the daemon defaults (5 min max, Esc for 5 s) and no managed
   settings.
+- `settings.updates` controls the in-app updater: `{ "enabled": false }` switches update checks
+  off on this machine (Settings → Updates shows "disabled by policy" and hides the token field),
+  `{ "automatic": false }` only pins the "check automatically" toggle so users still update by hand.
 
 ## Uninstalling
 

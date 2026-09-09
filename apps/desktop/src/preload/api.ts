@@ -31,6 +31,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   memories: ['list', 'add', 'update', 'remove', 'consolidate'],
   ui: ['respondPrompt'],
   system: ['status', 'install', 'setAutostart', 'installerPath'],
+  updates: ['status', 'check', 'download', 'install', 'setToken'],
   plugins: ['pluginsDir', 'list', 'install', 'remove', 'setEnabled', 'reload', 'openFolder'],
   editor: [
     'workspaceDir', 'listProjects', 'create', 'open', 'importInstalled', 'forget', 'read', 'saveManifest', 'addCharacter', 'saveCharacter', 'removeCharacter',
@@ -47,6 +48,7 @@ export const EVENT_METHODS: { [K in Namespaces]?: Partial<Record<keyof IpcApi[K]
   permissions: { onRequest: IPC_EVENT_CHANNELS.permissionRequest },
   ui: { onPrompt: IPC_EVENT_CHANNELS.uiPrompt },
   media: { onCommand: IPC_EVENT_CHANNELS.mediaCommand },
+  updates: { onStatus: IPC_EVENT_CHANNELS.updateStatus },
 };
 
 export function channelFor(namespace: string, method: string): string {

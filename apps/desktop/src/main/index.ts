@@ -5,8 +5,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BrowserWindow, Menu, Tray, app, nativeImage, protocol, session } from 'electron';
+import { BrowserWindow, Menu, Notification, Tray, app, dialog, nativeImage, protocol, session } from 'electron';
 import { ASSET_PROTOCOL } from '@rp/shared';
+import type { UpdateStatus } from '@rp/shared';
 import { handleAssetRequest } from './asset-protocol.js';
 import { isHyprland } from './display/layers.js';
 import { createApp } from './engine.js';
@@ -105,6 +106,7 @@ async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     if (stopping) return;
     stopping = true;
+    services?.updates.stop();
     await services?.stop();
   };
   app.on('before-quit', (event) => {
@@ -130,9 +132,13 @@ async function main(): Promise<void> {
   protocol.handle(ASSET_PROTOCOL, (request) => handleAssetRequest(request, { packRootFor: (packId) => active.packRootFor(packId), logger }));
 
   registerIpc({ services, windows, logger, version });
-  if (START_HIDDEN) tray = createTray(windows, () => void shutdown().finally(() => app.quit()));
+  if (START_HIDDEN) tray = createTray(windows, active, () => void shutdown().finally(() => app.quit()));
   const win = windows.createMainWindow({ hidden: START_HIDDEN });
-  win.once('ready-to-show', () => logger.info(`[main] window ${START_HIDDEN ? 'ready (hidden, tray)' : 'opened'} (userData: ${app.getPath('userData')})`));
+  win.once('ready-to-show', () => {
+    logger.info(`[main] window ${START_HIDDEN ? 'ready (hidden, tray)' : 'opened'} (userData: ${app.getPath('userData')})`);
+    active.updates.start();
+  });
+  watchUpdateReady(active, windows);
   logger.info(`[main] rp-code ${version} ready; ${engine.packs.characters().length} character(s) available`);
   if (isSmokeRun(env)) {
     await smokeLoadPlugin(active.plugins, APP_ROOT, logger, env);
@@ -149,8 +155,48 @@ async function main(): Promise<void> {
   }
 }
 
-/** Tray icon with Show / Quit (used by `--hidden`). */
-function createTray(windows: WindowManager, quit: () => void): Tray | undefined {
+/**
+ * Announce a downloaded update once: a native dialog when the window is visible (Restart now /
+ * Later), otherwise a notification whose click brings the window back (tray mode).
+ */
+function watchUpdateReady(services: AppServices, windows: WindowManager): void {
+  let announced: string | undefined;
+  services.updates.subscribe((status: UpdateStatus) => {
+    if (status.state !== 'ready' || !status.latestVersion || announced === status.latestVersion) return;
+    announced = status.latestVersion;
+    const version = status.latestVersion;
+    const win = windows.getMainWindow();
+    if (win && win.isVisible()) {
+      void dialog
+        .showMessageBox(win, {
+          type: 'info',
+          title: 'Update ready',
+          message: `Update to ${version} is ready`,
+          detail: `rp-code ${version} has been downloaded. Restart now to apply it, or later from Settings → Updates (it is also applied when you quit).`,
+          buttons: ['Restart now', 'Later'],
+          defaultId: 0,
+          cancelId: 1,
+        })
+        .then((r) => {
+          if (r.response === 0) return services.updates.install();
+          return undefined;
+        })
+        .catch((err: unknown) => logger.warn('[updates] restart failed', err));
+      return;
+    }
+    if (!Notification.isSupported()) return;
+    const note = new Notification({ title: 'rp-code', body: `rp-code ${version} is ready to install` });
+    note.on('click', () => {
+      const w = windows.getMainWindow() ?? windows.createMainWindow();
+      w.show();
+      w.focus();
+    });
+    note.show();
+  });
+}
+
+/** Tray icon with Show / Check for updates / Quit (used by `--hidden`). */
+function createTray(windows: WindowManager, services: AppServices, quit: () => void): Tray | undefined {
   try {
     const iconFile = [path.join(APP_ROOT, 'resources', 'tray.png'), path.join(process.resourcesPath ?? '', 'tray.png')].find((f) => fs.existsSync(f));
     const icon = iconFile ? nativeImage.createFromPath(iconFile) : nativeImage.createEmpty();
@@ -161,7 +207,28 @@ function createTray(windows: WindowManager, quit: () => void): Tray | undefined 
       w.show();
       w.focus();
     };
-    t.setContextMenu(Menu.buildFromTemplate([{ label: 'Show rp-code', click: show }, { type: 'separator' }, { label: 'Quit', click: quit }]));
+    const checkForUpdates = (): void => {
+      void services.updates
+        .check()
+        .then((status) => {
+          if (status.state === 'available' || status.state === 'downloading') {
+            if (Notification.isSupported()) new Notification({ title: 'rp-code', body: `rp-code ${status.latestVersion ?? ''} is available${status.canInstallInPlace ? ' and downloading' : ''}` }).show();
+          } else if (status.state === 'up-to-date' && Notification.isSupported()) new Notification({ title: 'rp-code', body: `rp-code ${status.currentVersion} is up to date` }).show();
+          else if (status.state === 'error') logger.warn(`[updates] ${status.error ?? 'check failed'}`);
+        })
+        .catch((err: unknown) => {
+          logger.warn('[updates] tray check failed', err);
+          show();
+        });
+    };
+    t.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: 'Show rp-code', click: show },
+        { label: 'Check for updates…', click: checkForUpdates },
+        { type: 'separator' },
+        { label: 'Quit', click: quit },
+      ]),
+    );
     t.on('click', show);
     return t;
   } catch (err) {

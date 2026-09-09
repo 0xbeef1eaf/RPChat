@@ -196,6 +196,7 @@ export async function captureWindows(logger: Logger, mediaList: () => unknown[] 
     ['chat-session', "document.querySelector('.session-item')?.click()"],
     ['packs', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Packs'))?.click()"],
     ['settings', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Settings'))?.click()"],
+    ['settings-updates', "[...document.querySelectorAll('.tabs .tab')].find(b => b.textContent.trim() === 'Updates')?.click()"],
     ['sdk-reference', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('SDK'))?.click()"],
     ['editor-projects', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Pack editor'))?.click()"],
     ['editor-pack', "document.querySelector('.project-card .btn-primary')?.click()"],

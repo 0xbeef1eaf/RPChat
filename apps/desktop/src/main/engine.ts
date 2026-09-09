@@ -2,7 +2,8 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { Notification, app, dialog, screen, shell } from 'electron';
+import { Notification, app, dialog, safeStorage, screen, shell } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import { Engine, FileStorage } from '@rp/core';
 import type { Logger, ProviderFactory } from '@rp/core';
 import { createStandardRegistry } from '@rp/sdk';
@@ -31,6 +32,7 @@ import { PluginService } from './plugins/service.js';
 import { DaemonClient } from './system/daemon-client.js';
 import { SystemIntegration } from './system/integration.js';
 import { PolicyWatcher, applyPolicy, stripManagedPatch } from './system/policy.js';
+import { UpdateService } from './updates/service.js';
 import { createHyprTransport } from './display/hyprland.js';
 import type { HyprTransport } from './display/hyprland.js';
 import { detectWindowSystem, isHyprland } from './display/layers.js';
@@ -59,6 +61,7 @@ export interface AppServices {
   editor: EditorService;
   plugins: PluginService;
   system: SystemIntegration;
+  updates: UpdateService;
   policy: PolicyWatcher;
   daemon: DaemonClient;
   commands: CommandRunner;
@@ -282,6 +285,27 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     logger,
   });
 
+  // ---- in-place updates (AppImage from the private GitHub releases) ---------------
+  autoUpdater.logger = {
+    info: (m?: unknown) => logger.info(`[updater] ${String(m)}`),
+    warn: (m?: unknown) => logger.warn(`[updater] ${String(m)}`),
+    error: (m?: unknown) => logger.error(`[updater] ${String(m)}`),
+    debug: (m: string) => logger.debug(`[updater] ${m}`),
+  };
+  autoUpdater.autoInstallOnAppQuit = true;
+  const updates = new UpdateService({
+    updater: autoUpdater,
+    appVersion: opts.appVersion,
+    isPackaged: app.isPackaged,
+    ...(env.APPIMAGE ? { appImagePath: env.APPIMAGE } : {}),
+    execPath: process.execPath,
+    userDataDir: opts.userData,
+    settings: { get: () => engine.settings.get() },
+    policy,
+    safeStorage,
+    logger,
+  });
+
   await engine.start();
   const builtinIds = new Set(createStandardRegistry().list().map((m) => m.id));
   const plugins = new PluginService({
@@ -330,6 +354,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     editor,
     plugins,
     system,
+    updates,
     policy,
     daemon,
     commands,
@@ -351,6 +376,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     async stop() {
       if (stopped) return;
       stopped = true;
+      updates.stop();
       permissionPrompts.rejectAll();
       uiPrompts.rejectAll();
       await senses.dispose().catch((err: unknown) => logger.warn('[senses] dispose failed', err));
