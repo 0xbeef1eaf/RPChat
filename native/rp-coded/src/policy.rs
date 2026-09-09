@@ -5,7 +5,8 @@
 //! mtime so re-reading on every `policy`/`lock` request is cheap.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -253,6 +254,88 @@ impl std::fmt::Display for PolicyError {
 /// Result of a policy load: `Ok(None)` when the file is absent (defaults apply).
 pub type PolicyLoad = Result<Option<PolicyFile>, PolicyError>;
 
+/// Why a write-once creation (`set-policy`) failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateError {
+    /// Something (file, symlink, directory) already exists at the policy path.
+    Exists(PathBuf),
+    /// The object is not a valid policy.
+    Invalid(String),
+    /// Directory or file could not be created/written.
+    Io(String),
+}
+
+impl std::fmt::Display for CreateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CreateError::Exists(p) => write!(
+                f,
+                "a policy already exists at {}; only root can change it",
+                p.display()
+            ),
+            CreateError::Invalid(m) => write!(f, "policy invalid: {m}"),
+            CreateError::Io(m) => write!(f, "cannot write policy: {m}"),
+        }
+    }
+}
+
+/// Validate a policy object the way the file is validated (unknown keys are rejected).
+pub fn policy_from_value(value: Value) -> Result<PolicyFile, CreateError> {
+    let policy: PolicyFile =
+        serde_json::from_value(value).map_err(|e| CreateError::Invalid(e.to_string()))?;
+    policy.validate().map_err(CreateError::Invalid)?;
+    Ok(policy)
+}
+
+/// Create the policy file at `path` **once**: pretty JSON plus a trailing newline, mode 0644,
+/// parent directory created 0755 when missing. `policy` must already have passed
+/// [`policy_from_value`]; the object is written as given (key order and integer formatting
+/// preserved) rather than re-serialised from the struct. Anything already at `path` — a file,
+/// a symlink (dangling or not) or a directory — is left alone and reported as `Exists`.
+///
+/// The file is opened with `O_CREAT|O_EXCL`, which the kernel evaluates atomically, so two
+/// concurrent callers cannot both succeed and nothing existing is ever replaced. The content
+/// is written straight into that file (no temp-file-and-rename dance): a crash between the
+/// create and the fsync leaves a truncated file, which the loader rejects as invalid, i.e.
+/// the daemon fails closed until root fixes it. `renameat2(RENAME_NOREPLACE)` would avoid
+/// that window but is not available on every libc/kernel this daemon is built for.
+pub fn create_policy_file(path: &Path, policy: &Value) -> Result<(), CreateError> {
+    if fs::symlink_metadata(path).is_ok() {
+        return Err(CreateError::Exists(path.to_path_buf()));
+    }
+    if let Some(dir) = path.parent() {
+        if !dir.exists() {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o755)
+                .create(dir)
+                .map_err(|e| CreateError::Io(format!("mkdir {}: {e}", dir.display())))?;
+        }
+    }
+    let mut text = serde_json::to_string_pretty(policy)
+        .map_err(|e| CreateError::Invalid(format!("cannot serialise policy: {e}")))?;
+    text.push('\n');
+    let mut file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o644)
+        .open(path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(CreateError::Exists(path.to_path_buf()))
+        }
+        Err(e) => return Err(CreateError::Io(format!("create {}: {e}", path.display()))),
+    };
+    let io_err = |e: io::Error| CreateError::Io(format!("write {}: {e}", path.display()));
+    // `mode` above is subject to the umask; make the world-readable mode explicit.
+    file.set_permissions(fs::Permissions::from_mode(0o644))
+        .map_err(io_err)?;
+    file.write_all(text.as_bytes()).map_err(io_err)?;
+    file.sync_all().map_err(io_err)?;
+    Ok(())
+}
+
 /// Parse and validate policy JSON text.
 pub fn parse_policy(text: &str) -> Result<PolicyFile, PolicyError> {
     let policy: PolicyFile =
@@ -322,6 +405,15 @@ impl PolicyStore {
     /// fails closed (`Err`) so a broken policy never grants more than the administrator wrote.
     pub fn lock_limits(&mut self) -> Result<LockLimits, PolicyError> {
         Ok(self.load()?.map(|p| p.lock_limits()).unwrap_or_default())
+    }
+
+    /// Validate `value` and create the policy file once (see [`create_policy_file`]). The
+    /// cache is dropped so the next `load` reads the new file.
+    pub fn create(&mut self, value: Value) -> Result<PolicyFile, CreateError> {
+        let policy = policy_from_value(value.clone())?;
+        create_policy_file(&self.path, &value)?;
+        self.cache = None;
+        Ok(policy)
     }
 }
 
@@ -502,6 +594,80 @@ mod tests {
         // Removed → defaults again.
         fs::remove_file(&path).unwrap();
         assert_eq!(store.load(), Ok(None));
+    }
+
+    #[test]
+    fn create_writes_once_with_mode_0644_and_pretty_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("etc").join("rp-code").join("policy.json");
+        let mut store = PolicyStore::new(&path);
+        assert_eq!(store.load(), Ok(None));
+
+        let value = json!({"version":1,"managedBy":"me","inputLock":{"maxDurationMs":4000}});
+        let created = store.create(value.clone()).unwrap();
+        assert_eq!(created.managed_by.as_deref(), Some("me"));
+        let meta = fs::metadata(&path).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o644);
+        let dir_mode = fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(dir_mode, 0o755);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.ends_with("}\n"), "trailing newline: {text:?}");
+        assert!(
+            text.contains("\n  \"managedBy\": \"me\""),
+            "pretty: {text:?}"
+        );
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), value);
+        // The store sees it immediately.
+        assert_eq!(store.lock_limits().unwrap().max_duration_ms, 4000);
+
+        // Second time: EXISTS, file untouched.
+        assert!(matches!(
+            store.create(json!({"version":1})),
+            Err(CreateError::Exists(_))
+        ));
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        let msg = CreateError::Exists(path.clone()).to_string();
+        assert!(msg.contains("only root can change it"), "{msg}");
+
+        // A symlink (even dangling) or a directory at the path also counts as existing.
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(dir.path().join("nowhere"), &link).unwrap();
+        assert!(matches!(
+            PolicyStore::new(&link).create(json!({"version":1})),
+            Err(CreateError::Exists(_))
+        ));
+        let sub = dir.path().join("dir.json");
+        fs::create_dir(&sub).unwrap();
+        assert!(matches!(
+            PolicyStore::new(&sub).create(json!({"version":1})),
+            Err(CreateError::Exists(_))
+        ));
+    }
+
+    #[test]
+    fn create_rejects_invalid_policies_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.json");
+        let mut store = PolicyStore::new(&path);
+        for bad in [
+            json!({"version":2}),
+            json!({"version":1,"settings":{"theme":"dark"}}),
+            json!({"version":1,"extra":1}),
+            json!({"version":1,"inputLock":{"emergencyKey":"space"}}),
+            json!("nope"),
+        ] {
+            let err = store.create(bad.clone()).unwrap_err();
+            assert!(matches!(err, CreateError::Invalid(_)), "{bad} → {err}");
+        }
+        assert!(!path.exists());
+        assert!(matches!(
+            store.create(json!({"version":1,"settings":{"theme":"dark"}})),
+            Err(CreateError::Invalid(m)) if m.contains("theme")
+        ));
     }
 
     #[test]

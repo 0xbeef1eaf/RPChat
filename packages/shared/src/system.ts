@@ -51,8 +51,11 @@ export interface DaemonStatus {
 export interface SystemIntegrationStatus {
   platform: string;
   daemon: DaemonStatus;
-  /** Policy file present and readable. */
-  policy: { present: boolean; path?: string; managedBy?: string; managed: ManagedSettingsPaths; error?: string };
+  /**
+   * Policy file present and readable. `canCreate`: the daemon is connected and no policy file
+   * exists, so the user may create one once through the daemon without root (`system.createPolicy`).
+   */
+  policy: { present: boolean; canCreate: boolean; path?: string; managedBy?: string; managed: ManagedSettingsPaths; error?: string };
   /** udev rule and group membership as detected (Linux). */
   udev: { rulePresent: boolean; inGroup: boolean; groupName: string };
   autostart: { enabled: boolean; method: 'xdg' | 'systemd-user' | 'none'; path?: string };
@@ -74,7 +77,9 @@ export type DaemonRequest =
   | { op: 'type'; text: string }
   | { op: 'key'; combo: string }
   | { op: 'click'; x: number; y: number; button?: 'left' | 'right' | 'middle' }
-  | { op: 'move'; x: number; y: number };
+  | { op: 'move'; x: number; y: number }
+  /** Create the policy file once (write-once): `EXISTS` when one is already there, `INVALID` when the object fails validation. */
+  | { op: 'set-policy'; policy: PolicyFile };
 
 export type DaemonResponse =
   | { ok: true; op: 'hello'; version: string; protocol: 1; devices: { keyboards: number; pointers: number; uinput: boolean } }
@@ -82,7 +87,8 @@ export type DaemonResponse =
   | { ok: true; op: 'policy'; policy: PolicyFile | null; path: string }
   | { ok: true; op: 'lock'; until: string; durationMs: number; devices: LockDevices }
   | { ok: true; op: 'unlock' | 'type' | 'key' | 'click' | 'move' }
-  | { ok: false; error: string; code: 'REFUSED' | 'POLICY' | 'NO_DEVICES' | 'BUSY' | 'INVALID' | 'INTERNAL' };
+  | { ok: true; op: 'set-policy'; path: string }
+  | { ok: false; error: string; code: 'REFUSED' | 'POLICY' | 'NO_DEVICES' | 'BUSY' | 'INVALID' | 'INTERNAL' | 'EXISTS' };
 
 export const DAEMON_SOCKET_PATH = '/run/rp-code/daemon.sock';
 export const POLICY_FILE_PATH = '/etc/rp-code/policy.json';

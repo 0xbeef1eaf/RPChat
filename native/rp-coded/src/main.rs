@@ -81,7 +81,7 @@ use std::time::Instant;
 use inject::Injector;
 use lock::{DeviceSource, LockEngine, UnlockCause, TICK_INTERVAL};
 use logging::Level;
-use policy::{PolicyStore, DEFAULT_POLICY_PATH};
+use policy::{CreateError, PolicyStore, DEFAULT_POLICY_PATH};
 use protocol::{
     DaemonError, DaemonResult, ErrorCode, Ok as OkPayload, Request, Response, PROTOCOL_VERSION,
 };
@@ -335,6 +335,33 @@ impl Daemon {
                 inject::run_move(self.injector().as_mut(), x, y)?;
                 log_debug!("move to {x},{y} for {peer}");
                 Ok(OkPayload::Move)
+            }
+            Request::SetPolicy { policy } => {
+                let mut store = self.policy();
+                let path = store.path().to_string_lossy().into_owned();
+                match store.create(policy) {
+                    Ok(created) => {
+                        log_info!(
+                            "policy created at {path} by {peer}{}",
+                            created
+                                .managed_by
+                                .as_deref()
+                                .filter(|m| !m.is_empty())
+                                .map(|m| format!(" (managedBy: {m:?})"))
+                                .unwrap_or_default()
+                        );
+                        Ok(OkPayload::SetPolicy { path })
+                    }
+                    Err(e @ CreateError::Exists(_)) => {
+                        log_warn!("set-policy from {peer} refused: {e}");
+                        Err(DaemonError::new(ErrorCode::Exists, e.to_string()))
+                    }
+                    Err(CreateError::Invalid(m)) => Err(DaemonError::invalid(m)),
+                    Err(e @ CreateError::Io(_)) => {
+                        log_error!("set-policy from {peer} failed: {e}");
+                        Err(DaemonError::internal(e.to_string()))
+                    }
+                }
             }
         }
     }
@@ -871,6 +898,119 @@ mod tests {
             c.send(json!({"op":"lock","durationMs":1e9}))["durationMs"],
             300_000
         );
+    }
+
+    #[test]
+    fn set_policy_writes_once_over_the_socket() {
+        let server = TestServer::start(fake_devices(), FakeInjector::default(), None);
+        let path = server.daemon.policy().path().to_path_buf();
+        let mut c = server.connect();
+        assert_eq!(c.send(json!({"op":"policy"}))["policy"], Value::Null);
+
+        // Invalid objects: INVALID with the validation message, and no file.
+        let bad =
+            c.send(json!({"op":"set-policy","policy":{"version":1,"settings":{"theme":"dark"}}}));
+        assert_eq!(bad["ok"], false);
+        assert_eq!(bad["code"], "INVALID");
+        assert!(bad["error"].as_str().unwrap().contains("settings.theme"));
+        let bad = c.send(json!({"op":"set-policy","policy":{"version":2}}));
+        assert_eq!(bad["code"], "INVALID");
+        assert!(bad["error"].as_str().unwrap().contains("version"));
+        assert_eq!(
+            c.send(json!({"op":"set-policy","policy":{"version":1,"nope":true}}))["code"],
+            "INVALID"
+        );
+        assert_eq!(
+            c.send(json!({"op":"set-policy"}))["code"],
+            "INVALID",
+            "policy is required"
+        );
+        assert!(!path.exists());
+
+        // First creation succeeds: 0644, pretty JSON, trailing newline.
+        let policy = json!({
+            "version": 1,
+            "managedBy": "the household admin",
+            "settings": {"maxInputLockMs": 20000},
+            "inputLock": {"maxDurationMs": 20000, "emergencyKey": "f12"}
+        });
+        let ok = c.send(json!({"op":"set-policy","policy":policy}));
+        assert_eq!(
+            ok,
+            json!({"ok":true,"op":"set-policy","path":path.to_string_lossy()})
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            format!("{}\n", serde_json::to_string_pretty(&policy).unwrap())
+        );
+
+        // A second creation is refused and leaves the file alone.
+        let again = c.send(json!({"op":"set-policy","policy":{"version":1}}));
+        assert_eq!(again["ok"], false);
+        assert_eq!(again["code"], "EXISTS");
+        assert!(again["error"]
+            .as_str()
+            .unwrap()
+            .contains("only root can change it"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+
+        // `policy` reports it and `lock` honours inputLock.maxDurationMs (fresh connection too).
+        let p = c.send(json!({"op":"policy"}));
+        assert_eq!(p["policy"]["managedBy"], "the household admin");
+        assert_eq!(p["policy"]["settings"], json!({"maxInputLockMs": 20000}));
+        assert_eq!(p["policy"]["inputLock"]["emergencyKey"], "f12");
+        assert_eq!(
+            p["policy"]["inputLock"]["maxDurationMs"].as_f64(),
+            Some(20000.0)
+        );
+        assert_eq!(p["path"], json!(path.to_string_lossy()));
+        let mut c2 = server.connect();
+        let lock = c2.send(json!({"op":"lock","durationMs":600000}));
+        assert_eq!(lock["ok"], true);
+        assert_eq!(lock["durationMs"], 20000);
+        c2.send(json!({"op":"unlock"}));
+    }
+
+    #[test]
+    fn set_policy_creates_the_parent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("etc").join("rp-code").join("policy.json");
+        let daemon = Daemon::new(
+            Box::new(fake_devices()),
+            Box::new(FakeInjector::default()),
+            &nested,
+        );
+        let res = daemon.handle(
+            Request::SetPolicy {
+                policy: json!({"version":1}),
+            },
+            "uid 1000 pid 42",
+        );
+        assert!(res.is_ok(), "{res:?}");
+        assert_eq!(
+            fs::read_to_string(&nested).unwrap(),
+            "{\n  \"version\": 1\n}\n"
+        );
+        let mode = fs::metadata(nested.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o755);
+        assert!(matches!(
+            daemon.handle(
+                Request::SetPolicy {
+                    policy: json!({"version":1}),
+                },
+                "uid 1000 pid 42",
+            ),
+            Response::Err(ref e) if e.code == ErrorCode::Exists
+        ));
     }
 
     #[test]

@@ -230,6 +230,9 @@ for f in README.md POLICY.md policy.example.json; do
 done
 unit_changed=false
 install_file "$DIST/rp-coded.service" "$UNIT_DST" 0644 && unit_changed=true || true
+# The policy directory must exist before the unit starts: it is the one path under /etc the
+# hardened service may write to (write-once policy creation from the app, see POLICY.md).
+if [ -d "$POLICY_DIR" ]; then skip "$POLICY_DIR exists"; else run install -d -m 0755 -o root -g root "$POLICY_DIR"; ok "created $POLICY_DIR"; fi
 if have systemctl && [ -d /run/systemd/system ]; then
   run systemctl daemon-reload
   if systemctl is-enabled rp-coded >/dev/null 2>&1 && systemctl is-active rp-coded >/dev/null 2>&1; then
@@ -262,8 +265,7 @@ if have udevadm; then
   fi
 fi
 
-# 4. policy ----------------------------------------------------------------------------------------
-if [ -d "$POLICY_DIR" ]; then skip "$POLICY_DIR exists"; else run install -d -m 0755 -o root -g root "$POLICY_DIR"; ok "created $POLICY_DIR"; fi
+# 4. policy (the directory itself was created in step 2, before the service started) -----------------
 if [ -e "$POLICY_DST" ]; then
   skip "$POLICY_DST exists (not touched)"
   if ! $DRY_RUN && [ "$(stat -c '%U:%G %a' "$POLICY_DST")" != "root:root 644" ]; then
@@ -272,7 +274,7 @@ if [ -e "$POLICY_DST" ]; then
 elif $POLICY_TEMPLATE; then
   run install -m 0644 -o root -g root "$DIST/policy.example.json" "$POLICY_DST"; ok "created $POLICY_DST from the template"
 else
-  skip "no policy file (defaults apply; --policy-template writes $POLICY_DST, see $LIBEXEC/POLICY.md)"
+  skip "no policy file (defaults apply; create one once from Settings → System, or --policy-template writes the example to $POLICY_DST, see $LIBEXEC/POLICY.md)"
 fi
 
 # 5. application menu entry and icon (system-wide, so AppImage users get a launcher) ----------------

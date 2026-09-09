@@ -47,7 +47,8 @@ rm -r squashfs-root
 
 The `.deb` package runs `install.sh --autostart none` on installation, which does the
 system-wide steps (group, daemon, udev rule, policy directory) and leaves group membership and
-autostart for you or the Settings button.
+autostart for you or the Settings button. It does not write a policy file (no
+`--policy-template`), so the write-once creation from the app stays available.
 
 Flags: `--user <name>` (default: the user behind `sudo`/`pkexec`), `--app-bin <path>` (the
 executable or AppImage the autostart and menu entries should launch), `--autostart xdg|systemd|none`
@@ -64,9 +65,9 @@ re-running is safe.
 | Step | Change |
 |---|---|
 | 1 | Creates the **`rp-code` group** and adds your user to it (needs a re-login). |
-| 2 | Installs the daemon to `/usr/local/libexec/rp-code/rp-coded` (plus `README.md`, `POLICY.md`, `policy.example.json`), the unit `/etc/systemd/system/rp-coded.service`, and runs `systemctl enable --now rp-coded`. |
+| 2 | Installs the daemon to `/usr/local/libexec/rp-code/rp-coded` (plus `README.md`, `POLICY.md`, `policy.example.json`), the unit `/etc/systemd/system/rp-coded.service`, creates `/etc/rp-code` (`0755`, the one path under `/etc` the hardened service may write to) and runs `systemctl enable --now rp-coded`. |
 | 3 | Installs `/etc/udev/rules.d/70-rp-code.rules` (makes `/dev/uinput` group-writable for `rp-code` — only needed by fallback tools such as `ydotool`; the daemon itself is root), `/etc/modules-load.d/rp-code.conf` (`uinput` at boot), loads the module now and reloads udev. |
-| 4 | Creates `/etc/rp-code` (`0755`). With `--policy-template`, writes `/etc/rp-code/policy.json` from the example **only if it does not exist**; an existing file is never modified (its ownership is corrected to `root:root 0644` if needed). |
+| 4 | Policy file: **nothing is written by default** — the file is write-once and you can create it from the app afterwards (below). With `--policy-template`, writes `/etc/rp-code/policy.json` from the example **only if it does not exist**; an existing file is never modified (its ownership is corrected to `root:root 0644` if needed). |
 | 5 | Application menu entry `/usr/local/share/applications/rp-code.desktop` (`Exec=<app> %U`) and icon `/usr/local/share/icons/hicolor/512x512/apps/rp-code.png`, refreshed with `update-desktop-database`/`gtk-update-icon-cache` when present. Skipped with `--menu-entry no` (the `.deb` does this, it ships its own entry). |
 | 6 | Autostart for your user: `~/.config/autostart/rp-code.desktop` (`Exec=<app> --hidden`, XDG) or `~/.config/systemd/user/rp-code.service` (enabled with `systemctl --user` when a session bus is reachable, otherwise it prints the command). Switching methods removes the other entry. It also prints the Hyprland `exec-once = <app> --hidden` line for people who prefer that. |
 | 7 | Runs `rp-coded --check-devices` and prints what the daemon can see. |
@@ -133,6 +134,35 @@ Points worth knowing:
   off on this machine (Settings → Updates shows "disabled by policy" and hides the token field),
   `{ "automatic": false }` only pins the "check automatically" toggle so users still update by hand.
 
+### Creating the policy from the app (write once)
+
+You do not need root to create the policy — only to change it later. When the daemon is
+connected and no policy file exists, Settings → System shows **Create policy…** in the policy
+card. It opens an editor prefilled with a policy built from your *current* settings (every
+managed key, `inputLock` at your max lock with Esc for 5 s, `managedBy` left empty for you to
+fill in), with a *Reset to current settings* link. Edit it, tick *I understand this cannot be
+undone without root* and press **Write policy**: the app validates the JSON (problems are listed
+in the dialog), sends it to `rp-coded` (`set-policy`), which validates it again exactly like the
+file, creates `/etc/rp-code` if needed and writes `policy.json` as `root:root 0644`. Both the
+daemon and the app pick the new file up immediately; the managed badges appear once settings
+reload.
+
+Rules of the flow:
+
+- **Write once.** The daemon only creates the file when nothing exists at that path (not even
+  a symlink or directory) and answers `EXISTS` otherwise. It never modifies or removes an
+  existing policy; after creation only root can (`sudoedit /etc/rp-code/policy.json`,
+  `sudo rm /etc/rp-code/policy.json`).
+- **Anyone in the `rp-code` group can do it, once, for the whole machine.** The first member
+  to write the file sets the policy for every user; it is meant for the person who set the
+  machine up. If several accounts share the machine, decide who does it before adding the others
+  to the group, or seed the file as root yourself (`install.sh --policy-template`).
+- **The daemon is the only writer.** The app cannot touch `/etc`; the write goes through the
+  socket, is logged with your uid/pid and the `managedBy` text (`journalctl -u rp-coded`), and
+  the file is written with `O_CREAT|O_EXCL`, so two people cannot both succeed.
+- Without the daemon (not installed, or you are not in the group yet) the button is not shown;
+  the policy card says so.
+
 ## Uninstalling
 
 ```sh
@@ -153,9 +183,11 @@ and the `rp-code` group. It **keeps `/etc/rp-code/policy.json`** and prints how 
   password prompts. Treat the group exactly like `input`: only add accounts that are allowed to
   do that, and do not add it to service accounts.
 - **The daemon does not trust the app.** Durations are clamped server-side, the policy can
-  disable locking, and the policy file lives in `/etc` where the app cannot write. Nothing the
-  app sends can read your input; the daemon drains grabbed events and only looks for the
-  emergency key.
+  disable locking, and the policy file lives in `/etc` where the app cannot write. The one
+  exception is deliberate: `set-policy` lets a group member *create* the file when none exists
+  (write once, logged with uid/pid); an existing file is never changed by anything but root.
+  Nothing the app sends can read your input; the daemon drains grabbed events and only looks
+  for the emergency key.
 - **Least privilege for a root process.** The systemd unit runs with a closed device policy
   (input devices and `/dev/uinput` only), read-only file system, no new privileges, a system-call
   allow-list and just the capabilities needed to hand the socket to the group. Every lock is

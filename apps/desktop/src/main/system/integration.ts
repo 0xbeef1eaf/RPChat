@@ -6,10 +6,11 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { SystemIntegrationStatus } from '@rp/shared';
+import type { AppSettings, PolicyFile, SystemIntegrationStatus } from '@rp/shared';
 import { RpError, SYSTEM_GROUP } from '@rp/shared';
 import type { DaemonClient } from './daemon-client.js';
 import type { PolicyWatcher } from './policy.js';
+import { parsePolicy } from './policy.js';
 
 export const UDEV_RULE_PATH = '/etc/udev/rules.d/70-rp-code.rules';
 export const AUTOSTART_FILENAME = 'rp-code.desktop';
@@ -56,6 +57,30 @@ export function autostartDesktopEntry(appBin: string): string {
     'StartupNotify=false',
     '',
   ].join('\n');
+}
+
+/**
+ * Pure: a policy seeded from the user's current settings, so a new policy starts from what
+ * they already have (pretty JSON, ready to edit). `managedBy` is left for them to fill in.
+ */
+export function policyTemplate(settings: AppSettings): string {
+  const policy: PolicyFile = {
+    version: 1,
+    managedBy: '',
+    settings: {
+      maxInputLockMs: settings.maxInputLockMs,
+      autonomy: { ...settings.autonomy },
+      permissions: { moduleAllow: { ...settings.permissions.moduleAllow } },
+      web: { allowlist: [...settings.web.allowlist] },
+      desktop: { launchAllowlist: [...settings.desktop.launchAllowlist] },
+      memory: { ...settings.memory },
+      senses: { includeInPrompt: settings.senses.includeInPrompt, watchDirs: [...settings.senses.watchDirs], calendarSources: [...settings.senses.calendarSources] },
+      displayBackend: settings.displayBackend,
+      updates: { enabled: true, automatic: settings.updates.automatic },
+    },
+    inputLock: { enabled: true, maxDurationMs: settings.maxInputLockMs, emergencyKey: 'esc', emergencyHoldMs: 5000 },
+  };
+  return `${JSON.stringify(policy, null, 2)}\n`;
 }
 
 export function defaultRunner(): ProcessRunner {
@@ -179,7 +204,7 @@ export class SystemIntegration {
       this.autostartStatus(),
       this.installerPath(),
     ]);
-    const policy: SystemIntegrationStatus['policy'] = { present: policyState.present, path: policyState.path, managed: policyState.managed };
+    const policy: SystemIntegrationStatus['policy'] = { present: policyState.present, canCreate: daemon.connected && !policyState.present, path: policyState.path, managed: policyState.managed };
     if (policyState.managedBy) policy.managedBy = policyState.managedBy;
     if (policyState.error) policy.error = policyState.error;
     return {
@@ -211,6 +236,32 @@ export class SystemIntegration {
     } catch (err) {
       throw new RpError('CAPABILITY_FAILED', `Cannot run pkexec: ${(err as Error).message} (install polkit, or run "sudo ${installer} --app-bin ${this.deps.appBin} --user ${this.userName()}" yourself)`);
     }
+  }
+
+  /** `policyTemplate()` for the given settings (see the pure function). */
+  policyTemplate(settings: AppSettings): string {
+    return policyTemplate(settings);
+  }
+
+  /**
+   * Create the policy file once through the daemon (write-once, no root needed). `text` is
+   * parsed and validated here first (`INVALID_ARGUMENT` with `details.problems`), then sent as
+   * the object the user wrote so the daemon's stricter validation (unknown keys) still applies;
+   * a policy that already exists comes back as `INVALID_ARGUMENT` with `details.daemonCode: 'EXISTS'`.
+   */
+  async createPolicy(text: string): Promise<SystemIntegrationStatus> {
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch (err) {
+      const problem = `not valid JSON: ${(err as Error).message}`;
+      throw new RpError('INVALID_ARGUMENT', `Invalid policy file:\n${problem}`, { problems: [problem] });
+    }
+    const parsed = parsePolicy(json);
+    const { path } = await this.deps.daemon.setPolicy(json as PolicyFile);
+    this.deps.logger.info(`[system] policy created at ${path}${parsed.managedBy ? ` (managed by ${parsed.managedBy})` : ''}`);
+    this.deps.policy.invalidate();
+    return this.status();
   }
 
   /** Write or remove `~/.config/autostart/rp-code.desktop` (no privileges needed). */

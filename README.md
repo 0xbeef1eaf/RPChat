@@ -147,9 +147,11 @@ sudo resources/system/install.sh          # or native/rp-coded/install.sh from a
 ```
 
 It creates the `rp-code` group, installs the udev rule and service, sets the app
-to start on login, and creates `/etc/rp-code/policy.json`, a root-owned file that
+to start on login, and prepares `/etc/rp-code` for `policy.json`, a root-owned file that
 can cap lock durations, pin settings the user cannot change and disable modules
-outright. The app shows the daemon and policy state under **Settings → System**.
+outright. The app shows the daemon and policy state under **Settings → System**,
+where you can also create the policy once without a root password (afterwards only
+root can change it).
 See [docs/system-integration.md](docs/system-integration.md).
 
 To chat for real, open **Settings → Providers**, add a provider (Anthropic,

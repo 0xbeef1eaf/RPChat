@@ -248,6 +248,12 @@ export class PolicyWatcher {
     private readonly logger?: Pick<Console, 'info' | 'warn'>,
   ) {}
 
+  /** Drop the cache so the next `current()` re-reads the file whatever its mtime (e.g. right after creating it). */
+  invalidate(): void {
+    this.state = undefined;
+    this.stamp = undefined;
+  }
+
   async current(): Promise<PolicyState> {
     let stamp: string;
     try {

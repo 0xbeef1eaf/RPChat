@@ -13,7 +13,7 @@ Spec: `docs/spec/system.md`. User guide: `docs/system-integration.md`. Wire cont
 
 ```sh
 cargo build --release          # → target/release/rp-coded (no system libraries needed)
-cargo test                     # 53 tests, all run without /dev/input or /dev/uinput
+cargo test                     # 57 tests, all run without /dev/input or /dev/uinput
 cargo clippy --all-targets
 pnpm run build:daemon          # same build, from the monorepo root
 ./target/release/rp-coded --check-devices
@@ -76,6 +76,7 @@ created it. Unknown fields in requests are ignored; a malformed line gets
 | `{ "op": "key", "combo" }` | `{ "ok": true, "op": "key" }` |
 | `{ "op": "click", "x", "y", "button"? }` | `{ "ok": true, "op": "click" }` |
 | `{ "op": "move", "x", "y" }` | `{ "ok": true, "op": "move" }` |
+| `{ "op": "set-policy", "policy": PolicyFile }` | `{ "ok": true, "op": "set-policy", "path" }` — creates the policy file **once** (see below) |
 
 `until` is RFC 3339 UTC with milliseconds (`2026-01-02T03:04:05.678Z`), the same shape as
 `Date.prototype.toISOString()`. `devices` is `"keyboard"`, `"mouse"` or `"both"` (default).
@@ -90,6 +91,7 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 | `BUSY` | every matching device is `EVIOCGRAB`bed by another process (EBUSY); uinput write would block |
 | `INVALID` | malformed JSON / unknown op / wrong field types; `durationMs` ≤ 0 or non-finite; empty or > 2000-char `text`; unparsable `combo`; non-finite coordinates |
 | `INTERNAL` | unexpected I/O failure (details in `error` and the journal) |
+| `EXISTS` | `set-policy` while something (file, symlink, directory) already exists at the policy path; only root can change it |
 
 ### Semantics the app relies on
 
@@ -112,6 +114,17 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   `BackSpace`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Up`/`Down`/`Left`/`Right`,
   `F1`..`F24`, `XF86AudioMute`, ...) or a single character (`ctrl+s`, `super+2`, `ctrl++`).
   A capital letter does not add Shift (`ctrl+S` = `ctrl+s`); write `ctrl+shift+s`.
+- **`set-policy`** (write once): validates `policy` exactly like the file (unknown keys →
+  `INVALID` with the validation message), refuses with `EXISTS` when anything is already at the
+  policy path, creates the parent directory (`0755`) when missing and writes the object as
+  pretty JSON with a trailing newline, `0644`. The file is opened with `O_CREAT|O_EXCL` and
+  written in place: the kernel makes the existence check and the creation one atomic step, so
+  two callers cannot both succeed and nothing existing is ever replaced (a crash mid-write
+  leaves a truncated file the loader rejects, i.e. locks are refused until root fixes it). The
+  creation is logged with the requester's uid/pid and `managedBy`; the next `policy`/`lock`
+  request reads the new file. Any member of `rp-code` can do this once for the whole machine;
+  afterwards only root can edit or delete the file (`ProtectSystem=strict` leaves
+  `/etc/rp-code` writable for exactly this).
 - **`click` / `move`**: absolute coordinates in the primary screen's pixel space. The virtual
   device's ABS_X/ABS_Y range is `0..W-1` / `0..H-1` where `W×H` is the first connected DRM
   connector's preferred mode (`/sys/class/drm/*/modes`), fallback 1920×1080; coordinates are
@@ -141,7 +154,9 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 - The daemon never trusts the app's numbers: the policy clamps durations and can disable locking
   entirely; the policy file must be root-owned and lives outside the user's reach.
 - No request can read input: grabbed events are drained and discarded, only the emergency key is
-  inspected. No request can change the policy.
+  inspected. No request can change an existing policy: `set-policy` only ever creates the file
+  when none exists (write once), so the first member of the group to do it seeds the policy for
+  everyone; edits and removal need root.
 - The systemd unit runs with a closed device policy (only `char-input` and `/dev/uinput`),
   `ProtectSystem=strict`, `NoNewPrivileges`, a system-call allow-list and only the capabilities
   needed to chown the socket.

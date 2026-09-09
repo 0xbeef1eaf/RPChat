@@ -15,6 +15,7 @@ export function SystemSection() {
   const [running, setRunning] = useState(false);
   const [output, setOutput] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [policyDialog, setPolicyDialog] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -191,7 +192,18 @@ export function SystemSection() {
               ) : null}
             </dl>
           ) : (
-            <p className="muted small">Administrators can force settings and input-lock limits from a root-owned file. Nothing is forced on this machine.</p>
+            <div className="stack" style={{ gap: 8 }}>
+              <p className="muted small">Administrators can force settings and input-lock limits from a root-owned file. Nothing is forced on this machine.</p>
+              {policy.canCreate ? (
+                <div>
+                  <button type="button" className="btn btn-sm" onClick={() => setPolicyDialog(true)} disabled={running}>
+                    Create policy…
+                  </button>
+                </div>
+              ) : !daemon.connected && linux ? (
+                <p className="field-hint">Install the system integration to be able to create a policy without root.</p>
+              ) : null}
+            </div>
           )}
         </div>
 
@@ -237,7 +249,7 @@ export function SystemSection() {
         <div className="row wrap">
           <div className="item-text grow">
             <span className="item-title">Install system integration</span>
-            <span className="item-sub">Creates the group and udev rule, installs the root daemon service and a policy template; asks for your password (pkexec).</span>
+            <span className="item-sub">Creates the group and udev rule and installs the root daemon service; asks for your password (pkexec).</span>
           </div>
           <button type="button" className="btn btn-primary btn-sm" onClick={() => setInstallDialog(true)} disabled={!linux || !status.installerAvailable || running}>
             {running ? 'Running…' : 'Install system integration…'}
@@ -270,6 +282,19 @@ export function SystemSection() {
         ) : null}
       </div>
 
+      {policyDialog ? (
+        <CreatePolicyDialog
+          path={policy.path ?? '/etc/rp-code/policy.json'}
+          onClose={() => setPolicyDialog(false)}
+          onCreated={async (next) => {
+            setPolicyDialog(false);
+            setStatus(next);
+            toast('success', 'Policy written');
+            await Promise.all([load(), refreshSettings().catch(() => undefined)]);
+          }}
+        />
+      ) : null}
+
       {installDialog ? (
         <Modal title="Install system integration?" onClose={() => setInstallDialog(false)}>
           <p>The installer runs with administrator rights and makes these changes:</p>
@@ -282,7 +307,7 @@ export function SystemSection() {
               installs and starts the <code>rp-coded</code> root daemon service (input lock, typing, emergency unlock key)
             </li>
             <li>
-              writes a policy template to <code>{policy.path ?? '/etc/rp-code/policy.json'}</code> (nothing forced until edited)
+              creates <code>/etc/rp-code</code> for the policy file (nothing is written there; you can create the policy from this tab afterwards)
             </li>
             <li>optionally registers the app to start on login</li>
           </ul>
@@ -302,5 +327,95 @@ export function SystemSection() {
         </Modal>
       ) : null}
     </div>
+  );
+}
+
+/** Validation problems from a `createPolicy` error: the message lists one problem per line after "Invalid policy file:". */
+function policyProblems(err: unknown): string[] {
+  const message = errorMessage(err);
+  const lines = message
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length > 1 && /^Invalid policy file:?$/.test(lines[0] ?? '')) return lines.slice(1);
+  return [message];
+}
+
+function CreatePolicyDialog({ path, onClose, onCreated }: { path: string; onClose: () => void; onCreated: (status: SystemIntegrationStatus) => void | Promise<void> }) {
+  const [text, setText] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [understood, setUnderstood] = useState(false);
+  const [writing, setWriting] = useState(false);
+  const [problems, setProblems] = useState<string[] | null>(null);
+
+  const reset = useCallback(async () => {
+    setLoading(true);
+    try {
+      setText(await api().system.policyTemplate());
+      setProblems(null);
+    } catch (err) {
+      setProblems([errorMessage(err)]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reset();
+  }, [reset]);
+
+  const submit = async () => {
+    setWriting(true);
+    setProblems(null);
+    try {
+      const next = await api().system.createPolicy(text);
+      await onCreated(next);
+    } catch (err) {
+      setProblems(policyProblems(err));
+    } finally {
+      setWriting(false);
+    }
+  };
+
+  return (
+    <Modal title="Create the policy file" onClose={writing ? undefined : onClose}>
+      <p>
+        Writes <code>{path}</code> through the rp-code daemon. This does not need your password, but it can only be done once: afterwards only root
+        can edit or remove the file, and the values in it override the settings of every user on this machine.
+      </p>
+      <div className="field">
+        <div className="row">
+          <label className="grow" htmlFor="policy-json">
+            Policy (JSON, prefilled from your current settings)
+          </label>
+          <button type="button" className="btn btn-sm" onClick={reset} disabled={loading || writing}>
+            Reset to current settings
+          </button>
+        </div>
+        <textarea id="policy-json" className="code" rows={20} spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} disabled={loading || writing} />
+      </div>
+      {problems ? (
+        <div className="callout callout-danger small">
+          <strong>The policy was not written.</strong>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {problems.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <label className="check">
+        <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} disabled={writing} />
+        I understand this cannot be undone without root
+      </label>
+      <div className="form-actions">
+        <button type="button" className="btn" onClick={onClose} disabled={writing}>
+          Cancel
+        </button>
+        <button type="button" className="btn btn-primary" onClick={submit} disabled={!understood || loading || writing || text.trim().length === 0}>
+          {writing ? 'Writing…' : 'Write policy'}
+        </button>
+      </div>
+    </Modal>
   );
 }

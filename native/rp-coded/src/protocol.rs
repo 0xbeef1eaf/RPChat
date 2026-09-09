@@ -99,6 +99,12 @@ pub enum Request {
         x: f64,
         y: f64,
     },
+    /// Create the policy file once (write-once; `EXISTS` when one is already there). The
+    /// object is validated exactly like the file would be.
+    #[serde(rename = "set-policy")]
+    SetPolicy {
+        policy: serde_json::Value,
+    },
 }
 
 impl Request {
@@ -114,6 +120,7 @@ impl Request {
             Request::Key { .. } => "key",
             Request::Click { .. } => "click",
             Request::Move { .. } => "move",
+            Request::SetPolicy { .. } => "set-policy",
         }
     }
 }
@@ -150,16 +157,19 @@ pub enum ErrorCode {
     Invalid,
     /// Unexpected I/O failure; details in `error` and the journal.
     Internal,
+    /// `set-policy` while a policy file already exists (only root can change it).
+    Exists,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 6] = [
+    pub const ALL: [ErrorCode; 7] = [
         ErrorCode::Refused,
         ErrorCode::Policy,
         ErrorCode::NoDevices,
         ErrorCode::Busy,
         ErrorCode::Invalid,
         ErrorCode::Internal,
+        ErrorCode::Exists,
     ];
 }
 
@@ -212,6 +222,11 @@ pub enum Ok {
     Key,
     Click,
     Move,
+    /// The policy file that was just created.
+    #[serde(rename = "set-policy")]
+    SetPolicy {
+        path: String,
+    },
 }
 
 /// Marker that serialises as the JSON literal `true` and refuses anything else.
@@ -455,6 +470,20 @@ mod tests {
             round_trip_request(json!({"op":"move","x":0,"y":0})),
             Request::Move { x: 0.0, y: 0.0 }
         );
+        assert_eq!(
+            round_trip_request(json!({"op":"set-policy","policy":{"version":1,"managedBy":"me"}})),
+            Request::SetPolicy {
+                policy: json!({"version":1,"managedBy":"me"})
+            }
+        );
+        assert!(
+            parse_line(r#"{"op":"set-policy"}"#).is_err(),
+            "policy is required"
+        );
+        assert!(
+            parse_line(r#"{"op":"setpolicy","policy":{}}"#).is_err(),
+            "the op is kebab-case on the wire"
+        );
     }
 
     #[test]
@@ -469,6 +498,7 @@ mod tests {
             (json!({"op":"key","combo":""}), "key"),
             (json!({"op":"click","x":0,"y":0}), "click"),
             (json!({"op":"move","x":0,"y":0}), "move"),
+            (json!({"op":"set-policy","policy":{}}), "set-policy"),
         ] {
             let req: Request = serde_json::from_value(v).unwrap();
             assert_eq!(req.op(), name);
@@ -574,6 +604,12 @@ mod tests {
         round_trip_response(&Response::ok(Ok::Key), json!({"ok":true,"op":"key"}));
         round_trip_response(&Response::ok(Ok::Click), json!({"ok":true,"op":"click"}));
         round_trip_response(&Response::ok(Ok::Move), json!({"ok":true,"op":"move"}));
+        round_trip_response(
+            &Response::ok(Ok::SetPolicy {
+                path: "/etc/rp-code/policy.json".into(),
+            }),
+            json!({"ok":true,"op":"set-policy","path":"/etc/rp-code/policy.json"}),
+        );
     }
 
     #[test]
@@ -585,7 +621,9 @@ mod tests {
             "BUSY",
             "INVALID",
             "INTERNAL",
+            "EXISTS",
         ];
+        assert_eq!(names.len(), ErrorCode::ALL.len());
         for (code, name) in ErrorCode::ALL.iter().zip(names) {
             round_trip_response(
                 &Response::err(*code, "why"),

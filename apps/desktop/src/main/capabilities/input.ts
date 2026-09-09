@@ -3,7 +3,7 @@ import type { ActionContext, CapabilityHandler, DaemonRequest, DaemonResponse, J
 import { RpError } from '@rp/shared';
 import type { Logger } from '@rp/core';
 import type { CommandRunner } from './commands-runner.js';
-import { DaemonError } from '../system/daemon-client.js';
+import { toRpError } from '../system/daemon-client.js';
 import type { DaemonClient } from '../system/daemon-client.js';
 
 export const INPUT_LOCK_MIN_MS = 1000;
@@ -110,11 +110,7 @@ export class InputHandler implements CapabilityHandler {
     try {
       return await daemon.request<R>(req);
     } catch (err) {
-      if (err instanceof DaemonError) {
-        const code = err.code === 'REFUSED' || err.code === 'POLICY' ? 'PERMISSION_DENIED' : err.code === 'INVALID' ? 'INVALID_ARGUMENT' : 'CAPABILITY_FAILED';
-        throw new RpError(code, `rp-coded refused ${req.op}: ${err.message}`, { daemonCode: err.code });
-      }
-      throw err;
+      throw toRpError(err, req.op);
     }
   }
 

@@ -39,11 +39,14 @@ SystemCallFilter=~@privileged @resources
 SystemCallFilter=@chown
 CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
 RestrictAddressFamilies=AF_UNIX
-# Socket directory: created 0750 and chowned root:rp-code by the daemon. /etc/rp-code stays
-# read-only through ProtectSystem=strict.
+# Socket directory: created 0750 and chowned root:rp-code by the daemon. /etc/rp-code is the
+# only other writable path: the daemon creates policy.json there once (`set-policy`, write-once)
+# and never modifies or removes it. The directory is created by install.sh before the service
+# starts ("-": ignored when missing, so the unit still starts without it).
 RuntimeDirectory=rp-code
 RuntimeDirectoryMode=0750
 ReadWritePaths=/run/rp-code
+ReadWritePaths=-/etc/rp-code
 # Input devices (char major 13 = "input", covers hot-plugged ones) and /dev/uinput (misc).
 DevicePolicy=closed
 DeviceAllow=char-input rw

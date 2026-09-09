@@ -4,11 +4,12 @@
  * 10 s timeout, reconnect on the next request after the socket drops.
  */
 import * as net from 'node:net';
-import type { DaemonRequest, DaemonResponse, DaemonStatus } from '@rp/shared';
+import type { DaemonRequest, DaemonResponse, DaemonStatus, PolicyFile, RpErrorCode } from '@rp/shared';
 import { DAEMON_SOCKET_PATH, RpError } from '@rp/shared';
 
 export type HelloResponse = Extract<DaemonResponse, { op: 'hello' }>;
 export type StatusResponse = Extract<DaemonResponse, { op: 'status' }>;
+export type SetPolicyResponse = Extract<DaemonResponse, { op: 'set-policy' }>;
 export type DaemonErrorResponse = Extract<DaemonResponse, { ok: false }>;
 
 /** Thrown for `{ ok: false }` answers; `code` is the daemon's code. */
@@ -20,6 +21,26 @@ export class DaemonError extends Error {
     super(message);
     this.name = 'DaemonError';
   }
+}
+
+/** `RpError` code for a daemon error code (shared by every op that goes through the daemon). */
+export function rpErrorCodeFor(code: DaemonErrorResponse['code']): RpErrorCode {
+  switch (code) {
+    case 'REFUSED':
+    case 'POLICY':
+      return 'PERMISSION_DENIED';
+    case 'INVALID':
+    case 'EXISTS':
+      return 'INVALID_ARGUMENT';
+    default:
+      return 'CAPABILITY_FAILED';
+  }
+}
+
+/** Turn a `DaemonError` into the `RpError` callers expect; anything else is returned as is. */
+export function toRpError(err: unknown, op: DaemonRequest['op']): unknown {
+  if (err instanceof DaemonError) return new RpError(rpErrorCodeFor(err.code), `rp-coded refused ${op}: ${err.message}`, { daemonCode: err.code });
+  return err;
 }
 
 export interface DaemonClientOptions {
@@ -102,6 +123,20 @@ export class DaemonClient {
       return { connected: true, version: hello.version, socketPath: this.socketPath, devices: hello.devices, locked: status.locked };
     } catch (err) {
       return { connected: false, socketPath: this.socketPath, error: (err as Error).message };
+    }
+  }
+
+  /**
+   * Create the policy file once through the daemon. Rejects with `RpError` `INVALID_ARGUMENT`
+   * when the daemon rejects the object (`INVALID`) or a policy already exists (`EXISTS`,
+   * `details.daemonCode`), `PERMISSION_DENIED`/`CAPABILITY_FAILED` like the other ops.
+   */
+  async setPolicy(policy: PolicyFile): Promise<{ path: string }> {
+    try {
+      const res = await this.request<SetPolicyResponse>({ op: 'set-policy', policy });
+      return { path: res.path };
+    } catch (err) {
+      throw toRpError(err, 'set-policy');
     }
   }
 

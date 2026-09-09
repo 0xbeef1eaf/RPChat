@@ -245,6 +245,8 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       install: (_e, options) => services.system.install(options && typeof options === 'object' ? options : {}),
       setAutostart: (_e, enabled) => services.system.setAutostart(Boolean(enabled)),
       installerPath: () => services.system.installerPath(),
+      createPolicy: (_e, text) => services.system.createPolicy(requireString(text, 'text')),
+      policyTemplate: async () => services.system.policyTemplate(await engine.settings.get()),
     },
     updates: {
       status: () => services.updates.status(),

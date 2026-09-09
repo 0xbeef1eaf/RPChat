@@ -30,7 +30,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   audit: ['list'],
   memories: ['list', 'add', 'update', 'remove', 'consolidate'],
   ui: ['respondPrompt'],
-  system: ['status', 'install', 'setAutostart', 'installerPath'],
+  system: ['status', 'install', 'setAutostart', 'installerPath', 'createPolicy', 'policyTemplate'],
   updates: ['status', 'check', 'download', 'install', 'setToken'],
   plugins: ['pluginsDir', 'list', 'install', 'remove', 'setEnabled', 'reload', 'openFolder'],
   editor: [

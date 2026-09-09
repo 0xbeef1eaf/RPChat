@@ -5,12 +5,13 @@ import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AppSettings, DaemonRequest, DaemonResponse } from '@rp/shared';
 import { defaultSettings } from '@rp/core';
-import { DaemonClient, DaemonError } from './daemon-client.js';
-import { SystemIntegration, autostartDesktopEntry } from './integration.js';
+import { RpError } from '@rp/shared';
+import { DaemonClient, DaemonError, rpErrorCodeFor } from './daemon-client.js';
+import { SystemIntegration, autostartDesktopEntry, policyTemplate } from './integration.js';
 import { PolicyWatcher, applyPolicy, loadPolicy, managedPaths, parsePolicy, stripManagedPatch } from './policy.js';
 
 /** Fake rp-coded: answers the protocol from an in-memory lock state. */
-function fakeDaemon(socketPath: string, opts: { hang?: boolean } = {}) {
+function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: string } = {}) {
   let locked: { until: string; reason?: string; devices: 'keyboard' | 'mouse' | 'both' } | null = null;
   const seen: DaemonRequest[] = [];
   const conns = new Set<net.Socket>();
@@ -49,6 +50,18 @@ function fakeDaemon(socketPath: string, opts: { hang?: boolean } = {}) {
           case 'key':
             res = req.combo === 'bad' ? { ok: false, error: 'unknown key', code: 'INVALID' } : { ok: true, op: 'key' };
             break;
+          case 'set-policy': {
+            // Like rp-coded: strict validation (unknown keys), write once, 0644 pretty JSON.
+            const file = opts.policyPath ?? '/nonexistent/policy.json';
+            const unknown = Object.keys((req.policy as { settings?: object }).settings ?? {}).find((k) => k === 'theme');
+            if (unknown) res = { ok: false, error: `policy invalid: settings.${unknown} is not a managed setting`, code: 'INVALID' };
+            else if (fs.existsSync(file)) res = { ok: false, error: `a policy already exists at ${file}; only root can change it`, code: 'EXISTS' };
+            else {
+              fs.writeFileSync(file, `${JSON.stringify(req.policy, null, 2)}\n`, { mode: 0o644 });
+              res = { ok: true, op: 'set-policy', path: file };
+            }
+            break;
+          }
           default:
             res = { ok: true, op: req.op as 'type' };
         }
@@ -177,6 +190,77 @@ describe('policy', () => {
   });
 });
 
+describe('SystemIntegration.createPolicy', () => {
+  const base: AppSettings = defaultSettings();
+
+  it('policyTemplate seeds a valid policy from the current settings', () => {
+    const settings: AppSettings = { ...base, maxInputLockMs: 42_000, displayBackend: 'electron', web: { ...base.web, allowlist: ['a.example'] }, permissions: { moduleAllow: { desktop: false } }, updates: { automatic: false, checkIntervalHours: 6 } };
+    const text = policyTemplate(settings);
+    expect(text.endsWith('}\n')).toBe(true);
+    const json = JSON.parse(text) as Record<string, unknown>;
+    expect(json).toMatchObject({ version: 1, managedBy: '', inputLock: { enabled: true, maxDurationMs: 42_000, emergencyKey: 'esc', emergencyHoldMs: 5000 } });
+    expect(json.settings).toMatchObject({ maxInputLockMs: 42_000, autonomy: base.autonomy, permissions: { moduleAllow: { desktop: false } }, web: { allowlist: ['a.example'] }, desktop: { launchAllowlist: [] }, memory: base.memory, displayBackend: 'electron', updates: { enabled: true, automatic: false } });
+    expect((json.settings as { senses: object }).senses).toEqual({ includeInPrompt: base.senses.includeInPrompt, watchDirs: base.senses.watchDirs, calendarSources: base.senses.calendarSources });
+    // Round-trips through the app's parser without problems, with every key managed.
+    const parsed = parsePolicy(json);
+    expect(managedPaths(parsed)).toEqual(expect.arrayContaining(['maxInputLockMs', 'autonomy.maxSelfWakesPerHour', 'permissions.moduleAllow.desktop', 'web.allowlist', 'desktop.launchAllowlist', 'memory.enabled', 'senses.watchDirs', 'displayBackend', 'updates.automatic', 'updates.enabled']));
+  });
+
+  it('parses, calls the daemon, refreshes the watcher and maps daemon errors', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-pol-'));
+    const sock = path.join(tmp, 'd.sock');
+    const policyPath = path.join(tmp, 'policy.json');
+    const daemon = fakeDaemon(sock, { policyPath });
+    await daemon.listen();
+    const client = new DaemonClient({ socketPath: sock, timeoutMs: 2000 });
+    const integration = new SystemIntegration({
+      platform: 'linux',
+      daemon: client,
+      policy: new PolicyWatcher(policyPath),
+      resourcesDirs: [],
+      homeDir: path.join(tmp, 'home'),
+      appBin: '/opt/rp-code',
+      userName: 'alice',
+      udevRulePath: path.join(tmp, 'rules'),
+      run: async () => ({ code: 0, stdout: '', stderr: '' }),
+      logger: { info: () => undefined, warn: () => undefined, debug: () => undefined },
+    });
+    const before = await integration.status();
+    expect(before.daemon.connected).toBe(true);
+    expect(before.policy).toMatchObject({ present: false, canCreate: true });
+
+    // Invalid JSON and invalid policies are rejected before the daemon is involved.
+    await expect(integration.createPolicy('{oops')).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', details: { problems: [expect.stringMatching(/not valid JSON/)] } });
+    await expect(integration.createPolicy(JSON.stringify({ version: 2, settings: { maxInputLockMs: 'x' } }))).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', details: { problems: ['version must be 1', 'settings.maxInputLockMs must be a number ≥ 1000'] } });
+    expect(daemon.seen.filter((r) => r.op === 'set-policy')).toHaveLength(0);
+    // The daemon's stricter validation (unknown keys) is surfaced as INVALID_ARGUMENT too.
+    await expect(integration.createPolicy(JSON.stringify({ version: 1, settings: { theme: 'dark' } }))).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', message: /settings.theme/, details: { daemonCode: 'INVALID' } });
+    expect(fs.existsSync(policyPath)).toBe(false);
+
+    const text = integration.policyTemplate({ ...base, maxInputLockMs: 15_000 }).replace('"managedBy": ""', '"managedBy": "alice"');
+    const after = await integration.createPolicy(text);
+    expect(daemon.seen.filter((r) => r.op === 'set-policy')).toHaveLength(2);
+    expect(after.policy).toMatchObject({ present: true, canCreate: false, path: policyPath, managedBy: 'alice' });
+    expect(after.policy.managed).toContain('maxInputLockMs');
+    expect(JSON.parse(fs.readFileSync(policyPath, 'utf8'))).toMatchObject({ version: 1, managedBy: 'alice', inputLock: { maxDurationMs: 15_000 } });
+
+    // Second creation: the daemon's EXISTS → INVALID_ARGUMENT with the daemon message.
+    const err = await integration.createPolicy(text).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RpError);
+    expect(err).toMatchObject({ code: 'INVALID_ARGUMENT', message: /already exists .* only root can change it/, details: { daemonCode: 'EXISTS' } });
+    expect(rpErrorCodeFor('EXISTS')).toBe('INVALID_ARGUMENT');
+    expect(rpErrorCodeFor('POLICY')).toBe('PERMISSION_DENIED');
+    expect(rpErrorCodeFor('BUSY')).toBe('CAPABILITY_FAILED');
+    // Without a daemon nothing can be created.
+    client.close();
+    await daemon.close();
+    const offline = await integration.status();
+    expect(offline.daemon.connected).toBe(false);
+    expect(offline.policy.canCreate).toBe(false);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
 describe('SystemIntegration', () => {
   it('assembles the status and toggles the XDG autostart entry', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-sys-'));
@@ -205,7 +289,7 @@ describe('SystemIntegration', () => {
       logger: { info: () => undefined, warn: () => undefined, debug: () => undefined },
     });
     const status = await integration.status();
-    expect(status).toMatchObject({ platform: 'linux', daemon: { connected: false }, policy: { present: false, managed: [] }, udev: { rulePresent: false, inGroup: true, groupName: 'rp-code' }, autostart: { enabled: false, method: 'none' }, installerAvailable: true });
+    expect(status).toMatchObject({ platform: 'linux', daemon: { connected: false }, policy: { present: false, canCreate: false, managed: [] }, udev: { rulePresent: false, inGroup: true, groupName: 'rp-code' }, autostart: { enabled: false, method: 'none' }, installerAvailable: true });
     expect(await integration.installerPath()).toBe(path.join(resources, 'system', 'install.sh'));
     const enabled = await integration.setAutostart(true);
     expect(enabled.autostart).toEqual({ enabled: true, method: 'xdg', path: path.join(tmp, 'home', '.config', 'autostart', 'rp-code.desktop') });

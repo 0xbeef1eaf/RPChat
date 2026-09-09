@@ -181,6 +181,14 @@ export interface IpcApi {
     setAutostart(enabled: boolean): Promise<SystemIntegrationStatus>;
     /** Path of the bundled installer script, for users who prefer to run it themselves. */
     installerPath(): Promise<string | null>;
+    /**
+     * Create the policy file once through the daemon (no root needed; afterwards only root can
+     * change it). `text` is the JSON document; throws `INVALID_ARGUMENT` with the problems, or
+     * the mapped daemon error (`EXISTS` when a policy already exists). Resolves with the new status.
+     */
+    createPolicy(text: string): Promise<SystemIntegrationStatus>;
+    /** Pretty JSON of a policy seeded from the current settings, to start editing from. */
+    policyTemplate(): Promise<string>;
   };
   /** In-place app updates from the private GitHub releases (see `UpdateStatus`). */
   updates: {

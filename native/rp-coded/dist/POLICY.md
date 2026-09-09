@@ -16,6 +16,17 @@ daemon refuse `lock` (`code: "POLICY"`) until it is fixed — it never falls bac
 silently once a file exists. `rp-coded --check-devices` does not validate the policy; check
 with `python3 -m json.tool /etc/rp-code/policy.json` or by watching `journalctl -u rp-coded`.
 
+## Creating the file without root (write once)
+
+The file is normally written by root (`sudo`, or `install.sh --policy-template`). When it does
+not exist yet, **any member of the `rp-code` group can create it once** through the daemon
+(Settings → System → *Create policy…*, or the `set-policy` request): the daemon validates the
+object exactly like the file, creates `/etc/rp-code` if needed and writes `policy.json` as
+`root:root 0644`. After that the daemon refuses further `set-policy` requests (`code: "EXISTS"`)
+and **only root can edit or delete the file** — there is no undo from the app. Because the
+first person in the group to do it sets the policy for every user of the machine, this is meant
+for whoever set the machine up; the values in `settings` override everyone's own settings.
+
 ## Top level
 
 | Field | Type | Meaning |
