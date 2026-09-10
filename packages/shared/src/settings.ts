@@ -18,7 +18,8 @@ export interface HistorySettings {
   summaryBudgetTokens: number;
   /**
    * How many of the most recent assistant messages keep the code and results of their actions.
-   * Older ones keep only their visible text. Default 2; 0 drops every past action.
+   * Older ones keep only their visible text. Default 0: past tool calls are never re-sent (the
+   * current turn's calls and results always are, inside the turn).
    */
   keepActionDetailFor: number;
 }
@@ -28,7 +29,7 @@ export const DEFAULT_HISTORY_SETTINGS: HistorySettings = {
   compressAboveTokens: 6_000,
   keepRecentMessages: 16,
   summaryBudgetTokens: 700,
-  keepActionDetailFor: 2,
+  keepActionDetailFor: 0,
 };
 import type { MessagingChannel } from './senses.js';
 

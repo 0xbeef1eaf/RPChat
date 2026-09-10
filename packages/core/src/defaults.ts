@@ -10,6 +10,8 @@ export function defaultSettings(): AppSettings {
 /** Merge a stored/partial settings object onto the defaults (run limits merged field by field). */
 /** `contextTokenBudget` default before the abridged SDK index; migrated on load. */
 export const LEGACY_CONTEXT_TOKEN_BUDGET = 24_000;
+/** `history.keepActionDetailFor` default before it became 0; migrated on load. */
+export const LEGACY_KEEP_ACTION_DETAIL_FOR = 2;
 
 export function mergeSettings(stored: Partial<AppSettings> | undefined, base: AppSettings = defaultSettings()): AppSettings {
   if (!stored) return base;
@@ -33,6 +35,8 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   }
   if (stored.history && typeof stored.history === 'object') {
     merged.history = { ...base.history, ...stored.history };
+    // Early builds defaulted to re-sending the last two turns' tool calls; that overloads smaller models.
+    if (stored.history.keepActionDetailFor === LEGACY_KEEP_ACTION_DETAIL_FOR) merged.history.keepActionDetailFor = base.history.keepActionDetailFor;
   }
   if (stored.autonomy && typeof stored.autonomy === 'object') {
     merged.autonomy = { ...base.autonomy, ...stored.autonomy };

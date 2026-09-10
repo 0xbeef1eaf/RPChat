@@ -189,4 +189,31 @@ describe('model-exchange capture (settings.debug.showModelTraffic)', () => {
     expect(list[0]!.request.temperature).toBe(0);
     expect(list[0]!.response?.message.content[0]).toMatchObject({ type: 'text' });
   });
+
+  it('by default a later turn is sent without any earlier tool calls or results', async () => {
+    t = await createTestEngine({
+      script: [
+        { text: 'Let me check.', toolCalls: [runAction('return await sdk.state.get("mood");', 'read mood', 'tu_1')] },
+        { text: 'You seem happy!' },
+        { text: 'Still happy.' },
+      ],
+      runnerHandler: async () => ({ ok: true, returnValue: 'happy', logs: [] }),
+    });
+    await t.engine.settings.update({ debug: { showModelTraffic: true } });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    await t.engine.chat.send(session.id, 'how do I seem?');
+    await t.engine.chat.send(session.id, 'and now?');
+
+    const list = exchanges(t);
+    const last = list.at(-1)!;
+    const parts = last.request.messages.flatMap((m) => m.content.map((p) => p.type));
+    expect(parts).not.toContain('tool_use');
+    expect(parts).not.toContain('tool_result');
+    // The earlier reply is still there as plain text.
+    expect(last.request.messages.some((m) => m.role === 'assistant' && m.content.some((p) => p.type === 'text' && p.text.includes('Let me check.')))).toBe(true);
+    // Within the first turn, round 1 did carry its own tool pair.
+    const round1 = list.find((x) => x.kind === 'turn' && x.round === 1)!;
+    expect(round1.request.messages.flatMap((m) => m.content.map((p) => p.type))).toEqual(expect.arrayContaining(['tool_use', 'tool_result']));
+  });
 });

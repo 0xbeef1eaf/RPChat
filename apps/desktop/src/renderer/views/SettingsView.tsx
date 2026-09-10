@@ -381,7 +381,7 @@ export function SettingsView() {
             path="history.keepActionDetailFor"
             value={settings.history.keepActionDetailFor}
             min={0}
-            hint="Older messages send only their visible text; the code they ran and its result are left out. 0 drops every past action."
+            hint="Past turns send only their visible text; the code they ran and its results are left out. 0 (default) never re-sends past tool calls; raise it if your model needs to see recent actions. The current turn always sees its own."
             onCommit={(v) => patchSettings({ history: { ...settings.history, keepActionDetailFor: Math.round(v) } })}
           />
         </div>

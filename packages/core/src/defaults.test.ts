@@ -43,5 +43,7 @@ describe('mergeSettings budget migration', () => {
     const { LEGACY_CONTEXT_TOKEN_BUDGET, mergeSettings } = await import('./defaults.js');
     expect(mergeSettings({ contextTokenBudget: LEGACY_CONTEXT_TOKEN_BUDGET }).contextTokenBudget).toBe(64_000);
     expect(mergeSettings({ contextTokenBudget: 30_000 }).contextTokenBudget).toBe(30_000);
+    expect(mergeSettings({ history: { keepActionDetailFor: 2 } as never }).history.keepActionDetailFor).toBe(0);
+    expect(mergeSettings({ history: { keepActionDetailFor: 3 } as never }).history.keepActionDetailFor).toBe(3);
   });
 });
