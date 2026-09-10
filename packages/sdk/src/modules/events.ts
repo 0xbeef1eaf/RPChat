@@ -51,7 +51,7 @@ interface EventsApi {
 - Write the handler as a **function**: \`sdk.events.on("time", async (input) => { ... })\`. It is part of your code, so it is checked like the rest of it, instead of hiding in a string.
 - It runs later as its own action with \`input = { event, data, ...opts.input }\`, in a fresh run: **nothing around it is in scope** — no variable you just computed, no helper you defined above. Pass those through \`opts.input\`. Keep it small: usually store something, show something, or \`sdk.llm.wake({...})\` so you can respond in words.
 - Check \`list()\` first and reuse/replace rather than stacking duplicates (30 per session). Use \`once: true\` for one-shot reactions.
-- Filters: \`time\` \`{ hour, minute?, weekday? }\`; \`user-idle\` \`{ idleMs }\`; \`window-changed\`/\`app-launched\` \`{ app?, title? }\` (substring); \`battery-low\` \`{ percent }\`; \`file-added\` \`{ dir?, ext? }\`; \`widget-message\` \`{ widgetId }\`.
+- Filters: \`time\` \`{ hour, minute?, weekday? }\`; \`user-idle\` \`{ idleMs }\` (without it, as soon as the host counts the user as idle; with it, once they have been away that long); \`window-changed\`/\`app-launched\` \`{ app?, title? }\` (substring); \`battery-low\` \`{ percent }\`; \`file-added\` \`{ dir?, ext? }\`; \`widget-message\` \`{ widgetId }\`.
 
 \`\`\`ts
 const subs = await sdk.events.list();

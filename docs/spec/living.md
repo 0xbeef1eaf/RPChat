@@ -93,8 +93,11 @@ effective set; blocked modules are listed as not available with the reason "deni
 - Host events arrive via `SensesProvider.subscribe` or `hostEvents.emit`; core also generates: `time`
   (evaluates every minute: filter `{ hour?, minute?, weekday? }`, missing = any; `minute` defaults to 0
   when only `hour` is given), `custom:*` (from `sdk.events.emit`), `routine-changed`.
-- Matching: `user-idle` fires when `data.idleMs >= filter.idleMs ?? 300000` and the subscription is
-  not already in the idle state (per-subscription edge detection; `user-back` resets). `battery-low`:
+- Matching: `user-idle` fires when `data.idleMs >= filter.idleMs ?? 0` — no filter means "as soon as
+  the host says they are idle", i.e. at `settings.senses.idleThresholdMs` — and the subscription is
+  not already in the idle state (per-subscription edge detection; `user-back` resets). For this to work
+  for longer waits, the host repeats `user-idle` with the grown `idleMs` every `IDLE_REPEAT_MS` (30 s)
+  while the user stays away; an `onEvent` behaviour is only run for the first of them. `battery-low`:
   edge below `filter.percent ?? 20`. `window-changed`/`app-launched`: optional `filter.app`/`filter.title`
   (case-insensitive substring). `file-added`: optional `filter.dir`, `filter.ext`. `song-changed`: any.
   `widget-message`: `filter.widgetId`. Generic: any other filter key must equal `data[key]`.
@@ -163,7 +166,9 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   --format '{"title":"{{title}}","artist":"{{artist}}","album":"{{album}}","app":"{{playerName}}","status":"{{status}}"}'`
   when `playerctl` is on PATH). Emits edge events (`user-idle`/`user-back` with the threshold
   `settings.senses.idleThresholdMs`, `battery-low`, `screen-*`, `song-changed`, `window-changed`,
-  `app-launched`). `watch.ts`: `fs.watch` on `settings.senses.watchDirs` → `file-added` (debounced,
+  `app-launched`; `user-idle` again every 30 s while the absence lasts, so a subscription asking for a
+  longer idle than the threshold is reached instead of waiting for an event that never comes).
+  `watch.ts`: `fs.watch` on `settings.senses.watchDirs` → `file-added` (debounced,
   ignore dotfiles/partial downloads `.part/.crdownload`). `wayland-idle.ts`: `powerMonitor.getSystemIdleTime()`
   reads X11's screensaver extension, so under a Wayland session it never sees input and answers 0 for
   ever — `user-idle`/`user-back` never fired and the presence line always said "at keyboard". The monitor

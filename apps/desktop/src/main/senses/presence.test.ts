@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { NowPlaying } from '@rp/shared';
-import { PresenceProvider, dayPartOf, detectEdges, initialEdgeState, toSnapshot } from './presence.js';
+import { IDLE_REPEAT_MS, PresenceProvider, dayPartOf, detectEdges, initialEdgeState, toSnapshot } from './presence.js';
 import type { PresenceSample } from './presence.js';
 import { parseActiveWindowOutput, parseHyprActiveWindow, parseHyprActiveWindowEvent, parseNowPlayingOutput, readLinuxBatteryPercent } from './samplers.js';
 import { shouldIgnoreFile } from './watch.js';
@@ -18,10 +18,33 @@ describe('detectEdges', () => {
     expect(s.events).toEqual([]);
     s = detectEdges(s.state, { ...base, idleMs: 130_000 }, opts, at);
     expect(s.events.map((e) => e.name)).toEqual(['user-idle']);
-    s = detectEdges(s.state, { ...base, idleMs: 200_000 }, opts, at);
+    // Still idle, within the repeat pace: no second crossing event.
+    s = detectEdges(s.state, { ...base, idleMs: 145_000 }, opts, at);
     expect(s.events).toEqual([]);
     s = detectEdges(s.state, { ...base, idleMs: 1000 }, opts, at);
     expect(s.events.map((e) => e.name)).toEqual(['user-back']);
+  });
+
+  it('keeps reporting user-idle while the user stays away, so longer subscription thresholds are reached', () => {
+    // A subscription asking for "away 15 minutes" only fires on an event that
+    // says so; one event at the 2-minute crossing would never reach it.
+    let s = detectEdges(initialEdgeState(), base, opts, at);
+    s = detectEdges(s.state, { ...base, idleMs: 120_000 }, opts, at);
+    expect(s.events).toEqual([{ name: 'user-idle', data: { idleMs: 120_000 }, at }]);
+
+    // Nothing more until it has grown by the repeat pace.
+    s = detectEdges(s.state, { ...base, idleMs: 140_000 }, opts, at);
+    expect(s.events).toEqual([]);
+    s = detectEdges(s.state, { ...base, idleMs: 120_000 + IDLE_REPEAT_MS }, opts, at);
+    expect(s.events.map((e) => e.data)).toEqual([{ idleMs: 150_000 }]);
+    s = detectEdges(s.state, { ...base, idleMs: 900_000 }, opts, at);
+    expect(s.events.map((e) => e.data)).toEqual([{ idleMs: 900_000 }]);
+
+    // Back at the keyboard: one user-back, and the next absence starts over.
+    s = detectEdges(s.state, { ...base, idleMs: 0 }, opts, at);
+    expect(s.events.map((e) => e.name)).toEqual(['user-back']);
+    s = detectEdges(s.state, { ...base, idleMs: 130_000 }, opts, at);
+    expect(s.events.map((e) => e.name)).toEqual(['user-idle']);
   });
 
   it('emits battery-low once below the threshold, re-arming when charged', () => {

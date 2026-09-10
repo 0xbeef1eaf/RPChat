@@ -150,6 +150,40 @@ describe('event matching', () => {
     expect(matchesFilter('time', { hour: 9, minute: 30, weekday: 2 }, { weekday: [0, 6] })).toBe(false);
   });
 
+  it('fires a subscription with no idle filter as soon as the host reports the user idle', async () => {
+    const senses = new FakeSenses();
+    const runs: Array<{ trigger: ActionContext['trigger'] }> = [];
+    t = await createTestEngine({
+      senses,
+      runnerHandler: async (request) => {
+        if (request.context.trigger.kind === 'event') runs.push({ trigger: request.context.trigger });
+        return null;
+      },
+    });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    const ctx = ctxOf(MINIMAL_ID, 'echo', session.id);
+
+    const sub = (await invoke(ctx, 'events', 'on', 'user-idle', 'await sdk.chat.say("away");', { label: 'idle' })) as { ok: true; value: { id: string } };
+    // The host reports idle at the threshold the user configured (2 min by
+    // default). A subscription default above that could never be reached.
+    senses.push('user-idle', { idleMs: 120_000 });
+    await t.engine.eventService.idle();
+    expect(runs).toHaveLength(1);
+    expect((await t.engine.subscriptions.list(session.id)).find((s) => s.id === sub.value.id)?.fired).toBe(1);
+
+    // Repeats while the user stays away do not re-fire it; coming back re-arms.
+    t.clock.advance(60_000);
+    senses.push('user-idle', { idleMs: 300_000 });
+    await t.engine.eventService.idle();
+    expect(runs).toHaveLength(1);
+    senses.push('user-back', { idleMs: 0 });
+    t.clock.advance(5000);
+    senses.push('user-idle', { idleMs: 120_000 });
+    await t.engine.eventService.idle();
+    expect(runs).toHaveLength(2);
+  });
+
   it('fires subscriptions with edges, once, debounce, cap, custom events and onEvent', async () => {
     const senses = new FakeSenses();
     const runs: Array<{ code: string; input: string; trigger: ActionContext['trigger'] }> = [];

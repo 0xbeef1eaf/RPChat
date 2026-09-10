@@ -28,6 +28,8 @@ export interface PresenceSampler {
 
 export interface EdgeState {
   idle: boolean;
+  /** `idleMs` reported by the last `user-idle` event, so repeats are paced. */
+  idleNotifiedMs?: number;
   batteryLow: boolean;
   locked: boolean | null;
   windowKey: string | null;
@@ -40,7 +42,17 @@ export interface EdgeState {
 export interface EdgeOptions {
   idleThresholdMs: number;
   batteryLowPercent?: number;
+  /**
+   * How much further the user has to stay idle before `user-idle` is repeated.
+   * Subscriptions carry their own `filter.idleMs` and only fire once an event
+   * reports at least that much, so one event at the crossing would leave every
+   * longer wait ("tell me when they have been away 15 minutes") unfired.
+   */
+  idleRepeatMs?: number;
 }
+
+/** Default pace of repeated `user-idle` events while the user stays away. */
+export const IDLE_REPEAT_MS = 30_000;
 
 export function initialEdgeState(): EdgeState {
   return { idle: false, batteryLow: false, locked: null, windowKey: null, seenApps: [], songKey: null, primed: false };
@@ -64,10 +76,16 @@ export function detectEdges(state: EdgeState, sample: PresenceSample, opts: Edge
 
   if (!state.idle && sample.idleMs >= threshold) {
     next.idle = true;
+    next.idleNotifiedMs = sample.idleMs;
     events.push({ name: 'user-idle', data: { idleMs: sample.idleMs }, at });
   } else if (state.idle && sample.idleMs < threshold) {
     next.idle = false;
+    delete next.idleNotifiedMs;
     events.push({ name: 'user-back', data: { idleMs: sample.idleMs }, at });
+  } else if (state.idle && sample.idleMs - (state.idleNotifiedMs ?? 0) >= Math.max(1000, opts.idleRepeatMs ?? IDLE_REPEAT_MS)) {
+    // Still away: repeat with the grown idleMs so longer subscription thresholds are reached.
+    next.idleNotifiedMs = sample.idleMs;
+    events.push({ name: 'user-idle', data: { idleMs: sample.idleMs }, at });
   }
 
   const onBattery = sample.onBattery === true;
