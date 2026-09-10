@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { NowPlaying } from '@rp/shared';
 import { PresenceProvider, dayPartOf, detectEdges, initialEdgeState, toSnapshot } from './presence.js';
 import type { PresenceSample } from './presence.js';
-import { parseActiveWindowOutput, parseHyprActiveWindow, parseHyprActiveWindowEvent, parseNowPlayingOutput } from './samplers.js';
+import { parseActiveWindowOutput, parseHyprActiveWindow, parseHyprActiveWindowEvent, parseNowPlayingOutput, readLinuxBatteryPercent } from './samplers.js';
 import { shouldIgnoreFile } from './watch.js';
 
 const base: PresenceSample = { idleMs: 0, screenLocked: false, onBattery: false, batteryPercent: 80, activeWindow: { title: 'zsh', app: 'kitty' }, nowPlaying: null };
@@ -148,5 +151,37 @@ describe('samplers + watch parsing', () => {
     expect(shouldIgnoreFile('x.crdownload')).toBe(true);
     expect(shouldIgnoreFile('notes.txt~')).toBe(true);
     expect(shouldIgnoreFile('report.pdf')).toBe(false);
+  });
+});
+
+describe('readLinuxBatteryPercent', () => {
+  /** A /sys/class/power_supply tree: each entry is name → files. */
+  function sysfs(devices: Record<string, Record<string, string>>): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-power-'));
+    for (const [name, files] of Object.entries(devices)) {
+      fs.mkdirSync(path.join(root, name));
+      for (const [file, value] of Object.entries(files)) fs.writeFileSync(path.join(root, name, file), `${value}\n`);
+    }
+    return root;
+  }
+
+  it('ignores peripheral batteries, which is all a desktop has', () => {
+    // Verbatim from a desktop with a Logitech mouse: the only power_supply entry.
+    const root = sysfs({ hidpp_battery_0: { type: 'Battery', scope: 'Device', capacity: '61', status: 'Discharging' } });
+    expect(readLinuxBatteryPercent(root)).toBeNull();
+  });
+
+  it('reads the machine battery, with or without a scope file, and skips the mains adapter', () => {
+    expect(readLinuxBatteryPercent(sysfs({ AC: { type: 'Mains', online: '1' }, BAT0: { type: 'Battery', capacity: '87' } }))).toBe(87);
+    expect(readLinuxBatteryPercent(sysfs({ BAT0: { type: 'Battery', scope: 'System', capacity: '5' } }))).toBe(5);
+    // A laptop with a wireless mouse plugged in: the laptop battery wins whichever comes first.
+    expect(readLinuxBatteryPercent(sysfs({ hidpp_battery_0: { type: 'Battery', scope: 'Device', capacity: '61' }, BAT0: { type: 'Battery', capacity: '42' } }))).toBe(42);
+  });
+
+  it('clamps nonsense and returns null when there is nothing to read', () => {
+    expect(readLinuxBatteryPercent(sysfs({ BAT0: { type: 'Battery', capacity: '140' } }))).toBe(100);
+    expect(readLinuxBatteryPercent(sysfs({ BAT0: { type: 'Battery', capacity: 'n/a' } }))).toBeNull();
+    expect(readLinuxBatteryPercent(sysfs({}))).toBeNull();
+    expect(readLinuxBatteryPercent('/nope/does-not-exist')).toBeNull();
   });
 });

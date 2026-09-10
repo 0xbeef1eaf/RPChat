@@ -155,7 +155,9 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   while something needs it (prompt inclusion or subscriptions): idle via the compositor on Wayland and
   `powerMonitor.getSystemIdleTime()` elsewhere (see below),
   lock via `powerMonitor` `lock-screen`/`unlock-screen`, battery via `powerMonitor.isOnBatteryPower()` +
-  Linux `/sys/class/power_supply/*/capacity` (else null), active window via Hyprland `j/activewindow`
+  Linux `/sys/class/power_supply/*/capacity`, skipping entries with `scope: Device` — a wireless mouse,
+  keyboard or headset is a `type: Battery` too, and on a desktop it is the only one, which otherwise
+  reported the peripheral's charge as the machine's and fired `battery-low` when it ran down (else null), active window via Hyprland `j/activewindow`
   (and the event socket `activewindow>>` for instant `window-changed`) or the `activeWindow` template
   (JSON or `title\tapp`), now-playing via the `nowPlaying` template (default `playerctl metadata
   --format '{"title":"{{title}}","artist":"{{artist}}","album":"{{album}}","app":"{{playerName}}","status":"{{status}}"}'`

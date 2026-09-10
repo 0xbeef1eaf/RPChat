@@ -75,7 +75,15 @@ export function parseNowPlayingOutput(text: string): NowPlaying | null {
   return out;
 }
 
-/** Linux: the `capacity` of the first battery under /sys/class/power_supply, else null. */
+/**
+ * Charge of the machine's own battery, or null when it has none.
+ *
+ * `type: Battery` alone is not enough: a wireless mouse, keyboard, headset or
+ * controller shows up here too, and on a desktop those are the only entries —
+ * reporting one made the app tell a character the PC was at 61% and fire
+ * `battery-low` when the mouse ran down. The kernel marks them `scope: Device`;
+ * a real system battery has `scope: System` or no scope at all.
+ */
 export function readLinuxBatteryPercent(root = '/sys/class/power_supply'): number | null {
   let entries: string[];
   try {
@@ -87,6 +95,7 @@ export function readLinuxBatteryPercent(root = '/sys/class/power_supply'): numbe
     try {
       const type = fs.readFileSync(`${root}/${name}/type`, 'utf8').trim().toLowerCase();
       if (type !== 'battery') continue;
+      if (isPeripheral(root, name)) continue;
       const v = Number.parseInt(fs.readFileSync(`${root}/${name}/capacity`, 'utf8').trim(), 10);
       if (Number.isFinite(v)) return Math.max(0, Math.min(100, v));
     } catch {
@@ -94,6 +103,15 @@ export function readLinuxBatteryPercent(root = '/sys/class/power_supply'): numbe
     }
   }
   return null;
+}
+
+/** `scope: Device` is the kernel's marker for a battery that powers a peripheral, not the machine. */
+function isPeripheral(root: string, name: string): boolean {
+  try {
+    return fs.readFileSync(`${root}/${name}/scope`, 'utf8').trim().toLowerCase() === 'device';
+  } catch {
+    return false; // no scope file: a system battery (the usual laptop case)
+  }
 }
 
 export interface SamplerParts {
