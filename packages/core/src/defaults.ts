@@ -1,5 +1,5 @@
 import { DEFAULT_RUN_LIMITS, DEFAULT_SETTINGS } from '@rp/shared';
-import type { AppSettings, RunLimits } from '@rp/shared';
+import type { AppSettings, CommandTemplates, RunLimits } from '@rp/shared';
 
 /** A fresh, fully populated `AppSettings` (deep copies of the defaults). */
 export function defaultSettings(): AppSettings {
@@ -13,9 +13,15 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   const runLimits: RunLimits = { ...base.runLimits, ...(stored.runLimits ?? {}) };
   const merged: AppSettings = { ...base, ...stored, runLimits };
   if (!Array.isArray(merged.providers)) merged.providers = [];
-  // Nested records are merged per key so a patch of one entry keeps the others.
+  // Nested records are merged per key so a patch of one entry keeps the others. Command templates
+  // are also filtered to the known names so keys from older versions (e.g. the removed input
+  // templates) are dropped instead of carried along forever.
   if (stored.commandTemplates && typeof stored.commandTemplates === 'object') {
-    merged.commandTemplates = { ...base.commandTemplates, ...stored.commandTemplates };
+    merged.commandTemplates = { ...base.commandTemplates };
+    for (const name of Object.keys(base.commandTemplates) as Array<keyof CommandTemplates>) {
+      const tpl = (stored.commandTemplates as Partial<CommandTemplates>)[name];
+      if (tpl && typeof tpl === 'object') merged.commandTemplates[name] = tpl;
+    }
   }
   if (stored.memory && typeof stored.memory === 'object') {
     merged.memory = { ...base.memory, ...stored.memory };

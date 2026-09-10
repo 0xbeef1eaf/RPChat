@@ -1,21 +1,18 @@
-/** `sdk.input`: bounded keyboard/mouse lock through the user's command templates. */
+/** `sdk.input`: bounded keyboard/mouse lock and input injection through the rp-coded system daemon. */
 import type { ActionContext, CapabilityHandler, DaemonRequest, DaemonResponse, Json, LockDevices } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import type { Logger } from '@rp/core';
-import type { CommandRunner } from './commands-runner.js';
 import { toRpError } from '../system/daemon-client.js';
 import type { DaemonClient } from '../system/daemon-client.js';
 
 export const INPUT_LOCK_MIN_MS = 1000;
 export const INPUT_TEXT_MAX = 2000;
+export const INPUT_DAEMON_REQUIRED_MESSAGE = 'Input control needs the rp-code system integration (Settings → System → Install); the daemon is not connected';
 type LockResponse = Extract<DaemonResponse, { op: 'lock' }>;
 type StatusResponse = Extract<DaemonResponse, { op: 'status' }>;
+type MouseButton = 'left' | 'right' | 'middle';
 const KEY_COMBO = /^[a-zA-Z0-9_+\-]{1,64}$/;
-const BUTTONS: Record<string, { button: string; buttonNum: string; buttonHex: string }> = {
-  left: { button: 'left', buttonNum: '1', buttonHex: '0xC0' },
-  middle: { button: 'middle', buttonNum: '2', buttonHex: '0xC2' },
-  right: { button: 'right', buttonNum: '3', buttonHex: '0xC1' },
-};
+const BUTTONS: ReadonlySet<string> = new Set<MouseButton>(['left', 'middle', 'right']);
 
 export function pointArgs(x: unknown, y: unknown): { x: number; y: number } {
   if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) throw new RpError('INVALID_ARGUMENT', 'x and y must be numbers');
@@ -31,19 +28,18 @@ export function lockDevicesArg(v: unknown): LockDevices {
   return v as LockDevices;
 }
 
-export function buttonArg(v: unknown): { button: string; buttonNum: string; buttonHex: string } {
+/** `button` argument of `click`: left | right | middle (default left). */
+export function buttonArg(v: unknown): MouseButton {
   const name = typeof v === 'string' ? v.toLowerCase() : 'left';
-  const b = BUTTONS[name];
-  if (!b) throw new RpError('INVALID_ARGUMENT', 'button must be left, right or middle');
-  return b;
+  if (!BUTTONS.has(name)) throw new RpError('INVALID_ARGUMENT', 'button must be left, right or middle');
+  return name as MouseButton;
 }
 
 export interface InputHandlerDeps {
-  commands: CommandRunner;
   maxLockMs(): Promise<number>;
   logger: Logger;
   now?: () => number;
-  /** rp-coded client (Linux): used for every operation while it is reachable, templates otherwise. */
+  /** rp-coded client (Linux). Every method fails with CAPABILITY_FAILED while it is missing or unreachable. */
   daemon?: DaemonClient;
 }
 
@@ -51,44 +47,38 @@ export class InputHandler implements CapabilityHandler {
   readonly moduleId = 'input';
   private until: number | undefined;
   private lockedDevices: LockDevices = 'both';
-  private timer: NodeJS.Timeout | undefined;
 
   constructor(private readonly deps: InputHandlerDeps) {}
 
   async invoke(method: string, args: Json[], _context: ActionContext): Promise<Json | void> {
-    const daemon = await this.daemonIfAvailable();
     switch (method) {
       case 'lock':
-        return this.lock(args[0], args[1], daemon);
+        return this.lock(args[0], args[1]);
       case 'unlock':
-        await this.unlock(daemon);
+        await this.unlock();
         return;
       case 'status':
-        return daemon ? this.daemonStatus(daemon) : this.status();
+        return this.daemonStatus(await this.requireDaemon());
       case 'type': {
         if (typeof args[0] !== 'string' || args[0].length === 0) throw new RpError('INVALID_ARGUMENT', 'text must be a non-empty string');
         if (args[0].length > INPUT_TEXT_MAX) throw new RpError('INVALID_ARGUMENT', `text is longer than ${INPUT_TEXT_MAX} characters`);
-        if (daemon) await this.viaDaemon(daemon, { op: 'type', text: args[0] });
-        else await this.runInput('inputType', { text: args[0] }, 'input type');
+        await this.viaDaemon(await this.requireDaemon(), { op: 'type', text: args[0] });
         return;
       }
       case 'key': {
         if (typeof args[0] !== 'string' || !KEY_COMBO.test(args[0])) throw new RpError('INVALID_ARGUMENT', 'combo must look like "ctrl+shift+s"');
-        if (daemon) await this.viaDaemon(daemon, { op: 'key', combo: args[0] });
-        else await this.runInput('inputKey', { combo: args[0] }, 'input key');
+        await this.viaDaemon(await this.requireDaemon(), { op: 'key', combo: args[0] });
         return;
       }
       case 'click': {
         const { x, y } = pointArgs(args[0], args[1]);
         const button = buttonArg(args[2]);
-        if (daemon) await this.viaDaemon(daemon, { op: 'click', x, y, button: button.button as 'left' | 'right' | 'middle' });
-        else await this.runInput('inputClick', { x: String(x), y: String(y), ...button }, 'input click');
+        await this.viaDaemon(await this.requireDaemon(), { op: 'click', x, y, button });
         return;
       }
       case 'moveMouse': {
         const { x, y } = pointArgs(args[0], args[1]);
-        if (daemon) await this.viaDaemon(daemon, { op: 'move', x, y });
-        else await this.runInput('inputMove', { x: String(x), y: String(y) }, 'input move');
+        await this.viaDaemon(await this.requireDaemon(), { op: 'move', x, y });
         return;
       }
       default:
@@ -100,10 +90,11 @@ export class InputHandler implements CapabilityHandler {
     return (this.deps.now ?? Date.now)();
   }
 
-  private async daemonIfAvailable(): Promise<DaemonClient | undefined> {
+  /** The connected daemon client, or CAPABILITY_FAILED when the system integration is missing or unreachable. */
+  private async requireDaemon(): Promise<DaemonClient> {
     const d = this.deps.daemon;
-    if (!d) return undefined;
-    return (await d.isAvailable()) ? d : undefined;
+    if (d && (await d.isAvailable())) return d;
+    throw new RpError('CAPABILITY_FAILED', INPUT_DAEMON_REQUIRED_MESSAGE);
   }
 
   private async viaDaemon<R extends DaemonResponse>(daemon: DaemonClient, req: DaemonRequest): Promise<Extract<R, { ok: true }>> {
@@ -120,76 +111,40 @@ export class InputHandler implements CapabilityHandler {
     return { locked: false };
   }
 
-  private async runInput(name: 'inputType' | 'inputKey' | 'inputClick' | 'inputMove', vars: Record<string, string>, what: string): Promise<void> {
-    const result = await this.deps.commands.run(name, vars, what);
-    if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `${what} command exited with ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
-  }
-
+  /** What the app last heard from the daemon (no round trip); used to decide whether `dispose` should unlock. */
   status(): { locked: boolean; until?: string; devices?: LockDevices } {
     if (this.until !== undefined && this.until > this.now()) return { locked: true, until: new Date(this.until).toISOString(), devices: this.lockedDevices };
     return { locked: false };
   }
 
-  private async lock(durationArg: unknown, optionsArg: unknown, daemon?: DaemonClient): Promise<{ until: string; durationMs: number; devices: LockDevices }> {
+  private async lock(durationArg: unknown, optionsArg: unknown): Promise<{ until: string; durationMs: number; devices: LockDevices }> {
     if (typeof durationArg !== 'number' || !Number.isFinite(durationArg)) throw new RpError('INVALID_ARGUMENT', 'durationMs must be a number');
     const max = Math.max(INPUT_LOCK_MIN_MS, await this.deps.maxLockMs());
     const durationMs = Math.min(max, Math.max(INPUT_LOCK_MIN_MS, Math.round(durationArg)));
     const options = optionsArg && typeof optionsArg === 'object' ? (optionsArg as { reason?: unknown; devices?: unknown }) : {};
     const reason = typeof options.reason === 'string' ? options.reason : '';
     const devices = lockDevicesArg(options.devices);
-    if (daemon) {
-      // The daemon clamps again against the root-owned policy and unlocks by itself.
-      const res = await this.viaDaemon<LockResponse>(daemon, { op: 'lock', durationMs, devices, ...(reason ? { reason } : {}) });
-      this.clearTimer();
-      this.until = new Date(res.until).getTime();
-      this.lockedDevices = res.devices ?? devices;
-      this.deps.logger.info(`[input] locked ${this.lockedDevices} via rp-coded for ${res.durationMs} ms${reason ? ` (${reason})` : ''}`);
-      return { until: res.until, durationMs: res.durationMs, devices: this.lockedDevices };
-    }
-    const seconds = String(Math.ceil(durationMs / 1000));
-    const result = await this.deps.commands.run('inputLock', { seconds, durationMs: String(durationMs), reason, devices }, 'input lock');
-    if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `Input lock command exited with ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
-    this.clearTimer();
-    this.until = this.now() + durationMs;
-    this.lockedDevices = devices;
-    this.deps.logger.info(`[input] locked ${devices} for ${durationMs} ms${reason ? ` (${reason})` : ''}`);
-    this.timer = setTimeout(() => {
-      void this.release('timer');
-    }, durationMs);
-    this.timer.unref?.();
-    return { until: new Date(this.until).toISOString(), durationMs, devices };
+    const daemon = await this.requireDaemon();
+    // The daemon clamps again against the root-owned policy and unlocks by itself.
+    const res = await this.viaDaemon<LockResponse>(daemon, { op: 'lock', durationMs, devices, ...(reason ? { reason } : {}) });
+    this.until = new Date(res.until).getTime();
+    this.lockedDevices = res.devices ?? devices;
+    this.deps.logger.info(`[input] locked ${this.lockedDevices} via rp-coded for ${res.durationMs} ms${reason ? ` (${reason})` : ''}`);
+    return { until: res.until, durationMs: res.durationMs, devices: this.lockedDevices };
   }
 
-  private async unlock(daemon?: DaemonClient): Promise<void> {
-    const wasLocked = this.status().locked;
-    this.clearTimer();
-    if (daemon) {
-      this.until = undefined;
-      await this.viaDaemon(daemon, { op: 'unlock' });
-      return;
-    }
-    await this.release(wasLocked ? 'unlock' : 'idle');
-  }
-
-  private async release(why: string): Promise<void> {
-    const devices = this.lockedDevices;
+  private async unlock(): Promise<void> {
+    const daemon = await this.requireDaemon();
     this.until = undefined;
-    if (!(await this.deps.commands.isConfigured('inputUnlock'))) return;
-    try {
-      const result = await this.deps.commands.run('inputUnlock', { devices }, 'input unlock');
-      if (result.code !== 0) this.deps.logger.warn(`[input] unlock (${why}) exited with ${result.code}: ${result.stderr.trim()}`);
-    } catch (err) {
-      this.deps.logger.warn(`[input] unlock (${why}) failed`, err);
-    }
-  }
-
-  private clearTimer(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
+    await this.viaDaemon(daemon, { op: 'unlock' });
   }
 
   async dispose(): Promise<void> {
-    if (this.status().locked) await this.unlock();
-    this.clearTimer();
+    if (!this.status().locked) return;
+    try {
+      await this.unlock();
+    } catch (err) {
+      this.deps.logger.warn('[input] unlock on dispose failed', err);
+    }
   }
 }

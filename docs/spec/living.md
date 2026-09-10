@@ -183,8 +183,8 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   volume defaults `wpctl set-volume @DEFAULT_AUDIO_SINK@ {level}%` / `wpctl get-volume` (parse), then
   `pactl`; brightness `brightnessctl set {level}%`; DND `makoctl mode -t do-not-disturb` if on PATH,
   else `dunstctl set-paused {on}`; theme `gsettings set org.gnome.desktop.interface color-scheme
-  prefer-{theme}`), `input` additions (`inputType` default `ydotool type -- "{text}"` when on PATH else
-  `xdotool type -- "{text}"`; key/click/move likewise), `files` (home `<userData>/characters/<encoded
+  prefer-{theme}`), `input` additions (`type`/`key`/`click`/`moveMouse`, daemon-only since the system
+  integration — see `docs/spec/system.md`), `files` (home `<userData>/characters/<encoded
   ref>/home`, path guard like assets, 5 MB per file, 200 files, `open` via `shell.openPath`),
   `messaging` (discord/slack/generic JSON POST, telegram GET/POST `text`, `command` template; 10 s
   timeout; `channels()` from settings), `system.clipboardRead`.

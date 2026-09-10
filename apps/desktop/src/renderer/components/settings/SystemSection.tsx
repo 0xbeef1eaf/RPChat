@@ -99,7 +99,8 @@ export function SystemSection() {
       <div className="row">
         <p className="muted small grow">
           The optional system integration runs a small root daemon (<code>rp-coded</code>) that handles input locking and typing safely, plus a
-          root-owned policy file that can force settings on this machine.
+          root-owned policy file that can force settings on this machine. Input locking and injection (<code>sdk.input</code>) are only
+          available through the daemon: until it is installed and connected, those calls fail.
         </p>
         <button type="button" className="btn btn-sm" onClick={load} disabled={running}>
           Refresh
@@ -107,8 +108,8 @@ export function SystemSection() {
       </div>
       {!linux ? (
         <div className="callout small">
-          System integration is <strong>Linux only</strong> for now (platform: <code>{status.platform}</code>). Input and desktop features fall back
-          to the command templates in Settings → Commands.
+          System integration is <strong>Linux only</strong> for now (platform: <code>{status.platform}</code>). Input locking and injection are
+          unavailable here; desktop features use the command templates in Settings → Commands.
         </div>
       ) : null}
 

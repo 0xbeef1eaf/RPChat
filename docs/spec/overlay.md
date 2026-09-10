@@ -138,15 +138,13 @@ Platform defaults (used when a template's `command` is empty):
 |---|---|---|---|---|
 | wallpaper | `swww img {file}` if `swww` on PATH, else `hyprctl hyprpaper wallpaper "{monitor},{file}"` if `hyprpaper` on PATH, else empty | `gsettings set org.gnome.desktop.background picture-uri "file://{file}"` if `gsettings` on PATH, else `feh --bg-fill {file}` if `feh`, else empty | PowerShell one-liner via `shell:true` setting `SystemParametersInfo` (write the standard `Add-Type` snippet) | `osascript -e 'tell application "System Events" to set picture of every desktop to "{file}"'` |
 | browser | `xdg-open {url}` | `xdg-open {url}` | `cmd /c start "" {url}` (shell) | `open {url}` |
-| inputLock | empty (document `hyprctl`-free options in the Settings help: e.g. a user script using `evsieve`/`xinput`, or `hyprlock` for a screen lock) | `xinput` based example in help; default empty | empty | empty |
-| inputUnlock | empty | empty | empty | empty |
 
 "Not configured" (empty after defaults) → handler throws `RpError('CAPABILITY_FAILED', 'No <x> command configured; set one in Settings → Commands')`.
 
 Handlers (`apps/desktop/src/main/capabilities/{wallpaper,browser,input}.ts`):
 - `wallpaper.set(asset, { monitor? })`: arg 0 is a pack-root-relative asset path already validated by core; resolve to an absolute file via `resolveAssetPath(packRoot, path)`; `{file}` = absolute path, `{monitor}` = resolved monitor name or ''. Remember `current` in memory. `restore()` runs the template with `settings.wallpaperRestoreFile` (must exist) → true; empty → false.
 - `browser.open(url, { newWindow? })`: validate `^https?://` via `new URL`; `{url}` substitution; when `newWindow` and the template contains `{newWindow}` substitute `--new-window` else ''. Never fall back to `shell.openExternal` silently — if no template, use `shell.openExternal` only when the platform default is empty (it never is).
-- `input.lock(durationMs, { reason })`: clamp to `[1000, settings.maxInputLockMs]`; run `inputLock` with `{seconds}`,`{durationMs}`; arm a timer that runs `inputUnlock` (if configured) at the end and clears state; `unlock()` runs `inputUnlock` now (if configured) and clears the timer; `status()`. If `inputLock` exits non-zero → `CAPABILITY_FAILED` with stderr. Log every run to the audit trail via core (core already audits the capability call; the handler adds a `logger.info`).
+- `input.lock(durationMs, { reason, devices })`: clamp to `[1000, settings.maxInputLockMs]` and forward to the `rp-coded` daemon, which clamps again against the root-owned policy and unlocks by itself; `unlock()` and `status()` likewise. No command templates are involved (superseded by `docs/spec/system.md`): without a connected daemon every `sdk.input` method throws `CAPABILITY_FAILED`. Core audits the capability call; the handler adds a `logger.info`.
 
 All three templates are editable in **Settings → Commands** (renderer): command, `shell` toggle, timeout, a "Test" button that runs the template with sample values (`{file}` = the app's bundled sample image, `{url}` = `https://example.com`, `{seconds}` = 3), showing exit code/stdout/stderr. Add to `IpcApi.settings`: `testCommand(name: keyof CommandTemplates, tpl: CommandTemplate): Promise<{ code: number; stdout: string; stderr: string }>`.
 

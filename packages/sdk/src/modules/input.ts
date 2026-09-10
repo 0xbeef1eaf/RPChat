@@ -2,17 +2,19 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const inputModule: CapabilityModuleSpec = {
   id: 'input',
-  version: '1.2.0',
+  version: '1.2.1',
   title: 'Input control',
   summary: "Lock the user's keyboard/mouse for a set duration, or type, press keys, click and move the mouse for them; each call needs user approval.",
   permission: 'pack',
   apiTypeName: 'InputApi',
   typings: `/**
  * Control the user's input devices: lock keyboard/mouse for a bounded time, or synthesise typing,
- * key presses, clicks and pointer moves through the commands they configured in Settings. Once the
- * user has granted the 'input' capability you may use it freely; lock durations are capped by their
- * settings and every call is logged. Synthesised input goes to whatever window is
- * focused, so focus the right window first (sdk.desktop.focusWindow) and keep sequences short.
+ * key presses, clicks and pointer moves. Everything goes through the rp-code system integration
+ * daemon (Linux); when it is not installed or not connected every call fails with
+ * CAPABILITY_FAILED. Once the user has granted the 'input' capability you may use it freely; lock
+ * durations are capped by their settings and by the machine's policy, and every call is logged.
+ * Synthesised input goes to whatever window is focused, so focus the right window first
+ * (sdk.desktop.focusWindow) and keep sequences short.
  */
 interface InputApi {
   /**
@@ -37,7 +39,7 @@ interface InputApi {
   type(text: string): Promise<void>;
   /**
    * Press a key combination in the focused window.
-   * @param combo xdotool-style combo, e.g. "ctrl+s", "alt+tab", "Return", "super+2".
+   * @param combo Key names joined with "+", e.g. "ctrl+s", "alt+tab", "Return", "super+2".
    * @example await sdk.input.key("ctrl+s");
    */
   key(combo: string): Promise<void>;
@@ -60,7 +62,7 @@ interface InputApi {
 
 - Keep lock durations short; say what you are doing before locking; \`unlock()\` early if the user seems distressed.
 - Synthesised input hits whatever window is focused: \`sdk.desktop.focusWindow\` first, then a few \`type\`/\`key\`/\`click\` calls at most. Never type into password fields or run destructive shortcuts.
-- Fails with CAPABILITY_FAILED when the user has not configured the matching command.
+- Needs the rp-code system integration daemon (Settings → System → Install). Without it every call fails with CAPABILITY_FAILED ("Input control needs the rp-code system integration…"); tell the user rather than retrying.
 
 \`\`\`ts
 await sdk.chat.say("Close your eyes. Ten seconds.");
@@ -68,7 +70,7 @@ const { until } = await sdk.input.lock(10_000, { reason: "surprise" });
 return { until };
 \`\`\``,
   methods: {
-    lock: { description: "Lock keyboard and mouse for a bounded duration (via the user's command).", dangerous: true },
+    lock: { description: 'Lock keyboard and mouse for a bounded duration (through the system daemon).', dangerous: true },
     unlock: { description: 'Release the input lock early.', dangerous: true },
     status: { description: 'Whether input is currently locked.' },
     type: { description: 'Type text into the focused window.', dangerous: true },

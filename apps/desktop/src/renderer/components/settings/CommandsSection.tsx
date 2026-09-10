@@ -21,12 +21,10 @@ interface TemplateGroup {
 const GROUPS: TemplateGroup[] = [
   {
     title: 'Media & system',
-    hint: 'wallpaper, browser and input lock',
+    hint: 'wallpaper and browser',
     templates: [
       { name: 'wallpaper', label: 'Set wallpaper', placeholders: '{file} {monitor}', help: 'Used by sdk.wallpaper.set. {file} is the absolute image path, {monitor} the monitor name or empty.' },
       { name: 'browser', label: 'Open browser', placeholders: '{url}', help: 'Used by sdk.browser.open. Include {newWindow} where a new-window flag should go.' },
-      { name: 'inputLock', label: 'Lock input', placeholders: '{seconds} {durationMs}', help: 'Used by sdk.input.lock. No platform default: point it at your own script (e.g. evsieve/xinput on Linux, or hyprlock for a screen lock).' },
-      { name: 'inputUnlock', label: 'Unlock input', placeholders: '', help: 'Optional. Leave empty when the lock command unlocks itself after the duration.' },
     ],
   },
   {
@@ -58,16 +56,6 @@ const GROUPS: TemplateGroup[] = [
       { name: 'theme', label: 'Switch theme', placeholders: '{theme}', help: 'dark or light. Default: gsettings color-scheme.' },
     ],
   },
-  {
-    title: 'Input',
-    hint: 'sdk.input typing and pointer control (every call asks you first)',
-    templates: [
-      { name: 'inputType', label: 'Type text', placeholders: '{text}', help: 'Default: ydotool, then xdotool.' },
-      { name: 'inputKey', label: 'Press keys', placeholders: '{combo}', help: 'e.g. ctrl+s.' },
-      { name: 'inputClick', label: 'Click', placeholders: '{x} {y} {button}', help: 'button is left/right/middle.' },
-      { name: 'inputMove', label: 'Move pointer', placeholders: '{x} {y}', help: '' },
-    ],
-  },
 ];
 
 const EMPTY: CommandTemplate = { command: '' };
@@ -94,8 +82,9 @@ export function CommandsSection({ settings, onPatch }: CommandsSectionProps) {
   return (
     <div className="stack" style={{ gap: 14 }}>
       <p className="muted small">
-        External commands characters may run through the <code>wallpaper</code>, <code>browser</code> and <code>input</code> modules
-        (each still needs a per-pack grant). Commands are tokenised like a shell line and run <em>without</em> a shell; placeholders are
+        External commands characters may run through the <code>wallpaper</code>, <code>browser</code>, <code>desktop</code> and
+        <code>voice</code> modules (each still needs a per-pack grant). Input locking and typing are not configured here: they go through
+        the system integration daemon (Settings → System). Commands are tokenised like a shell line and run <em>without</em> a shell; placeholders are
         substituted inside tokens so values can never inject extra arguments. Leave a command empty to use the platform default.
       </p>
       {GROUPS.map((g) => (

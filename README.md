@@ -45,8 +45,9 @@ Characters, their behaviours and their media are distributed as shareable
 - **Initiative**: characters can schedule code to run later, wake themselves
   with a self-written prompt, and keep a session moving without you typing,
   within rate limits you control.
-- **External commands**: wallpaper, browser and input-lock actions run through
-  command templates you edit in Settings.
+- **External commands**: wallpaper, browser, desktop and voice actions run through
+  command templates you edit in Settings. Input locking and injection are
+  daemon-only (see *System integration* below).
 - **Senses and events**: characters can see what you're doing (idle time,
   active window, now playing, battery, calendar), look at the screen through a
   vision model, and subscribe to events (you came back, a song changed, a file

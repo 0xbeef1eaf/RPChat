@@ -49,7 +49,7 @@ describe('defaultTemplates', () => {
     expect(defaultTemplates('linux', hypr, (n) => n === 'hyprpaper').wallpaper.command).toBe('hyprctl hyprpaper wallpaper "{monitor},{file}"');
     expect(defaultTemplates('linux', hypr, () => false).wallpaper.command).toBe('');
     expect(defaultTemplates('linux', hypr, () => false).browser.command).toBe('xdg-open {url}');
-    expect(defaultTemplates('linux', hypr, () => true).inputLock.command).toBe('');
+    expect(defaultTemplates('linux', hypr, () => true)).not.toHaveProperty('inputLock');
   });
 
   it('linux without Hyprland uses gsettings then feh', () => {
@@ -65,15 +65,14 @@ describe('defaultTemplates', () => {
     const mac = defaultTemplates('darwin', noEnv, () => true);
     expect(mac.wallpaper.command).toContain('osascript');
     expect(mac.browser.command).toBe('open {url}');
-    expect(mac.inputLock.command).toBe('');
-    expect(mac.inputUnlock.command).toBe('');
+    expect(Object.keys(mac)).not.toContain('inputType');
   });
 });
 
 describe('effectiveTemplate + buildArgv', () => {
   it('uses the user template when set, else the platform default', () => {
     const defaults = defaultTemplates('darwin', {} as NodeJS.ProcessEnv, () => true);
-    const user = { wallpaper: { command: '' , timeoutMs: 5 }, browser: { command: 'firefox {url}' }, inputLock: { command: '' }, inputUnlock: { command: '' } };
+    const user = { wallpaper: { command: '' , timeoutMs: 5 }, browser: { command: 'firefox {url}' } };
     expect(effectiveTemplate('browser', user, defaults).command).toBe('firefox {url}');
     expect(effectiveTemplate('wallpaper', user, defaults)).toEqual({ ...defaults.wallpaper, timeoutMs: 5 });
   });

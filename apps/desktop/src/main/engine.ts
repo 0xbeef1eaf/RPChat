@@ -179,7 +179,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   // ---- system integration (Linux daemon + root-owned policy) --------------------
   const daemon = new DaemonClient({ ...(env.RP_DAEMON_SOCKET ? { socketPath: env.RP_DAEMON_SOCKET } : {}), logger });
   const policy = new PolicyWatcher(env.RP_POLICY_FILE, logger);
-  const input = new InputHandler({ commands, maxLockMs: async () => (await settingsOf()).maxInputLockMs, logger, ...(process.platform === 'linux' ? { daemon } : {}) });
+  const input = new InputHandler({ maxLockMs: async () => (await settingsOf()).maxInputLockMs, logger, ...(process.platform === 'linux' ? { daemon } : {}) });
 
   // ---- phase 2: senses + handlers ------------------------------------------
   const senses = createSenses({ settings: settingsOf, commands, ...(hypr ? { hypr } : {}), logger });

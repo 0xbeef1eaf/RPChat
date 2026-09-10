@@ -52,8 +52,8 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   `src/devices.rs`. `cargo test` must pass here without devices; `--check-devices` flag prints what it
   can open (used by the installer).
 - `native/rp-coded/dist/`: `rp-coded.service`, `70-rp-code.rules`
-  (`KERNEL=="uinput", GROUP="rp-code", MODE="0660", OPTIONS+="static_node=uinput"` — for the
-  fallback tools such as ydotool; the daemon itself needs no rule), `modules-load.d/rp-code.conf`
+  (`KERNEL=="uinput", GROUP="rp-code", MODE="0660", OPTIONS+="static_node=uinput"` — lets
+  `rp-code` group members use `/dev/uinput` directly; the daemon itself needs no rule), `modules-load.d/rp-code.conf`
   (`uinput`), `policy.example.json` (every field with comments in an adjacent `POLICY.md`),
   `rp-code-autostart.desktop` (XDG autostart, `Exec=rp-code --hidden`), `rp-code.service` (systemd
   **user** unit alternative: `WantedBy=graphical-session.target`).
@@ -95,9 +95,12 @@ with `pkexec` for the current user.
   and every `settings.get()` go through `applyPolicy`; `settings.update` ignores managed paths and
   the response carries the forced values. Policy file is re-read when its mtime changes
   (`PolicyWatcher.invalidate()` forces the next read).
-- `InputHandler` (Linux): when the daemon is connected, `lock/unlock/status/type/key/click/moveMouse`
-  go through it (the daemon clamps; the app also clamps to `maxInputLockMs`); otherwise the existing
-  command templates. `status()` reports `locked` from the daemon.
+- `InputHandler` is daemon-only: `lock/unlock/status/type/key/click/moveMouse` go through rp-coded
+  (the daemon clamps; the app also clamps to `maxInputLockMs`) and `status()` reports `locked` from
+  the daemon. There are no input command templates and no fallback: while the daemon is missing or
+  unreachable (including every non-Linux platform) each method throws `CAPABILITY_FAILED` with
+  "Input control needs the rp-code system integration (Settings → System → Install); the daemon is
+  not connected".
 - `src/main/system/integration.ts`: `SystemIntegrationStatus` assembly (daemon hello, policy,
   udev rule present, group membership via `id -Gn`, autostart detection), `install()` runs the
   bundled `install.sh` through `pkexec` (Linux; refuses elsewhere) with `--app-bin process.execPath`

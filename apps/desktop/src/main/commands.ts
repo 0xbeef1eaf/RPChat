@@ -167,10 +167,6 @@ export function defaultTemplates(
   let brightness: CommandTemplate = empty;
   let doNotDisturb: CommandTemplate = empty;
   let theme: CommandTemplate = empty;
-  let inputType: CommandTemplate = empty;
-  let inputKey: CommandTemplate = empty;
-  let inputClick: CommandTemplate = empty;
-  let inputMove: CommandTemplate = empty;
   if (linux) {
     if (hyprland) screenshot = pick(['grim', 'grim -o {monitor} {file}']);
     else screenshot = pick(['grim', 'grim {file}'], ['scrot', 'scrot -o {file}'], ['import', 'import -window root {file}']);
@@ -180,10 +176,6 @@ export function defaultTemplates(
     brightness = pick(['brightnessctl', 'brightnessctl set {level}%']);
     doNotDisturb = pick(['makoctl', 'makoctl mode -t do-not-disturb'], ['dunstctl', 'dunstctl set-paused {on}']);
     theme = pick(['gsettings', 'gsettings set org.gnome.desktop.interface color-scheme prefer-{theme}']);
-    inputType = pick(['ydotool', 'ydotool type -- "{text}"'], ['xdotool', 'xdotool type -- "{text}"'], ['wtype', 'wtype -- "{text}"']);
-    inputKey = pick(['ydotool', 'ydotool key {combo}'], ['xdotool', 'xdotool key {combo}']);
-    inputClick = pick(['ydotool', 'ydotool mousemove --absolute -x {x} -y {y} click {buttonHex}'], ['xdotool', 'xdotool mousemove {x} {y} click {buttonNum}']);
-    inputMove = pick(['ydotool', 'ydotool mousemove --absolute -x {x} -y {y}'], ['xdotool', 'xdotool mousemove {x} {y}']);
   } else if (platform === 'darwin') {
     screenshot = { command: 'screencapture -x {file}' };
     tts = { command: 'say "{text}"' };
@@ -199,8 +191,6 @@ export function defaultTemplates(
   return {
     wallpaper,
     browser,
-    inputLock: empty,
-    inputUnlock: empty,
     activeWindow: empty,
     nowPlaying,
     screenshot,
@@ -212,10 +202,6 @@ export function defaultTemplates(
     brightness,
     doNotDisturb,
     theme,
-    inputType,
-    inputKey,
-    inputClick,
-    inputMove,
   };
 }
 

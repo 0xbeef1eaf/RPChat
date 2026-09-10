@@ -16,8 +16,11 @@ systemd and does exactly four things:
 4. Tell the app what the policy says so the Settings UI can show which values are managed.
 
 The app talks to it over a unix socket that only members of the `rp-code` group can open.
-Nothing else in rp-code needs elevated rights, and the app keeps working (with the fallback
-command templates, or without the `input` module) when the daemon is not installed.
+Nothing else in rp-code needs elevated rights. `sdk.input` is **daemon-only**: there is no
+fallback through user-configured tools, so while the daemon is not installed or not connected
+every `sdk.input` call fails with `CAPABILITY_FAILED` ("Input control needs the rp-code system
+integration (Settings → System → Install); the daemon is not connected") and the rest of the app
+keeps working.
 
 ## Installing
 
@@ -45,6 +48,12 @@ sudo squashfs-root/resources/system/install.sh --user "$USER" --app-bin "$(readl
 rm -r squashfs-root
 ```
 
+Always pass `--app-bin` with the **`.AppImage` itself**. The `rp-code` binary inside
+`squashfs-root` only runs while the whole extraction is around (it loads `libffmpeg.so` and its
+resources from next to itself), so a launcher pointing there breaks as soon as the folder is
+removed. The installer refuses to auto-pick such a path, and looks for an `rp-code*.AppImage` in
+`~/Applications`, `~/.local/bin`, `~/Downloads` and `~` when no `--app-bin` is given.
+
 The `.deb` package runs `install.sh --autostart none` on installation, which does the
 system-wide steps (group, daemon, udev rule, policy directory) and leaves group membership and
 autostart for you or the Settings button. It does not write a policy file (no
@@ -66,7 +75,7 @@ re-running is safe.
 |---|---|
 | 1 | Creates the **`rp-code` group** and adds your user to it (needs a re-login). |
 | 2 | Installs the daemon to `/usr/local/libexec/rp-code/rp-coded` (plus `README.md`, `POLICY.md`, `policy.example.json`), the unit `/etc/systemd/system/rp-coded.service`, creates `/etc/rp-code` (`0755`, the one path under `/etc` the hardened service may write to) and runs `systemctl enable --now rp-coded`. |
-| 3 | Installs `/etc/udev/rules.d/70-rp-code.rules` (makes `/dev/uinput` group-writable for `rp-code` — only needed by fallback tools such as `ydotool`; the daemon itself is root), `/etc/modules-load.d/rp-code.conf` (`uinput` at boot), loads the module now and reloads udev. |
+| 3 | Installs `/etc/udev/rules.d/70-rp-code.rules` (makes `/dev/uinput` group-writable for `rp-code` so group members can use it directly; the daemon itself is root and does not need it), `/etc/modules-load.d/rp-code.conf` (`uinput` at boot), loads the module now and reloads udev. |
 | 4 | Policy file: **nothing is written by default** — the file is write-once and you can create it from the app afterwards (below). With `--policy-template`, writes `/etc/rp-code/policy.json` from the example **only if it does not exist**; an existing file is never modified (its ownership is corrected to `root:root 0644` if needed). |
 | 5 | Application menu entry `/usr/local/share/applications/rp-code.desktop` (`Exec=<app> %U`) and icon `/usr/local/share/icons/hicolor/512x512/apps/rp-code.png`, refreshed with `update-desktop-database`/`gtk-update-icon-cache` when present. Skipped with `--menu-entry no` (the `.deb` does this, it ships its own entry). |
 | 6 | Autostart for your user: `~/.config/autostart/rp-code.desktop` (`Exec=<app> --hidden`, XDG) or `~/.config/systemd/user/rp-code.service` (enabled with `systemctl --user` when a session bus is reachable, otherwise it prints the command). Switching methods removes the other entry. It also prints the Hyprland `exec-once = <app> --hidden` line for people who prefer that. |
@@ -201,5 +210,5 @@ and the `rp-code` group. It **keeps `/etc/rp-code/policy.json`** and prints how 
   characters differ. Clicks use the primary screen's pixel space (first connected DRM output,
   fallback 1920×1080); multi-monitor layouts may need a compositor-side mapping for the
   `rp-coded virtual input` device.
-- **Without the daemon** the app falls back to the command templates you configure yourself
-  (`ydotool`, `wtype`, `hyprctl`, …); those run as your user with whatever rights they have.
+- **Without the daemon** there is no input locking or injection at all: `sdk.input` calls fail
+  with `CAPABILITY_FAILED` until the system integration is installed and connected.

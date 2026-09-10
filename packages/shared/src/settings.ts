@@ -6,7 +6,7 @@ import type { MessagingChannel } from './senses.js';
 /**
  * A user-editable external command. `command` is tokenised like a shell command line
  * (quotes respected) and executed WITHOUT a shell; placeholders such as `{file}`, `{url}`,
- * `{seconds}`, `{durationMs}`, `{monitor}` are substituted inside tokens with the raw value
+ * `{seconds}`, `{text}`, `{monitor}` are substituted inside tokens with the raw value
  * (never re-tokenised, so values cannot inject extra arguments). Set `shell: true` to run
  * the substituted line through the platform shell instead (values are then shell-quoted).
  * An empty `command` means "use the platform default" or, when there is none, "not configured".
@@ -20,15 +20,15 @@ export interface CommandTemplate {
   timeoutMs?: number;
 }
 
+/**
+ * External commands the app runs on the character's behalf. Input locking and injection
+ * (`sdk.input`) are not here: they go through the rp-coded system daemon only.
+ */
 export interface CommandTemplates {
   /** Set the desktop wallpaper. Placeholders: {file} (absolute path), {monitor} (name or empty). */
   wallpaper: CommandTemplate;
   /** Open a browser window. Placeholders: {url}. */
   browser: CommandTemplate;
-  /** Lock keyboard/mouse input. Placeholders: {seconds}, {durationMs}, {devices} (keyboard|mouse|both). */
-  inputLock: CommandTemplate;
-  /** Unlock input early (optional; leave empty if the lock command unlocks itself after the duration). */
-  inputUnlock: CommandTemplate;
   /** Print the active window as JSON `{title, app, class?}` or `title\tapp` on stdout. Not needed on Hyprland. */
   activeWindow: CommandTemplate;
   /** Print now-playing info as JSON `{title, artist, album, app, status}` (default: playerctl). */
@@ -51,14 +51,6 @@ export interface CommandTemplates {
   doNotDisturb: CommandTemplate;
   /** Switch theme: `{theme}` (dark/light). */
   theme: CommandTemplate;
-  /** Type text: `{text}`. */
-  inputType: CommandTemplate;
-  /** Press a key combo: `{combo}` (e.g. ctrl+s). */
-  inputKey: CommandTemplate;
-  /** Click at `{x}` `{y}` with `{button}` (left/right/middle). */
-  inputClick: CommandTemplate;
-  /** Move the pointer to `{x}` `{y}`. */
-  inputMove: CommandTemplate;
 }
 
 export interface AppSettings {
@@ -153,8 +145,6 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   commandTemplates: {
     wallpaper: { command: '' },
     browser: { command: '' },
-    inputLock: { command: '' },
-    inputUnlock: { command: '' },
     activeWindow: { command: '' },
     nowPlaying: { command: '' },
     screenshot: { command: '' },
@@ -166,10 +156,6 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
     brightness: { command: '' },
     doNotDisturb: { command: '' },
     theme: { command: '' },
-    inputType: { command: '' },
-    inputKey: { command: '' },
-    inputClick: { command: '' },
-    inputMove: { command: '' },
   },
   senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [] },
   web: { allowlist: [], maxBytes: 512 * 1024 },
