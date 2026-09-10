@@ -258,6 +258,20 @@ describe('PromptBuilder', () => {
   });
 });
 
+describe('engine rules', () => {
+  it('tells the character to use the sdk rather than describe using it', async () => {
+    const { system } = new PromptBuilder().build(await input([msg(1, 'user', 'hi')]));
+    const rules = system.slice(system.indexOf('<engine_rules>'), system.indexOf('</engine_rules>'));
+    // The failure this guards against: a character that narrates an action it never ran.
+    expect(rules).toContain('Never mime what you can actually do');
+    expect(rules).toContain('*shows you the photo*');
+    expect(rules).toMatch(/Reach for the sdk whenever/);
+    // …without turning into a machine that acts for its own sake.
+    expect(rules).toContain('Do not act for the sake of acting');
+    expect(rules).toContain('one action per intention');
+  });
+});
+
 describe('errorForModel', () => {
   /** What the sandbox produces for a failing action, already mapped to the model's own source. */
   const sandboxError = {
