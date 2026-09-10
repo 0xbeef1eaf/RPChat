@@ -87,6 +87,16 @@ describe('applyChatEvent', () => {
     expect(applyChatEvent(initialState(), { type: 'messages-cleared', sessionId: 'other' }).messages['other']).toEqual([]);
   });
 
+  it('session-reset clears the status, error and markers and bumps the events version', () => {
+    let s = loaded();
+    s = applyChatEvent(s, { type: 'status', sessionId: S, text: 'thinking' });
+    s = applyChatEvent(s, { type: 'event-fired', sessionId: S, subscriptionId: 'sub', event: 'user-back' });
+    const version = s.runtime[S]!.eventsVersion;
+    s = applyChatEvent(s, { type: 'session-reset', sessionId: S });
+    expect(s.runtime[S]).toMatchObject({ status: null, error: null, eventMarkers: [], eventsVersion: version + 1 });
+    expect(applyChatEvent(initialState(), { type: 'session-reset', sessionId: 'other' })).toEqual(initialState());
+  });
+
   it('concatenates text deltas onto the right message', () => {
     let s = loaded();
     s = applyChatEvent(s, { type: 'message-added', sessionId: S, message: msg('m2', '') });

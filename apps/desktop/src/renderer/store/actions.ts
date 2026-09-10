@@ -146,6 +146,7 @@ export async function reloadMessages(sessionId: SessionId): Promise<void> {
   update((s) => setMessages(s, sessionId, messages));
 }
 
+/** Opens the character's chat; the engine keeps one session per character, so this creates it only the first time. */
 export async function createSession(characterRef: CharacterRef): Promise<Session | null> {
   try {
     const session = await api().sessions.create({ characterRef });
@@ -183,6 +184,15 @@ export async function deleteMessage(sessionId: SessionId, messageId: string): Pr
     await api().sessions.removeMessage(sessionId, messageId);
   } catch (err) {
     reportError('Could not delete message', err);
+  }
+}
+
+export async function resetSessionState(sessionId: SessionId): Promise<void> {
+  try {
+    await api().sessions.resetState(sessionId);
+    toast('success', 'Session state reset');
+  } catch (err) {
+    reportError('Could not reset session state', err);
   }
 }
 

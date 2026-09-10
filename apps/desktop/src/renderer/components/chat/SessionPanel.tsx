@@ -6,11 +6,12 @@ interface SessionPanelProps {
   providers: ProviderConfig[];
   onSave: (session: Session) => Promise<boolean>;
   onDelete: () => void;
+  onReset: () => void;
   onClose: () => void;
 }
 
 /** Inline editor for a session's title, scenario and provider/model override. */
-export function SessionPanel({ session, providers, onSave, onDelete, onClose }: SessionPanelProps) {
+export function SessionPanel({ session, providers, onSave, onDelete, onReset, onClose }: SessionPanelProps) {
   const [title, setTitle] = useState(session.title);
   const [scenario, setScenario] = useState(session.scenario ?? '');
   const [providerId, setProviderId] = useState(session.providerId ?? '');
@@ -81,6 +82,14 @@ export function SessionPanel({ session, providers, onSave, onDelete, onClose }: 
         <div className="form-actions">
           <button type="button" className="btn btn-danger" onClick={onDelete}>
             Delete session
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={onReset}
+            title="Forget scratch state, timers, event subscriptions, the history summary and the status line; messages and memories stay"
+          >
+            Reset session state
           </button>
           <span className="grow" />
           <button type="button" className="btn" onClick={onClose}>

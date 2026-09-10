@@ -8,7 +8,7 @@ import { MessageList } from '../components/chat/MessageList';
 import { ModelTrafficDrawer } from '../components/chat/ModelTrafficDrawer';
 import { SessionPanel } from '../components/chat/SessionPanel';
 import { Avatar } from '../components/common/Avatar';
-import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, saveSession, sendMessage } from '../store/actions';
+import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, resetSessionState, saveSession, sendMessage } from '../store/actions';
 import { runtimeFor } from '../store/state';
 import { useAppState } from '../store/store';
 
@@ -24,6 +24,7 @@ export function ChatView() {
   const [trafficOpen, setTrafficOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const session = useMemo(() => sessions.find((s) => s.id === activeSessionId), [sessions, activeSessionId]);
   const character = useMemo(() => (session ? characters.find((c) => c.ref === session.characterRef) : undefined), [characters, session]);
@@ -128,6 +129,7 @@ export function ChatView() {
           providers={settings?.providers ?? []}
           onSave={saveSession}
           onDelete={() => setConfirmDelete(true)}
+          onReset={() => setConfirmReset(true)}
           onClose={() => setPanelOpen(false)}
         />
       ) : null}
@@ -160,6 +162,25 @@ export function ChatView() {
         onSend={onSend}
         onAbort={onAbort}
       />
+      {confirmReset ? (
+        <ConfirmDialog
+          title="Reset session state?"
+          message={
+            <>
+              This forgets what <strong>{characterName}</strong> stored for this session (scratch state, pending timers, event subscriptions,
+              the rolling history summary and the status line). Messages, long-term state and memories stay. A running reply is stopped.
+            </>
+          }
+          confirmLabel="Reset"
+          danger
+          onCancel={() => setConfirmReset(false)}
+          onConfirm={() => {
+            setConfirmReset(false);
+            setPanelOpen(false);
+            void resetSessionState(session.id);
+          }}
+        />
+      ) : null}
       {confirmClear ? (
         <ConfirmDialog
           title="Clear history?"

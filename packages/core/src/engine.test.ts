@@ -712,4 +712,31 @@ describe('history editing', () => {
     await t.engine.chat.send(session.id, 'third');
     expect((await t.engine.sessions.messages(session.id)).map((m) => m.role)).toEqual(['user', 'assistant']);
   });
+
+  it('keeps one session per character and resets session state without touching messages', async () => {
+    t = await createTestEngine({ respond: () => ({ text: 'ok' }) });
+    await t.engine.packs.install(LUNA_DIR);
+    const first = await t.engine.sessions.create({ characterRef: LUNA_REF });
+    const again = await t.engine.sessions.create({ characterRef: LUNA_REF, title: 'ignored' });
+    expect(again.id).toBe(first.id);
+    expect((await t.engine.sessions.list()).filter((s) => s.characterRef === LUNA_REF)).toHaveLength(1);
+    expect((await t.engine.sessions.messages(first.id)).filter((m) => m.origin === 'greeting')).toHaveLength(1); // no second greeting
+    expect(await t.engine.sessions.forCharacter(LUNA_REF)).toMatchObject({ id: first.id });
+
+    await t.engine.chat.send(first.id, 'hello');
+    const scope = `session:${first.id}`;
+    await t.engine.storage.state.set(scope, 'scratch', 42);
+    await t.engine.timers.schedule({ id: 'tm-reset', sessionId: first.id, characterRef: LUNA_REF, kind: 'wake', fireAt: '2030-01-01T00:00:00.000Z', payload: null, createdAt: t.clock.now().toISOString() });
+    expect(await t.engine.timers.list({ sessionId: first.id })).toHaveLength(1);
+    const before = (await t.engine.sessions.messages(first.id)).length;
+    const events: string[] = [];
+    t.engine.events.on('chat', (e) => events.push(e.type));
+
+    await t.engine.chat.resetState(first.id);
+    expect(await t.engine.storage.state.get(scope, 'scratch')).toBeUndefined();
+    expect(await t.engine.timers.list({ sessionId: first.id })).toHaveLength(0);
+    expect((await t.engine.sessions.messages(first.id)).length).toBe(before); // messages untouched
+    expect(events).toEqual(expect.arrayContaining(['status', 'session-reset']));
+    await expect(t.engine.chat.resetState('nope')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
 });

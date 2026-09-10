@@ -119,6 +119,7 @@ export interface IpcApi {
   };
   sessions: {
     list(): Promise<Session[]>;
+    /** One session per character: returns the character's existing session when it already has one. */
     create(input: CreateSessionInput): Promise<Session>;
     get(sessionId: string): Promise<Session | undefined>;
     update(session: Session): Promise<Session>;
@@ -128,6 +129,12 @@ export interface IpcApi {
     removeMessage(sessionId: string, messageId: string): Promise<void>;
     /** Delete every message of the session; the session, its state, timers and memories stay. */
     clearMessages(sessionId: string): Promise<void>;
+    /**
+     * Reset the session's runtime state: sandbox `sdk.state.session.*` values, pending timers, event
+     * subscriptions, the rolling history summary and the status line. Messages and the character's
+     * long-term state and memories stay. Aborts a running turn first.
+     */
+    resetState(sessionId: string): Promise<void>;
   };
   chat: {
     send(sessionId: string, text: string): Promise<void>;

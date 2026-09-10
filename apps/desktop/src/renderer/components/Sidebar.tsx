@@ -65,11 +65,11 @@ export function Sidebar() {
                 <button
                   type="button"
                   className="btn btn-icon btn-sm"
-                  title={`New chat with ${c.name}`}
-                  aria-label={`New chat with ${c.name}`}
+                  title={`Open chat with ${c.name}`}
+                  aria-label={`Open chat with ${c.name}`}
                   onClick={() => createSession(c.ref)}
                 >
-                  +
+                  ›
                 </button>
               </div>
             ))

@@ -15,6 +15,7 @@ export class SessionService {
   private behaviours: BehaviourHooks | undefined;
   private beforeRemove: ((session: Session) => Promise<void>) | undefined;
   private afterRemove: ((session: Session) => Promise<void>) | undefined;
+  private afterReset: ((session: Session) => Promise<void>) | undefined;
   private afterCreate: ((session: Session) => Promise<void>) | undefined;
 
   constructor(
@@ -41,6 +42,11 @@ export class SessionService {
     this.afterRemove = hook;
   }
 
+  /** Runs after `resetState` cleared the session's state (the Engine removes its event subscriptions). */
+  setAfterReset(hook: (session: Session) => Promise<void>): void {
+    this.afterReset = hook;
+  }
+
   /** Runs after a session was created and its `onSessionStart` behaviour ran (the Engine recomputes event interest). Failures are logged. */
   setAfterCreate(hook: (session: Session) => Promise<void>): void {
     this.afterCreate = hook;
@@ -61,8 +67,23 @@ export class SessionService {
     return session;
   }
 
+  /** The character's session, if it has one (newest first when older data holds several). */
+  async forCharacter(characterRef: string): Promise<Session | undefined> {
+    const all = (await this.storage.sessions.list()).filter((s) => s.characterRef === characterRef);
+    return all.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0];
+  }
+
+  /**
+   * One chat per character: when the character already has a session it is returned as is
+   * (no new greeting, no `onSessionStart`). Use `resetState` / `clearMessages` to start over.
+   */
   async create(input: CreateSessionInput): Promise<Session> {
     const { pack, character } = this.packs.getCharacter(input.characterRef);
+    const existing = await this.forCharacter(input.characterRef);
+    if (existing) {
+      this.logger.debug(`[sessions] ${input.characterRef} already has session ${existing.id}; returning it`);
+      return existing;
+    }
     const at = this.now().toISOString();
     const session: Session = {
       id: randomUUID(),
@@ -163,6 +184,27 @@ export class SessionService {
     session.updatedAt = this.now().toISOString();
     await this.storage.sessions.upsert(session);
     this.emitter.emit('chat', { type: 'messages-cleared', sessionId });
+  }
+
+  /**
+   * Reset the session's runtime state without touching its messages: the `session:<id>` state scope
+   * (sandbox scratch values, history summary, autonomy counters, consolidation marker), pending
+   * timers, event subscriptions (via the reset hook) and the status line.
+   */
+  async resetState(sessionId: string): Promise<void> {
+    const session = await this.require(sessionId);
+    await this.timers.removeForSession(sessionId);
+    await this.storage.state.clear(`session:${sessionId}`);
+    this.permissions.clearSession(sessionId);
+    if (this.afterReset) {
+      try {
+        await this.afterReset(session);
+      } catch (err) {
+        this.logger.warn(`[sessions] after-reset hook failed for ${sessionId}`, err);
+      }
+    }
+    this.emitter.emit('chat', { type: 'status', sessionId, text: null });
+    this.emitter.emit('chat', { type: 'session-reset', sessionId });
   }
 
   /** Persist a changed message and refresh the session stats (no event; callers emit `message-updated`). */

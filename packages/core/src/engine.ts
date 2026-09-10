@@ -279,6 +279,7 @@ export class Engine {
     this.hostEvents = { emit: (event) => void this.eventService.handleHostEvent(event, hostEventScope(event)) };
     this.subscriptions = { list: (sessionId) => this.eventService.list(sessionId), remove: (id) => this.eventService.remove(id) };
     this.sessions.setAfterRemove((session) => this.eventService.removeForSession(session.id));
+    this.sessions.setAfterReset((session) => this.eventService.removeForSession(session.id));
     this.sessions.setAfterCreate(() => this.eventService.updateInterest());
     this.packs.onPacksChanged(() => this.eventService.updateInterest());
     const llmHandler = this.dispatcher.handlerFor('llm') as LlmHandler;

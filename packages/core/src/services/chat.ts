@@ -94,6 +94,12 @@ export class ChatService {
     await this.runExclusive(sessionId, () => this.o.sessions.removeMessage(sessionId, messageId));
   }
 
+  /** Reset the session's runtime state (see `SessionService.resetState`); a running turn is aborted first. */
+  async resetState(sessionId: string): Promise<void> {
+    await this.abort(sessionId);
+    await this.runExclusive(sessionId, () => this.o.sessions.resetState(sessionId));
+  }
+
   /** Clear the whole history of a session; a running or queued turn is aborted first. */
   async clearMessages(sessionId: string): Promise<void> {
     await this.abort(sessionId);

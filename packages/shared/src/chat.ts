@@ -76,6 +76,8 @@ export type ChatEvent =
   | { type: 'message-removed'; sessionId: SessionId; messageId: MessageId }
   /** Every message of the session was deleted (the session itself stays). */
   | { type: 'messages-cleared'; sessionId: SessionId }
+  /** The session's scratch state, timers, event subscriptions, history summary and status were reset (messages stay). */
+  | { type: 'session-reset'; sessionId: SessionId }
   | { type: 'action-started'; sessionId: SessionId; messageId: MessageId; action: ActionRecord }
   | { type: 'action-finished'; sessionId: SessionId; messageId: MessageId; action: ActionRecord }
   | { type: 'status'; sessionId: SessionId; text: string | null }

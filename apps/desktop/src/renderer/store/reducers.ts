@@ -85,6 +85,11 @@ export function applyChatEvent(state: AppState, event: ChatEvent): AppState {
       if (!list) return state;
       return { ...state, messages: { ...state.messages, [event.sessionId]: list.filter((m) => m.id !== event.messageId) } };
     }
+    case 'session-reset': {
+      const rt = state.runtime[event.sessionId];
+      if (!rt) return state;
+      return patchRuntime(state, event.sessionId, { status: null, error: null, eventMarkers: [], eventsVersion: rt.eventsVersion + 1 });
+    }
     case 'messages-cleared': {
       const runtime = state.runtime[event.sessionId];
       const next = { ...state, messages: { ...state.messages, [event.sessionId]: [] } };
