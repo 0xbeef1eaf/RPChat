@@ -112,9 +112,34 @@ export class PackService {
   async start(): Promise<void> {
     for (const record of await this.storage.packs.list()) {
       try {
-        this.loaded.set(record.packId, await loadPack(record.root));
+        const pack = await loadPack(record.root);
+        this.loaded.set(record.packId, pack);
+        await this.syncRequestedCapabilities(record, pack);
       } catch (err) {
         this.logger.error(`[packs] cannot load installed pack ${record.packId} at ${record.root}`, err);
+      }
+    }
+  }
+
+  /**
+   * The install record remembers what the pack requested at install time; a pack edited in place
+   * (pack.json or a character.json under the packs dir) would otherwise keep reporting the old
+   * list as "not requested by the pack" forever. Refresh it and default-grant new modules from the
+   * global policy, exactly as `install` does.
+   */
+  private async syncRequestedCapabilities(record: InstalledPackRecord, pack: LoadedPack): Promise<void> {
+    const requested = this.nonTrustedCapabilities(pack);
+    const same = requested.length === record.requestedCapabilities.length && requested.every((id, i) => id === record.requestedCapabilities[i]);
+    if (same) return;
+    const added = requested.filter((id) => !record.requestedCapabilities.includes(id));
+    const removed = record.requestedCapabilities.filter((id) => !requested.includes(id));
+    this.logger.info(`[packs] ${record.packId} capabilities changed on disk (+${added.join(',') || '-'} / -${removed.join(',') || '-'}); refreshing install record`);
+    await this.storage.packs.upsert({ ...record, requestedCapabilities: requested, characterIds: pack.characters.map((c) => c.definition.id) });
+    const grants = await this.permissions.grantsFor(record.packId);
+    const policy = await this.settings().catch(() => undefined);
+    for (const module of added) {
+      if (!grants.some((g) => g.module === module)) {
+        await this.permissions.setGrant(record.packId, module, policy ? policyAllows(policy, module) : false);
       }
     }
   }
