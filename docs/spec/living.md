@@ -147,7 +147,8 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
 ## 4. Desktop main (`apps/desktop`)
 
 - **SensesProvider** (`src/main/senses/`): `presence.ts` samples every `settings.senses.pollMs` only
-  while something needs it (prompt inclusion or subscriptions): idle via `powerMonitor.getSystemIdleTime()`,
+  while something needs it (prompt inclusion or subscriptions): idle via the compositor on Wayland and
+  `powerMonitor.getSystemIdleTime()` elsewhere (see below),
   lock via `powerMonitor` `lock-screen`/`unlock-screen`, battery via `powerMonitor.isOnBatteryPower()` +
   Linux `/sys/class/power_supply/*/capacity` (else null), active window via Hyprland `j/activewindow`
   (and the event socket `activewindow>>` for instant `window-changed`) or the `activeWindow` template
@@ -156,7 +157,14 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   when `playerctl` is on PATH). Emits edge events (`user-idle`/`user-back` with the threshold
   `settings.senses.idleThresholdMs`, `battery-low`, `screen-*`, `song-changed`, `window-changed`,
   `app-launched`). `watch.ts`: `fs.watch` on `settings.senses.watchDirs` → `file-added` (debounced,
-  ignore dotfiles/partial downloads `.part/.crdownload`). The poll loop captures `pollMs` when it is
+  ignore dotfiles/partial downloads `.part/.crdownload`). `wayland-idle.ts`: `powerMonitor.getSystemIdleTime()`
+  reads X11's screensaver extension, so under a Wayland session it never sees input and answers 0 for
+  ever — `user-idle`/`user-back` never fired and the presence line always said "at keyboard". The monitor
+  therefore speaks `ext-idle-notify-v1` straight over the display socket (wlroots compositors, KDE,
+  recent GNOME; no native module, no dependency): bind `wl_seat` and `ext_idle_notifier_v1`, ask for a
+  notification at a 1 s timeout, and derive `idleMs` from the `idled`/`resumed` events. It stays
+  unavailable (and the Electron value is used) when the socket, the global or the session is missing,
+  and reconnects if the compositor restarts. The poll loop captures `pollMs` when it is
   scheduled, so a `settings.senses` patch calls `senses.refresh()` → `provider.refreshSettings()`,
   which reschedules the running loop (and stays idle when nothing is interested). Widget/avatar page events → `widget-message` /
   `avatar-clicked`.
