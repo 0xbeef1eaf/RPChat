@@ -95,10 +95,40 @@ if [ -z "$DAEMON_BIN" ]; then
     if [ -x "$c" ]; then DAEMON_BIN="$c"; break; fi
   done
 fi
+APP_BIN_EXPLICIT=false
+[ -n "$APP_BIN" ] && APP_BIN_EXPLICIT=true
+if [ -z "$APP_BIN" ]; then
+  # An AppImage next to the user's usual places wins over an extracted tree (see below).
+  if [ -n "$USER_HOME" ]; then
+    for d in "$USER_HOME/Applications" "$USER_HOME/.local/bin" "$USER_HOME/Downloads" "$USER_HOME"; do
+      c="$(ls -t "$d"/rp-code*.AppImage 2>/dev/null | head -n 1 || true)"
+      if [ -n "$c" ] && [ -x "$c" ]; then APP_BIN="$(readlink -f "$c")"; break; fi
+    done
+  fi
+fi
 if [ -z "$APP_BIN" ]; then
   for c in "${APPIMAGE:-}" "$SCRIPT_DIR/../../rp-code" "$SCRIPT_DIR/../../../rp-code" /opt/rp-code/rp-code /usr/lib/rp-code/rp-code /usr/bin/rp-code /usr/local/bin/rp-code; do
     if [ -n "$c" ] && [ -x "$c" ]; then APP_BIN="$(readlink -f "$c")"; break; fi
   done
+fi
+# Refuse the Electron binary inside an `--appimage-extract` tree: it only runs while the whole
+# extraction (libffmpeg.so, resources, ...) stays around, and people delete that after installing.
+is_appimage() { case "$1" in *.AppImage|*.appimage) return 0 ;; esac; [ "$(dd if="$1" bs=1 skip=8 count=2 2>/dev/null)" = "AI" ]; }
+if [ -n "$APP_BIN" ] && ! is_appimage "$APP_BIN"; then
+  case "$APP_BIN" in
+    */squashfs-root/*)
+      if $APP_BIN_EXPLICIT; then
+        warn "$APP_BIN is inside an extracted AppImage tree; launchers will break if that folder is removed. Prefer --app-bin <path to the .AppImage>."
+      else
+        die "found only $APP_BIN (an extracted AppImage tree). Pass --app-bin with the path to the .AppImage itself, e.g. --app-bin \"\$(readlink -f rp-code-*.AppImage)\""
+      fi
+      ;;
+    *)
+      if [ ! -f "$(dirname "$APP_BIN")/libffmpeg.so" ]; then
+        warn "$APP_BIN does not look like a complete app install (no libffmpeg.so next to it); if the app fails to start, re-run with --app-bin <path to the .AppImage>"
+      fi
+      ;;
+  esac
 fi
 APP_EXEC="${APP_BIN:-rp-code}"
 ICON_SRC=""
