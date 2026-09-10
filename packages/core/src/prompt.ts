@@ -6,6 +6,7 @@ import type {
   AssetEntry,
   ChatMessage,
   ContentPart,
+  HistorySummary,
   Json,
   LlmMessage,
   LoadedCharacter,
@@ -29,12 +30,19 @@ export interface PromptInput {
   registry: CapabilityRegistry;
   /** Module ids the character may use (trusted + granted). */
   allowedModules: string[];
-  /** Module ids listed as "not available". */
-  deniedModules: string[];
-  /** Optional reason per denied module (e.g. "denied by your settings"). */
-  deniedReasons?: Record<string, string>;
   session: Session;
   transcript: ChatMessage[];
+  /**
+   * Rolling summary of the oldest messages (`HistoryService`). Those messages are replaced by the
+   * summary; when `throughMessageId` is no longer in `transcript` the summary is ignored and the
+   * transcript is used whole.
+   */
+  historySummary?: HistorySummary;
+  /**
+   * How many of the most recent assistant messages keep the code and results of their actions.
+   * Older ones contribute only their visible text. Default: all of them.
+   */
+  keepActionDetailFor?: number;
   /** Current persistent character state. */
   state: Record<string, Json>;
   /** Pending timers of this character. */
@@ -68,6 +76,12 @@ export interface PromptStats {
   transcriptTokens: number;
   /** Transcript messages dropped by the window. */
   droppedMessages: number;
+  /** Transcript messages replaced by `<history_summary>` (0 when there is no usable summary). */
+  summarisedMessages: number;
+  /** Estimated tokens of the `<history_summary>` section. */
+  summaryTokens: number;
+  /** Past assistant messages whose action code and results were left out of the transcript. */
+  trimmedActionMessages: number;
 }
 
 export interface BuiltPrompt {
@@ -163,13 +177,12 @@ function assetList(assets: AssetEntry[], tagDescriptions: Record<string, string>
 
 function packContext(input: PromptInput): string {
   const { pack, character } = input;
+  // The manifest description is store copy for the Packs page, not context: pack authors routinely
+  // paste the whole persona into it, which duplicates <persona> and costs thousands of tokens.
   const lines = [`Pack: ${pack.manifest.name} (${pack.manifest.id} v${pack.manifest.version})`];
-  if (pack.manifest.description) lines.push(`Description: ${pack.manifest.description}`);
   lines.push(`Active character: ${character.definition.name} (${character.definition.id})`);
   lines.push(assetList(pack.assets, pack.tagDescriptions ?? {}));
   lines.push(`Granted sdk modules: ${input.allowedModules.length > 0 ? input.allowedModules.join(', ') : 'none'}`);
-  const denied = input.deniedModules.map((id) => (input.deniedReasons?.[id] ? `${id} (${input.deniedReasons[id]})` : id));
-  lines.push(`Not available: ${denied.length > 0 ? denied.join(', ') : 'none'}`);
   return lines.join('\n');
 }
 
@@ -234,8 +247,33 @@ function fenceFor(action: ActionRecord): string {
   return `\`\`\`${ACTION_FENCE_TAG}\n${purpose}${action.code.trim()}\n\`\`\``;
 }
 
-/** Convert the stored transcript into provider messages (tool pairs or fenced pairs). */
-export function transcriptToMessages(transcript: ChatMessage[], useTools: boolean): LlmMessage[] {
+export interface TranscriptOptions {
+  /**
+   * Keep the code and results of the actions of this many trailing assistant messages; older
+   * action detail is left out (the visible text stays). Default: keep everything.
+   */
+  keepActionDetailFor?: number;
+}
+
+/** Ids of the assistant messages that may keep their action detail, newest first up to `keep`. */
+function actionDetailIds(transcript: ChatMessage[], keep: number | undefined): Set<string> | undefined {
+  if (keep === undefined) return undefined;
+  const ids = new Set<string>();
+  if (keep <= 0) return ids;
+  for (let i = transcript.length - 1; i >= 0 && ids.size < keep; i--) {
+    const msg = transcript[i]!;
+    if (msg.role === 'assistant' && (msg.actions?.length ?? 0) > 0) ids.add(msg.id);
+  }
+  return ids;
+}
+
+/**
+ * Convert the stored transcript into provider messages (tool pairs or fenced pairs).
+ * With `keepActionDetailFor`, older messages contribute only their visible text: their `tool_use`
+ * and `tool_result` blocks are dropped together, so no result is ever orphaned from its call.
+ */
+export function transcriptToMessages(transcript: ChatMessage[], useTools: boolean, options: TranscriptOptions = {}): LlmMessage[] {
+  const detailed = actionDetailIds(transcript, options.keepActionDetailFor);
   const out: LlmMessage[] = [];
   const push = (role: LlmMessage['role'], content: ContentPart[]): void => {
     if (content.length === 0) return;
@@ -260,7 +298,7 @@ export function transcriptToMessages(transcript: ChatMessage[], useTools: boolea
       continue;
     }
     const text = msg.kind === 'emote' ? `*${msg.content.trim()}*` : msg.content;
-    const actions = msg.actions ?? [];
+    const actions = detailed && !detailed.has(msg.id) ? [] : (msg.actions ?? []);
     if (actions.length === 0) {
       if (msg.content.trim().length > 0) push('assistant', [{ type: 'text', text }]);
       continue;
@@ -294,14 +332,29 @@ function hasToolUse(msg: LlmMessage): boolean {
 /** Builds the system prompt (ARCHITECTURE §6) and the windowed transcript. */
 export class PromptBuilder {
   build(input: PromptInput): BuiltPrompt {
-    const reference = generateSdkIndex(input.registry, { modules: input.allowedModules, deniedModules: input.deniedModules });
+    const reference = generateSdkIndex(input.registry, { modules: input.allowedModules });
     const stable = [
       section('engine_rules', engineRules(input.character.definition.name, input.useTools)),
       section('persona', persona(input.character)),
       section('pack', packContext(input)),
       section('sdk_reference', reference),
     ].join('\n\n');
+    // The summary stands in for the messages it covers; if its last message is gone (history
+    // cleared, message deleted) it no longer describes this transcript and is ignored.
+    const summary = input.historySummary;
+    const throughIdx = summary ? input.transcript.findIndex((m) => m.id === summary.throughMessageId) : -1;
+    const usableSummary = summary && throughIdx >= 0 ? summary : undefined;
+    const transcript = usableSummary ? input.transcript.slice(throughIdx + 1) : input.transcript;
+
     const dynamic = [
+      ...(usableSummary
+        ? [
+            section(
+              'history_summary',
+              `Earlier in this conversation (${usableSummary.messageCount} message(s), not shown in full below):\n${usableSummary.text}`,
+            ),
+          ]
+        : []),
       section('memory', memory(input)),
       ...(input.mood ? [section('mood', moodPromptText(input.mood))] : []),
       ...(input.routine ? [section('routine', RoutineService.promptText(input.routine))] : []),
@@ -311,8 +364,12 @@ export class PromptBuilder {
 
     const systemTokens = estimateTokens(system);
     const budget = Math.max(MIN_TRANSCRIPT_BUDGET, input.contextTokenBudget - systemTokens);
-    const all = transcriptToMessages(input.transcript, input.useTools);
+    const trim: TranscriptOptions = {};
+    if (input.keepActionDetailFor !== undefined) trim.keepActionDetailFor = input.keepActionDetailFor;
+    const all = transcriptToMessages(transcript, input.useTools, trim);
     const messages = windowMessages(all, budget);
+    const withActions = transcript.filter((m) => m.role === 'assistant' && (m.actions?.length ?? 0) > 0).length;
+    const keptDetail = input.keepActionDetailFor === undefined ? withActions : Math.min(withActions, Math.max(0, input.keepActionDetailFor));
     const stats: PromptStats = {
       systemTokens,
       sdkReferenceTokens: estimateTokens(reference),
@@ -320,6 +377,9 @@ export class PromptBuilder {
       transcriptBudgetTokens: budget,
       transcriptTokens: messages.reduce((n, m) => n + estimateTokens(JSON.stringify(m.content)), 0),
       droppedMessages: all.length - messages.length,
+      summarisedMessages: usableSummary ? throughIdx + 1 : 0,
+      summaryTokens: usableSummary ? estimateTokens(usableSummary.text) : 0,
+      trimmedActionMessages: withActions - keptDetail,
     };
     return { system, messages, stats, stablePrefixLength: stable.length };
   }

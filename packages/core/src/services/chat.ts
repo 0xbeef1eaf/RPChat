@@ -6,6 +6,7 @@ import type { MemoryService } from './memory.js';
 import type { BehaviourRunner } from '../behaviours.js';
 import { PromptBuilder, SELF_WAKE_PREFIX } from '../prompt.js';
 import type { AuditService } from './audit.js';
+import type { HistoryService } from './history.js';
 import type { PackService } from './packs.js';
 import type { PermissionService } from './permissions.js';
 import type { SessionService } from './sessions.js';
@@ -14,7 +15,6 @@ import type { TimerService } from './timers.js';
 import type { Clock, EngineEmitter, Logger } from '../types.js';
 import { characterScope } from '../handlers/state.js';
 import { providerLabel } from './exchanges.js';
-import { DENIAL_HINT, DENIAL_TEXT } from './permissions.js';
 
 export interface ChatServiceOptions {
   storage: Pick<Storage, 'state'>;
@@ -34,6 +34,8 @@ export interface ChatServiceOptions {
   locale?: string;
   /** When present, memories are injected into the prompt and consolidated every `settings.memory.consolidateEveryTurns` turns. */
   memories?: MemoryService;
+  /** When present, old messages are replaced by a rolling summary written in the background. */
+  history?: HistoryService;
   /** Used for `timers.run` entries of code timers and `llm.wake` denials. */
   audit?: Pick<AuditService, 'record'>;
   /** Host presence sampler (Phase 2); the senses line is added when the pack has `presence`. */
@@ -95,7 +97,11 @@ export class ChatService {
   /** Clear the whole history of a session; a running or queued turn is aborted first. */
   async clearMessages(sessionId: string): Promise<void> {
     await this.abort(sessionId);
-    await this.runExclusive(sessionId, () => this.o.sessions.clearMessages(sessionId));
+    await this.runExclusive(sessionId, async () => {
+      await this.o.sessions.clearMessages(sessionId);
+      // The summary describes messages that no longer exist.
+      await this.o.history?.clear(sessionId);
+    });
   }
 
   /** Run `task` serialised with the session's turns (used for event code and code timers). */
@@ -266,17 +272,32 @@ export class ChatService {
     await this.o.audit?.record(entry);
   }
 
-  /** After `turn-finished`: run a queued immediate self-wake, count turns, kick off memory consolidation. */
+  /**
+   * After `turn-finished`: run a queued immediate self-wake, count turns, then kick off the two
+   * background jobs — memory consolidation and, once the transcript outgrows
+   * `settings.history.compressAboveTokens`, history compression. Both run off the turn.
+   */
   private async afterTurn(sessionId: string): Promise<void> {
     this.finishTurn(sessionId);
-    const memories = this.o.memories;
-    if (!memories) return;
     const count = (this.turnCounts.get(sessionId) ?? 0) + 1;
     this.turnCounts.set(sessionId, count);
     const settings = await this.o.settings.get();
-    const every = Math.max(1, Math.floor(settings.memory.consolidateEveryTurns));
-    if (!settings.memory.enabled || count % every !== 0 || memories.isConsolidating(sessionId)) return;
-    void memories.consolidate(sessionId, { auto: true }).catch((err) => this.o.logger.warn('[chat] consolidation failed', err));
+
+    const memories = this.o.memories;
+    if (memories) {
+      const every = Math.max(1, Math.floor(settings.memory.consolidateEveryTurns));
+      if (settings.memory.enabled && count % every === 0 && !memories.isConsolidating(sessionId)) {
+        void memories.consolidate(sessionId, { auto: true }).catch((err) => this.o.logger.warn('[chat] consolidation failed', err));
+      }
+    }
+
+    const history = this.o.history;
+    if (history && !history.isCompressing(sessionId)) {
+      const transcript = await this.o.sessions.messages(sessionId);
+      if (history.shouldCompress(transcript, settings.history)) {
+        void history.compress(sessionId, { auto: true }).catch((err) => this.o.logger.warn('[chat] history compression failed', err));
+      }
+    }
   }
 
   /** Called when a turn's work is complete: an immediate wake queued during the turn runs next. */
@@ -355,7 +376,6 @@ export class ChatService {
     const useTools = settings.useToolCalling && config.supportsTools !== false;
 
     const allowedModules = await this.o.permissions.allowedModules(pack.manifest.id);
-    const deniedModules = await this.o.permissions.deniedModules(pack.manifest.id);
     const surface = await this.o.behaviours.surfaceFor(pack.manifest.id);
     const state = await this.o.storage.state.all(characterScope({ packId: pack.manifest.id, characterId: character.definition.id }));
     const timers = await this.o.timers.list({ characterRef: session.characterRef });
@@ -367,12 +387,13 @@ export class ChatService {
       memories = await this.o.memories.forPrompt(session.characterRef, `${lastUser}\n${lastAssistant}`, settings.memory.promptBudgetTokens);
     }
 
+    const summary = this.o.history ? await this.o.history.summaryFor(session.id) : undefined;
+
     const promptInput: import('../prompt.js').PromptInput = {
       pack,
       character,
       registry: this.o.registry,
       allowedModules,
-      deniedModules,
       session,
       transcript,
       state,
@@ -380,13 +401,12 @@ export class ChatService {
       memories,
       userDisplayName: settings.userDisplayName,
       contextTokenBudget: settings.contextTokenBudget,
+      keepActionDetailFor: Math.max(0, Math.floor(settings.history.keepActionDetailFor)),
       useTools,
       now: this.o.now(),
     };
+    if (summary) promptInput.historySummary = summary;
     if (this.o.locale !== undefined) promptInput.locale = this.o.locale;
-    promptInput.deniedReasons = Object.fromEntries(
-      Object.entries((await this.o.permissions.effective(pack.manifest.id)).denied).map(([id, reason]) => [id, `${DENIAL_TEXT[reason]}: ${DENIAL_HINT[reason]}`]),
-    );
     if (this.o.senses && settings.senses.includeInPrompt && allowedModules.includes('presence')) {
       try {
         promptInput.senses = this.completeSnapshot(await this.o.senses.snapshot(session.id), transcript);
@@ -401,6 +421,8 @@ export class ChatService {
       this.o.logger.warn(
         `[chat] prompt budget: system ~${stats.systemTokens} tokens (sdk reference ~${stats.sdkReferenceTokens}) of ${stats.budgetTokens}; ` +
           `${stats.transcriptBudgetTokens} left for the transcript, ${stats.droppedMessages} older message(s) dropped` +
+          (stats.summarisedMessages > 0 ? `; ${stats.summarisedMessages} summarised into ~${stats.summaryTokens} tokens` : '') +
+          (stats.trimmedActionMessages > 0 ? `; action detail trimmed from ${stats.trimmedActionMessages} message(s)` : '') +
           (stats.systemTokens * 2 > stats.budgetTokens ? ' — raise Settings → General → context token budget or grant fewer modules' : ''),
       );
     }

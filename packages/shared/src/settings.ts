@@ -1,6 +1,35 @@
 import type { RunLimits } from './action.js';
 import type { ProviderConfig } from './llm.js';
 import { DEFAULT_MEMORY_SETTINGS, type MemorySettings } from './memory.js';
+
+/**
+ * Keeping a long conversation inside the context window: the oldest messages are replaced by a
+ * rolling summary written in the background, and the code and results of past actions are dropped
+ * from the transcript (they are still shown in the app and kept in storage).
+ */
+export interface HistorySettings {
+  /** Master switch for background summarisation. Default true. */
+  compress: boolean;
+  /** Start summarising once the transcript is estimated above this many tokens. Default 6000. */
+  compressAboveTokens: number;
+  /** Messages at the end of the transcript that are never summarised. Default 16. */
+  keepRecentMessages: number;
+  /** Approximate token budget for the summary itself. Default 700. */
+  summaryBudgetTokens: number;
+  /**
+   * How many of the most recent assistant messages keep the code and results of their actions.
+   * Older ones keep only their visible text. Default 2; 0 drops every past action.
+   */
+  keepActionDetailFor: number;
+}
+
+export const DEFAULT_HISTORY_SETTINGS: HistorySettings = {
+  compress: true,
+  compressAboveTokens: 6_000,
+  keepRecentMessages: 16,
+  summaryBudgetTokens: 700,
+  keepActionDetailFor: 2,
+};
 import type { MessagingChannel } from './senses.js';
 
 /**
@@ -106,6 +135,7 @@ export interface AppSettings {
   /** Wallpaper file to restore with `sdk.wallpaper.restore()`; empty = unknown. */
   wallpaperRestoreFile: string;
   memory: MemorySettings;
+  history: HistorySettings;
   senses: {
     /** Add a one-line presence summary (idle, active window, now playing, battery) to every prompt when the pack has `presence`. Default true. */
     includeInPrompt: boolean;
@@ -204,6 +234,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   maxInputLockMs: 5 * 60_000,
   wallpaperRestoreFile: '',
   memory: DEFAULT_MEMORY_SETTINGS,
+  history: DEFAULT_HISTORY_SETTINGS,
   updates: { automatic: true, checkIntervalHours: 6 },
   autonomy: {
     maxSelfWakesPerHour: 30,

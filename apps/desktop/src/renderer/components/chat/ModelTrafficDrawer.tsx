@@ -10,7 +10,7 @@ interface ModelTrafficDrawerProps {
   onClose: () => void;
 }
 
-const KIND_LABEL: Record<ModelExchange['kind'], string> = { turn: 'turn', 'llm.ask': 'llm.ask', memory: 'memory' };
+const KIND_LABEL: Record<ModelExchange['kind'], string> = { turn: 'turn', 'llm.ask': 'llm.ask', memory: 'memory', history: 'history' };
 
 function kindLabel(x: ModelExchange): string {
   return x.kind === 'turn' && x.round !== undefined ? `turn · round ${x.round}` : KIND_LABEL[x.kind];

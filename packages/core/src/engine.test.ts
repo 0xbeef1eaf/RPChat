@@ -233,7 +233,7 @@ describe('ChatService turns', () => {
     expect(second.system).toContain('<sdk_reference>');
     expect(second.system).toContain('## sdk.state —');
     expect(second.system).not.toContain('## sdk.media —');
-    expect(second.system).toContain('`sdk.media`');
+    expect(second.system).not.toContain('## Not available'); // ungranted modules are not described at all
     expect(second.system).toContain('"mood": "happy"');
     expect(second.messages[0]!.role).toBe('user');
     expect(second.messages[0]!.content[0]).toEqual({ type: 'text', text: 'how do I seem?' });

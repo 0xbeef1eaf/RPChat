@@ -321,13 +321,14 @@ describe('generateSdkIndex', () => {
   });
 
   it('renders one-line signatures with the first TSDoc sentence and helper types', () => {
-    const index = generateSdkIndex(registry, { modules: ['media', 'state'], deniedModules: ['system', 'system'] });
+    const index = generateSdkIndex(registry, { modules: ['media', 'state'] });
     expect(index).toContain('- showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle> — Show an image asset in an overlay.');
     expect(index).toContain('- session.get(key: string): Promise<Json | undefined>');
     expect(index).toContain('ShowImageOptions extends OverlayOptions { durationMs?: number; caption?: string }');
     expect(index).toContain('## Shared types');
     expect(index).not.toContain('PresenceSnapshot'); // unreferenced shared types are dropped
-    expect(index).toContain('## Not available\nThese modules are not granted in this session and do not exist on `sdk`: `sdk.system`.');
+    expect(index).not.toContain('## Not available'); // ungranted modules are omitted, not described
+    expect(index).not.toContain('sdk.system');
     expect(index).toContain('sdk.help.module("<id>")');
     expect(index).toContain('```ts\nconst pic = await sdk.pack.asset("media/images/luna-smile.png");');
     expect(index).not.toContain('sdk.timers —');

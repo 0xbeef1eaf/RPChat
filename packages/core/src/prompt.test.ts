@@ -42,7 +42,6 @@ async function input(transcript: ChatMessage[], overrides: Partial<PromptInput> 
     character: pack.characters[0]!,
     registry: createStandardRegistry(),
     allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'media'],
-    deniedModules: ['ui', 'system'],
     session,
     transcript,
     state: { userName: 'Sam' },
@@ -72,7 +71,7 @@ describe('PromptBuilder', () => {
     expect(system).toContain('- showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>');
     expect(system).not.toContain('interface MediaApi'); // abridged index, not the full d.ts
     expect(system).not.toContain('sdk.system —');
-    expect(system).toContain('`sdk.ui`, `sdk.system`');
+    expect(system).not.toContain('Not available'); // ungranted modules are omitted entirely
     expect(stats.sdkReferenceTokens).toBeLessThan(3000);
     expect(stats.systemTokens).toBeLessThan(stats.budgetTokens / 2);
     expect(stats.droppedMessages).toBe(0);
@@ -83,17 +82,76 @@ describe('PromptBuilder', () => {
     expect(messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]);
   });
 
-  it('includes the new modules when granted and lists them as not available otherwise', async () => {
-    const denied = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display'], deniedModules: ['media', 'ui', 'system', 'wallpaper', 'browser', 'input'] })).system;
+  it('includes the new modules when granted and says nothing at all about the rest', async () => {
+    const denied = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display'] })).system;
     expect(denied).toContain('## sdk.display');
-    for (const id of ['wallpaper', 'browser', 'input', 'media']) expect(denied).not.toContain(`## sdk.${id} —`);
-    expect(denied).toContain('`sdk.wallpaper`, `sdk.browser`, `sdk.input`');
-    expect(denied).toContain('Not available: media, ui, system, wallpaper, browser, input');
+    for (const id of ['wallpaper', 'browser', 'input', 'media']) {
+      expect(denied).not.toContain(`## sdk.${id} —`);
+      expect(denied).not.toMatch(new RegExp(`^Granted sdk modules: .*\\b${id}\\b`, 'm'));
+    }
+    expect(denied).not.toContain('Not available'); // no list of what the character cannot do
+    expect(denied).not.toContain('are not granted in this session');
 
-    const granted = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display', 'wallpaper', 'browser', 'input'], deniedModules: ['media', 'ui', 'system'] })).system;
+    const granted = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display', 'wallpaper', 'browser', 'input'] })).system;
     for (const id of ['display', 'wallpaper', 'browser', 'input']) expect(granted).toContain(`## sdk.${id}`);
     expect(granted).toContain('Granted sdk modules: chat, log, state, pack, timers, display, wallpaper, browser, input');
-    expect(granted).not.toContain('`sdk.wallpaper`, ');
+    expect(granted).not.toContain('Not available');
+  });
+
+  it('replaces summarised messages with <history_summary> and ignores a summary whose last message is gone', async () => {
+    const transcript = [msg(1, 'user', 'oldest'), msg(2, 'assistant', 'old reply'), msg(3, 'user', 'recent'), msg(4, 'assistant', 'recent reply')];
+    const summary = { text: 'They talked about the rain.', throughMessageId: 'm2', messageCount: 2, updatedAt: 't' };
+    const { system, messages, stats } = new PromptBuilder().build(await input(transcript, { historySummary: summary }));
+    expect(system).toContain('<history_summary>');
+    expect(system).toContain('Earlier in this conversation (2 message(s), not shown in full below):\nThey talked about the rain.');
+    expect(JSON.stringify(messages)).not.toContain('oldest');
+    expect(JSON.stringify(messages)).toContain('recent');
+    expect(stats).toMatchObject({ summarisedMessages: 2, summaryTokens: estimateTokens(summary.text) });
+
+    // Marker no longer in the transcript (history cleared, message deleted): fall back to the whole thing.
+    const stale = new PromptBuilder().build(await input(transcript, { historySummary: { ...summary, throughMessageId: 'gone' } }));
+    expect(stale.system).not.toContain('<history_summary>');
+    expect(JSON.stringify(stale.messages)).toContain('oldest');
+    expect(stale.stats.summarisedMessages).toBe(0);
+  });
+
+  it('drops the action detail of older messages, keeping the most recent, without orphaning a tool result', async () => {
+    const transcript = [actionMessage(1, 'first'), actionMessage(2, 'second'), actionMessage(3, 'third')];
+    const kept = new PromptBuilder().build(await input(transcript, { keepActionDetailFor: 1 }));
+    const parts = kept.messages.flatMap((m) => m.content);
+    const uses = parts.filter((p) => p.type === 'tool_use');
+    const results = parts.filter((p) => p.type === 'tool_result');
+    expect(uses).toHaveLength(1); // only the newest action survives
+    expect(results).toHaveLength(1);
+    expect(results.every((r) => uses.some((u) => u.type === 'tool_use' && r.type === 'tool_result' && u.id === r.toolUseId))).toBe(true);
+    expect(JSON.stringify(kept.messages)).toContain('first'); // the visible text of the older turns stays
+    expect(kept.stats.trimmedActionMessages).toBe(2);
+
+    const none = new PromptBuilder().build(await input(transcript, { keepActionDetailFor: 0 }));
+    expect(none.messages.flatMap((m) => m.content).some((p) => p.type === 'tool_use' || p.type === 'tool_result')).toBe(false);
+    expect(none.stats.trimmedActionMessages).toBe(3);
+
+    const all = new PromptBuilder().build(await input(transcript));
+    expect(all.messages.flatMap((m) => m.content).filter((p) => p.type === 'tool_use')).toHaveLength(3);
+    expect(all.stats.trimmedActionMessages).toBe(0);
+  });
+
+  it('trims older action fences too when tool calling is off', async () => {
+    const transcript = [actionMessage(1, 'first'), actionMessage(2, 'second')];
+    const { messages } = new PromptBuilder().build(await input(transcript, { useTools: false, keepActionDetailFor: 1 }));
+    const text = JSON.stringify(messages);
+    expect(text).toContain('first');
+    expect((text.match(/<action_result>/g) ?? []).length).toBe(1); // one result block, for the kept action
+    expect((text.match(/return 1;/g) ?? []).length).toBe(1);
+  });
+
+  it('keeps the pack manifest description out of the system prompt', async () => {
+    const description = (await luna()).manifest.description ?? '';
+    expect(description.length).toBeGreaterThan(0);
+    const { system } = new PromptBuilder().build(await input([]));
+    expect(system).not.toContain(description);
+    expect(system).not.toContain('Description:');
+    expect(system).toContain('Pack: Luna (com.example.luna v1.0.0)'); // the identifying line stays
   });
 
   it('renders <state> and <memories> inside <memory>, with guidance in the engine rules', async () => {

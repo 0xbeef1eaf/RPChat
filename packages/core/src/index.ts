@@ -41,6 +41,8 @@ export type { ProviderFactory } from './services/settings.js';
 export { TimerService } from './services/timers.js';
 export { MemoryService, memoryLine, parseJsonArray, normalizeTags, normalizeImportance, normalizeText, MEMORY_TEXT_MAX } from './services/memory.js';
 export type { AddMemoryOptions, ConsolidateOptions, MemoryServiceOptions } from './services/memory.js';
+export { HistoryService, transcriptTokens, HISTORY_SUMMARY_KEY, HISTORY_STATE_SCOPE, COMPRESSION_MIN_MESSAGES } from './services/history.js';
+export type { CompressOptions, HistoryServiceOptions } from './services/history.js';
 export { rankMemories, scoreMemory, matchScore, tokenize, jaccard, promptOrder } from './memory/rank.js';
 export type { ScoredMemory } from './memory/rank.js';
 export { MemoryHandler, toSdkMemory, MEMORY_LIST_DEFAULT, MEMORY_LIST_MAX } from './handlers/memory.js';

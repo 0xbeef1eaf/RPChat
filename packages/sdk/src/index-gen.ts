@@ -12,7 +12,6 @@ import { extractInterfaceBody, stripComments } from './validate.js';
 
 export interface GenerateIndexOptions {
   modules?: string[];
-  deniedModules?: string[];
   /** Include the compressed preamble helper types (default true). */
   helperTypes?: boolean;
 }
@@ -198,11 +197,8 @@ export function generateSdkIndex(registry: CapabilityRegistry, options: Generate
     const shared = referencedTypes(indexTypes(SDK_PREAMBLE_TYPINGS), sections.join('\n'));
     if (shared.length > 0) sections.push(`## Shared types\n${shared.join('\n')}`);
   }
-  const denied = (options.deniedModules ?? []).filter((id, i, arr) => arr.indexOf(id) === i);
-  if (denied.length > 0) {
-    sections.push(
-      `## Not available\nThese modules are not granted in this session and do not exist on \`sdk\`: ${denied.map((d) => `\`sdk.${d}\``).join(', ')}. Do not call them; if the user asks for something that needs one, say which capability is missing and where it can be enabled (the <pack> section gives the reason for each).`,
-    );
-  }
+  // Modules the pack cannot use are left out entirely: naming them costs prompt space to describe
+  // what the character cannot do. A call that needs one still fails with an actionable
+  // PERMISSION_DENIED naming the module and where to enable it.
   return sections.join('\n\n') + '\n';
 }
