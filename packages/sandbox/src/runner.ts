@@ -22,8 +22,9 @@ import type {
   SerializedError,
 } from '@rp/shared';
 import { BOOTSTRAP_SOURCE, RESULT_SERIALISER_SUFFIX } from './bootstrap.js';
-import { ENTRY_FUNCTION_NAME, transpile, wrapAsAsyncFunctionBody } from './transpile.js';
-import { mapHostCrash, mapIsolateError, timeoutError } from './errors.js';
+import { ASYNC_WRAPPER_LINES, ENTRY_FUNCTION_NAME, PRELUDE_LINES, transpile, wrapAsAsyncFunctionBody } from './transpile.js';
+import { SourceMapper } from './sourcemap.js';
+import { mapHostCrash, mapIsolateError, timeoutError, withSourceContext } from './errors.js';
 import type { TerminationKind, TerminationLimits, TerminationState } from './errors.js';
 
 export interface QuickJsRunnerOptions {
@@ -96,12 +97,17 @@ export class QuickJsRunner implements CodeRunner {
     const hostCallTimeoutMs = this.options.hostCallTimeoutMs ?? DEFAULT_HOST_CALL_TIMEOUT_MS;
 
     let compiledCode: string;
+    let mapper: SourceMapper | undefined;
     try {
-      compiledCode = transpile(request.code, request.language).js;
+      const transpiled = transpile(request.code, request.language);
+      compiledCode = transpiled.js;
+      // Positions the isolate reports are in the wrapped, reformatted output;
+      // this maps them back to the lines the model actually wrote.
+      if (transpiled.map) mapper = new SourceMapper(transpiled.map, ASYNC_WRAPPER_LINES, PRELUDE_LINES);
     } catch (err) {
       return {
         ok: false,
-        error: serializeError(err),
+        error: withSourceContext(serializeError(err), request.code),
         logs: [],
         calls: [],
         durationMs: elapsed(started),
@@ -143,7 +149,7 @@ export class QuickJsRunner implements CodeRunner {
         compiledCode,
       };
       if (outcome.ok) result.returnValue = outcome.value;
-      else result.error = outcome.error;
+      else result.error = withSourceContext(outcome.error, request.code, mapper);
       return result;
     });
   }

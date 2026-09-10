@@ -14,6 +14,7 @@ import type {
   LlmProvider,
   RunLimits,
   SdkSurface,
+  SerializedError,
   Session,
 } from '@rp/shared';
 import { RUN_ACTION_TOOL_NAME, RpError, serializeError } from '@rp/shared';
@@ -88,10 +89,33 @@ function toolInput(input: unknown): { purpose: string; code: string } | undefine
   return { purpose: typeof purpose === 'string' ? purpose : '', code };
 }
 
+/**
+ * Everything the model is told about a failure, so it can fix the code and try
+ * again in the next round: the message, where in *its own* source the failure
+ * happened, that line quoted with a caret, and the mapped stack (the sandbox
+ * maps both back through the source map before they get here).
+ */
+export function errorForModel(error: SerializedError): Record<string, unknown> {
+  const out: Record<string, unknown> = { code: error.code, message: error.message };
+  const details = error.details && typeof error.details === 'object' && !Array.isArray(error.details) ? { ...(error.details as Record<string, unknown>) } : undefined;
+  if (details) {
+    // Lifted out of `details` rather than copied: the model reads them, and the
+    // frame is the largest thing in the payload — sending it twice is waste.
+    for (const key of ['line', 'column', 'frame'] as const) {
+      const value = details[key];
+      if (typeof value === (key === 'frame' ? 'string' : 'number')) out[key] = value;
+      delete details[key];
+    }
+    if (Object.keys(details).length > 0) out['details'] = details;
+  } else if (error.details !== undefined) out['details'] = error.details;
+  if (error.stack !== undefined && error.stack.length > 0) out['stack'] = error.stack;
+  return out;
+}
+
 /** Result payload sent back to the model. */
 export function resultPayload(result: CodeRunResult): Record<string, unknown> {
   const payload: Record<string, unknown> = { ok: result.ok, returnValue: result.returnValue ?? null };
-  if (result.error) payload.error = { code: result.error.code, message: result.error.message, details: result.error.details };
+  if (result.error) payload.error = errorForModel(result.error);
   if (result.logs.length > 0) payload.logs = result.logs.map((l) => `${l.level}: ${l.message}`);
   return payload;
 }

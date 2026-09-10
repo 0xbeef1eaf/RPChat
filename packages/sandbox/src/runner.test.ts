@@ -291,6 +291,31 @@ describe('QuickJsRunner', () => {
     expect(thrown.error?.details).toMatchObject({ thrown: { weird: true } });
   });
 
+  it('points a failure at the line the model wrote, with a caret and a mapped stack', async () => {
+    const code = ['const items = [1, 2, 3];', 'function pick(list: any[]) {', '  return list.find((x) => x.missing.deep);', '}', 'return pick(items);'].join('\n');
+    const result = await runner.run(req(code));
+    expect(result.ok).toBe(false);
+    const details = result.error?.details as { line?: number; column?: number; frame?: string };
+    // esbuild reformats and the runner wraps the code, so the isolate reports
+    // other line numbers; what comes back is the model's own line 3.
+    expect(details.line).toBe(3);
+    expect(details.frame).toContain('> 3 |   return list.find((x) => x.missing.deep);');
+    expect(details.frame).toContain('^');
+    expect(result.error?.stack).toContain('at pick (action.ts:3:');
+    expect(result.error?.stack).not.toContain('action.js');
+    expect(result.error?.stack).not.toContain('__rp_main');
+  });
+
+  it('gives a compile error the same frame, without the host stack', async () => {
+    const result = await runner.run(req('const a = 1;\nconst b = ;'));
+    expect(result.error?.code).toBe('SANDBOX_COMPILE');
+    const details = result.error?.details as { line?: number; column?: number; frame?: string };
+    expect(details.line).toBe(2);
+    expect(details.frame).toContain('> 2 | const b = ;');
+    // The RpError was thrown on the host: those frames say nothing to the model.
+    expect(result.error?.stack).toBeUndefined();
+  });
+
   it('catches runaway recursion as a runtime error and keeps the runner usable', async () => {
     const result = await runner.run(req(`function f(n: number): number { return f(n + 1) + 1 } return f(0);`));
     expect(result.ok).toBe(false);
