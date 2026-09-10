@@ -39,6 +39,19 @@ The code that runs is not the code the model wrote: esbuild reformats it and the
 The result is `SerializedError` with a mapped `stack` and `details: { line, column, frame, … }`. Core's `errorForModel` (used by both the live tool result and the replayed `<action_result>`, so they read alike) forwards `code`, `message`, `line`, `column`, `frame`, `details` and `stack`, and the system prompt tells the model those fields point at its own `action.ts` lines and that it may fix them and run once more.
 7. Always release every handle (use `Scope` / `using` helpers), dispose the context, and return `durationMs` and `compiledCode`.
 
+## 4. Function arguments (handlers)
+
+`sdk.events.on` and `sdk.timers.runLater` store code to run later, in a fresh isolate. Written as a
+string it is unchecked and awkward; written as a function it is part of the model's own code. JSON has
+no functions, so the bootstrap's `JSON.stringify` replacer turns a function argument into the action
+body that calls it — `return await (<its source>)(input);` — using the source the isolate compiled,
+which is already plain JavaScript (esbuild stripped the types). The host is unchanged: it still
+receives, validates and stores a string, and `wrapBehaviourScript` binds `input` when it runs.
+
+A handler therefore closes over nothing: no variable from the surrounding action, no helper defined
+above it. Whatever it needs travels in `opts.input`. Arguments that are not serialisable at all still
+reject with `sdk.<module>.<method>: arguments must be JSON-serialisable`.
+
 ## Tests (must run in vitest under Node 22 — wasm only, no native)
 
 - returns JSON value; `await sdk.x.y()` reaches the invoker with parsed args and context

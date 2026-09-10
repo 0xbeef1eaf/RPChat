@@ -26,7 +26,7 @@ all mirroring `@rp/shared` (add them to the structural-identity test where they 
 | `screen` | pack | `look(opts?: { monitor?: MonitorSelector; question?: string }): { description: string; width; height }` (D) — screenshot described by a vision model; `draw(shapes: DrawShape[], opts?: { monitor?; durationMs? }): { ids: string[] }`; `clear(ids?: string[]): void` |
 | `calendar` | pack | `upcoming(hours?: number): CalendarEvent[]` (default 24 h, max 14 d); `today(): CalendarEvent[]` |
 | `web` | pack | `fetch(url, opts?: { method?: 'GET'\|'POST'; headers?; body?: string; maxBytes? }): { status; headers; text }` (D; restricted to the allowlist when one is set); `rss(url, limit?): Array<{ title; link; published?; summary? }>` (allowlist likewise); `weather(place: string): { place; tempC; feelsLikeC; condition; windKph; humidity; forecast: Array<{ day; minC; maxC; condition }> }` (open-meteo, always allowed) |
-| `events` | trusted | `on(event: HostEventName, code: string, opts?: { filter?: Record<string, Json>; input?: Json; once?: boolean; label?: string }): EventSubscriptionInfo`; `off(id): boolean`; `list(): EventSubscriptionInfo[]`; `emit(name: string, data?: Json): void` (custom `custom:<name>` events a character can raise for its own subscriptions) |
+| `events` | trusted | `on(event: HostEventName, handler: Handler, opts?: { filter?: Record<string, Json>; input?: Json; once?: boolean; label?: string }): EventSubscriptionInfo`; `off(id): boolean`; `list(): EventSubscriptionInfo[]`; `emit(name: string, data?: Json): void` (custom `custom:<name>` events a character can raise for its own subscriptions) |
 | `avatar` | pack | `show(opts?: { expression?; size?; monitor?; position?; x?; y?; layer?; opacity?; clickThrough?; lookAtCursor? }): AvatarStateInfo`; `set(patch: { expression?; size?; lookAtCursor?; opacity?; clickThrough? }): AvatarStateInfo`; `say(text, opts?: { durationMs? }): void` (speech bubble); `animate(name: AvatarAnimation): void`; `moveTo(target: { monitor?; position?; x?; y? }, opts?: { durationMs? }): void`; `hide(): void`; `state(): AvatarStateInfo \| null`; `expressions(): string[]` |
 | `widgets` | pack | `show(spec: { id?; title?; html; width?; height? } & OverlayOptions): WidgetInfo`; `update(id, patch: { html?; title?; postMessage?: Json }): void`; `close(id): void`; `closeAll(): void`; `list(): WidgetInfo[]` |
 | `voice` | pack | `speak(text, opts?: { rate?: number; voice?: string; wait?: boolean }): void`; `stop(): void`; `listen(opts?: { maxSeconds?: number }): { text: string }` (D) |
@@ -100,7 +100,12 @@ effective set; blocked modules are listed as not available with the reason "deni
   `widget-message`: `filter.widgetId`. Generic: any other filter key must equal `data[key]`.
 - Firing: run `code` via `BehaviourRunner.runScript` with `input = { event, data, ...input }`, trigger
   `{ kind: 'event', subscriptionId, event }`; if the character has an `onEvent` behaviour it also runs
-  (input `{ event, data }`) for events with no matching subscription; audit as `events.fire`
+  (input `{ event, data }`) for events with no matching subscription; audit as `events.fire`.
+  `Handler` is a function `(input) => …` or, as before, the body of an async function as a string:
+  the isolate turns a function argument into `return await (<source>)(input);` before it crosses to
+  the host (see `docs/spec/sandbox.md` §4), so the host still stores and runs a string and the model
+  gets to write — and have checked — real code. A handler runs in a fresh isolate: it closes over
+  nothing, and everything it needs travels in `opts.input`
   allowed/failed; `fired++`; `once` → remove. Event code runs do not count toward autonomy limits, but
   wakes they trigger do. Emit `event-fired` chat event. Debounce identical event+subscription within 2 s.
 - `setInterest` is called whenever the subscription set changes (union of event names + always `time`

@@ -6,7 +6,9 @@ Characters can act without the user typing. Contracts: `ScheduledTimer.kind` (`w
 ## TimerService
 
 - `schedule(ctx, delayMs, payload, opts)` → kind `wake` (unchanged behaviour).
-- `runLater(ctx, delayMs, code, { input, label, repeatEveryMs, maxRuns })` → kind `code`; validate
+- `runLater(ctx, delayMs, handler, { input, label, repeatEveryMs, maxRuns })` → kind `code`; the
+  handler reaches the host as code either way (a function argument is serialised to an action body in
+  the isolate, see `docs/spec/sandbox.md` §4); validate
   1 s ≤ delay ≤ 7 d, code non-empty ≤ 16 KiB, `repeatEveryMs ≥ settings.autonomy.minRepeatIntervalMs`,
   per-session count ≤ `maxTimersPerSession` (INVALID_ARGUMENT otherwise). On fire: run `code` through the
   same runner path as behaviours (`const input = <json>;` prepended, `language: 'ts'`, trigger

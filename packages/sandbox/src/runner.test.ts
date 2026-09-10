@@ -7,6 +7,7 @@ const surface: SdkSurface = {
   modules: [
     { id: 'media', methods: ['showImage', 'close'] },
     { id: 'state', methods: ['get', 'set', 'session.get', 'session.set'] },
+    { id: 'events', methods: ['on'] },
     { id: 'log', methods: ['debug', 'info', 'warn', 'error'] },
   ],
 };
@@ -314,6 +315,39 @@ describe('QuickJsRunner', () => {
     expect(details.frame).toContain('> 2 | const b = ;');
     // The RpError was thrown on the host: those frames say nothing to the model.
     expect(result.error?.stack).toBeUndefined();
+  });
+
+  it('sends a function argument as the action body that calls it, and runs that body later', async () => {
+    const invoker = makeInvoker();
+    const stored = await runner.run(
+      req(
+        [
+          'await sdk.events.on("user-idle", async (input: { data: { idleMs: number } }) => {',
+          '  await sdk.state.set("lastIdle", input.data.idleMs);',
+          '});',
+          // A string handler still works, unchanged.
+          'await sdk.events.on("user-back", \'await sdk.state.set("back", true);\');',
+          'return "subscribed";',
+        ].join('\n'),
+        { invoker },
+      ),
+    );
+    expect(stored.error).toBeUndefined();
+    const [asFunction, asString] = invoker.calls.map((c) => c.args[1] as string);
+    expect(asFunction).toBe('return await (async (input) => {\n    await sdk.state.set("lastIdle", input.data.idleMs);\n  })(input);');
+    expect(asString).toBe('await sdk.state.set("back", true);');
+
+    // What the host stored is a normal action body: bind `input` and run it.
+    const later = makeInvoker();
+    const fired = await runner.run(req(`const input = { data: { idleMs: 900000 } }; ${asFunction}`, { invoker: later }));
+    expect(fired.error).toBeUndefined();
+    expect(later.calls.map((c) => [c.module, c.method, c.args])).toEqual([['state', 'set', ['lastIdle', 900000]]]);
+  });
+
+  it('still refuses arguments that are not serialisable at all', async () => {
+    const result = await runner.run(req('const cycle: any = {}; cycle.self = cycle; await sdk.state.set("x", cycle); return 1;'));
+    expect(result.ok).toBe(false);
+    expect(result.error?.message).toContain('sdk.state.set');
   });
 
   it('catches runaway recursion as a runtime error and keeps the runner usable', async () => {
