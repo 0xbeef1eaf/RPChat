@@ -144,6 +144,27 @@ export class SessionService {
     return message;
   }
 
+  /** Delete one message from the history and emit `message-removed`. Unknown ids are ignored. */
+  async removeMessage(sessionId: string, messageId: string): Promise<void> {
+    const before = await this.storage.messages.list(sessionId);
+    if (!before.some((m) => m.id === messageId)) return;
+    await this.storage.messages.remove(sessionId, messageId);
+    await this.refreshStats(sessionId);
+    this.emitter.emit('chat', { type: 'message-removed', sessionId, messageId });
+  }
+
+  /** Delete every message of the session (the session record, its state, timers and memories stay). */
+  async clearMessages(sessionId: string): Promise<void> {
+    const session = await this.storage.sessions.get(sessionId);
+    if (!session) throw new RpError('NOT_FOUND', `Session "${sessionId}" does not exist`, { sessionId });
+    await this.storage.messages.removeForSession(sessionId);
+    session.messageCount = 0;
+    delete session.lastMessagePreview;
+    session.updatedAt = this.now().toISOString();
+    await this.storage.sessions.upsert(session);
+    this.emitter.emit('chat', { type: 'messages-cleared', sessionId });
+  }
+
   /** Persist a changed message and refresh the session stats (no event; callers emit `message-updated`). */
   async persistMessage(message: ChatMessage): Promise<void> {
     await this.storage.messages.update(message);

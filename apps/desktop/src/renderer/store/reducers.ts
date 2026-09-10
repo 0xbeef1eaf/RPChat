@@ -78,6 +78,16 @@ export function applyChatEvent(state: AppState, event: ChatEvent): AppState {
     }
     case 'text-delta':
       return patchMessage(state, event.sessionId, event.messageId, (m) => ({ ...m, content: m.content + event.delta }));
+    case 'message-removed': {
+      const list = state.messages[event.sessionId];
+      if (!list) return state;
+      return { ...state, messages: { ...state.messages, [event.sessionId]: list.filter((m) => m.id !== event.messageId) } };
+    }
+    case 'messages-cleared': {
+      const runtime = state.runtime[event.sessionId];
+      const next = { ...state, messages: { ...state.messages, [event.sessionId]: [] } };
+      return runtime ? patchRuntime(next, event.sessionId, { turnId: null, error: null, eventMarkers: [] }) : next;
+    }
     case 'memory-added':
       return { ...state, memoryVersion: state.memoryVersion + 1 };
     case 'mood-changed':

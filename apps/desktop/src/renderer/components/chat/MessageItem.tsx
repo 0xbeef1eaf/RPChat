@@ -12,6 +12,8 @@ interface MessageItemProps {
   userName: string;
   /** Text is still arriving for this message. */
   streaming: boolean;
+  /** Delete this message from the history (hidden while streaming). */
+  onDelete?: (messageId: string) => void;
 }
 
 function originLabel(origin: ChatMessage['origin']): string | null {
@@ -27,13 +29,20 @@ function originLabel(origin: ChatMessage['origin']): string | null {
   }
 }
 
-export const MessageItem = memo(function MessageItem({ message, characterName, avatarUrl, userName, streaming }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, characterName, avatarUrl, userName, streaming, onDelete }: MessageItemProps) {
+  const deleteButton =
+    onDelete && !streaming ? (
+      <button type="button" className="msg-delete" title="Delete this message from the history" aria-label="Delete message" onClick={() => onDelete(message.id)}>
+        ×
+      </button>
+    ) : null;
   if (message.kind === 'emote') {
     return (
       <div className="msg msg-emote">
         <div className="msg-body">
           <div className="emote">
             {characterName} {message.content}
+            {deleteButton}
           </div>
         </div>
       </div>
@@ -59,6 +68,7 @@ export const MessageItem = memo(function MessageItem({ message, characterName, a
               {message.usage.inputTokens}↑ {message.usage.outputTokens}↓
             </span>
           ) : null}
+          {deleteButton}
         </div>
         {actions.length > 0 ? (
           <div className="actions">

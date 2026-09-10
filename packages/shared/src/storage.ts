@@ -33,6 +33,8 @@ export interface Storage {
     list(sessionId: SessionId): Promise<ChatMessage[]>;
     append(message: ChatMessage): Promise<void>;
     update(message: ChatMessage): Promise<void>;
+    /** Delete one message; no error when it does not exist. */
+    remove(sessionId: SessionId, messageId: string): Promise<void>;
     removeForSession(sessionId: SessionId): Promise<void>;
   };
   /** Key/value state scoped by `scope` (e.g. `char:<packId>/<charId>` or `session:<id>`). */

@@ -7,7 +7,7 @@ import { EventsDrawer } from '../components/chat/EventsDrawer';
 import { MessageList } from '../components/chat/MessageList';
 import { SessionPanel } from '../components/chat/SessionPanel';
 import { Avatar } from '../components/common/Avatar';
-import { abortTurn, closeAllMedia, deleteSession, navigate, openMemories, saveSession, sendMessage } from '../store/actions';
+import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, saveSession, sendMessage } from '../store/actions';
 import { runtimeFor } from '../store/state';
 import { useAppState } from '../store/store';
 
@@ -21,6 +21,7 @@ export function ChatView() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const session = useMemo(() => sessions.find((s) => s.id === activeSessionId), [sessions, activeSessionId]);
   const character = useMemo(() => (session ? characters.find((c) => c.ref === session.characterRef) : undefined), [characters, session]);
@@ -91,6 +92,15 @@ export function ChatView() {
         <button type="button" className="btn btn-sm" onClick={closeAllMedia} title="Close every open media window">
           Close media
         </button>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => setConfirmClear(true)}
+          disabled={!messages || messages.length === 0}
+          title="Delete every message in this session; memories, timers and state stay"
+        >
+          Clear history
+        </button>
         <button type="button" className="btn btn-sm" onClick={() => setPanelOpen((v) => !v)} aria-expanded={panelOpen}>
           Session settings
         </button>
@@ -113,6 +123,7 @@ export function ChatView() {
         turnRunning={running}
         error={runtime.error}
         markers={runtime.eventMarkers}
+        onDeleteMessage={(messageId) => void deleteMessage(session.id, messageId)}
       />
       <div className="status-line" aria-live="polite">
         {running ? <span className="spinner" /> : null}
@@ -133,6 +144,24 @@ export function ChatView() {
         onSend={onSend}
         onAbort={onAbort}
       />
+      {confirmClear ? (
+        <ConfirmDialog
+          title="Clear history?"
+          message={
+            <>
+              This deletes every message in <strong>{session.title}</strong>. The character keeps its memories, timers and state; only the
+              conversation is removed. This cannot be undone.
+            </>
+          }
+          confirmLabel="Clear"
+          danger
+          onCancel={() => setConfirmClear(false)}
+          onConfirm={() => {
+            setConfirmClear(false);
+            void clearHistory(session.id);
+          }}
+        />
+      ) : null}
       {confirmDelete ? (
         <ConfirmDialog
           title="Delete session?"

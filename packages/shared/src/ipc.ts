@@ -124,6 +124,10 @@ export interface IpcApi {
     update(session: Session): Promise<Session>;
     remove(sessionId: string): Promise<void>;
     messages(sessionId: string): Promise<ChatMessage[]>;
+    /** Delete one message from the history (aborts a running turn first). */
+    removeMessage(sessionId: string, messageId: string): Promise<void>;
+    /** Delete every message of the session; the session, its state, timers and memories stay. */
+    clearMessages(sessionId: string): Promise<void>;
   };
   chat: {
     send(sessionId: string, text: string): Promise<void>;

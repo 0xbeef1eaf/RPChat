@@ -221,6 +221,12 @@ export class FileStorage implements Storage {
       else list.push(message);
       await this.save(rel, list);
     },
+    remove: async (sessionId, messageId) => {
+      const rel = this.messagesFile(sessionId);
+      const list = await this.loadList<ChatMessage>(rel);
+      const next = list.filter((m) => m.id !== messageId);
+      if (next.length !== list.length) await this.save(rel, next);
+    },
     removeForSession: async (sessionId) => this.unlink(this.messagesFile(sessionId)),
   };
 

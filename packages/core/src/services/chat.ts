@@ -85,6 +85,18 @@ export class ChatService {
     this.controllers.get(sessionId)?.abort();
   }
 
+  /** Delete one message; a running or queued turn is aborted first so it cannot resurrect it. */
+  async removeMessage(sessionId: string, messageId: string): Promise<void> {
+    await this.abort(sessionId);
+    await this.runExclusive(sessionId, () => this.o.sessions.removeMessage(sessionId, messageId));
+  }
+
+  /** Clear the whole history of a session; a running or queued turn is aborted first. */
+  async clearMessages(sessionId: string): Promise<void> {
+    await this.abort(sessionId);
+    await this.runExclusive(sessionId, () => this.o.sessions.clearMessages(sessionId));
+  }
+
   /** Run `task` serialised with the session's turns (used for event code and code timers). */
   runExclusive<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
     const result = this.enqueue(sessionId, task);

@@ -13,6 +13,7 @@ interface MessageListProps {
   error: SerializedError | null;
   /** `event-fired` markers, rendered inline at their time. */
   markers?: EventMarker[];
+  onDeleteMessage?: (messageId: string) => void;
 }
 
 type Row = { kind: 'message'; at: string; message: ChatMessage } | { kind: 'marker'; at: string; marker: EventMarker };
@@ -27,7 +28,7 @@ export function mergeRows(messages: ChatMessage[], markers: EventMarker[]): Row[
 }
 
 /** Scrollable transcript that sticks to the bottom while the user has not scrolled up. */
-export function MessageList({ messages, characterName, avatarUrl, userName, turnRunning, error, markers = [] }: MessageListProps) {
+export function MessageList({ messages, characterName, avatarUrl, userName, turnRunning, error, markers = [], onDeleteMessage }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
 
@@ -75,6 +76,7 @@ export function MessageList({ messages, characterName, avatarUrl, userName, turn
                 avatarUrl={avatarUrl}
                 userName={userName}
                 streaming={row.message.id === streamingId && row.message.role === 'assistant'}
+                onDelete={onDeleteMessage}
               />
             ) : (
               <div key={`marker-${row.marker.id}`} className="event-marker" title={`subscription ${row.marker.subscriptionId}`}>

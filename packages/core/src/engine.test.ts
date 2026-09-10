@@ -676,3 +676,40 @@ describe('timers', () => {
     expect(await t.engine.timers.list()).toEqual([]);
   });
 });
+
+describe('history editing', () => {
+  it('removes one message or clears the session, emits events and keeps session state', async () => {
+    t = await createTestEngine({ respond: () => ({ text: 'ok' }) });
+    await t.engine.packs.install(LUNA_DIR);
+    const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
+    await t.engine.chat.send(session.id, 'first');
+    await t.engine.chat.send(session.id, 'second');
+    await t.engine.storage.state.set(`session:${session.id}`, 'scratch', 1);
+    const before = await t.engine.sessions.messages(session.id);
+    expect(before.length).toBeGreaterThanOrEqual(4);
+    const events: string[] = [];
+    t.engine.events.on('chat', (e) => events.push(e.type));
+
+    const victim = before.find((m) => m.role === 'user' && m.content === 'first')!;
+    await t.engine.chat.removeMessage(session.id, victim.id);
+    const after = await t.engine.sessions.messages(session.id);
+    expect(after.some((m) => m.id === victim.id)).toBe(false);
+    expect(after.length).toBe(before.length - 1);
+    expect(events).toContain('message-removed');
+    expect((await t.engine.sessions.get(session.id))?.messageCount).toBe(after.length);
+    await t.engine.chat.removeMessage(session.id, 'does-not-exist'); // ignored
+
+    await t.engine.chat.clearMessages(session.id);
+    expect(await t.engine.sessions.messages(session.id)).toEqual([]);
+    expect(events).toContain('messages-cleared');
+    const cleared = await t.engine.sessions.get(session.id);
+    expect(cleared?.messageCount).toBe(0);
+    expect(cleared?.lastMessagePreview).toBeUndefined();
+    expect(await t.engine.storage.state.get(`session:${session.id}`, 'scratch')).toBe(1); // state survives
+    await expect(t.engine.chat.clearMessages('nope')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+
+    // Chatting again works on the empty history.
+    await t.engine.chat.send(session.id, 'third');
+    expect((await t.engine.sessions.messages(session.id)).map((m) => m.role)).toEqual(['user', 'assistant']);
+  });
+});

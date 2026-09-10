@@ -75,6 +75,16 @@ describe('applyChatEvent', () => {
     ]);
   });
 
+  it('drops removed messages and empties the list on clear', () => {
+    let s = loaded();
+    s = applyChatEvent(s, { type: 'message-added', sessionId: S, message: msg('m2', 'a') });
+    s = applyChatEvent(s, { type: 'message-removed', sessionId: S, messageId: 'm1' });
+    expect(s.messages[S]?.map((m) => m.id)).toEqual(['m2']);
+    s = applyChatEvent(s, { type: 'messages-cleared', sessionId: S });
+    expect(s.messages[S]).toEqual([]);
+    expect(applyChatEvent(initialState(), { type: 'messages-cleared', sessionId: 'other' }).messages['other']).toEqual([]);
+  });
+
   it('concatenates text deltas onto the right message', () => {
     let s = loaded();
     s = applyChatEvent(s, { type: 'message-added', sessionId: S, message: msg('m2', '') });

@@ -23,7 +23,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   characters: ['list', 'status'],
   events: ['list', 'remove'],
   senses: ['snapshot'],
-  sessions: ['list', 'create', 'get', 'update', 'remove', 'messages'],
+  sessions: ['list', 'create', 'get', 'update', 'remove', 'messages', 'removeMessage', 'clearMessages'],
   chat: ['send', 'abort'],
   permissions: ['respond'],
   settings: ['get', 'managed', 'update', 'testProvider', 'listModels', 'testCommand', 'defaultCommands'],

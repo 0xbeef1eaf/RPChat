@@ -76,6 +76,9 @@ describe('FileStorage', () => {
     await b.memories.removeForCharacter('q/d');
     expect(await b.memories.list('q/d')).toEqual([]);
 
+    await b.messages.remove('s1', m1.id);
+    expect((await b.messages.list('s1')).map((m) => m.content)).toEqual(['hello']);
+    await b.messages.remove('s1', 'missing'); // no-op
     await b.messages.removeForSession('s1');
     await b.state.clear('session:s1');
     await b.sessions.remove('s1');

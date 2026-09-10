@@ -110,7 +110,7 @@ export async function bootstrap(): Promise<void> {
   const rp = api();
   rp.chat.onEvent((event) => {
     update((s) => applyChatEvent(s, event));
-    if (event.type === 'turn-finished' || event.type === 'message-added' || event.type === 'error') {
+    if (event.type === 'turn-finished' || event.type === 'message-added' || event.type === 'error' || event.type === 'message-removed' || event.type === 'messages-cleared') {
       scheduleSessionsRefresh();
     }
     if (event.type === 'memory-added' && event.sessionId === appStore.getState().activeSessionId) {
@@ -174,6 +174,23 @@ export async function deleteSession(sessionId: SessionId): Promise<void> {
     update((s) => removeSessionReducer(s, sessionId));
   } catch (err) {
     reportError('Could not delete session', err);
+  }
+}
+
+export async function deleteMessage(sessionId: SessionId, messageId: string): Promise<void> {
+  try {
+    await api().sessions.removeMessage(sessionId, messageId);
+  } catch (err) {
+    reportError('Could not delete message', err);
+  }
+}
+
+export async function clearHistory(sessionId: SessionId): Promise<void> {
+  try {
+    await api().sessions.clearMessages(sessionId);
+    toast('success', 'History cleared');
+  } catch (err) {
+    reportError('Could not clear history', err);
   }
 }
 

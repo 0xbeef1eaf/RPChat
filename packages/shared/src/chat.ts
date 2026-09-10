@@ -56,6 +56,10 @@ export type ChatEvent =
   | { type: 'message-added'; sessionId: SessionId; message: ChatMessage }
   | { type: 'text-delta'; sessionId: SessionId; messageId: MessageId; delta: string }
   | { type: 'message-updated'; sessionId: SessionId; message: ChatMessage }
+  /** One message was deleted from the history. */
+  | { type: 'message-removed'; sessionId: SessionId; messageId: MessageId }
+  /** Every message of the session was deleted (the session itself stays). */
+  | { type: 'messages-cleared'; sessionId: SessionId }
   | { type: 'action-started'; sessionId: SessionId; messageId: MessageId; action: ActionRecord }
   | { type: 'action-finished'; sessionId: SessionId; messageId: MessageId; action: ActionRecord }
   | { type: 'status'; sessionId: SessionId; text: string | null }

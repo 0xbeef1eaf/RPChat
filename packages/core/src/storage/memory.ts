@@ -89,6 +89,10 @@ export class MemoryStorage implements Storage {
       if (list && idx >= 0) list[idx] = clone(message);
       else await this.messages.append(message);
     },
+    remove: async (sessionId, messageId) => {
+      const list = this.messageRecords.get(sessionId);
+      if (list) this.messageRecords.set(sessionId, list.filter((m) => m.id !== messageId));
+    },
     removeForSession: async (sessionId) => {
       this.messageRecords.delete(sessionId);
     },

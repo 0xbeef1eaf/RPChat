@@ -130,6 +130,8 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       update: (_e, session: Session) => engine.sessions.update(session),
       remove: (_e, sessionId) => engine.sessions.remove(requireString(sessionId, 'sessionId')),
       messages: (_e, sessionId) => engine.sessions.messages(requireString(sessionId, 'sessionId')),
+      removeMessage: (_e, sessionId, messageId) => engine.chat.removeMessage(requireString(sessionId, 'sessionId'), requireString(messageId, 'messageId')),
+      clearMessages: (_e, sessionId) => engine.chat.clearMessages(requireString(sessionId, 'sessionId')),
     },
     chat: {
       send: (_e, sessionId, text) => engine.chat.send(requireString(sessionId, 'sessionId'), text),
