@@ -24,7 +24,7 @@ export function SensesSection({ settings, onPatch, NumberField }: SensesSectionP
         What characters with the <code>presence</code> capability can sense: idle time, the active window, what is playing, battery and
         screen lock. Nothing leaves your machine except through the prompt to your configured LLM provider.
       </p>
-      <LiveSnapshot />
+      <LiveSnapshot auto={senses.liveSnapshotAutoRefresh} onAutoChange={(liveSnapshotAutoRefresh) => void patch({ liveSnapshotAutoRefresh })} />
       <div className="field-grid">
         <div className="field">
           <span className="field-label">
@@ -68,10 +68,9 @@ export function SensesSection({ settings, onPatch, NumberField }: SensesSectionP
   );
 }
 
-function LiveSnapshot() {
+function LiveSnapshot({ auto, onAutoChange }: { auto: boolean; onAutoChange: (auto: boolean) => void }) {
   const [snap, setSnap] = useState<PresenceSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [auto, setAuto] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -97,7 +96,7 @@ function LiveSnapshot() {
       <div className="row" style={{ marginBottom: 6 }}>
         <h3 className="grow">Live snapshot</h3>
         <label className="check small">
-          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto-refresh
+          <input type="checkbox" checked={auto} onChange={(e) => onAutoChange(e.target.checked)} /> auto-refresh
         </label>
         <button type="button" className="btn btn-sm" onClick={load}>
           Refresh

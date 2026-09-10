@@ -86,6 +86,39 @@ describe('PresenceProvider', () => {
     expect(samples).toBeGreaterThan(0);
   });
 
+  it('picks up a changed poll interval on refreshSettings (the loop captured the old one)', async () => {
+    let pollMs = 5000;
+    let samples = 0;
+    const provider = new PresenceProvider({
+      sampler: { sample: async () => (samples += 1, { ...base }) },
+      settings: async () => ({ pollMs, idleThresholdMs: 60_000 }),
+      logger: { warn: () => undefined, debug: () => undefined },
+      snapshotCacheMs: 0,
+    });
+    provider.setInterest(['user-idle']);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(provider.polling).toBe(true);
+    const afterFirstPoll = samples;
+
+    // 5 s between polls: nothing more is sampled on its own within the test.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(samples).toBe(afterFirstPoll);
+
+    // Settings → Senses lowered the interval; the running loop has to restart.
+    pollMs = 1000; // clamped to the 500 ms floor below
+    await provider.refreshSettings();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(samples).toBeGreaterThan(afterFirstPoll);
+    expect(provider.polling).toBe(true);
+
+    // Refreshing while nothing is interested does not start a loop.
+    provider.setInterest([]);
+    await new Promise((r) => setTimeout(r, 5));
+    await provider.refreshSettings();
+    expect(provider.polling).toBe(false);
+    await provider.dispose();
+  });
+
   it('derives snapshot fields', () => {
     expect(dayPartOf(new Date(2026, 0, 1, 3))).toBe('night');
     expect(dayPartOf(new Date(2026, 0, 1, 7))).toBe('early-morning');

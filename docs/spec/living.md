@@ -156,7 +156,9 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   when `playerctl` is on PATH). Emits edge events (`user-idle`/`user-back` with the threshold
   `settings.senses.idleThresholdMs`, `battery-low`, `screen-*`, `song-changed`, `window-changed`,
   `app-launched`). `watch.ts`: `fs.watch` on `settings.senses.watchDirs` → `file-added` (debounced,
-  ignore dotfiles/partial downloads `.part/.crdownload`). Widget/avatar page events → `widget-message` /
+  ignore dotfiles/partial downloads `.part/.crdownload`). The poll loop captures `pollMs` when it is
+  scheduled, so a `settings.senses` patch calls `senses.refresh()` → `provider.refreshSettings()`,
+  which reschedules the running loop (and stays idle when nothing is interested). Widget/avatar page events → `widget-message` /
   `avatar-clicked`.
 - **Handlers** (`src/main/capabilities/`): `presence` (from the provider), `screen` (`look`: screenshot
   via `desktopCapturer` on X11/Windows/macOS, `screenshot` template on Wayland (Hyprland default

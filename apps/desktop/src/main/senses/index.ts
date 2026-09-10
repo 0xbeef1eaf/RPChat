@@ -19,7 +19,7 @@ export interface SensesDeps {
 export interface Senses {
   provider: PresenceProvider;
   watcher: DirWatcher;
-  /** Re-read `settings.senses` (watch dirs). */
+  /** Re-read `settings.senses`: watched directories and the poll interval. */
   refresh(): Promise<void>;
   dispose(): Promise<void>;
 }
@@ -75,6 +75,8 @@ export function createSenses(deps: SensesDeps): Senses {
   const refresh = async (): Promise<void> => {
     const s = await deps.settings();
     watcher.setDirs(s.senses.watchDirs);
+    // The running poll loop still holds the previous `pollMs`; restart it.
+    await provider.refreshSettings();
   };
   return {
     provider,

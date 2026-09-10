@@ -201,6 +201,14 @@ export class PresenceProvider {
     void this.reschedule();
   }
 
+  /**
+   * Re-read the settings. The poll loop captures `pollMs` when it is scheduled,
+   * so a changed interval only takes effect once the loop is restarted.
+   */
+  async refreshSettings(): Promise<void> {
+    await this.reschedule();
+  }
+
   get polling(): boolean {
     return this.timer !== undefined;
   }
