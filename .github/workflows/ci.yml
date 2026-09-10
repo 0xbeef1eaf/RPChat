@@ -1,8 +1,13 @@
 name: CI
 
+# Pull requests get one run, not two: a branch push and its PR used to fire this
+# workflow separately for the same commit. `main` runs it as well so the caches
+# below are written on the default branch — GitHub only lets a branch restore
+# caches from itself or from the default branch, so without this every PR
+# started cold and recompiled the Rust helper from scratch.
 on:
   push:
-    branches-ignore: [main]
+    branches: [main]
   pull_request:
 
 concurrency:
@@ -24,6 +29,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Shared with the release workflow: without a shared key the cache key
+          # carries the job id, so the two workflows could never reuse each
+          # other's artifacts for the same crates.
+          shared-key: native-linux
           workspaces: |
             native/overlay-wlr
             native/rp-coded

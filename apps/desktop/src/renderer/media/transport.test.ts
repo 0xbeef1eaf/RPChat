@@ -2,8 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MediaCommand, MediaWindowEvent } from '@rp/shared';
 import { createHelperTransport, decodeBase64Url, detectTransportMode, parseCommandJson, parseHashCommand, type HelperEnv } from './transport';
 
+/**
+ * base64url the way the page itself does it: this is renderer code, so the
+ * test has no `Buffer` (tsconfig.web.json sets `types: []`, and vitest 4 no
+ * longer leaks node's types into it either).
+ */
+function encodeBase64Url(text: string): string {
+  let binary = '';
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
 function b64url(obj: unknown): string {
-  return Buffer.from(JSON.stringify(obj), 'utf8').toString('base64url');
+  return encodeBase64Url(JSON.stringify(obj));
 }
 
 const show: MediaCommand = {
@@ -31,7 +42,7 @@ function fakeEnv(hash = ''): HelperEnv & { hook: ((json: string) => void) | unde
 describe('base64url + hash parsing', () => {
   it('decodes base64url with and without padding, including unicode', () => {
     const text = '{"a":"héllo ✨"}';
-    const encoded = Buffer.from(text, 'utf8').toString('base64url');
+    const encoded = encodeBase64Url(text);
     expect(encoded).not.toMatch(/[+/=]/);
     expect(decodeBase64Url(encoded)).toBe(text);
     expect(decodeBase64Url(`${encoded}==`)).toBe(text);
@@ -49,7 +60,7 @@ describe('base64url + hash parsing', () => {
     expect(parseHashCommand(`#cmd=${b64url({ type: 'nuke-it', id: 'x' })}`)).toBeNull();
     expect(parseHashCommand(`#cmd=${b64url({ type: 'show-image', id: 'x' })}`)).toBeNull(); // no url
     expect(parseHashCommand(`#cmd=${b64url({ type: 'close' })}`)).toBeNull(); // no id
-    expect(parseHashCommand(`#cmd=${Buffer.from('not json').toString('base64url')}`)).toBeNull();
+    expect(parseHashCommand(`#cmd=${encodeBase64Url('not json')}`)).toBeNull();
   });
 
   it('parseCommandJson accepts every command type with its required fields', () => {
