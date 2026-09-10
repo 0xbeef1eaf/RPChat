@@ -24,6 +24,9 @@ pub struct OverlaySettings {
     pub margin_px: f64,
     pub x: Option<f64>,
     pub y: Option<f64>,
+    /// `Anchor::Random` seeds: fractions of the free space (None → centre).
+    pub random_x: Option<f64>,
+    pub random_y: Option<f64>,
     pub monitor: Option<MonitorSelector>,
     pub width: f64,
     /// Explicit height from the app; when `None` the page's `content-size` drives it.
@@ -45,6 +48,8 @@ impl OverlaySettings {
             margin_px: show.margin_px,
             x: show.x,
             y: show.y,
+            random_x: show.random_x,
+            random_y: show.random_y,
             monitor: show.monitor.clone(),
             width: show.width,
             height: show.height,
@@ -76,6 +81,12 @@ impl OverlaySettings {
         }
         if let Some(m) = patch.margin_px {
             self.margin_px = m;
+        }
+        if patch.random_x.is_some() {
+            self.random_x = patch.random_x;
+        }
+        if patch.random_y.is_some() {
+            self.random_y = patch.random_y;
         }
         if patch.x.is_some() {
             self.x = patch.x;
@@ -142,7 +153,10 @@ pub struct OverlayPlan {
 /// Resolve a monitor selector against the current monitor list:
 /// `index` → `name` (exact, then case-insensitive, then id) → the monitor containing `(x, y)`.
 /// Returns `None` when nothing matches (the compositor's default monitor is used).
-pub fn select_monitor(selector: Option<&MonitorSelector>, monitors: &[MonitorInfo]) -> Option<usize> {
+pub fn select_monitor(
+    selector: Option<&MonitorSelector>,
+    monitors: &[MonitorInfo],
+) -> Option<usize> {
     let (index, name, point) = match selector? {
         MonitorSelector::Spec { index, name, x, y } => {
             (*index, name.as_deref(), x.and_then(|x| y.map(|y| (x, y))))
@@ -210,9 +224,15 @@ pub fn plan(settings: &OverlaySettings, monitors: &[MonitorInfo]) -> OverlayPlan
     let reference = reference_monitor(monitor_index, monitors);
     // Without any monitor information fall back to a generous virtual screen so
     // fractions and clamps still produce sane numbers.
-    let (mon_w, mon_h) = reference.map(|m| (m.width.max(1), m.height.max(1))).unwrap_or((1920, 1080));
+    let (mon_w, mon_h) = reference
+        .map(|m| (m.width.max(1), m.height.max(1)))
+        .unwrap_or((1920, 1080));
 
-    let margin = if settings.margin_px.is_finite() { settings.margin_px.max(0.0).round() as i32 } else { 0 };
+    let margin = if settings.margin_px.is_finite() {
+        settings.margin_px.max(0.0).round() as i32
+    } else {
+        0
+    };
 
     // Size: explicit width always wins; the height is explicit, else the page's
     // reported content height, else the default.
@@ -220,27 +240,44 @@ pub fn plan(settings: &OverlaySettings, monitors: &[MonitorInfo]) -> OverlayPlan
     let wanted_h = settings
         .height
         .and_then(finite_positive)
-        .or_else(|| settings.content_size.and_then(|(_, h)| finite_positive(h)).map(|h| h + settings.content_padding))
+        .or_else(|| {
+            settings
+                .content_size
+                .and_then(|(_, h)| finite_positive(h))
+                .map(|h| h + settings.content_padding)
+        })
         .unwrap_or(DEFAULT_HEIGHT);
     let width = clamp_i32(wanted_w.round() as i32, MIN_SIZE.min(mon_w), mon_w);
     let height = clamp_i32(wanted_h.round() as i32, MIN_SIZE.min(mon_h), mon_h);
 
-    let explicit = settings.x.is_some() || settings.y.is_some();
+    // Explicit x/y and the random anchor both become a top-left anchor with margins, clamped so
+    // the surface never leaves the monitor (re-run on every content-size, the seeds stay fixed).
+    let explicit =
+        settings.x.is_some() || settings.y.is_some() || settings.anchor == Anchor::Random;
     let (anchors, margins, width, height) = if explicit {
-        // Explicit position: anchor top-left and express the position as margins.
         let left = match settings.x {
             Some(x) => explicit_offset(x, mon_w),
-            None => preset_left(settings.anchor, mon_w, width, margin),
+            None => preset_left(settings.anchor, mon_w, width, margin, settings.random_x),
         };
         let top = match settings.y {
             Some(y) => explicit_offset(y, mon_h),
-            None => preset_top(settings.anchor, mon_h, height, margin),
+            None => preset_top(settings.anchor, mon_h, height, margin, settings.random_y),
         };
         let left = clamp_i32(left, 0, mon_w - width);
         let top = clamp_i32(top, 0, mon_h - height);
         (
-            Edges { top: true, bottom: false, left: true, right: false },
-            Edges { top, bottom: 0, left, right: 0 },
+            Edges {
+                top: true,
+                bottom: false,
+                left: true,
+                right: false,
+            },
+            Edges {
+                top,
+                bottom: 0,
+                left,
+                right: 0,
+            },
             width,
             height,
         )
@@ -257,7 +294,11 @@ pub fn plan(settings: &OverlaySettings, monitors: &[MonitorInfo]) -> OverlayPlan
         )
     };
 
-    let opacity = if settings.opacity.is_finite() { settings.opacity.clamp(0.0, 1.0) } else { 1.0 };
+    let opacity = if settings.opacity.is_finite() {
+        settings.opacity.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
 
     OverlayPlan {
         layer: settings.layer,
@@ -276,7 +317,7 @@ fn preset_edges(anchor: Anchor, margin: i32) -> (Edges<bool>, Edges<i32>) {
     let mut a = Edges::<bool>::default();
     let mut m = Edges::<i32>::default();
     match anchor {
-        Anchor::Center => {}
+        Anchor::Center | Anchor::Random => {}
         Anchor::TopLeft => {
             a.top = true;
             a.left = true;
@@ -305,19 +346,31 @@ fn preset_edges(anchor: Anchor, margin: i32) -> (Edges<bool>, Edges<i32>) {
     (a, m)
 }
 
-fn preset_left(anchor: Anchor, mon_w: i32, width: i32, margin: i32) -> i32 {
+/// `seed` fraction of the space left after the surface and both margins (matches `placement.ts`).
+fn random_offset(seed: Option<f64>, extent: i32, size: i32, margin: i32) -> i32 {
+    let free = (extent - size - 2 * margin).max(0);
+    let f = seed
+        .filter(|v| v.is_finite())
+        .map(|v| v.clamp(0.0, 1.0))
+        .unwrap_or(0.5);
+    margin.min((extent - size).max(0)) + (f * free as f64).round() as i32
+}
+
+fn preset_left(anchor: Anchor, mon_w: i32, width: i32, margin: i32, seed: Option<f64>) -> i32 {
     match anchor {
         Anchor::TopLeft | Anchor::BottomLeft => margin,
         Anchor::TopRight | Anchor::BottomRight => mon_w - width - margin,
         Anchor::Center => ((mon_w - width) as f64 / 2.0).round() as i32,
+        Anchor::Random => random_offset(seed, mon_w, width, margin),
     }
 }
 
-fn preset_top(anchor: Anchor, mon_h: i32, height: i32, margin: i32) -> i32 {
+fn preset_top(anchor: Anchor, mon_h: i32, height: i32, margin: i32, seed: Option<f64>) -> i32 {
     match anchor {
         Anchor::TopLeft | Anchor::TopRight => margin,
         Anchor::BottomLeft | Anchor::BottomRight => mon_h - height - margin,
         Anchor::Center => ((mon_h - height) as f64 / 2.0).round() as i32,
+        Anchor::Random => random_offset(seed, mon_h, height, margin),
     }
 }
 
@@ -355,61 +408,220 @@ mod tests {
     #[test]
     fn presets_anchor_two_edges_with_margin() {
         let m = fixture_monitors();
-        let p = plan(&show(r#"{"id":"a","url":"u","anchor":"bottom-right","marginPx":30}"#), &m);
-        assert_eq!(p.anchors, Edges { top: false, bottom: true, left: false, right: true });
-        assert_eq!(p.margins, Edges { top: 0, bottom: 30, left: 0, right: 30 });
+        let p = plan(
+            &show(r#"{"id":"a","url":"u","anchor":"bottom-right","marginPx":30}"#),
+            &m,
+        );
+        assert_eq!(
+            p.anchors,
+            Edges {
+                top: false,
+                bottom: true,
+                left: false,
+                right: true
+            }
+        );
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 0,
+                bottom: 30,
+                left: 0,
+                right: 30
+            }
+        );
 
         let p = plan(&show(r#"{"id":"a","url":"u","anchor":"top-left"}"#), &m);
-        assert_eq!(p.anchors, Edges { top: true, bottom: false, left: true, right: false });
-        assert_eq!(p.margins, Edges { top: 24, bottom: 0, left: 24, right: 0 });
+        assert_eq!(
+            p.anchors,
+            Edges {
+                top: true,
+                bottom: false,
+                left: true,
+                right: false
+            }
+        );
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 24,
+                bottom: 0,
+                left: 24,
+                right: 0
+            }
+        );
 
-        let p = plan(&show(r#"{"id":"a","url":"u","anchor":"top-right","marginPx":0}"#), &m);
-        assert_eq!(p.anchors, Edges { top: true, bottom: false, left: false, right: true });
+        let p = plan(
+            &show(r#"{"id":"a","url":"u","anchor":"top-right","marginPx":0}"#),
+            &m,
+        );
+        assert_eq!(
+            p.anchors,
+            Edges {
+                top: true,
+                bottom: false,
+                left: false,
+                right: true
+            }
+        );
         assert_eq!(p.margins, Edges::default());
 
-        let p = plan(&show(r#"{"id":"a","url":"u","anchor":"bottom-left","marginPx":-5}"#), &m);
-        assert_eq!(p.anchors, Edges { top: false, bottom: true, left: true, right: false });
-        assert_eq!(p.margins, Edges::default(), "negative margins are clamped to 0");
+        let p = plan(
+            &show(r#"{"id":"a","url":"u","anchor":"bottom-left","marginPx":-5}"#),
+            &m,
+        );
+        assert_eq!(
+            p.anchors,
+            Edges {
+                top: false,
+                bottom: true,
+                left: true,
+                right: false
+            }
+        );
+        assert_eq!(
+            p.margins,
+            Edges::default(),
+            "negative margins are clamped to 0"
+        );
     }
 
     #[test]
     fn explicit_xy_forces_top_left_and_resolves_fractions() {
         let m = fixture_monitors(); // primary: 2560x1400 work area
-        let p = plan(&show(r#"{"id":"a","url":"u","anchor":"bottom-right","x":0.5,"y":0.25,"width":400,"height":200}"#), &m);
-        assert_eq!(p.anchors, Edges { top: true, bottom: false, left: true, right: false });
-        assert_eq!(p.margins, Edges { top: 350, bottom: 0, left: 1280, right: 0 });
+        let p = plan(
+            &show(
+                r#"{"id":"a","url":"u","anchor":"bottom-right","x":0.5,"y":0.25,"width":400,"height":200}"#,
+            ),
+            &m,
+        );
+        assert_eq!(
+            p.anchors,
+            Edges {
+                top: true,
+                bottom: false,
+                left: true,
+                right: false
+            }
+        );
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 350,
+                bottom: 0,
+                left: 1280,
+                right: 0
+            }
+        );
         assert_eq!((p.width, p.height), (400, 200));
 
         // Pixels (> 1) are used as-is; 1.0 is still a fraction; 0 is 0.
-        let p = plan(&show(r#"{"id":"a","url":"u","x":100,"y":0,"width":400,"height":200}"#), &m);
-        assert_eq!(p.margins, Edges { top: 0, bottom: 0, left: 100, right: 0 });
-        let p = plan(&show(r#"{"id":"a","url":"u","x":1,"y":1,"width":400,"height":200}"#), &m);
-        assert_eq!(p.margins, Edges { top: 1200, bottom: 0, left: 2160, right: 0 }, "1.0 = far edge, clamped inside");
+        let p = plan(
+            &show(r#"{"id":"a","url":"u","x":100,"y":0,"width":400,"height":200}"#),
+            &m,
+        );
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 0,
+                bottom: 0,
+                left: 100,
+                right: 0
+            }
+        );
+        let p = plan(
+            &show(r#"{"id":"a","url":"u","x":1,"y":1,"width":400,"height":200}"#),
+            &m,
+        );
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 1200,
+                bottom: 0,
+                left: 2160,
+                right: 0
+            },
+            "1.0 = far edge, clamped inside"
+        );
     }
 
     #[test]
     fn explicit_position_is_clamped_inside_monitor() {
         let m = fixture_monitors();
-        let p = plan(&show(r#"{"id":"a","url":"u","x":5000,"y":-40,"width":400,"height":200}"#), &m);
-        assert_eq!(p.margins, Edges { top: 0, bottom: 0, left: 2160, right: 0 });
+        let p = plan(
+            &show(r#"{"id":"a","url":"u","x":5000,"y":-40,"width":400,"height":200}"#),
+            &m,
+        );
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 0,
+                bottom: 0,
+                left: 2160,
+                right: 0
+            }
+        );
     }
 
     #[test]
     fn only_x_given_uses_preset_for_y() {
         let m = fixture_monitors();
-        let p = plan(&show(r#"{"id":"a","url":"u","anchor":"bottom-left","x":10,"width":400,"height":200}"#), &m);
-        assert_eq!(p.anchors, Edges { top: true, bottom: false, left: true, right: false });
-        assert_eq!(p.margins, Edges { top: 1400 - 200 - 24, bottom: 0, left: 10, right: 0 });
-        let p = plan(&show(r#"{"id":"a","url":"u","anchor":"center","y":10,"width":400,"height":200}"#), &m);
-        assert_eq!(p.margins, Edges { top: 10, bottom: 0, left: 1080, right: 0 });
+        let p = plan(
+            &show(r#"{"id":"a","url":"u","anchor":"bottom-left","x":10,"width":400,"height":200}"#),
+            &m,
+        );
+        assert_eq!(
+            p.anchors,
+            Edges {
+                top: true,
+                bottom: false,
+                left: true,
+                right: false
+            }
+        );
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 1400 - 200 - 24,
+                bottom: 0,
+                left: 10,
+                right: 0
+            }
+        );
+        let p = plan(
+            &show(r#"{"id":"a","url":"u","anchor":"center","y":10,"width":400,"height":200}"#),
+            &m,
+        );
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 10,
+                bottom: 0,
+                left: 1080,
+                right: 0
+            }
+        );
     }
 
     #[test]
     fn fractions_resolve_against_selected_monitor() {
         let m = fixture_monitors(); // second monitor: 1920x1080 at 2560,0
-        let p = plan(&show(r#"{"id":"a","url":"u","monitor":{"index":1},"x":0.5,"y":0.5,"width":100,"height":100}"#), &m);
+        let p = plan(
+            &show(
+                r#"{"id":"a","url":"u","monitor":{"index":1},"x":0.5,"y":0.5,"width":100,"height":100}"#,
+            ),
+            &m,
+        );
         assert_eq!(p.monitor_index, Some(1));
-        assert_eq!(p.margins, Edges { top: 540, bottom: 0, left: 960, right: 0 });
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 540,
+                bottom: 0,
+                left: 960,
+                right: 0
+            }
+        );
     }
 
     #[test]
@@ -417,12 +629,24 @@ mod tests {
         let m = fixture_monitors();
         let sel = |json: &str| select_monitor(Some(&serde_json::from_str(json).unwrap()), &m);
         assert_eq!(sel(r#"{"index":1}"#), Some(1));
-        assert_eq!(sel(r#"{"index":7,"name":"HDMI-A-1"}"#), Some(1), "bad index falls through to name");
+        assert_eq!(
+            sel(r#"{"index":7,"name":"HDMI-A-1"}"#),
+            Some(1),
+            "bad index falls through to name"
+        );
         assert_eq!(sel(r#"{"name":"dp-1"}"#), Some(0), "case-insensitive name");
         assert_eq!(sel(r#"{"name":"1"}"#), Some(1), "id matches too");
-        assert_eq!(sel(r#"{"name":"nope","x":3000,"y":100}"#), Some(1), "unknown name falls through to point");
+        assert_eq!(
+            sel(r#"{"name":"nope","x":3000,"y":100}"#),
+            Some(1),
+            "unknown name falls through to point"
+        );
         assert_eq!(sel(r#"{"x":100,"y":100}"#), Some(0));
-        assert_eq!(sel(r#"{"x":9999,"y":9999}"#), None, "point outside everything → default");
+        assert_eq!(
+            sel(r#"{"x":9999,"y":9999}"#),
+            None,
+            "point outside everything → default"
+        );
         assert_eq!(sel(r#"{"index":-1}"#), None);
         assert_eq!(sel(r#"{}"#), None);
         assert_eq!(sel("1"), Some(1));
@@ -434,15 +658,30 @@ mod tests {
     #[test]
     fn size_is_clamped_to_monitor_and_minimum() {
         let m = fixture_monitors();
-        let p = plan(&show(r#"{"id":"a","url":"u","width":99999,"height":99999}"#), &m);
+        let p = plan(
+            &show(r#"{"id":"a","url":"u","width":99999,"height":99999}"#),
+            &m,
+        );
         assert_eq!((p.width, p.height), (2560, 1400));
         let p = plan(&show(r#"{"id":"a","url":"u","width":1,"height":-3}"#), &m);
-        assert_eq!((p.width, p.height), (16, 320), "tiny width → MIN_SIZE, non-positive height → default");
+        assert_eq!(
+            (p.width, p.height),
+            (16, 320),
+            "tiny width → MIN_SIZE, non-positive height → default"
+        );
         // With a preset anchor the margins shrink the available space.
-        let p = plan(&show(r#"{"id":"a","url":"u","anchor":"top-left","marginPx":100,"width":2560,"height":1400}"#), &m);
+        let p = plan(
+            &show(
+                r#"{"id":"a","url":"u","anchor":"top-left","marginPx":100,"width":2560,"height":1400}"#,
+            ),
+            &m,
+        );
         assert_eq!((p.width, p.height), (2460, 1300));
         // No monitors at all: still sane.
-        let p = plan(&show(r#"{"id":"a","url":"u","x":0.5,"width":400,"height":200}"#), &[]);
+        let p = plan(
+            &show(r#"{"id":"a","url":"u","x":0.5,"width":400,"height":200}"#),
+            &[],
+        );
         assert_eq!(p.margins.left, 960, "0.5 of the 1920px fallback screen");
         assert_eq!(p.monitor_index, None);
     }
@@ -454,13 +693,27 @@ mod tests {
         assert_eq!(plan(&s, &m).height, 320);
         assert!(s.set_content_size(300.0, 180.0));
         let p = plan(&s, &m);
-        assert_eq!((p.width, p.height), (480, 204), "width stays fixed, height follows content plus the 24 px padding");
-        assert!(!s.set_content_size(300.0, 180.0), "same size again → no change");
+        assert_eq!(
+            (p.width, p.height),
+            (480, 204),
+            "width stays fixed, height follows content plus the 24 px padding"
+        );
+        assert!(
+            !s.set_content_size(300.0, 180.0),
+            "same size again → no change"
+        );
         assert!(s.set_content_size(300.0, 5000.0));
-        assert_eq!(plan(&s, &m).height, 1400 - 24, "content height clamped to the work area minus margin");
+        assert_eq!(
+            plan(&s, &m).height,
+            1400 - 24,
+            "content height clamped to the work area minus margin"
+        );
 
         let mut s = show(r#"{"id":"a","url":"u","height":200}"#);
-        assert!(!s.set_content_size(300.0, 600.0), "explicit height ignores content-size");
+        assert!(
+            !s.set_content_size(300.0, 600.0),
+            "explicit height ignores content-size"
+        );
         assert_eq!(plan(&s, &m).height, 200);
         s.apply(&patch(r#"{"height":null}"#));
         assert_eq!(plan(&s, &m).height, 200, "null in a patch is 'unchanged'");
@@ -469,13 +722,22 @@ mod tests {
     #[test]
     fn update_patch_merges() {
         let m = fixture_monitors();
-        let mut s = show(r#"{"id":"a","url":"u","anchor":"top-left","opacity":0.5,"namespace":"custom"}"#);
+        let mut s =
+            show(r#"{"id":"a","url":"u","anchor":"top-left","opacity":0.5,"namespace":"custom"}"#);
         s.apply(&patch(r#"{"layer":"background","opacity":0.9,"clickThrough":true,"marginPx":8,"width":300,"monitor":{"index":1}}"#));
         let p = plan(&s, &m);
         assert_eq!(p.layer, Layer::Background);
         assert_eq!(p.opacity, 0.9);
         assert!(p.click_through);
-        assert_eq!(p.margins, Edges { top: 8, bottom: 0, left: 8, right: 0 });
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 8,
+                bottom: 0,
+                left: 8,
+                right: 0
+            }
+        );
         assert_eq!(p.width, 300);
         assert_eq!(p.monitor_index, Some(1));
         assert_eq!(p.namespace, "custom", "namespace is not patchable");
@@ -483,25 +745,79 @@ mod tests {
         // x/y in a patch switch to explicit positioning...
         s.apply(&patch(r#"{"x":10,"y":20}"#));
         let p = plan(&s, &m);
-        assert_eq!(p.anchors, Edges { top: true, bottom: false, left: true, right: false });
-        assert_eq!(p.margins, Edges { top: 20, bottom: 0, left: 10, right: 0 });
+        assert_eq!(
+            p.anchors,
+            Edges {
+                top: true,
+                bottom: false,
+                left: true,
+                right: false
+            }
+        );
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 20,
+                bottom: 0,
+                left: 10,
+                right: 0
+            }
+        );
         // ...and an anchor without x/y switches back to the preset.
         s.apply(&patch(r#"{"anchor":"bottom-right"}"#));
         let p = plan(&s, &m);
-        assert_eq!(p.anchors, Edges { top: false, bottom: true, left: false, right: true });
-        assert_eq!(p.margins, Edges { top: 0, bottom: 8, left: 0, right: 8 });
+        assert_eq!(
+            p.anchors,
+            Edges {
+                top: false,
+                bottom: true,
+                left: false,
+                right: true
+            }
+        );
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 0,
+                bottom: 8,
+                left: 0,
+                right: 8
+            }
+        );
         // anchor + x in the same patch keeps explicit mode (x set, y from the preset).
         s.apply(&patch(r#"{"anchor":"top-right","x":0.5}"#));
         let p = plan(&s, &m);
-        assert_eq!(p.anchors, Edges { top: true, bottom: false, left: true, right: false });
-        assert_eq!(p.margins, Edges { top: 8, bottom: 0, left: 960, right: 0 });
+        assert_eq!(
+            p.anchors,
+            Edges {
+                top: true,
+                bottom: false,
+                left: true,
+                right: false
+            }
+        );
+        assert_eq!(
+            p.margins,
+            Edges {
+                top: 8,
+                bottom: 0,
+                left: 960,
+                right: 0
+            }
+        );
     }
 
     #[test]
     fn opacity_is_clamped() {
         let m = fixture_monitors();
-        assert_eq!(plan(&show(r#"{"id":"a","url":"u","opacity":3}"#), &m).opacity, 1.0);
-        assert_eq!(plan(&show(r#"{"id":"a","url":"u","opacity":-1}"#), &m).opacity, 0.0);
+        assert_eq!(
+            plan(&show(r#"{"id":"a","url":"u","opacity":3}"#), &m).opacity,
+            1.0
+        );
+        assert_eq!(
+            plan(&show(r#"{"id":"a","url":"u","opacity":-1}"#), &m).opacity,
+            0.0
+        );
     }
 
     #[test]
@@ -512,7 +828,10 @@ mod tests {
 
     #[test]
     fn plan_serialises_camel_case() {
-        let p = plan(&show(r#"{"id":"a","url":"u","clickThrough":true}"#), &fixture_monitors());
+        let p = plan(
+            &show(r#"{"id":"a","url":"u","clickThrough":true}"#),
+            &fixture_monitors(),
+        );
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(v["clickThrough"], true);
         assert_eq!(v["monitorIndex"], serde_json::Value::Null);
@@ -525,5 +844,87 @@ fn finite_non_negative(v: f64) -> f64 {
         v
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod random_anchor_tests {
+    use super::*;
+    use crate::protocol::{Anchor, Layer};
+
+    fn settings(seed: (f64, f64), width: f64, height: f64) -> OverlaySettings {
+        OverlaySettings {
+            layer: Layer::Top,
+            anchor: Anchor::Random,
+            margin_px: 24.0,
+            x: None,
+            y: None,
+            random_x: Some(seed.0),
+            random_y: Some(seed.1),
+            monitor: None,
+            width,
+            height: Some(height),
+            content_padding: 0.0,
+            opacity: 1.0,
+            click_through: false,
+            namespace: "rp".into(),
+            content_size: None,
+        }
+    }
+
+    fn monitor() -> Vec<MonitorInfo> {
+        vec![MonitorInfo {
+            index: 0,
+            id: "m".into(),
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+            primary: true,
+            has_cursor: true,
+        }]
+    }
+
+    #[test]
+    fn random_anchor_stays_on_monitor_for_every_seed() {
+        for (sx, sy) in [(0.0, 0.0), (1.0, 1.0), (0.37, 0.91), (5.0, -3.0)] {
+            let p = plan(&settings((sx, sy), 400.0, 300.0), &monitor());
+            assert!(p.anchors.top && p.anchors.left);
+            assert!(
+                p.margins.left >= 0 && p.margins.left + p.width <= 1920,
+                "left {} width {}",
+                p.margins.left,
+                p.width
+            );
+            assert!(p.margins.top >= 0 && p.margins.top + p.height <= 1080);
+        }
+        let lo = plan(&settings((0.0, 0.0), 400.0, 300.0), &monitor());
+        let hi = plan(&settings((1.0, 1.0), 400.0, 300.0), &monitor());
+        assert_eq!((lo.margins.left, lo.margins.top), (24, 24));
+        assert_eq!(
+            (hi.margins.left, hi.margins.top),
+            (1920 - 400 - 24, 1080 - 300 - 24)
+        );
+    }
+
+    #[test]
+    fn random_anchor_with_oversized_content_is_clamped_not_clipped() {
+        let p = plan(&settings((0.8, 0.8), 5000.0, 4000.0), &monitor());
+        assert_eq!((p.margins.left, p.margins.top), (0, 0));
+        assert_eq!((p.width, p.height), (1920, 1080));
+    }
+
+    #[test]
+    fn missing_seed_centres() {
+        let mut s = settings((0.0, 0.0), 400.0, 300.0);
+        s.random_x = None;
+        s.random_y = None;
+        let p = plan(&s, &monitor());
+        assert_eq!(
+            (p.margins.left, p.margins.top),
+            (24 + (1920 - 400 - 48) / 2, 24 + (1080 - 300 - 48) / 2)
+        );
     }
 }

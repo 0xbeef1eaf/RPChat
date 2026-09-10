@@ -1,7 +1,7 @@
 # Display backends, overlays and external commands (desktop main process)
 
 This spec extends `docs/spec/desktop.md`. It covers how media overlays honour
-`OverlayOptions` (`layer`, `monitor`, `position`/`x`/`y`, `opacity`,
+`OverlayOptions` (`layer`, `monitor`, `position`/`x`/`y` — default position `random`: a spot drawn once per overlay so the whole window stays on the monitor, re-clamped when the content size arrives; the helper receives `randomX`/`randomY` and applies the same formula —, `opacity`,
 `clickThrough`), how the app runs on **Hyprland** (Wayland), and how the
 `wallpaper`, `browser` and `input` modules execute user-configured command
 templates. Contracts: `@rp/shared/media.ts` (`OverlayOptions`, `OverlayUpdate`,
@@ -27,6 +27,7 @@ export interface OverlaySpec {
 export interface ResolvedOverlayOptions {
   monitor: MonitorInfo; layer: OverlayLayer; opacity: number; clickThrough: boolean;
   anchor: MediaPosition; marginPx: number; x?: number; y?: number;   // x/y resolved to logical px on the monitor
+  randomSeed?: { x: number; y: number };                              // anchor 'random': fractions of the free space, drawn once per overlay
   width: number; height?: number;
 }
 export interface OverlayHandle {

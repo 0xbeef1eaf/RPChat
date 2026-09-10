@@ -44,6 +44,8 @@ impl Layer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Anchor {
+    /// A spot chosen by the app (`randomX`/`randomY` fractions of the free space), always fully on the monitor.
+    Random,
     #[default]
     Center,
     TopLeft,
@@ -146,6 +148,11 @@ pub struct ShowParams {
     pub x: Option<f64>,
     #[serde(default)]
     pub y: Option<f64>,
+    /// Fractions (0..1) of the free space used by `anchor: "random"`; default 0.5 (centre).
+    #[serde(default)]
+    pub random_x: Option<f64>,
+    #[serde(default)]
+    pub random_y: Option<f64>,
     #[serde(default)]
     pub monitor: Option<MonitorSelector>,
     #[serde(default = "default_width")]
@@ -177,6 +184,10 @@ pub struct UpdatePatch {
     pub x: Option<f64>,
     #[serde(default)]
     pub y: Option<f64>,
+    #[serde(default)]
+    pub random_x: Option<f64>,
+    #[serde(default)]
+    pub random_y: Option<f64>,
     #[serde(default)]
     pub monitor: Option<MonitorSelector>,
     #[serde(default)]
@@ -358,7 +369,12 @@ mod tests {
     fn hello_version_defaults() {
         let r = parse(r#"{"op":"hello"}"#);
         assert_eq!(r.seq, None);
-        assert_eq!(r.op, Op::Hello { version: PROTOCOL_VERSION });
+        assert_eq!(
+            r.op,
+            Op::Hello {
+                version: PROTOCOL_VERSION
+            }
+        );
     }
 
     #[test]
@@ -435,13 +451,20 @@ mod tests {
         let Op::Show(s) = r.op else { panic!() };
         assert_eq!(
             s.monitor,
-            Some(MonitorSelector::Spec { index: None, name: None, x: Some(10.0), y: Some(20.0) })
+            Some(MonitorSelector::Spec {
+                index: None,
+                name: None,
+                x: Some(10.0),
+                y: Some(20.0)
+            })
         );
     }
 
     #[test]
     fn parses_update_patch() {
-        let r = parse(r#"{"op":"update","id":"m1","patch":{"opacity":0.5,"layer":"bottom","x":10,"clickThrough":false}}"#);
+        let r = parse(
+            r#"{"op":"update","id":"m1","patch":{"opacity":0.5,"layer":"bottom","x":10,"clickThrough":false}}"#,
+        );
         match r.op {
             Op::Update { id, patch } => {
                 assert_eq!(id, "m1");
@@ -456,10 +479,22 @@ mod tests {
         }
         // An empty / missing patch is fine.
         let r = parse(r#"{"op":"update","id":"m1"}"#);
-        assert_eq!(r.op, Op::Update { id: "m1".into(), patch: UpdatePatch::default() });
+        assert_eq!(
+            r.op,
+            Op::Update {
+                id: "m1".into(),
+                patch: UpdatePatch::default()
+            }
+        );
         // null == absent
         let r = parse(r#"{"op":"update","id":"m1","patch":{"height":null}}"#);
-        assert_eq!(r.op, Op::Update { id: "m1".into(), patch: UpdatePatch::default() });
+        assert_eq!(
+            r.op,
+            Op::Update {
+                id: "m1".into(),
+                patch: UpdatePatch::default()
+            }
+        );
     }
 
     #[test]
@@ -467,10 +502,16 @@ mod tests {
         let r = parse(r#"{"op":"js","id":"m1","script":"window.__rpMediaCommand('{}')","seq":9}"#);
         assert_eq!(
             r.op,
-            Op::Js { id: "m1".into(), script: "window.__rpMediaCommand('{}')".into() }
+            Op::Js {
+                id: "m1".into(),
+                script: "window.__rpMediaCommand('{}')".into()
+            }
         );
         assert_eq!(r.seq, Some(9));
-        assert_eq!(parse(r#"{"op":"close","id":"m1"}"#).op, Op::Close { id: "m1".into() });
+        assert_eq!(
+            parse(r#"{"op":"close","id":"m1"}"#).op,
+            Op::Close { id: "m1".into() }
+        );
     }
 
     #[test]
@@ -517,7 +558,10 @@ mod tests {
         assert_eq!(v["ev"], "ready");
         assert_eq!(v["version"], PROTOCOL_VERSION);
         assert_eq!(v["seq"], 1);
-        assert_eq!(v["features"]["layers"], serde_json::json!(["background", "bottom", "top", "overlay"]));
+        assert_eq!(
+            v["features"]["layers"],
+            serde_json::json!(["background", "bottom", "top", "overlay"])
+        );
         assert_eq!(v["features"]["clickThrough"], true);
         assert_eq!(v["features"]["exactPosition"], true);
         assert_eq!(v["features"]["video"], true);
@@ -543,17 +587,29 @@ mod tests {
             scale: 1.0,
             has_cursor: true,
         };
-        let line = Outgoing::new(Event::Monitors { monitors: vec![mon] }, None).to_line();
+        let line = Outgoing::new(
+            Event::Monitors {
+                monitors: vec![mon],
+            },
+            None,
+        )
+        .to_line();
         let v: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(v["monitors"][0]["hasCursor"], true);
         assert_eq!(v["monitors"][0]["name"], "DP-1");
 
         let line = Outgoing::new(
-            Event::Message { id: "m1".into(), payload: serde_json::json!({"type":"ended","id":"m1"}) },
+            Event::Message {
+                id: "m1".into(),
+                payload: serde_json::json!({"type":"ended","id":"m1"}),
+            },
             None,
         )
         .to_line();
-        assert_eq!(line, r#"{"ev":"message","id":"m1","payload":{"id":"m1","type":"ended"}}"#);
+        assert_eq!(
+            line,
+            r#"{"ev":"message","id":"m1","payload":{"id":"m1","type":"ended"}}"#
+        );
     }
 
     #[test]

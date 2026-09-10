@@ -43,8 +43,17 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(v, min), max);
 }
 
-function anchorX(position: MediaPosition, monitor: MonitorInfo, width: number, margin: number): number {
+/** Random anchor: `seed` fraction of the space left after the window and the margins, so it is always fully visible. */
+function randomOffset(seed: number | undefined, extent: number, size: number, margin: number): number {
+  const free = Math.max(0, extent - size - 2 * margin);
+  const f = typeof seed === 'number' && Number.isFinite(seed) ? Math.min(1, Math.max(0, seed)) : 0.5;
+  return Math.min(margin, Math.max(0, extent - size)) + Math.round(f * free);
+}
+
+function anchorX(position: MediaPosition, monitor: MonitorInfo, width: number, margin: number, seed?: number): number {
   switch (position) {
+    case 'random':
+      return monitor.x + randomOffset(seed, monitor.width, width, margin);
     case 'top-left':
     case 'bottom-left':
       return monitor.x + margin;
@@ -56,8 +65,10 @@ function anchorX(position: MediaPosition, monitor: MonitorInfo, width: number, m
   }
 }
 
-function anchorY(position: MediaPosition, monitor: MonitorInfo, height: number, margin: number): number {
+function anchorY(position: MediaPosition, monitor: MonitorInfo, height: number, margin: number, seed?: number): number {
   switch (position) {
+    case 'random':
+      return monitor.y + randomOffset(seed, monitor.height, height, margin);
     case 'top-left':
     case 'top-right':
       return monitor.y + margin;
@@ -76,7 +87,7 @@ function explicitOffset(value: number, extent: number): number {
   return Math.round(value);
 }
 
-const POSITIONS: ReadonlySet<string> = new Set(['center', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
+const POSITIONS: ReadonlySet<string> = new Set(['random', 'center', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
 
 export interface PlacementInput {
   monitor: MonitorInfo;
@@ -85,6 +96,8 @@ export interface PlacementInput {
   /** Already resolved to logical px on the monitor. */
   x?: number;
   y?: number;
+  /** `anchor: 'random'`: fixed fractions of the free space (missing → centre). */
+  randomSeed?: { x: number; y: number };
 }
 
 /** Absolute bounds for a window of `size` placed per `input`, clamped to stay fully on the monitor. */
@@ -93,8 +106,8 @@ export function placeOverlay(input: PlacementInput, size: Size): Bounds {
   const width = clamp(Math.round(positive(size.width) ?? DEFAULT_OVERLAY_WIDTH), Math.min(MIN_OVERLAY_SIZE, monitor.width), Math.max(1, monitor.width));
   const height = clamp(Math.round(positive(size.height) ?? DEFAULT_OVERLAY_HEIGHT), Math.min(MIN_OVERLAY_SIZE, monitor.height), Math.max(1, monitor.height));
   const margin = Math.max(0, input.marginPx);
-  let x = typeof input.x === 'number' ? monitor.x + Math.round(input.x) : anchorX(input.anchor, monitor, width, margin);
-  let y = typeof input.y === 'number' ? monitor.y + Math.round(input.y) : anchorY(input.anchor, monitor, height, margin);
+  let x = typeof input.x === 'number' ? monitor.x + Math.round(input.x) : anchorX(input.anchor, monitor, width, margin, input.randomSeed?.x);
+  let y = typeof input.y === 'number' ? monitor.y + Math.round(input.y) : anchorY(input.anchor, monitor, height, margin, input.randomSeed?.y);
   x = clamp(x, monitor.x, monitor.x + monitor.width - width);
   y = clamp(y, monitor.y, monitor.y + monitor.height - height);
   return { x, y, width, height };
@@ -110,13 +123,15 @@ export function resolvePlacement(
   opts: OverlayPlacement & { width?: number; height?: number },
   monitors: MonitorInfo[],
   size: Size,
+  randomSeed?: { x: number; y: number },
 ): { monitor: MonitorInfo; bounds: Bounds } {
   const monitor = selectMonitor(opts.monitor, monitors);
   const input: PlacementInput = {
     monitor,
-    anchor: opts.position && POSITIONS.has(opts.position) ? opts.position : 'center',
+    anchor: opts.position && POSITIONS.has(opts.position) ? opts.position : 'random',
     marginPx: positive(opts.marginPx) ?? (opts.marginPx === 0 ? 0 : DEFAULT_MARGIN_PX),
   };
+  if (input.anchor === 'random' && typeof opts.x !== 'number' && typeof opts.y !== 'number') input.randomSeed = randomSeed ?? { x: Math.random(), y: Math.random() };
   if (typeof opts.x === 'number') input.x = explicitOffset(opts.x, monitor.width);
   if (typeof opts.y === 'number') input.y = explicitOffset(opts.y, monitor.height);
   const bounds = placeOverlay(input, {

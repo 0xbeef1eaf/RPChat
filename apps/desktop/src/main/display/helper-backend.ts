@@ -37,6 +37,10 @@ export function helperPlacement(o: ResolvedOverlayOptions): Record<string, unkno
   if (o.height !== undefined) out.height = o.height;
   if (o.x !== undefined) out.x = o.x;
   if (o.y !== undefined) out.y = o.y;
+  if (o.randomSeed) {
+    out.randomX = o.randomSeed.x;
+    out.randomY = o.randomSeed.y;
+  }
   return out;
 }
 

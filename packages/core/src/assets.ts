@@ -34,6 +34,8 @@ export function summariseTags(assets: AssetEntry[], tagDescriptions: Record<stri
 }
 
 export interface FindAssetsQuery {
+  /** When nothing matches the tags/text, return every asset of `kind` instead of an empty list. Default true. */
+  fallback?: boolean;
   /** Every tag must be present. */
   tags?: string[];
   /** At least one must be present. */
@@ -78,10 +80,16 @@ export function findAssets(assets: AssetEntry[], query: FindAssetsQuery): AssetR
     if (text && !entry.path.toLowerCase().includes(text) && !(entry.description ?? '').toLowerCase().includes(text)) continue;
     scored.push({ entry, score: all.length + anyHits.length });
   }
-  return scored
-    .sort((a, b) => b.score - a.score || a.entry.path.length - b.entry.path.length || (a.entry.path < b.entry.path ? -1 : 1))
-    .slice(0, limit)
-    .map((s) => toAssetRef(s.entry));
+  const ranked = scored.sort((a, b) => b.score - a.score || a.entry.path.length - b.entry.path.length || (a.entry.path < b.entry.path ? -1 : 1));
+  if (ranked.length === 0 && query.fallback !== false && (all.length > 0 || any.length > 0 || text.length > 0)) {
+    // Nothing carries those tags/words (many packs are untagged): fall back to every asset of the
+    // requested kind so the character can still pick something instead of concluding there is no media.
+    return assets
+      .filter((entry) => !query.kind || entry.kind === query.kind)
+      .slice(0, limit)
+      .map(toAssetRef);
+  }
+  return ranked.slice(0, limit).map((s) => toAssetRef(s.entry));
 }
 
 function statFile(abs: string): fs.Stats | undefined {

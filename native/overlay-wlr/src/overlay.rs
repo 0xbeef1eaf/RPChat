@@ -93,7 +93,11 @@ impl Overlay {
             &[],
         ));
         if !ucm.register_script_message_handler(MESSAGE_HANDLER) {
-            log_warn!("[{}] could not register script message handler '{}'", show.id, MESSAGE_HANDLER);
+            log_warn!(
+                "[{}] could not register script message handler '{}'",
+                show.id,
+                MESSAGE_HANDLER
+            );
         }
         let webview = WebView::with_user_content_manager(&ucm);
         let web_settings = webkit2gtk::Settings::new();
@@ -123,7 +127,12 @@ impl Overlay {
         overlay.connect_signals(&ucm);
         overlay.apply_plan();
 
-        log_info!("[{}] show {} (layer {:?})", overlay.id, show.url, show.layer);
+        log_info!(
+            "[{}] show {} (layer {:?})",
+            overlay.id,
+            show.url,
+            show.layer
+        );
         overlay.webview.load_uri(&show.url);
         overlay.window.show_all();
         overlay
@@ -156,7 +165,12 @@ impl Overlay {
         let w = weak.clone();
         self.window.connect_realize(move |_| {
             if let Some(o) = w.upgrade() {
-                let click_through = o.last_plan.borrow().as_ref().map(|p| p.click_through).unwrap_or(false);
+                let click_through = o
+                    .last_plan
+                    .borrow()
+                    .as_ref()
+                    .map(|p| p.click_through)
+                    .unwrap_or(false);
                 o.apply_input_shape(click_through);
             }
         });
@@ -171,12 +185,16 @@ impl Overlay {
 
         // Page load diagnostics.
         let w = weak.clone();
-        self.webview.connect_load_failed(move |_, _event, uri, error| {
-            if let Some(o) = w.upgrade() {
-                o.sink.emit(Event::error(Some(&o.id), format!("failed to load {uri}: {error}")), None);
-            }
-            false
-        });
+        self.webview
+            .connect_load_failed(move |_, _event, uri, error| {
+                if let Some(o) = w.upgrade() {
+                    o.sink.emit(
+                        Event::error(Some(&o.id), format!("failed to load {uri}: {error}")),
+                        None,
+                    );
+                }
+                false
+            });
         let w = weak.clone();
         self.webview.connect_load_changed(move |_, event| {
             if event == LoadEvent::Finished {
@@ -186,11 +204,15 @@ impl Overlay {
             }
         });
         let w = weak.clone();
-        self.webview.connect_web_process_terminated(move |_, reason| {
-            if let Some(o) = w.upgrade() {
-                o.sink.emit(Event::error(Some(&o.id), format!("web process terminated: {reason:?}")), None);
-            }
-        });
+        self.webview
+            .connect_web_process_terminated(move |_, reason| {
+                if let Some(o) = w.upgrade() {
+                    o.sink.emit(
+                        Event::error(Some(&o.id), format!("web process terminated: {reason:?}")),
+                        None,
+                    );
+                }
+            });
         // The page may call window.close(); treat it like a close request.
         let w = weak;
         self.webview.connect_close(move |_| {
@@ -206,7 +228,12 @@ impl Overlay {
             return;
         }
         log_debug!("[{}] mapped", self.id);
-        self.sink.emit(Event::Shown { id: self.id.clone() }, self.show_seq.take());
+        self.sink.emit(
+            Event::Shown {
+                id: self.id.clone(),
+            },
+            self.show_seq.take(),
+        );
     }
 
     fn on_destroyed(&self) {
@@ -215,7 +242,12 @@ impl Overlay {
             return;
         }
         log_info!("[{}] closed", self.id);
-        self.sink.emit(Event::Closed { id: self.id.clone() }, self.close_seq.take());
+        self.sink.emit(
+            Event::Closed {
+                id: self.id.clone(),
+            },
+            self.close_seq.take(),
+        );
     }
 
     fn on_script_message(&self, result: &webkit2gtk::JavascriptResult) {
@@ -235,14 +267,25 @@ impl Overlay {
                 }
             }
         }
-        self.sink.emit(Event::Message { id: self.id.clone(), payload }, None);
+        self.sink.emit(
+            Event::Message {
+                id: self.id.clone(),
+                payload,
+            },
+            None,
+        );
     }
 
     /// Merge an `update` patch and re-apply. Emits `updated`.
     pub fn update(&self, patch: &UpdatePatch, seq: Option<u64>) {
         self.settings.borrow_mut().apply(patch);
         self.apply_plan();
-        self.sink.emit(Event::Updated { id: self.id.clone() }, seq);
+        self.sink.emit(
+            Event::Updated {
+                id: self.id.clone(),
+            },
+            seq,
+        );
     }
 
     /// Run `script` in the page; emits `js-done` (or `error`) when it completes.
@@ -252,17 +295,30 @@ impl Overlay {
         // `run_javascript` is deprecated since WebKitGTK 2.40 in favour of
         // `evaluate_javascript`, but it is still shipped and is what the spec names.
         #[allow(deprecated)]
-        self.webview.run_javascript(script, None::<&gtk::gio::Cancellable>, move |result| match result {
-            Ok(_) => sink.emit(Event::JsDone { id }, seq),
-            Err(err) => sink.emit(Event::error(Some(&id), format!("script failed: {err}")), seq),
-        });
+        self.webview
+            .run_javascript(
+                script,
+                None::<&gtk::gio::Cancellable>,
+                move |result| match result {
+                    Ok(_) => sink.emit(Event::JsDone { id }, seq),
+                    Err(err) => sink.emit(
+                        Event::error(Some(&id), format!("script failed: {err}")),
+                        seq,
+                    ),
+                },
+            );
     }
 
     /// Destroy the window. `closed` is emitted from the destroy handler.
     pub fn close(&self, seq: Option<u64>) {
         if !self.alive.get() {
             if !self.closed_sent.replace(true) {
-                self.sink.emit(Event::Closed { id: self.id.clone() }, seq);
+                self.sink.emit(
+                    Event::Closed {
+                        id: self.id.clone(),
+                    },
+                    seq,
+                );
             }
             return;
         }
@@ -299,19 +355,25 @@ impl Overlay {
         w.set_layer_shell_margin(Edge::Left, next.margins.left);
         w.set_layer_shell_margin(Edge::Right, next.margins.right);
 
-        let monitor_changed = previous.as_ref().map(|p| p.monitor_index) != Some(next.monitor_index);
+        let monitor_changed =
+            previous.as_ref().map(|p| p.monitor_index) != Some(next.monitor_index);
         if monitor_changed {
             match next.monitor_index.and_then(gdk_monitor) {
                 Some(monitor) => w.set_monitor(&monitor),
                 None => {
                     if next.monitor_index.is_some() {
-                        log_warn!("[{}] GDK monitor {:?} not found; using default", self.id, next.monitor_index);
+                        log_warn!(
+                            "[{}] GDK monitor {:?} not found; using default",
+                            self.id,
+                            next.monitor_index
+                        );
                     }
                 }
             }
         }
 
-        let size_changed = previous.as_ref().map(|p| (p.width, p.height)) != Some((next.width, next.height));
+        let size_changed =
+            previous.as_ref().map(|p| (p.width, p.height)) != Some((next.width, next.height));
         if size_changed {
             w.set_size_request(next.width, next.height);
             w.set_default_size(next.width, next.height);
@@ -376,7 +438,11 @@ pub struct OverlayManager {
 
 impl OverlayManager {
     pub fn new(sink: EventSink, monitors: Rc<dyn MonitorSource>) -> OverlayManager {
-        OverlayManager { overlays: HashMap::new(), sink, monitors }
+        OverlayManager {
+            overlays: HashMap::new(),
+            sink,
+            monitors,
+        }
     }
 
     /// Drop entries whose window was destroyed behind our back (compositor closed it).
@@ -437,6 +503,9 @@ impl OverlayManager {
     }
 
     fn unknown(&self, id: &str, seq: Option<u64>) {
-        self.sink.emit(Event::error(Some(id), format!("unknown overlay id '{id}'")), seq);
+        self.sink.emit(
+            Event::error(Some(id), format!("unknown overlay id '{id}'")),
+            seq,
+        );
     }
 }

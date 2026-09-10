@@ -15,7 +15,10 @@ pub struct EventSink {
 
 impl EventSink {
     pub fn new(writer: Box<dyn Write + Send>) -> EventSink {
-        EventSink { writer: Arc::new(Mutex::new(writer)), broken: Arc::new(AtomicBool::new(false)) }
+        EventSink {
+            writer: Arc::new(Mutex::new(writer)),
+            broken: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     pub fn stdout() -> EventSink {
@@ -31,7 +34,10 @@ impl EventSink {
                 Ok(g) => g,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            guard.write_all(line.as_bytes()).and_then(|_| guard.write_all(b"\n")).and_then(|_| guard.flush())
+            guard
+                .write_all(line.as_bytes())
+                .and_then(|_| guard.write_all(b"\n"))
+                .and_then(|_| guard.flush())
         };
         if let Err(err) = result {
             if !self.broken.swap(true, Ordering::SeqCst) {
@@ -80,7 +86,10 @@ mod tests {
         sink.emit(Event::Shown { id: "a".into() }, Some(1));
         sink.emit(Event::Closed { id: "a".into() }, None);
         let out = String::from_utf8(cap.0.lock().unwrap().clone()).unwrap();
-        assert_eq!(out, "{\"ev\":\"shown\",\"id\":\"a\",\"seq\":1}\n{\"ev\":\"closed\",\"id\":\"a\"}\n");
+        assert_eq!(
+            out,
+            "{\"ev\":\"shown\",\"id\":\"a\",\"seq\":1}\n{\"ev\":\"closed\",\"id\":\"a\"}\n"
+        );
         assert!(!sink.is_broken());
     }
 

@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const packModule: CapabilityModuleSpec = {
   id: 'pack',
-  version: '1.0.0',
+  version: '1.1.0',
   title: 'Pack assets',
   summary: 'Find and inspect the files (images, video, audio, text) shipped with your pack.',
   permission: 'trusted',
@@ -31,13 +31,14 @@ interface PackApi {
   listAssets(prefix?: string, kind?: AssetRef['kind']): Promise<AssetRef[]>;
   /**
    * Find assets by meaning. All given filters must hold.
-   * @param query tags: every listed tag must be present; anyTags: at least one must be present;
+   * @param query tags: every listed tag must be present; anyTags: at least one must be present; fallback (default true): when
+   *   nothing carries those tags, every asset of that kind is returned instead of an empty list (pass false for a strict search);
    *   kind: restrict to a kind; text: case-insensitive substring of the path or description; limit: default 50.
    * @returns Matching assets, best matches first (more matching tags, then shorter path).
    * @example const beach = await sdk.pack.findAssets({ anyTags: ["beach", "summer"], kind: "image" });
    * @example const sad = await sdk.pack.findAssets({ tags: ["luna", "sad"] });
    */
-  findAssets(query: { tags?: string[]; anyTags?: string[]; kind?: AssetRef['kind']; text?: string; limit?: number }): Promise<AssetRef[]>;
+  findAssets(query: { tags?: string[]; anyTags?: string[]; kind?: AssetRef['kind']; text?: string; limit?: number; fallback?: boolean }): Promise<AssetRef[]>;
   /**
    * The tags used across the pack with counts and the author's meaning for each (from media.json).
    * The prompt already lists them; call this if you need fresh counts.

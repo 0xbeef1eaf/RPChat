@@ -37,7 +37,7 @@ interface AssetTag {
 }
 
 /** Anchor preset on the chosen monitor. */
-type MediaPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+type MediaPosition = 'random' | 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 /**
  * Stacking layer of an overlay (wlr-layer-shell naming): 'background' and 'bottom' sit
@@ -53,7 +53,7 @@ type MonitorSelector = 'primary' | 'cursor' | number | string;
 interface OverlayPlacement {
   /** Which monitor to use (see sdk.display.monitors()). Default 'primary'. */
   monitor?: MonitorSelector;
-  /** Anchor preset on that monitor. Default 'center'. Ignored when x/y are given. */
+  /** Anchor preset on that monitor. Default 'random': a spot chosen once per window, fully on screen. Ignored when x/y are given. */
   position?: MediaPosition;
   /** Explicit left offset from the monitor's left edge: 0..1 = fraction of its width, > 1 = logical px. */
   x?: number;

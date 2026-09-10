@@ -1,7 +1,11 @@
 import type { Json, MediaItemId } from './ids.js';
 
-/** Where a media overlay is anchored on the chosen monitor. */
-export type MediaPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+/**
+ * Where a media overlay is anchored on the chosen monitor. `random` (the default when neither a
+ * preset nor x/y is given) picks a spot once per window such that the whole window stays on the
+ * monitor, and keeps it when the content size arrives.
+ */
+export type MediaPosition = 'random' | 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 /**
  * Stacking layer of an overlay, modelled on wlr-layer-shell.

@@ -45,6 +45,8 @@ export interface ResolvedOverlayOptions {
   y?: number;
   width: number;
   height?: number;
+  /** For `anchor: 'random'`: fractions (0..1) of the free space, fixed when the overlay is created. */
+  randomSeed?: { x: number; y: number };
 }
 
 export interface OverlaySpec {
@@ -112,7 +114,16 @@ export interface OverlayWindowLike {
   runScript?(script: string): Promise<unknown>;
 }
 
-const POSITIONS: ReadonlySet<string> = new Set(['center', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
+const POSITIONS: ReadonlySet<string> = new Set(['random', 'center', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
+
+/** Injectable for tests. */
+export let randomSource: () => number = Math.random;
+export function setRandomSource(fn: () => number): void {
+  randomSource = fn;
+}
+export function newRandomSeed(): { x: number; y: number } {
+  return { x: randomSource(), y: randomSource() };
+}
 
 /** 0..1 → fraction of the monitor extent, > 1 → logical px. */
 export function resolveOffset(value: number | undefined, extent: number): number | undefined {
@@ -129,7 +140,7 @@ export function resolveOverlayOptions(opts: OverlayOptions | undefined, monitors
     layer: isOverlayLayer(o.layer) ? o.layer : defaults.layer,
     opacity: clampOpacity(o.opacity, 1),
     clickThrough: o.clickThrough === true,
-    anchor: typeof o.position === 'string' && POSITIONS.has(o.position) ? o.position : 'center',
+    anchor: typeof o.position === 'string' && POSITIONS.has(o.position) ? o.position : 'random',
     marginPx: typeof o.marginPx === 'number' && Number.isFinite(o.marginPx) && o.marginPx >= 0 ? Math.round(o.marginPx) : DEFAULT_MARGIN_PX,
     width: typeof o.width === 'number' && Number.isFinite(o.width) && o.width > 0 ? Math.round(o.width) : DEFAULT_OVERLAY_WIDTH,
   };
@@ -138,6 +149,7 @@ export function resolveOverlayOptions(opts: OverlayOptions | undefined, monitors
   const y = resolveOffset(o.y, monitor.height);
   if (x !== undefined) resolved.x = x;
   if (y !== undefined) resolved.y = y;
+  if (resolved.anchor === 'random' && x === undefined && y === undefined) resolved.randomSeed = newRandomSeed();
   return resolved;
 }
 
@@ -157,6 +169,8 @@ export function applyOverlayUpdate(current: ResolvedOverlayOptions, patch: Overl
     next.anchor = p.position;
     delete next.x;
     delete next.y;
+    delete next.randomSeed;
+    if (p.position === 'random') next.randomSeed = newRandomSeed();
   }
   if (typeof p.marginPx === 'number' && Number.isFinite(p.marginPx) && p.marginPx >= 0) next.marginPx = Math.round(p.marginPx);
   if (typeof p.width === 'number' && Number.isFinite(p.width) && p.width > 0) next.width = Math.round(p.width);

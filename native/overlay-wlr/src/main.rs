@@ -65,7 +65,13 @@ mod logging {
         eprintln!("rp-overlay-wlr [{}] {}", level.as_str(), message);
         if level <= Level::Warn {
             if let Some(sink) = SINK.get() {
-                sink.emit(Event::Log { level: level.as_str().to_owned(), message }, None);
+                sink.emit(
+                    Event::Log {
+                        level: level.as_str().to_owned(),
+                        message,
+                    },
+                    None,
+                );
             }
         }
     }
@@ -110,7 +116,12 @@ struct Args {
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
-    let mut args = Args { self_test: false, log_level: Level::Info, help: false, version: false };
+    let mut args = Args {
+        self_test: false,
+        log_level: Level::Info,
+        help: false,
+        version: false,
+    };
     let mut iter = argv.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -119,11 +130,13 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--version" | "-V" => args.version = true,
             "--log-level" => {
                 let value = iter.next().ok_or("--log-level requires a value")?;
-                args.log_level = Level::parse(value).ok_or_else(|| format!("unknown log level '{value}'"))?;
+                args.log_level =
+                    Level::parse(value).ok_or_else(|| format!("unknown log level '{value}'"))?;
             }
             other => {
                 if let Some(value) = other.strip_prefix("--log-level=") {
-                    args.log_level = Level::parse(value).ok_or_else(|| format!("unknown log level '{value}'"))?;
+                    args.log_level = Level::parse(value)
+                        .ok_or_else(|| format!("unknown log level '{value}'"))?;
                 } else {
                     return Err(format!("unknown argument '{other}'"));
                 }
@@ -147,7 +160,11 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if args.version {
-        println!("rp-overlay-wlr {} (protocol {})", env!("CARGO_PKG_VERSION"), PROTOCOL_VERSION);
+        println!(
+            "rp-overlay-wlr {} (protocol {})",
+            env!("CARGO_PKG_VERSION"),
+            PROTOCOL_VERSION
+        );
         return ExitCode::SUCCESS;
     }
     logging::set_level(args.log_level);
@@ -216,11 +233,19 @@ mod self_test {
             match request.op {
                 Op::Hello { version } => {
                     if version != PROTOCOL_VERSION {
-                        sink.emit(Event::error(None, format!("unsupported protocol version {version}")), seq);
+                        sink.emit(
+                            Event::error(None, format!("unsupported protocol version {version}")),
+                            seq,
+                        );
                     }
                     sink.emit(Event::ready(), seq);
                 }
-                Op::Monitors => sink.emit(Event::Monitors { monitors: monitor_list.clone() }, seq),
+                Op::Monitors => sink.emit(
+                    Event::Monitors {
+                        monitors: monitor_list.clone(),
+                    },
+                    seq,
+                ),
                 Op::Show(show) => {
                     let settings = OverlaySettings::from_show(&show);
                     let p = plan(&settings, &monitor_list);
@@ -235,21 +260,30 @@ mod self_test {
                         print_plan(&id, url, &p, seq);
                         sink.emit(Event::Updated { id }, seq);
                     }
-                    None => sink.emit(Event::error(Some(&id), format!("unknown overlay id '{id}'")), seq),
+                    None => sink.emit(
+                        Event::error(Some(&id), format!("unknown overlay id '{id}'")),
+                        seq,
+                    ),
                 },
                 Op::Js { id, script } => {
                     if overlays.contains_key(&id) {
                         log_info!("[{id}] would run {} bytes of script", script.len());
                         sink.emit(Event::JsDone { id }, seq);
                     } else {
-                        sink.emit(Event::error(Some(&id), format!("unknown overlay id '{id}'")), seq);
+                        sink.emit(
+                            Event::error(Some(&id), format!("unknown overlay id '{id}'")),
+                            seq,
+                        );
                     }
                 }
                 Op::Close { id } => {
                     if overlays.remove(&id).is_some() {
                         sink.emit(Event::Closed { id }, seq);
                     } else {
-                        sink.emit(Event::error(Some(&id), format!("unknown overlay id '{id}'")), seq);
+                        sink.emit(
+                            Event::error(Some(&id), format!("unknown overlay id '{id}'")),
+                            seq,
+                        );
                     }
                 }
                 Op::CloseAll => {
@@ -265,7 +299,10 @@ mod self_test {
             }
         }
 
-        log_info!("self-test: {lines} requests, {failures} parse failures, {} overlays left open", overlays.len());
+        log_info!(
+            "self-test: {lines} requests, {failures} parse failures, {} overlays left open",
+            overlays.len()
+        );
         if failures > 0 || sink.is_broken() {
             ExitCode::from(1)
         } else {
@@ -274,7 +311,13 @@ mod self_test {
     }
 
     fn print_plan(id: &str, url: &str, plan: &OverlayPlan, seq: Option<u64>) {
-        let line = PlanLine { ev: "plan", id, url, plan, seq };
+        let line = PlanLine {
+            ev: "plan",
+            id,
+            url,
+            plan,
+            seq,
+        };
         println!("{}", serde_json::to_string(&line).unwrap_or_default());
     }
 }
@@ -306,7 +349,8 @@ mod runtime {
             return ExitCode::from(2);
         }
         if !gtk_layer_shell::is_supported() {
-            let message = "wlr-layer-shell is not supported by this compositor / display backend".to_owned();
+            let message =
+                "wlr-layer-shell is not supported by this compositor / display backend".to_owned();
             log_error!("{message}");
             sink.emit(Event::error(None, message), None);
             return ExitCode::from(2);
@@ -323,7 +367,10 @@ mod runtime {
         );
 
         let monitors: Rc<dyn MonitorSource> = Rc::new(GdkMonitors);
-        let manager = Rc::new(RefCell::new(OverlayManager::new(sink.clone(), monitors.clone())));
+        let manager = Rc::new(RefCell::new(OverlayManager::new(
+            sink.clone(),
+            monitors.clone(),
+        )));
 
         // stdin reader thread → glib channel → main loop.
         // `MainContext::channel` is deprecated in glib 0.18 but remains the simplest

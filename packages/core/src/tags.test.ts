@@ -45,7 +45,13 @@ describe('findAssets', () => {
     expect(findAssets(ASSETS, { text: 'BALCONY' }).map((a) => a.path)).toEqual(['media/images/night/stars.png']);
     expect(findAssets(ASSETS, { text: 'legacy' }).map((a) => a.path)).toEqual(['media/legacy.png']);
     expect(findAssets(ASSETS, { tags: ['Beach'], anyTags: ['SUNSET', 'nope'], kind: 'image', text: 'beach' }).map((a) => a.path)).toEqual(['media/images/beach/sunset.png']);
-    expect(findAssets(ASSETS, { tags: ['beach', 'night'] })).toEqual([]);
+    // Nothing carries both tags: strict search is empty, the default falls back to every asset (of the kind).
+    expect(findAssets(ASSETS, { tags: ['beach', 'night'], fallback: false })).toEqual([]);
+    expect(findAssets(ASSETS, { tags: ['beach', 'night'] }).map((a) => a.path)).toEqual(ASSETS.map((a) => a.path));
+    expect(findAssets(ASSETS, { tags: ['beach', 'night'], kind: 'image' }).every((a) => a.kind === 'image')).toBe(true);
+    expect(findAssets(ASSETS, { tags: ['beach', 'night'], kind: 'image' }).length).toBe(ASSETS.filter((a) => a.kind === 'image').length);
+    expect(findAssets(ASSETS, { anyTags: ['nope'], limit: 2 })).toHaveLength(2);
+    expect(findAssets(ASSETS, { kind: 'audio' }).length).toBe(ASSETS.filter((a) => a.kind === 'audio').length); // no tag filter → no fallback needed
     expect(findAssets(ASSETS, {}).length).toBe(ASSETS.length);
     expect(findAssets(ASSETS, { limit: 2 }).length).toBe(2);
     expect(findAssets(ASSETS, { limit: 5000 }).length).toBe(ASSETS.length);
