@@ -15,6 +15,9 @@ import {
 } from './hyprland.js';
 import { FakeOverlayWindow, fakeScreen } from './test-fakes.js';
 
+/** Verbatim refusal from Hyprland 0.56.2 when the session runs a Lua config. */
+const LUA_REFUSAL = "keyword can't work with non-legacy parsers. Use eval.";
+
 /** Shapes taken from real `hyprctl -j monitors` output (Hyprland 0.4x). */
 const MONITORS: HyprMonitorJson[] = [
   {
@@ -98,8 +101,9 @@ describe('buildCommands', () => {
 
   it('builds window rules and batches', () => {
     const rules = windowRuleCommands();
-    expect(rules[0]).toBe('keyword windowrulev2 float,title:^(rp-overlay:.*)$');
-    expect(rules).toContain('keyword windowrulev2 noinitialfocus,title:^(rp-overlay:.*)$');
+    expect(rules[0]).toBe('keyword windowrule float,title:^(rp-overlay:.*)$');
+    expect(rules).toContain('keyword windowrule noinitialfocus,title:^(rp-overlay:.*)$');
+    expect(windowRuleCommands('windowrulev2')[0]).toBe('keyword windowrulev2 float,title:^(rp-overlay:.*)$');
     expect(batch(['a', 'b'])).toBe('[[BATCH]]a;b');
     expect(isOkResponse('ok')).toBe(true);
     expect(isOkResponse('ok\nok\n')).toBe(true);
@@ -118,12 +122,26 @@ class FakeTransport implements HyprTransport {
   readonly commands: string[] = [];
   rejectDispatchSetprop = false;
   clients: HyprClientJson[] = CLIENTS;
+  private listeners: Array<(event: string, data: string) => void> = [];
+
+  subscribe(listener: (event: string, data: string) => void): () => void {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== listener);
+    };
+  }
+
+  /** Push a Hyprland event (`configreloaded`, `closewindow`, …) at the backend. */
+  emit(event: string, data: string): void {
+    for (const l of this.listeners) l(event, data);
+  }
 
   async request(command: string): Promise<string> {
     this.commands.push(command);
     if (command === 'j/monitors') return JSON.stringify(MONITORS);
     if (command === 'j/clients') return JSON.stringify(this.clients);
     if (command === 'j/cursorpos') return JSON.stringify({ x: 10, y: 50 });
+    if (command === 'j/version') return JSON.stringify({ branch: 'main', tag: 'v0.45.0' });
     if (this.rejectDispatchSetprop && command.startsWith('dispatch setprop ')) return 'Invalid dispatcher';
     return 'ok';
   }
@@ -210,6 +228,48 @@ describe('HyprlandIpcBackend', () => {
     await backend.createOverlay(spec('img-2', resolveOverlayOptions({ opacity: 0.4 }, monitors, { layer: 'top' })));
     expect(t.commands).toContain('setprop address:0x55d2a1ff0000 alpha 0.4 lock');
     expect(t.commands).toContain('setprop address:0x55d2a1ff0000 noborder 1');
+  });
+
+  it('switches to `eval` on a Lua-config session and places the overlay with hl.dispatch', async () => {
+    const t = new FakeTransport();
+    // A Lua session answers every `keyword` and legacy `dispatch` this way.
+    const original = t.request.bind(t);
+    const { backend, windows } = make(t);
+    t.request = async (cmd: string) => {
+      // monitor 0 = DP-1, so the placement has to carry the target monitor.
+      if (cmd === 'j/clients' && windows[0]) return JSON.stringify([{ ...CLIENTS[1], title: windows[0].title, monitor: 0, floating: false, pinned: false }]);
+      if (cmd.startsWith('keyword ') || cmd.startsWith('[[BATCH]]keyword ') || cmd.startsWith('dispatch ')) {
+        t.commands.push(cmd);
+        return LUA_REFUSAL;
+      }
+      return original(cmd);
+    };
+    const monitors = await backend.monitors();
+    const opts = resolveOverlayOptions({ position: 'top-left', monitor: 'HDMI-A-1', opacity: 0.5, clickThrough: true }, monitors, { layer: 'overlay' });
+    const handle = await backend.createOverlay(spec('img-lua', opts));
+
+    // The rules go out as Lua, and nothing is retried with the legacy syntax.
+    const evals = t.commands.filter((c) => c.startsWith('eval '));
+    expect(evals.some((c) => c.includes('hl.window_rule({ name = "rp-code-overlays"'))).toBe(true);
+    const placement = evals.find((c) => c.includes('hl.dsp.window.move'));
+    expect(placement).toBeDefined();
+    expect(placement).toContain('if x.address == "0x55d2a1ff0000" then w = x end');
+    expect(placement).toContain('resize({ x = 480, y = 320, window = w })');
+    expect(placement).toContain(`move({ x = ${1920 + 24}, y = 24, monitor = "HDMI-A-1", window = w })`);
+    expect(placement).toContain('set_prop({ window = w, prop = "opacity", value = 0.5 })');
+    expect(placement).toContain('set_prop({ window = w, prop = "no_focus", value = 1 })');
+    expect(t.commands.filter((c) => c.startsWith('dispatch '))).toEqual([]);
+
+    // A config reload drops dynamic rules, so the backend registers them again.
+    const before = t.commands.length;
+    t.emit('configreloaded', '');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(t.commands.slice(before).some((c) => c.includes('hl.window_rule'))).toBe(true);
+
+    // Disposing takes our rules back out of the session.
+    await handle.close();
+    await backend.dispose();
+    expect(t.commands.some((c) => c.startsWith('eval') && c.includes('__rp_overlay_rules = nil'))).toBe(true);
   });
 
   it('leaves placement to the compositor when the window never shows up in j/clients', async () => {

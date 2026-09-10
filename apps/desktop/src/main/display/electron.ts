@@ -18,7 +18,7 @@ import type {
 } from './backend.js';
 import { applyOverlayUpdate, visualPatch } from './backend.js';
 import type { WindowSystem } from './layers.js';
-import { clampOpacity, nearestLayer } from './layers.js';
+import { OVERLAY_TITLE_PREFIX, clampOpacity, nearestLayer } from './layers.js';
 import type { Bounds, Size } from './placement.js';
 import { DEFAULT_OVERLAY_HEIGHT, placeOverlay, sameBounds } from './placement.js';
 
@@ -55,7 +55,7 @@ export interface ElectronBackendOptions {
   contentSizeTimeoutMs?: number;
 }
 
-export const OVERLAY_TITLE_PREFIX = 'rp-overlay:';
+export { OVERLAY_TITLE_PREFIX };
 /** media.html pads the stage by 12px on every side. */
 export const PAGE_PADDING_PX = 24;
 

@@ -3,6 +3,9 @@ import type { DisplayBackendInfo, OverlayLayer } from '@rp/shared';
 
 export type WindowSystem = DisplayBackendInfo['windowSystem'];
 
+/** Title prefix of every overlay window; Hyprland matches windows by it. */
+export const OVERLAY_TITLE_PREFIX = 'rp-overlay:';
+
 export const LAYER_ORDER: readonly OverlayLayer[] = ['background', 'bottom', 'top', 'overlay'];
 
 export function isOverlayLayer(v: unknown): v is OverlayLayer {

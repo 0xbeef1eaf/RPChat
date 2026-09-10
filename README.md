@@ -138,6 +138,14 @@ helper it falls back to Hyprland IPC emulation (top/overlay only), and on other
 desktops to plain Electron windows. See `docs/spec/overlay.md` and
 `native/overlay-wlr/README.md`.
 
+The IPC fallback keeps overlays where the SDK put them by registering window
+rules over the Hyprland socket at startup — nothing is written to your Hyprland
+config, and the rules are re-registered after a `hyprctl reload` and dropped
+again when the app quits. Sessions configured in Lua (`hyprland.lua`, Hyprland
+0.5x) are detected from Hyprland's own answers and driven through `eval` with
+`hl.window_rule` / `hl.dispatch` instead of the legacy `keyword` and `dispatch`
+commands.
+
 ### System integration (input locking, run on login, locked settings)
 
 Locking the keyboard or mouse needs access to `/dev/input`, which desktop users
