@@ -64,7 +64,8 @@ interface UiApi {
 
 - \`notify\` is an OS notification — useful when the user may not be looking at the chat (e.g. from a timer). Do not spam it.
 - \`confirm\` / \`choose\` open a modal and wait for the answer; the answer comes back into the same action, so you can act on it immediately. Prefer asking in normal conversation unless a structured choice makes the interaction clearer.
-- A dismissed dialog returns \`false\` / \`null\` — handle it gracefully.
+- A dismissed dialog returns \`false\` / \`null\` — handle it gracefully (also when there is no window to show it in).
+- \`notify\` throws CAPABILITY_FAILED where the OS has no notification service; say it in the chat instead.
 
 \`\`\`ts
 const pick = await sdk.ui.choose("Which one?", ["sunset", "forest", "city"]);

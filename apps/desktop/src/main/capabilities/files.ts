@@ -65,8 +65,8 @@ export class FilesHandler implements CapabilityHandler {
         await fs.access(absolute).catch(() => {
           throw new RpError('NOT_FOUND', `${String(args[0])} does not exist`);
         });
-        const error = await (this.deps.openPath ?? (async () => 'no opener'))(absolute);
-        if (error) throw new RpError('CAPABILITY_FAILED', error);
+        const error = await (this.deps.openPath ?? (async () => 'no application opener is available in this build'))(absolute);
+        if (error) throw new RpError('CAPABILITY_FAILED', `Cannot open ${String(args[0])} with the user's default application: ${error}`, { path: absolute });
         return;
       }
       default:

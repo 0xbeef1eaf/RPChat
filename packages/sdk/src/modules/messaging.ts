@@ -28,6 +28,7 @@ interface MessagingApi {
 - Messages leave the machine and cannot be unsent: send only what the user would happily see delivered, never private details from state, files or the screen.
 - Typical use is from a timer or event ("user idle 30 min → ping their phone"). Check \`channels()\` once and remember the name.
 - One message per occasion; do not chatter into channels.
+- \`send()\` throws NOT_FOUND for an unknown channel (the message lists the configured ones) and CAPABILITY_FAILED when the channel is misconfigured or delivery fails (Settings → Integrations → Messaging channels); \`{ ok: false }\` means the service rejected the message. Tell the user.
 
 \`\`\`ts
 const ch = (await sdk.messaging.channels()).find(c => c.kind === "telegram");

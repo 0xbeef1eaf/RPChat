@@ -4,7 +4,7 @@ export const inputModule: CapabilityModuleSpec = {
   id: 'input',
   version: '1.2.1',
   title: 'Input control',
-  summary: "Lock the user's keyboard/mouse for a set duration, or type, press keys, click and move the mouse for them; each call needs user approval.",
+  summary: "Lock the user's keyboard/mouse for a set duration, or type, press keys, click and move the mouse for them (through the system integration daemon; granted once per pack).",
   permission: 'pack',
   apiTypeName: 'InputApi',
   typings: `/**

@@ -5,12 +5,15 @@ import * as path from 'node:path';
 import type { ActionContext, CapabilityHandler, Json } from '@rp/shared';
 import { RpError, assetUrl } from '@rp/shared';
 import type { CommandRunner } from './commands-runner.js';
+import { commandFailed, notConfigured } from '../commands.js';
 import type { OverlayWindowLike } from '../display/backend.js';
 
 /** Synthetic pack id under which generated speech files are served to the audio window. */
 export const TTS_PACK_ID = 'app.rp-code.tts';
 export const VOICE_TEXT_MAX = 2000;
 export const LISTEN_MAX_SECONDS = 60;
+/** How long a fire-and-forget `speak()` waits for the TTS command to fail before reporting success. */
+export const SPEAK_START_GRACE_MS = 300;
 
 export interface VoiceHandlerDeps {
   commands: CommandRunner;
@@ -18,6 +21,8 @@ export interface VoiceHandlerDeps {
   /** Directory registered as the root of `TTS_PACK_ID` for the asset protocol. */
   ttsDir: string;
   logger: Pick<Console, 'warn' | 'debug'>;
+  /** Override of `SPEAK_START_GRACE_MS` for tests. */
+  startGraceMs?: number;
 }
 
 export function speechSynthesisScript(text: string, rate: number | undefined, voice: string | undefined): string {
@@ -62,18 +67,25 @@ export class VoiceHandler implements CapabilityHandler {
       if (writesFile) await fs.mkdir(this.deps.ttsDir, { recursive: true });
       const vars: Record<string, string> = { text, file, rate: rate !== undefined ? String(rate) : '', voice: voice ?? '' };
       const run = this.deps.commands.runTemplate(tpl, vars, 'tts', { signal: abort.signal }).then(async (result) => {
-        if (result.code !== 0 && !abort.signal.aborted) throw new RpError('CAPABILITY_FAILED', `TTS command exited with ${result.code}: ${result.stderr.trim()}`);
+        if (result.code !== 0 && !abort.signal.aborted) throw commandFailed('tts', tpl, result);
         if (writesFile && !abort.signal.aborted) await this.play(file, wait, abort);
       });
       if (wait || writesFile) await run;
-      else run.catch((err) => this.deps.logger.warn('[voice] tts failed', err));
+      else {
+        // Fire-and-forget, but a command that cannot start (missing binary) or fails at once is still reported.
+        const settled = run.then(() => 'ok' as const);
+        settled.catch((err) => this.deps.logger.warn('[voice] tts failed', err));
+        await Promise.race([settled, new Promise<'pending'>((r) => setTimeout(() => r('pending'), this.deps.startGraceMs ?? SPEAK_START_GRACE_MS).unref?.())]);
+      }
       return;
     }
     // Fallback: the hidden audio window's speechSynthesis.
     const win = this.deps.audioWindow();
     await win.whenReady();
     const ok = await win.runScript?.(speechSynthesisScript(text, rate, voice));
-    if (ok !== true) throw new RpError('CAPABILITY_FAILED', 'No tts command configured and speech synthesis is unavailable; set one in Settings → Commands');
+    if (ok !== true) {
+      throw new RpError('CAPABILITY_FAILED', `${notConfigured('tts').message}; the built-in speech synthesis is unavailable here too`, { template: 'tts' });
+    }
     if (wait) await new Promise((r) => setTimeout(r, Math.min(60_000, 400 + text.length * 60)));
   }
 
@@ -122,8 +134,7 @@ export class VoiceHandler implements CapabilityHandler {
 
   private async listen(opts: Record<string, unknown>): Promise<{ text: string }> {
     const seconds = typeof opts.maxSeconds === 'number' && opts.maxSeconds > 0 ? Math.min(LISTEN_MAX_SECONDS, Math.round(opts.maxSeconds)) : 10;
-    const result = await this.deps.commands.run('stt', { seconds: String(seconds) }, 'speech-to-text');
-    if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `STT command exited with ${result.code}: ${result.stderr.trim()}`);
+    const result = await this.deps.commands.runChecked('stt', { seconds: String(seconds) });
     return { text: result.stdout.trim() };
   }
 

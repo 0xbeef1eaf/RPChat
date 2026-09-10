@@ -77,7 +77,7 @@ export class WebHandler implements CapabilityHandler {
   private async assertAllowed(url: string): Promise<void> {
     const { allowlist } = await this.deps.settings();
     if (allowlist.length > 0 && !isAllowlisted(url, allowlist)) {
-      throw new RpError('PERMISSION_DENIED', `Host of ${url} is not on your web allowlist (Settings > Integrations)`);
+      throw new RpError('PERMISSION_DENIED', `The host of ${url} is not on the user's web allowlist; they can add it under Settings → Integrations → Web access`, { url, allowlist });
     }
   }
 

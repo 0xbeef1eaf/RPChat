@@ -38,6 +38,7 @@ interface PresenceApi {
 - **Prefer the \`<senses>\` line already in your prompt** — it is refreshed every turn. Call \`status()\` only when you need fresh numbers inside an action (branching on idle time, reacting to the current song).
 - To be *told* when something changes (user goes idle, song changes, window changes) use \`sdk.events.on\` instead of polling.
 - Window titles may reveal private things: be discreet, do not read them back word for word.
+- \`activeWindow\`/\`nowPlaying\` are null (not an error) when the host cannot sample them: outside Hyprland the user must set the Active window / Now playing commands in Settings → Commands (playerctl is the default when installed).
 
 \`\`\`ts
 const p = await sdk.presence.status();

@@ -69,14 +69,27 @@ export class MessagingHandler implements CapabilityHandler {
     if (typeof textArg !== 'string' || textArg.trim().length === 0) throw new RpError('INVALID_ARGUMENT', 'text must be a non-empty string');
     const text = textArg.length > MESSAGE_MAX_CHARS ? `${textArg.slice(0, MESSAGE_MAX_CHARS - 1)}…` : textArg;
     const channel = (await this.deps.channels()).find((c) => c.name === nameArg);
-    if (!channel) throw new RpError('NOT_FOUND', `No messaging channel named "${nameArg}"; configure one in Settings → Messaging`);
+    if (!channel) {
+      const names = (await this.deps.channels()).map((c) => c.name);
+      throw new RpError(
+        'NOT_FOUND',
+        names.length === 0
+          ? `No messaging channels are configured; the user can add one under Settings → Integrations → Messaging channels`
+          : `No messaging channel named "${nameArg}" (configured: ${names.join(', ')}); the user manages them under Settings → Integrations → Messaging channels`,
+        { channel: nameArg, configured: names },
+      );
+    }
     if (channel.kind === 'command') {
-      if (!channel.command || channel.command.command.trim().length === 0) throw new RpError('CAPABILITY_FAILED', `Channel "${channel.name}" has no command`);
+      if (!channel.command || channel.command.command.trim().length === 0) {
+        throw new RpError('CAPABILITY_FAILED', `Messaging channel "${channel.name}" has no command; edit it under Settings → Integrations → Messaging channels`, { channel: channel.name });
+      }
       const result = await this.deps.runCommand(channel.command, { text, channel: channel.name }, `messaging:${channel.name}`);
       return result.code === 0;
     }
     const request = buildMessageRequest(channel, text);
-    if (!request || !/^https?:\/\//i.test(request.url)) throw new RpError('CAPABILITY_FAILED', `Channel "${channel.name}" has no valid webhook URL`);
+    if (!request || !/^https?:\/\//i.test(request.url)) {
+      throw new RpError('CAPABILITY_FAILED', `Messaging channel "${channel.name}" (${channel.kind}) has no valid http(s) webhook URL; edit it under Settings → Integrations → Messaging channels`, { channel: channel.name });
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), MESSAGING_TIMEOUT_MS);
     try {

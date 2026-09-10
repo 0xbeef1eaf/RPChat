@@ -9,8 +9,8 @@ export const voiceModule: CapabilityModuleSpec = {
   apiTypeName: 'VoiceApi',
   typings: `/**
  * Text to speech through the user's configured TTS (or the built-in voice), and speech to text
- * through their configured recorder. speak() is silent-failure-free: if nothing is configured
- * it throws CAPABILITY_FAILED. listen() always asks the user first.
+ * through their configured recorder. Neither fails silently: when no TTS command or built-in
+ * voice exists, or no speech-to-text command is configured, the call throws CAPABILITY_FAILED.
  */
 interface VoiceApi {
   /**
@@ -30,11 +30,12 @@ interface VoiceApi {
    */
   listen(opts?: { maxSeconds?: number }): Promise<{ text: string }>;
 }`,
-  docs: `Talk out loud and, when invited, listen. Requires the \`voice\` capability; \`listen()\` also asks the user each time.
+  docs: `Talk out loud and, when invited, listen. Requires the \`voice\` capability.
 
 - Speak for short, spoken-worthy lines (a greeting when the user comes back, a reminder, a joke) — not your whole reply. Your chat text still appears as usual, so avoid saying and typing the same sentence.
 - Use \`wait: true\` only when the next thing depends on the speech having finished (e.g. before \`listen()\`).
 - \`listen()\` returns plain text, possibly empty; confirm what you understood before acting on it.
+- \`listen()\` needs a speech-to-text command (there is no platform default) and \`speak()\` a TTS command or the built-in voice: a CAPABILITY_FAILED names what is missing and where (Settings → Commands) — tell the user rather than retrying.
 
 \`\`\`ts
 await sdk.voice.speak("Welcome back! Tea?", { wait: true });

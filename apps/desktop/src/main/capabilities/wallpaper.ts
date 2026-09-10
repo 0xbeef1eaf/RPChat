@@ -47,8 +47,7 @@ export class WallpaperHandler implements CapabilityHandler {
         monitor = '';
       }
     }
-    const result = await this.deps.commands.run('wallpaper', { file, monitor }, 'wallpaper');
-    if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `Wallpaper command exited with ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
+    await this.deps.commands.runChecked('wallpaper', { file, monitor });
     this.current = assetArg;
     return { asset: assetArg };
   }
@@ -60,10 +59,9 @@ export class WallpaperHandler implements CapabilityHandler {
       const st = await fs.stat(file);
       if (!st.isFile()) throw new Error('not a file');
     } catch {
-      throw new RpError('CAPABILITY_FAILED', `Wallpaper restore file does not exist: ${file}`);
+      throw new RpError('CAPABILITY_FAILED', `The wallpaper restore file does not exist: ${file}; fix it in Settings → Commands → Wallpaper to restore`, { file });
     }
-    const result = await this.deps.commands.run('wallpaper', { file, monitor: '' }, 'wallpaper');
-    if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `Wallpaper command exited with ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
+    await this.deps.commands.runChecked('wallpaper', { file, monitor: '' });
     this.current = null;
     return true;
   }

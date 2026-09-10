@@ -47,27 +47,44 @@ export class CalendarHandler implements CapabilityHandler {
     }
   }
 
+  /**
+   * Events of every configured source in the window. No sources → `[]` (documented: an empty
+   * list can mean "no calendar configured"). Sources that cannot be read fall back to their
+   * cached copy; when every source fails and nothing is cached the call throws
+   * CAPABILITY_FAILED naming the sources, instead of pretending the user is free.
+   */
   async events(from: Date, to: Date): Promise<CalendarEvent[]> {
     const out: CalendarEvent[] = [];
+    const failures: string[] = [];
+    let readable = 0;
     for (const source of await this.deps.sources()) {
-      const raw = await this.load(source);
-      out.push(...expandEvents(raw, calendarName(source), from, to));
+      const loaded = await this.load(source);
+      if (loaded.ok) readable += 1;
+      else failures.push(`${source}: ${loaded.error}`);
+      out.push(...expandEvents(loaded.events, calendarName(source), from, to));
+    }
+    if (readable === 0 && failures.length > 0) {
+      throw new RpError('CAPABILITY_FAILED', `None of the user's calendar sources could be read (${failures.join('; ')}); they can fix them under Settings → Senses → Calendar sources`, {
+        failures,
+      });
     }
     return out.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
   }
 
-  private async load(source: string): Promise<RawEvent[]> {
+  private async load(source: string): Promise<{ ok: boolean; events: RawEvent[]; error?: string }> {
     const nowMs = Date.now();
     const cached = this.cache.get(source);
-    if (cached && nowMs - cached.at < CALENDAR_CACHE_MS) return cached.events;
+    if (cached && nowMs - cached.at < CALENDAR_CACHE_MS) return { ok: true, events: cached.events };
     try {
       const text = await this.read(source);
       const events = parseIcs(text);
       this.cache.set(source, { at: nowMs, events });
-      return events;
+      return { ok: true, events };
     } catch (err) {
       this.deps.logger.warn(`[calendar] cannot read ${source}`, err);
-      return cached?.events ?? [];
+      const error = (err as Error).message || String(err);
+      // A stale copy is better than nothing; only a source that never loaded counts as failed.
+      return cached ? { ok: true, events: cached.events } : { ok: false, events: [], error };
     }
   }
 

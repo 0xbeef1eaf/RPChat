@@ -21,6 +21,7 @@ import type {
 } from '@rp/shared';
 import { IPC_EVENT_CHANNELS, RpError } from '@rp/shared';
 import type { Engine, Logger } from '@rp/core';
+import { notConfigured } from './commands.js';
 import type { AppServices } from './engine.js';
 import { phase2, unavailable } from './phase2.js';
 import type { WindowManager } from './windows.js';
@@ -162,7 +163,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
         const tpl: CommandTemplate = template && typeof template === 'object' ? template : { command: '' };
         const effective = tpl.command && tpl.command.trim().length > 0 ? tpl : { ...services.commands.defaults()[name], ...(tpl.timeoutMs ? { timeoutMs: tpl.timeoutMs } : {}) };
         if (!effective.command || effective.command.trim().length === 0) {
-          throw new RpError('CAPABILITY_FAILED', `No ${name} command configured and no platform default is available`);
+          throw notConfigured(name);
         }
         const vars = {
           file: await services.sampleImage(),

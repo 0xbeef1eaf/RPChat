@@ -24,6 +24,7 @@ interface BrowserApi {
 
 - Only http/https URLs. Never open pages the user did not ask for or would not expect; tell them what you opened.
 - One page per action; do not spam windows.
+- Fails with CAPABILITY_FAILED when the user's browser command exits non-zero or its program is missing (the message says which; relay it).
 
 \`\`\`ts
 await sdk.browser.open("https://open-meteo.com/");

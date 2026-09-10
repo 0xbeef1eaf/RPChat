@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { AppSettings, CommandTemplate, CommandTemplates } from '@rp/shared';
+import { COMMAND_TEMPLATE_INFO } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { Toggle } from '../common/Toggle';
 
@@ -23,37 +24,37 @@ const GROUPS: TemplateGroup[] = [
     title: 'Media & system',
     hint: 'wallpaper and browser',
     templates: [
-      { name: 'wallpaper', label: 'Set wallpaper', placeholders: '{file} {monitor}', help: 'Used by sdk.wallpaper.set. {file} is the absolute image path, {monitor} the monitor name or empty.' },
-      { name: 'browser', label: 'Open browser', placeholders: '{url}', help: 'Used by sdk.browser.open. Include {newWindow} where a new-window flag should go.' },
+      { name: 'wallpaper', label: 'Set wallpaper', placeholders: '{file} {monitor}', help: '{file} is the absolute image path, {monitor} the monitor name or empty.' },
+      { name: 'browser', label: 'Open browser', placeholders: '{url}', help: 'Include {newWindow} where a new-window flag should go.' },
     ],
   },
   {
     title: 'Senses',
     hint: 'how presence is sampled (not needed on Hyprland for the active window)',
     templates: [
-      { name: 'activeWindow', label: 'Active window', placeholders: '', help: 'Print the active window as JSON {title, app, class?} or "title<TAB>app" on stdout.' },
-      { name: 'nowPlaying', label: 'Now playing', placeholders: '', help: 'Print JSON {title, artist, album, app, status}. Default: playerctl when installed.' },
-      { name: 'screenshot', label: 'Screenshot', placeholders: '{file} {monitor}', help: 'Write a PNG to {file} for sdk.screen.look (Hyprland default: grim). Not needed where Electron can capture the screen.' },
+      { name: 'activeWindow', label: 'Active window', placeholders: '', help: 'Print the active window as JSON {title, app, class?} or "title<TAB>app" on stdout. Without it (and outside Hyprland) the active window is reported as unknown.' },
+      { name: 'nowPlaying', label: 'Now playing', placeholders: '', help: 'Print JSON {title, artist, album, app, status}. Without it nothing-playing is reported.' },
+      { name: 'screenshot', label: 'Screenshot', placeholders: '{file} {monitor}', help: 'Write a PNG to {file}. Required on Wayland; elsewhere Electron captures the screen itself.' },
     ],
   },
   {
     title: 'Voice',
     hint: 'text to speech and speech to text',
     templates: [
-      { name: 'tts', label: 'Speak', placeholders: '{text} {file}', help: 'Speak {text}, or write a wav to {file} to have the app play it. Empty: built-in speech synthesis when available.' },
-      { name: 'stt', label: 'Listen', placeholders: '{seconds}', help: 'Record for {seconds} and print the transcript on stdout.' },
+      { name: 'tts', label: 'Speak', placeholders: '{text} {file}', help: 'Speak {text}, or write a wav to {file} to have the app play it. Empty and no default: the built-in speech synthesis when available.' },
+      { name: 'stt', label: 'Listen', placeholders: '{seconds}', help: 'Record for {seconds} and print the transcript on stdout. Required for sdk.voice.listen; there is no platform default.' },
     ],
   },
   {
     title: 'Desktop',
     hint: 'sdk.desktop — launching apps, audio, brightness, notifications, theme',
     templates: [
-      { name: 'launch', label: 'Launch app', placeholders: '{app} {args}', help: 'Empty: spawn {app} directly. The launch allowlist (Integrations) controls what runs without a prompt.' },
-      { name: 'volumeSet', label: 'Set volume', placeholders: '{level}', help: '0..100. Defaults try wpctl, then pactl.' },
-      { name: 'volumeGet', label: 'Get volume', placeholders: '', help: 'Print the current volume 0..100.' },
-      { name: 'brightness', label: 'Brightness', placeholders: '{level}', help: '0..100. Default: brightnessctl when installed.' },
-      { name: 'doNotDisturb', label: 'Do not disturb', placeholders: '{on}', help: '{on} is 1 or 0. Defaults: makoctl, then dunstctl.' },
-      { name: 'theme', label: 'Switch theme', placeholders: '{theme}', help: 'dark or light. Default: gsettings color-scheme.' },
+      { name: 'launch', label: 'Launch app', placeholders: '{app} {args}', help: 'Empty: spawn {app} directly. The launch allowlist (Integrations) limits which apps may be started at all.' },
+      { name: 'volumeSet', label: 'Set volume', placeholders: '{level}', help: '0..100.' },
+      { name: 'volumeGet', label: 'Get volume', placeholders: '', help: 'Print the current volume 0..100. Without it sdk.desktop.getVolume returns null.' },
+      { name: 'brightness', label: 'Brightness', placeholders: '{level}', help: '0..100.' },
+      { name: 'doNotDisturb', label: 'Do not disturb', placeholders: '{on}', help: '{on} is 1 or 0.' },
+      { name: 'theme', label: 'Switch theme', placeholders: '{theme}', help: 'dark or light.' },
     ],
   },
 ];
@@ -82,8 +83,9 @@ export function CommandsSection({ settings, onPatch }: CommandsSectionProps) {
   return (
     <div className="stack" style={{ gap: 14 }}>
       <p className="muted small">
-        External commands characters may run through the <code>wallpaper</code>, <code>browser</code>, <code>desktop</code> and
-        <code>voice</code> modules (each still needs a per-pack grant). Input locking and typing are not configured here: they go through
+        External commands characters may run through the <code>wallpaper</code>, <code>browser</code>, <code>screen</code>,{' '}
+        <code>presence</code>, <code>desktop</code> and <code>voice</code> modules (each still needs a per-pack grant). When a
+        command is missing, the character receives an error naming this page and the row to fill in. Input locking and typing are not configured here: they go through
         the system integration daemon (Settings → System). Commands are tokenised like a shell line and run <em>without</em> a shell; placeholders are
         substituted inside tokens so values can never inject extra arguments. Leave a command empty to use the platform default.
       </p>
@@ -160,7 +162,7 @@ function TemplateEditor({ meta, value, fallback, onSave }: TemplateEditorProps) 
         )}
       </div>
       <p className="field-hint" style={{ marginBottom: 8 }}>
-        {meta.help}
+        <span className="mono">Used by {COMMAND_TEMPLATE_INFO[meta.name].usedBy}.</span> {meta.help}
       </p>
       <div className="field">
         <label htmlFor={inputId}>Command</label>
@@ -175,8 +177,14 @@ function TemplateEditor({ meta, value, fallback, onSave }: TemplateEditorProps) 
         />
         {!draft.command.trim() && fallback?.command ? (
           <span className="field-hint">
-            Default: <code>{fallback.command}</code>
+            Detected default: <code>{fallback.command}</code>
             {fallback.shell ? ' (via shell)' : ''}
+          </span>
+        ) : null}
+        {!draft.command.trim() && !fallback?.command ? (
+          <span className="field-hint">
+            No default detected on this system (looked for: {COMMAND_TEMPLATE_INFO[meta.name].defaults}). Calls to {COMMAND_TEMPLATE_INFO[meta.name].usedBy} fail with
+            CAPABILITY_FAILED until you set one.
           </span>
         ) : null}
       </div>

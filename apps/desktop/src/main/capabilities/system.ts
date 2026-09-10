@@ -9,7 +9,7 @@ import * as path from 'node:path';
 import { clipboard, shell } from 'electron';
 import type { ActionContext, CapabilityHandler, Json } from '@rp/shared';
 import { RpError } from '@rp/shared';
-import { expandHome } from '../commands.js';
+import { expandHome, isMissingExecutable } from '../commands.js';
 
 export const EXEC_DEFAULT_TIMEOUT_MS = 30_000;
 export const EXEC_MAX_TIMEOUT_MS = 300_000;
@@ -68,7 +68,15 @@ export function runProgram(command: string, args: string[], opts: { cwd: string;
       clearTimeout(timer);
       if (settled) return;
       settled = true;
-      reject(new RpError('CAPABILITY_FAILED', `Cannot run "${command}": ${err.message}`, { command, args }, { cause: err }));
+      const missing = isMissingExecutable(err);
+      reject(
+        new RpError(
+          'CAPABILITY_FAILED',
+          missing ? `Cannot run "${command}": it is not installed or not on PATH` : `Cannot run "${command}": ${err.message}`,
+          { command, args, ...(missing ? { code: 'ENOENT' } : {}) },
+          { cause: err },
+        ),
+      );
     });
     child.on('close', (code, signal) => {
       clearTimeout(timer);

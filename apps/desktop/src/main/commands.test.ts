@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildArgv, defaultTemplates, effectiveTemplate, runTemplate, shellQuote, substitute, tokenize } from './commands.js';
+import { COMMAND_TEMPLATE_INFO } from '@rp/shared';
+import { buildArgv, defaultTemplates, effectiveTemplate, runTemplate, shellQuote, substitute, tokenize, commandFailed, isMissingExecutable, notConfigured, templateLocation } from './commands.js';
 
 describe('tokenize', () => {
   it('splits on whitespace and honours quotes', () => {
@@ -101,6 +102,55 @@ describe('runTemplate', () => {
     const r = await runTemplate({ command: 'node -e "setTimeout(()=>{},5000)"', timeoutMs: 200 }, {});
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('timed out');
-    await expect(runTemplate({ command: 'definitely-not-a-program-xyz {file}' }, { file: 'a' })).rejects.toThrow(/Cannot run/);
+    await expect(runTemplate({ command: 'definitely-not-a-program-xyz {file}' }, { file: 'a' })).rejects.toMatchObject({
+      code: 'CAPABILITY_FAILED',
+      message: 'Cannot run "definitely-not-a-program-xyz": it is not installed or not on PATH',
+      details: { file: 'definitely-not-a-program-xyz', code: 'ENOENT' },
+    });
+  });
+});
+
+describe('configuration errors', () => {
+  it('notConfigured names the SDK method, the settings row and the platform default for known templates', () => {
+    const err = notConfigured('screenshot');
+    expect(err.code).toBe('CAPABILITY_FAILED');
+    expect(err.message).toBe(
+      'No screenshot command is configured for sdk.screen.look; set one in Settings → Commands → Screenshot (platform default: grim on Hyprland/Wayland, grim/scrot/import on other Linux desktops, screencapture on macOS; not needed where Electron can capture the screen)',
+    );
+    expect(err.details).toEqual({ template: 'screenshot', usedBy: 'sdk.screen.look' });
+    expect(notConfigured('stt').message).toContain('sdk.voice.listen');
+    expect(notConfigured('stt').message).toContain('Settings → Commands → Listen');
+    expect(notConfigured('wallpaper').message).toContain('swww or hyprpaper on Hyprland');
+    // Unknown names keep the generic wording (used by buildArgv).
+    expect(notConfigured('matching').message).toBe('No matching command configured; set one in Settings → Commands');
+    expect(templateLocation('volumeSet')).toBe('Settings → Commands → Set volume');
+    expect(templateLocation('nope')).toBe('Settings → Commands');
+  });
+
+  it('every template has an info entry so errors and the Settings page agree', () => {
+    const names = Object.keys(defaultTemplates('linux', { PATH: '' }, () => false)).sort();
+    expect(Object.keys(COMMAND_TEMPLATE_INFO).sort()).toEqual(names);
+    for (const name of names) {
+      const info = COMMAND_TEMPLATE_INFO[name as keyof typeof COMMAND_TEMPLATE_INFO];
+      expect(info.usedBy, name).toMatch(/^sdk\./);
+      expect(info.label.length, name).toBeGreaterThan(0);
+      expect(info.defaults.length, name).toBeGreaterThan(0);
+    }
+  });
+
+  it('commandFailed quotes the command, exit code, output and the settings row', () => {
+    const err = commandFailed('wallpaper', { command: 'swww img {file}' }, { code: 2, stdout: '', stderr: 'no daemon running\n' });
+    expect(err.code).toBe('CAPABILITY_FAILED');
+    expect(err.message).toBe('Set wallpaper command ("swww img {file}") exited with 2: no daemon running; check it in Settings → Commands → Set wallpaper');
+    expect(err.details).toMatchObject({ template: 'wallpaper', code: 2 });
+    expect(commandFailed('tts', { command: 'say {text}' }, { code: 1, stdout: 'out', stderr: '' }).message).toContain('exited with 1: out;');
+    expect(commandFailed('tts', { command: 'say {text}' }, { code: 1, stdout: '', stderr: '' }).message).toContain('exited with 1; check it');
+  });
+
+  it('isMissingExecutable recognises spawn ENOENT only', () => {
+    expect(isMissingExecutable(Object.assign(new Error('spawn x ENOENT'), { code: 'ENOENT' }))).toBe(true);
+    expect(isMissingExecutable(Object.assign(new Error('EACCES'), { code: 'EACCES' }))).toBe(false);
+    expect(isMissingExecutable(new Error('x'))).toBe(false);
+    expect(isMissingExecutable(undefined)).toBe(false);
   });
 });

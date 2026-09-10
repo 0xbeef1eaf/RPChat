@@ -98,7 +98,7 @@ ui (pack)
 - `confirm(question: string): Promise<boolean>` — modal in the chat UI; the user answers.
 - `choose(question: string, options: string[]): Promise<string | null>`
 
-system (prompt) — every method `dangerous: true`
+system (pack; was `prompt` before per-call prompts were dropped) — every method `dangerous: true`
 - `openExternal(url: string): Promise<void>` (http/https only)
 - `exec(command: string, args?: string[], opts?: { timeoutMs?: number; cwd?: string }): Promise<{ code: number; stdout: string; stderr: string }>`
 - `readFile(path: string, maxBytes?: number): Promise<string>`

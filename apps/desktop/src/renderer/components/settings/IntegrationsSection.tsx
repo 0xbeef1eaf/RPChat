@@ -29,8 +29,9 @@ export function IntegrationsSection({ settings, onPatch, NumberField }: Integrat
       <section>
         <h3>Web access</h3>
         <p className="field-hint" style={{ marginBottom: 8 }}>
-          Hostnames <code>sdk.web.fetch</code> / <code>rss</code> may reach without asking you each time (<code>example.com</code> or{' '}
-          <code>*.example.com</code>). Leave it empty to allow any site. Weather (open-meteo) is always allowed.
+          Hostnames <code>sdk.web.fetch</code> / <code>rss</code> may reach (<code>example.com</code> or <code>*.example.com</code>). Leave it
+          empty to allow any http(s) site; with entries, other hosts fail with PERMISSION_DENIED and the character is told to ask you.
+          Weather (open-meteo) is always allowed.
         </p>
         <div className="field-grid">
           <div className="field" style={{ gridColumn: '1 / -1' }}>
@@ -47,7 +48,8 @@ export function IntegrationsSection({ settings, onPatch, NumberField }: Integrat
       <section>
         <h3>Desktop launch allowlist</h3>
         <p className="field-hint" style={{ marginBottom: 8 }}>
-          Executable names <code>sdk.desktop.launch</code> may start. Leave it empty to allow any app.
+          Executable names <code>sdk.desktop.launch</code> may start. Leave it empty to allow any app; with entries, other apps fail with
+          PERMISSION_DENIED and the character is told to ask you.
         </p>
         <StringListEditor id="launch-allow" values={desktop.launchAllowlist} placeholder="firefox" onChange={(launchAllowlist) => onPatch({ desktop: { ...desktop, launchAllowlist } })} />
       </section>
@@ -55,7 +57,8 @@ export function IntegrationsSection({ settings, onPatch, NumberField }: Integrat
       <section>
         <h3>Messaging channels</h3>
         <p className="field-hint" style={{ marginBottom: 8 }}>
-          Where <code>sdk.messaging.send(channel, text)</code> can deliver. Sending is marked dangerous and audited.
+          Where <code>sdk.messaging.send(channel, text)</code> can deliver. Sending is marked dangerous and audited; without channels the
+          character gets a NOT_FOUND error pointing here.
         </p>
         <ChannelsEditor channels={channels} onChange={(list) => onPatch({ messaging: { ...settings.messaging, channels: list } })} />
       </section>

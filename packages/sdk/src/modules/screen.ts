@@ -9,8 +9,8 @@ export const screenModule: CapabilityModuleSpec = {
   apiTypeName: 'ScreenApi',
   typings: `/**
  * See the screen and draw on it. look() takes a screenshot and has a vision model describe it —
- * you receive text, never the image — and always asks the user first. draw() puts temporary,
- * click-through shapes (arrows, circles, text) over the screen to point at things.
+ * you receive text, never the image. draw() puts temporary, click-through shapes (arrows,
+ * circles, text) over the screen to point at things. Requires the 'screen' capability.
  */
 interface ScreenApi {
   /**
@@ -38,9 +38,10 @@ interface ScreenApi {
    */
   clear(ids?: string[]): Promise<void>;
 }`,
-  docs: `See what is on screen and point at things. Requires the \`screen\` capability; \`look()\` additionally asks the user every time.
+  docs: `See what is on screen and point at things. Requires the \`screen\` capability.
 
 - \`look()\` is expensive and private: use it only when the user invites you to look or it clearly helps them. Ask a specific \`question\`; you get a short text description, not pixels.
+- \`look()\` fails with CAPABILITY_FAILED when no screenshot command is configured (Wayland needs one, e.g. grim) or the user's LLM provider has no vision; the message names what is missing and where (Settings → Commands / Providers) — tell the user.
 - \`draw()\` is for pointing: an arrow or circle with a short label, a few seconds long. Coordinates 0..1 are monitor fractions, so \`{ x: 0.5, y: 0.5 }\` is the centre. Keep it sparse and \`clear()\` when done.
 
 \`\`\`ts

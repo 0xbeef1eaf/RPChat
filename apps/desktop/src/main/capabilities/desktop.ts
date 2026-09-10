@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import type { ActionContext, CapabilityHandler, Json } from '@rp/shared';
 import { RpError } from '@rp/shared';
-import { expandHome } from '../commands.js';
+import { expandHome, isMissingExecutable } from '../commands.js';
 import type { HyprClientJson, HyprMonitorJson, HyprTransport } from '../display/hyprland.js';
 import { normalizeAddress } from '../display/hyprland.js';
 import { isLaunchAllowed } from './allowlist.js';
@@ -96,6 +96,10 @@ export function clampLevel(v: unknown): number {
 
 // ---- handler ------------------------------------------------------------------
 
+/** Window/workspace methods have no backend outside Hyprland (no template covers them). */
+export const HYPRLAND_REQUIRED_MESSAGE =
+  'Window and workspace control (sdk.desktop.listWindows/focusWindow/moveWindow/workspace/currentWorkspace) is only available when the app runs under Hyprland; this desktop session is not Hyprland, so there is nothing to configure';
+
 export interface DesktopHandlerDeps {
   commands: CommandRunner;
   hypr?: HyprTransport;
@@ -114,7 +118,10 @@ export class DesktopHandler implements CapabilityHandler {
       case 'launch': {
         const allowlist = await this.deps.launchAllowlist();
         if (allowlist.length > 0 && !(typeof args[0] === 'string' && isLaunchAllowed(args[0], allowlist))) {
-          throw new RpError('PERMISSION_DENIED', `${String(args[0])} is not on your launch allowlist (Settings > Integrations)`);
+          throw new RpError('PERMISSION_DENIED', `"${String(args[0])}" is not on the user's launch allowlist; they can add it under Settings → Integrations → Desktop launch allowlist`, {
+            app: String(args[0]),
+            allowlist,
+          });
         }
         return (await this.launch(args[0], args[1])) as unknown as Json;
       }
@@ -149,7 +156,7 @@ export class DesktopHandler implements CapabilityHandler {
         return { id: ws.id ?? 0, name: ws.name ?? String(ws.id ?? '') };
       }
       case 'setVolume':
-        await this.template('volumeSet', { level: String(clampLevel(args[0])) }, 'volume');
+        await this.deps.commands.runChecked('volumeSet', { level: String(clampLevel(args[0])) });
         return;
       case 'getVolume': {
         if (!(await this.deps.commands.isConfigured('volumeGet'))) return null;
@@ -157,24 +164,19 @@ export class DesktopHandler implements CapabilityHandler {
         return r.code === 0 ? parseVolumeOutput(r.stdout) : null;
       }
       case 'setBrightness':
-        await this.template('brightness', { level: String(clampLevel(args[0])) }, 'brightness');
+        await this.deps.commands.runChecked('brightness', { level: String(clampLevel(args[0])) });
         return;
       case 'doNotDisturb':
-        await this.template('doNotDisturb', { on: args[0] === true ? '1' : '0', onWord: args[0] === true ? 'true' : 'false' }, 'do-not-disturb');
+        await this.deps.commands.runChecked('doNotDisturb', { on: args[0] === true ? '1' : '0', onWord: args[0] === true ? 'true' : 'false' });
         return;
       case 'setTheme': {
         if (args[0] !== 'dark' && args[0] !== 'light') throw new RpError('INVALID_ARGUMENT', "theme must be 'dark' or 'light'");
-        await this.template('theme', { theme: args[0], darkMode: args[0] === 'dark' ? 'true' : 'false' }, 'theme');
+        await this.deps.commands.runChecked('theme', { theme: args[0], darkMode: args[0] === 'dark' ? 'true' : 'false' });
         return;
       }
       default:
         throw new RpError('CAPABILITY_UNKNOWN', `Unknown method sdk.desktop.${method}`);
     }
-  }
-
-  private async template(name: 'volumeSet' | 'brightness' | 'doNotDisturb' | 'theme', vars: Record<string, string>, what: string): Promise<void> {
-    const result = await this.deps.commands.run(name, vars, what);
-    if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `${what} command exited with ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
   }
 
   private async launch(appArg: unknown, argsArg: unknown): Promise<{ pid?: number }> {
@@ -183,14 +185,22 @@ export class DesktopHandler implements CapabilityHandler {
     if (!Array.isArray(args) || !args.every((a) => typeof a === 'string')) throw new RpError('INVALID_ARGUMENT', 'args must be an array of strings');
     const app = expandHome(appArg.trim());
     if (await this.deps.commands.isConfigured('launch')) {
-      const result = await this.deps.commands.run('launch', { app, args: (args as string[]).join(' ') }, 'launch');
-      if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `Launch command exited with ${result.code}: ${result.stderr.trim()}`);
+      await this.deps.commands.runChecked('launch', { app, args: (args as string[]).join(' ') });
       return {};
     }
     const spawnImpl = this.deps.spawnImpl ?? ((file: string, a: string[]) => spawn(file, a, { detached: true, stdio: 'ignore', windowsHide: false }));
     return new Promise((resolve, reject) => {
       const child = spawnImpl(app, args as string[]);
-      child.on('error', (err) => reject(new RpError('CAPABILITY_FAILED', `Cannot launch "${app}": ${err.message}`)));
+      child.on('error', (err) =>
+        reject(
+          new RpError(
+            'CAPABILITY_FAILED',
+            isMissingExecutable(err) ? `Cannot launch "${app}": it is not installed or not on PATH` : `Cannot launch "${app}": ${err.message}`,
+            { app, ...(isMissingExecutable(err) ? { code: 'ENOENT' } : {}) },
+            { cause: err },
+          ),
+        ),
+      );
       setTimeout(() => {
         child.unref();
         resolve(child.pid !== undefined ? { pid: child.pid } : {});
@@ -199,7 +209,7 @@ export class DesktopHandler implements CapabilityHandler {
   }
 
   async listWindows(): Promise<DesktopWindow[]> {
-    if (!this.deps.hypr) throw new RpError('CAPABILITY_FAILED', 'Window management is only available under Hyprland in this version');
+    if (!this.deps.hypr) throw new RpError('CAPABILITY_FAILED', HYPRLAND_REQUIRED_MESSAGE);
     const [clients, monitors, active] = await Promise.all([
       this.hyprJson<HyprClientJson[]>('j/clients'),
       this.hyprJson<HyprMonitorJson[]>('j/monitors'),
@@ -209,7 +219,7 @@ export class DesktopHandler implements CapabilityHandler {
   }
 
   private async hyprJson<T>(command: string): Promise<T> {
-    if (!this.deps.hypr) throw new RpError('CAPABILITY_FAILED', 'Only available under Hyprland in this version');
+    if (!this.deps.hypr) throw new RpError('CAPABILITY_FAILED', HYPRLAND_REQUIRED_MESSAGE);
     const text = await this.deps.hypr.request(command);
     try {
       return JSON.parse(text) as T;
@@ -219,7 +229,7 @@ export class DesktopHandler implements CapabilityHandler {
   }
 
   private async hyprOk(command: string): Promise<void> {
-    if (!this.deps.hypr) throw new RpError('CAPABILITY_FAILED', 'Only available under Hyprland in this version');
+    if (!this.deps.hypr) throw new RpError('CAPABILITY_FAILED', HYPRLAND_REQUIRED_MESSAGE);
     const res = await this.deps.hypr.request(command);
     if (res.trim().toLowerCase() !== 'ok') throw new RpError('CAPABILITY_FAILED', `Hyprland answered "${res.trim()}" to ${command}`);
   }

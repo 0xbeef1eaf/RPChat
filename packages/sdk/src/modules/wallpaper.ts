@@ -29,7 +29,7 @@ interface WallpaperApi {
   /** The pack asset this app last set as wallpaper in this session, or null. */
   current(): Promise<{ asset: string | null }>;
 }`,
-  docs: `Swap the user's wallpaper for a picture from the pack. Requires the \`wallpaper\` capability and a wallpaper command configured by the user; if none is configured the call fails with CAPABILITY_FAILED and you should simply carry on.
+  docs: `Swap the user's wallpaper for a picture from the pack. Requires the \`wallpaper\` capability and a wallpaper command configured by the user; if none is configured (or its program is not installed) the call fails with CAPABILITY_FAILED and the message names what is missing and where to set it (Settings → Commands) — tell the user, do not retry.
 
 - Use it sparingly and purposefully (a scene change, a reward, a mood), and offer \`restore()\` when the moment passes.
 - Prefer large images; check \`sdk.display.monitors()\` for resolutions if the pack has several sizes.

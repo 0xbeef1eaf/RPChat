@@ -70,7 +70,7 @@ interface DesktopApi {
    * @param level 0..100 (values above the user's current level are clamped to 100).
    */
   setVolume(level: number): Promise<void>;
-  /** Current output volume 0..100, or null when unknown. */
+  /** Current output volume 0..100, or null when unknown (no volume command configured, or unparsable output). */
   getVolume(): Promise<number | null>;
   /**
    * Set screen brightness.
@@ -85,6 +85,7 @@ interface DesktopApi {
   docs: `Tidy the desktop, set the mood, start things. Requires the \`desktop\` capability; \`launch()\` is limited to the user's launch allowlist when they set one. Availability varies by platform (best on Hyprland); unsupported calls throw \`CAPABILITY_FAILED\`.
 
 - Make changes the user asked for or will obviously welcome (dim lights and DND for a movie, focus their editor when they say "back to work"). Restore what you changed when the moment passes.
+- Volume, brightness, do-not-disturb and theme run the user's commands: when one is missing the call throws CAPABILITY_FAILED naming the command and Settings → Commands — tell the user. \`launch()\` throws PERMISSION_DENIED for an app outside their allowlist (Settings → Integrations).
 - \`listWindows()\` first, then match by \`id\` — titles change. Never close windows or touch volume/brightness abruptly (step gently).
 
 \`\`\`ts

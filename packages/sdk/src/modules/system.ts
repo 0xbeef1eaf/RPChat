@@ -58,7 +58,8 @@ interface SystemApi {
 }`,
   docs: `Reach outside the app: open a link, run a program, read or write a file, copy to the clipboard. Requires the \`system\` capability; calls are logged, not confirmed, so be deliberate.
 
-- Use only when the user clearly asked for the effect (or a pack script needs it), and tell them what you are about to do. A declined dialog throws \`PERMISSION_PROMPT_REJECTED\` — accept the refusal, do not retry.
+- Use only when the user clearly asked for the effect (or a pack script needs it), and tell them what you are about to do.
+- \`exec\` throws CAPABILITY_FAILED when the program is not installed or not on PATH (the message says so); unreadable or unwritable paths likewise — report it, do not retry.
 - One system call per action is the norm. \`exec\` is not a shell: give the program and its arguments separately.
 - File paths are absolute (or \`~/...\`). Never touch files the user did not mention.
 

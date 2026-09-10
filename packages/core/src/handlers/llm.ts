@@ -1,5 +1,6 @@
 import type { ActionContext, CapabilityHandler, Json, LlmChatRequest } from '@rp/shared';
 import { RpError } from '@rp/shared';
+import { resolveSupportsVision } from '@rp/llm';
 import type { ChatService } from '../services/chat.js';
 import type { ProviderFactory, SettingsService } from '../services/settings.js';
 import type { TimerService } from '../services/timers.js';
@@ -45,7 +46,20 @@ export class LlmHandler implements CapabilityHandler {
   async describeImage(sessionId: string, pngBase64: string, question?: string): Promise<string> {
     if (typeof pngBase64 !== 'string' || pngBase64.length === 0) throw new RpError('INVALID_ARGUMENT', 'pngBase64 must be a non-empty string');
     const session = await this.o.sessions.get(sessionId);
-    const config = await this.o.settings.resolveProvider(session?.providerId);
+    let config;
+    try {
+      config = await this.o.settings.resolveProvider(session?.providerId);
+    } catch (err) {
+      throw new RpError('CAPABILITY_FAILED', `Cannot describe the screenshot: ${(err as Error).message} (Settings → Providers)`, undefined, { cause: err });
+    }
+    // The mock provider (dev/smoke mode) answers anything; real providers must be marked vision-capable.
+    if (config.kind !== 'mock' && !resolveSupportsVision(config)) {
+      throw new RpError(
+        'CAPABILITY_FAILED',
+        `The session's LLM provider "${config.label || config.id}" (${config.model}) is configured without vision support, so the screenshot cannot be described; the user can enable "supports vision" for it or pick a vision-capable model under Settings → Providers`,
+        { providerId: config.id, model: session?.model ?? config.model },
+      );
+    }
     const provider = this.o.providerFactory(config);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);

@@ -53,6 +53,7 @@ interface FilesApi {
 - \`sdk.state\`/\`sdk.memory\` are for facts you look up; \`files\` is for documents — things the user might open, read or keep.
 - \`open(path)\` hands a file to the user's default app, so write it first, then open it. Tell the user where it is (\`homePath()\`).
 - Prefer \`append\` for logs/diaries and keep files small; list before writing to avoid clobbering.
+- \`open()\` throws NOT_FOUND for a missing file and CAPABILITY_FAILED when the desktop has no application for it (the message says why).
 
 \`\`\`ts
 const day = new Date().toISOString().slice(0, 10);

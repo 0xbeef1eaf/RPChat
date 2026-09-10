@@ -42,7 +42,7 @@ interface WebApi {
 
 - Prefer APIs and feeds that return JSON/RSS over scraping HTML: responses are plain text, truncated at the size cap, with no JavaScript run.
 - Never send the user's private data (state, transcripts, file contents) to a site unless they explicitly asked you to.
-- Keep it to one or two requests per action; a PERMISSION_DENIED means the host is not on the user's allowlist — do not retry.
+- Keep it to one or two requests per action; a PERMISSION_DENIED means the host is not on the user's allowlist (Settings → Integrations) — do not retry. Network errors and the 20 s timeout throw CAPABILITY_FAILED.
 
 \`\`\`ts
 const w = await sdk.web.weather("Lisbon");

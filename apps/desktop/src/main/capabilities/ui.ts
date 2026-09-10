@@ -10,6 +10,7 @@ export const NOTIFY_TITLE_MAX = 100;
 export const NOTIFY_BODY_MAX = 300;
 export const CHOOSE_MIN_OPTIONS = 2;
 export const CHOOSE_MAX_OPTIONS = 10;
+export const NOTIFICATIONS_UNSUPPORTED_MESSAGE = 'OS notifications are not supported on this system (no notification service is available), so sdk.ui.notify cannot deliver anything; say it in the chat instead';
 
 export interface UiHandlerDeps {
   prompts: PendingPrompts<UiPromptAnswer>;
@@ -109,7 +110,7 @@ export class UiHandler implements CapabilityHandler {
     }
     if (!Notification.isSupported()) {
       this.deps.logger.info(`[ui] notification (unsupported here): ${title} — ${body}`);
-      return;
+      throw new RpError('CAPABILITY_FAILED', NOTIFICATIONS_UNSUPPORTED_MESSAGE);
     }
     new Notification({ title, body, silent: false }).show();
   }

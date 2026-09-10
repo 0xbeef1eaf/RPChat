@@ -3,7 +3,7 @@ import { shell } from 'electron';
 import type { ActionContext, CapabilityHandler, Json } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import type { CommandRunner } from './commands-runner.js';
-import { isConfigured } from '../commands.js';
+import { commandFailed, isConfigured } from '../commands.js';
 import { httpUrlArg } from './system.js';
 
 export interface BrowserHandlerDeps {
@@ -28,6 +28,6 @@ export class BrowserHandler implements CapabilityHandler {
     }
     const newWindow = options.newWindow === true && tpl.command.includes('{newWindow}') ? '--new-window' : '';
     const result = await this.deps.commands.runTemplate(tpl, { url, newWindow }, 'browser');
-    if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `Browser command exited with ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
+    if (result.code !== 0) throw commandFailed('browser', tpl, result);
   }
 }

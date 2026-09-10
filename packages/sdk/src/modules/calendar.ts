@@ -25,6 +25,7 @@ interface CalendarApi {
 
 - \`today()\` for "what's on today", \`upcoming(hours)\` for "anything soon?". Times are local ISO strings; \`allDay\` events have no useful time.
 - An empty list can simply mean no calendar is configured — do not conclude the user is free.
+- When the configured sources cannot be read (bad path or URL) the call throws CAPABILITY_FAILED naming them (Settings → Senses → Calendar sources) — tell the user.
 - Combine with \`sdk.timers\` or \`sdk.events.on("time", ...)\` to remind them before an event.
 
 \`\`\`ts

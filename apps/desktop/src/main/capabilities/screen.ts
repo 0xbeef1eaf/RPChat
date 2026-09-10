@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import type { ActionContext, CapabilityHandler, DrawShape, Json, MonitorInfo, MonitorSelector } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import type { CommandRunner } from './commands-runner.js';
+import { notConfigured, templateLocation } from '../commands.js';
 import type { DisplayBackend, OverlayHandle, OverlaySpec } from '../display/backend.js';
 import { selectMonitor } from '../display/placement.js';
 
@@ -101,16 +102,13 @@ export class ScreenHandler implements CapabilityHandler {
       });
       if (native) return native;
     }
-    if (!(await this.deps.commands.isConfigured('screenshot'))) {
-      throw new RpError('CAPABILITY_FAILED', 'No screenshot command configured; set one in Settings → Commands (e.g. grim on Wayland)');
-    }
+    if (!(await this.deps.commands.isConfigured('screenshot'))) throw notConfigured('screenshot');
     await fs.mkdir(this.deps.tmpDir, { recursive: true });
     const file = path.join(this.deps.tmpDir, `shot-${randomUUID()}.png`);
     try {
-      const result = await this.deps.commands.run('screenshot', { file, monitor: monitor.name }, 'screenshot');
-      if (result.code !== 0) throw new RpError('CAPABILITY_FAILED', `Screenshot command exited with ${result.code}: ${result.stderr.trim()}`);
+      await this.deps.commands.runChecked('screenshot', { file, monitor: monitor.name });
       const png = await fs.readFile(file).catch(() => {
-        throw new RpError('CAPABILITY_FAILED', 'Screenshot command did not write the file');
+        throw new RpError('CAPABILITY_FAILED', `The screenshot command exited 0 but did not write ${file}; it must save a PNG to {file} — check it in ${templateLocation('screenshot')}`, { file });
       });
       return this.deps.capturer.downscale(png, SCREENSHOT_MAX_PX);
     } finally {

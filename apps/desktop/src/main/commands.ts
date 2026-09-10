@@ -1,14 +1,16 @@
 /**
- * User-editable command templates for the `wallpaper`, `browser` and `input`
- * modules (docs/spec/overlay.md §2). Everything here is pure except
- * `runTemplate`, which spawns the process.
+ * User-editable command templates for the `wallpaper`, `browser`, `screen`, `presence`,
+ * `voice` and `desktop` modules (docs/spec/overlay.md §2, living.md §4). Everything here is
+ * pure except `runTemplate`, which spawns the process. Configuration errors (`notConfigured`,
+ * `commandFailed`, missing executables) name the SDK method and the Settings → Commands row
+ * from `COMMAND_TEMPLATE_INFO`, which the Settings page uses for the same text.
  */
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { CommandTemplate, CommandTemplates } from '@rp/shared';
-import { RpError } from '@rp/shared';
+import type { CommandTemplate, CommandTemplateInfo, CommandTemplates } from '@rp/shared';
+import { COMMAND_TEMPLATE_INFO, RpError } from '@rp/shared';
 
 export interface CommandResult {
   code: number;
@@ -220,9 +222,46 @@ export function isConfigured(tpl: CommandTemplate | undefined): boolean {
   return Boolean(tpl && typeof tpl.command === 'string' && tpl.command.trim().length > 0);
 }
 
-/** Error thrown by handlers when a template is empty after defaults. */
-export function notConfigured(what: string): RpError {
-  return new RpError('CAPABILITY_FAILED', `No ${what} command configured; set one in Settings → Commands`);
+function templateInfo(name: string): CommandTemplateInfo | undefined {
+  return Object.prototype.hasOwnProperty.call(COMMAND_TEMPLATE_INFO, name) ? COMMAND_TEMPLATE_INFO[name as keyof CommandTemplates] : undefined;
+}
+
+/** "Settings → Commands → <label>" for a template name (or just the section for unknown names). */
+export function templateLocation(name: string): string {
+  const info = templateInfo(name);
+  return info ? `Settings → Commands → ${info.label}` : 'Settings → Commands';
+}
+
+/**
+ * Error thrown by handlers when a template is empty after defaults. For a known template the
+ * message names the SDK method that needs it, where to set it and what the platform default
+ * would have been (so the character can tell the user what to install or configure).
+ */
+export function notConfigured(name: keyof CommandTemplates | string): RpError {
+  const info = templateInfo(name);
+  if (!info) return new RpError('CAPABILITY_FAILED', `No ${name} command configured; set one in Settings → Commands`, { template: name });
+  return new RpError(
+    'CAPABILITY_FAILED',
+    `No ${info.label.toLowerCase()} command is configured for ${info.usedBy}; set one in ${templateLocation(name)} (platform default: ${info.defaults})`,
+    { template: name, usedBy: info.usedBy },
+  );
+}
+
+/** Error for a template that ran but exited non-zero (stderr, else stdout, is quoted). */
+export function commandFailed(name: keyof CommandTemplates | string, tpl: CommandTemplate, result: CommandResult): RpError {
+  const info = templateInfo(name);
+  const output = result.stderr.trim() || result.stdout.trim();
+  const label = info ? `${info.label} command` : `${name} command`;
+  return new RpError(
+    'CAPABILITY_FAILED',
+    `${label} ("${tpl.command}") exited with ${result.code}${output ? `: ${output.slice(0, 500)}` : ''}; check it in ${templateLocation(name)}`,
+    { template: name, command: tpl.command, code: result.code, stderr: result.stderr.slice(0, 2000) },
+  );
+}
+
+/** `true` for the spawn error raised when the executable does not exist (`ENOENT`). */
+export function isMissingExecutable(err: unknown): boolean {
+  return Boolean(err) && typeof err === 'object' && (err as { code?: unknown }).code === 'ENOENT';
 }
 
 export interface RunTemplateOptions {
@@ -283,7 +322,15 @@ export function runTemplate(tpl: CommandTemplate, vars: Record<string, string>, 
       clearTimeout(timer);
       if (settled) return;
       settled = true;
-      reject(new RpError('CAPABILITY_FAILED', `Cannot run "${file}": ${err.message}`, { file, args }, { cause: err }));
+      const missing = isMissingExecutable(err);
+      reject(
+        new RpError(
+          'CAPABILITY_FAILED',
+          missing ? `Cannot run "${file}": it is not installed or not on PATH` : `Cannot run "${file}": ${err.message}`,
+          { file, args, ...(missing ? { code: 'ENOENT' } : {}) },
+          { cause: err },
+        ),
+      );
     });
     child.on('close', (code, signal) => {
       clearTimeout(timer);

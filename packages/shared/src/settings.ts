@@ -53,6 +53,36 @@ export interface CommandTemplates {
   theme: CommandTemplate;
 }
 
+/** What a command template is for: which SDK methods run it and how the platform default is chosen. */
+export interface CommandTemplateInfo {
+  /** Label used in Settings → Commands and in error messages. */
+  label: string;
+  /** SDK methods that run this template, e.g. "sdk.wallpaper.set / restore". */
+  usedBy: string;
+  /** How the platform default is picked when the command is empty (what is probed for on PATH). */
+  defaults: string;
+}
+
+/**
+ * One entry per `CommandTemplates` key. Shared by the Settings UI (help text) and the host
+ * handlers (error messages), so a "not configured" error names the same place the user sees.
+ */
+export const COMMAND_TEMPLATE_INFO: Record<keyof CommandTemplates, CommandTemplateInfo> = {
+  wallpaper: { label: 'Set wallpaper', usedBy: 'sdk.wallpaper.set / restore', defaults: 'swww or hyprpaper on Hyprland, gsettings or feh on other Linux desktops, built in on Windows and macOS' },
+  browser: { label: 'Open browser', usedBy: 'sdk.browser.open', defaults: 'xdg-open on Linux, the system default browser on Windows and macOS' },
+  activeWindow: { label: 'Active window', usedBy: 'sdk.presence.activeWindow / status and the <senses> prompt line', defaults: 'none (Hyprland IPC is used directly; elsewhere the window is unknown until you set a command)' },
+  nowPlaying: { label: 'Now playing', usedBy: 'sdk.presence.nowPlaying / status and the <senses> prompt line', defaults: 'playerctl when installed' },
+  screenshot: { label: 'Screenshot', usedBy: 'sdk.screen.look', defaults: 'grim on Hyprland/Wayland, grim/scrot/import on other Linux desktops, screencapture on macOS; not needed where Electron can capture the screen' },
+  tts: { label: 'Speak', usedBy: 'sdk.voice.speak', defaults: 'espeak-ng, espeak or spd-say on Linux, say on macOS, PowerShell speech on Windows; otherwise the built-in speech synthesis' },
+  stt: { label: 'Listen', usedBy: 'sdk.voice.listen', defaults: 'none (no platform default; a recorder/transcriber command is required)' },
+  launch: { label: 'Launch app', usedBy: 'sdk.desktop.launch', defaults: 'none needed: the app is spawned directly when empty' },
+  volumeSet: { label: 'Set volume', usedBy: 'sdk.desktop.setVolume', defaults: 'wpctl or pactl on Linux, osascript on macOS' },
+  volumeGet: { label: 'Get volume', usedBy: 'sdk.desktop.getVolume', defaults: 'wpctl or pactl on Linux, osascript on macOS' },
+  brightness: { label: 'Brightness', usedBy: 'sdk.desktop.setBrightness', defaults: 'brightnessctl on Linux' },
+  doNotDisturb: { label: 'Do not disturb', usedBy: 'sdk.desktop.doNotDisturb', defaults: 'makoctl or dunstctl on Linux' },
+  theme: { label: 'Switch theme', usedBy: 'sdk.desktop.setTheme', defaults: 'gsettings on Linux, osascript on macOS' },
+};
+
 export interface AppSettings {
   providers: ProviderConfig[];
   /** Id of the provider used when a session has no override. */

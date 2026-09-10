@@ -67,7 +67,7 @@ interface MediaApi {
 - Playback calls resolve when playback starts, not when it finishes; do not wait for the end inside an action (schedule a timer instead if you need to react later).
 - Keep a handle in session state if you want to close it in a later action: \`await sdk.state.session.set("song", handle.id)\`.
 - Placement: \`monitor\` ('primary', 'cursor', an index or a name from \`sdk.display.monitors()\`), an anchor \`position\`, or exact \`x\`/\`y\` (fractions 0..1 or px). \`layer\` picks stacking: 'top' (default) or 'overlay' float above windows; 'bottom' sits behind windows but above the wallpaper (use it for ambient art); 'background' shares the wallpaper's layer and is usually hidden by the wallpaper daemon. \`opacity\` fades; \`clickThrough: true\` lets the user keep working through the overlay — combine it with a background layer for decorations, never for things they must click.
-- Check \`sdk.display.backend()\` once per session to learn which of these the desktop honours; unsupported options degrade gracefully instead of failing.
+- Check \`sdk.display.backend()\` once per session to learn which of these the desktop honours; unsupported options degrade gracefully instead of failing. Only a display backend that cannot open an overlay at all throws CAPABILITY_FAILED (the message says why).
 
 \`\`\`ts
 const pic = await sdk.pack.asset("media/images/luna-smile.png");
