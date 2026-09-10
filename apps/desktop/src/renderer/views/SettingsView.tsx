@@ -329,6 +329,65 @@ export function SettingsView() {
       </section>
 
       <section className="section" hidden={tab !== 'general'}>
+        <h2>Conversation history</h2>
+        <p className="muted small" style={{ marginBottom: 10 }}>
+          How a long conversation is kept inside the context window. Nothing is deleted: the chat view and storage always keep every
+          message, this only shapes what is sent to the model.
+        </p>
+        <div className="field-grid">
+          <div className="field">
+            <span className="field-label">Background summarisation</span>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings.history.compress}
+                onChange={(e) => patchSettings({ history: { ...settings.history, compress: e.target.checked } })}
+              />
+              Replace the oldest messages with a rolling summary
+            </label>
+            <span className="field-hint">Written by the model after a turn, off the conversation, once the transcript grows past the threshold below.</span>
+          </div>
+          <NumberField
+            id="hist-above"
+            label="Summarise above (tokens)"
+            path="history.compressAboveTokens"
+            value={settings.history.compressAboveTokens}
+            min={500}
+            step={500}
+            hint="Transcript size that triggers a summary. Keep it well under the context token budget."
+            onCommit={(v) => patchSettings({ history: { ...settings.history, compressAboveTokens: Math.round(v) } })}
+          />
+          <NumberField
+            id="hist-keep"
+            label="Messages kept in full"
+            path="history.keepRecentMessages"
+            value={settings.history.keepRecentMessages}
+            min={2}
+            hint="The most recent messages, never summarised."
+            onCommit={(v) => patchSettings({ history: { ...settings.history, keepRecentMessages: Math.round(v) } })}
+          />
+          <NumberField
+            id="hist-budget"
+            label="Summary budget (tokens)"
+            path="history.summaryBudgetTokens"
+            value={settings.history.summaryBudgetTokens}
+            min={100}
+            step={100}
+            onCommit={(v) => patchSettings({ history: { ...settings.history, summaryBudgetTokens: Math.round(v) } })}
+          />
+          <NumberField
+            id="hist-actions"
+            label="Turns keeping action detail"
+            path="history.keepActionDetailFor"
+            value={settings.history.keepActionDetailFor}
+            min={0}
+            hint="Older messages send only their visible text; the code they ran and its result are left out. 0 drops every past action."
+            onCommit={(v) => patchSettings({ history: { ...settings.history, keepActionDetailFor: Math.round(v) } })}
+          />
+        </div>
+      </section>
+
+      <section className="section" hidden={tab !== 'general'}>
         <h2>Appearance & media</h2>
         <div className="field-grid">
           <div className="field">

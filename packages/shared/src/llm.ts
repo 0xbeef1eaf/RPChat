@@ -103,8 +103,12 @@ export interface ModelExchange {
   /** Turn and assistant message the call belongs to (`turn` kind only). */
   turnId?: string;
   messageId?: MessageId;
-  /** `turn` = one round of a chat turn (round index from 0), `llm.ask` = `sdk.llm.ask` (and screenshot descriptions), `memory` = memory extraction. */
-  kind: 'turn' | 'llm.ask' | 'memory';
+  /**
+   * `turn` = one round of a chat turn (round index from 0), `llm.ask` = `sdk.llm.ask` (and
+   * screenshot descriptions), `memory` = memory extraction, `history` = background summarisation
+   * of the older messages of a session.
+   */
+  kind: 'turn' | 'llm.ask' | 'memory' | 'history';
   round?: number;
   startedAt: string;
   durationMs?: number;

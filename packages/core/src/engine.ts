@@ -36,6 +36,7 @@ import { ChatService } from './services/chat.js';
 import { EventService } from './services/events.js';
 import { MoodService } from './services/mood.js';
 import { RoutineService } from './services/routine.js';
+import { HistoryService } from './services/history.js';
 import { MemoryService } from './services/memory.js';
 import { PackService } from './services/packs.js';
 import { PermissionService } from './services/permissions.js';
@@ -85,6 +86,8 @@ export class Engine {
   readonly sessions: SessionService;
   /** Long-term character memories (`IpcApi.memories` maps 1:1 onto list/add/update/remove/consolidate). */
   readonly memories: MemoryService;
+  /** Background summarisation of the older messages of a session. */
+  readonly history: HistoryService;
   /** Event subscriptions + host-event routing (`hostEvents`/`subscriptions` are the host-facing views). */
   readonly eventService: EventService;
   readonly mood: MoodService;
@@ -136,6 +139,15 @@ export class Engine {
     this.packs = new PackService(opts.storage, opts.packsDir, opts.registry, this.permissions, this.timers, now, logger, () => this.settings.get());
     this.sessions = new SessionService(opts.storage, this.packs, this.permissions, this.timers, this.events, now, logger);
     this.memories = new MemoryService({
+      storage: opts.storage,
+      settings: this.settings,
+      packs: this.packs,
+      providerFactory,
+      emitter: this.events,
+      now,
+      logger,
+    });
+    this.history = new HistoryService({
       storage: opts.storage,
       settings: this.settings,
       packs: this.packs,
@@ -241,6 +253,7 @@ export class Engine {
       now,
       logger,
       memories: this.memories,
+      history: this.history,
       audit: this.audit,
       mood: this.mood,
       routine: this.routine,
@@ -363,6 +376,7 @@ export class Engine {
     await this.eventService.idle();
     await this.chat.idle();
     await this.memories.idle();
+    await this.history.idle();
     await this.dispatcher.dispose();
     await this.runner.dispose();
     await this.storage.close();

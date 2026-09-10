@@ -31,6 +31,9 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   if (stored.memory && typeof stored.memory === 'object') {
     merged.memory = { ...base.memory, ...stored.memory };
   }
+  if (stored.history && typeof stored.history === 'object') {
+    merged.history = { ...base.history, ...stored.history };
+  }
   if (stored.autonomy && typeof stored.autonomy === 'object') {
     merged.autonomy = { ...base.autonomy, ...stored.autonomy };
   }
