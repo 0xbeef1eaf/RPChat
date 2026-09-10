@@ -201,7 +201,7 @@ export function generateSdkIndex(registry: CapabilityRegistry, options: Generate
   const denied = (options.deniedModules ?? []).filter((id, i, arr) => arr.indexOf(id) === i);
   if (denied.length > 0) {
     sections.push(
-      `## Not available\nThese modules are not granted in this session and do not exist on \`sdk\`: ${denied.map((d) => `\`sdk.${d}\``).join(', ')}. Do not call them; if the user asks for something that needs one, say the capability is not enabled for this pack.`,
+      `## Not available\nThese modules are not granted in this session and do not exist on \`sdk\`: ${denied.map((d) => `\`sdk.${d}\``).join(', ')}. Do not call them; if the user asks for something that needs one, say which capability is missing and where it can be enabled (the <pack> section gives the reason for each).`,
     );
   }
   return sections.join('\n\n') + '\n';

@@ -25,6 +25,13 @@ export const DENIAL_TEXT: Record<DenialReason, string> = {
   'not-granted': 'not granted',
 };
 
+/** Longer explanation for the prompt: what the user (or pack author) can do about it. */
+export const DENIAL_HINT: Record<DenialReason, string> = {
+  'not-requested': 'the pack does not request it; the pack author must add it to the manifest capabilities',
+  policy: 'switched off globally by the user under Settings → Permissions',
+  'not-granted': 'switched off for this pack by the user under Packs → this pack → permission toggles',
+};
+
 export interface EffectiveCapabilities {
   /** requested ∩ global policy ∩ per-pack grant (non-trusted modules only). */
   effective: string[];

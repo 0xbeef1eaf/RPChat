@@ -38,6 +38,8 @@ export interface TurnInput {
   provider: LlmProvider;
   model: string;
   system: string;
+  /** See `LlmChatRequest.systemStablePrefixChars`. */
+  systemStablePrefixChars?: number;
   messages: LlmMessage[];
   useTools: boolean;
   maxActionRounds: number;
@@ -124,6 +126,7 @@ export class ActionLoop {
 
     const callProvider = async (withTools: boolean): Promise<LlmChatResponse> => {
       const request: LlmChatRequest = { model: input.model, system: input.system, messages: conversation };
+      if (input.systemStablePrefixChars) request.systemStablePrefixChars = input.systemStablePrefixChars;
       if (withTools) request.tools = [RUN_ACTION_TOOL];
       if (input.temperature !== undefined) request.temperature = input.temperature;
       if (input.maxTokens !== undefined) request.maxTokens = input.maxTokens;

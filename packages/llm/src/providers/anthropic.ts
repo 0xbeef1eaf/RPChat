@@ -151,7 +151,20 @@ export function toAnthropicParams(request: LlmChatRequest, supportsTools: boolea
     max_tokens: request.maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS,
     messages: toAnthropicMessages(stripImages(request.messages, supportsVision)),
   };
-  if (request.system) params.system = request.system;
+  if (request.system) {
+    const cut = request.systemStablePrefixChars ?? 0;
+    if (cut > 0 && cut < request.system.length) {
+      // Prompt caching: the turn-invariant prefix (rules, persona, pack, SDK reference) gets a cache
+      // breakpoint; the dynamic tail (memory, mood, time) follows uncached. Tools precede system in
+      // Anthropic's cache order, so the breakpoint covers them too.
+      params.system = [
+        { type: 'text', text: request.system.slice(0, cut), cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: request.system.slice(cut) },
+      ];
+    } else {
+      params.system = request.system;
+    }
+  }
   if (request.temperature !== undefined) params.temperature = request.temperature;
   if (supportsTools && request.tools && request.tools.length > 0) params.tools = toAnthropicTools(request.tools);
   return params;

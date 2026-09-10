@@ -29,3 +29,11 @@ describe('mergeSettings commandTemplates', () => {
     expect(defaultSettings().commandTemplates.browser).toEqual({ command: '' });
   });
 });
+
+describe('mergeSettings budget migration', () => {
+  it('moves the legacy 24k context budget to the current default and keeps other values', async () => {
+    const { LEGACY_CONTEXT_TOKEN_BUDGET, mergeSettings } = await import('./defaults.js');
+    expect(mergeSettings({ contextTokenBudget: LEGACY_CONTEXT_TOKEN_BUDGET }).contextTokenBudget).toBe(64_000);
+    expect(mergeSettings({ contextTokenBudget: 30_000 }).contextTokenBudget).toBe(30_000);
+  });
+});

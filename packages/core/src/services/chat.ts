@@ -13,7 +13,7 @@ import type { ProviderFactory, SettingsService } from './settings.js';
 import type { TimerService } from './timers.js';
 import type { Clock, EngineEmitter, Logger } from '../types.js';
 import { characterScope } from '../handlers/state.js';
-import { DENIAL_TEXT } from './permissions.js';
+import { DENIAL_HINT, DENIAL_TEXT } from './permissions.js';
 
 export interface ChatServiceOptions {
   storage: Pick<Storage, 'state'>;
@@ -372,7 +372,7 @@ export class ChatService {
     };
     if (this.o.locale !== undefined) promptInput.locale = this.o.locale;
     promptInput.deniedReasons = Object.fromEntries(
-      Object.entries((await this.o.permissions.effective(pack.manifest.id)).denied).map(([id, reason]) => [id, DENIAL_TEXT[reason]]),
+      Object.entries((await this.o.permissions.effective(pack.manifest.id)).denied).map(([id, reason]) => [id, `${DENIAL_TEXT[reason]}: ${DENIAL_HINT[reason]}`]),
     );
     if (this.o.senses && settings.senses.includeInPrompt && allowedModules.includes('presence')) {
       try {
@@ -383,7 +383,7 @@ export class ChatService {
     }
     if (this.o.mood) promptInput.mood = await this.o.mood.get(session.characterRef);
     if (this.o.routine) promptInput.routine = await this.o.routine.status(session.characterRef);
-    const { system, messages, stats } = this.promptBuilder.build(promptInput);
+    const { system, messages, stats, stablePrefixLength } = this.promptBuilder.build(promptInput);
     if (stats.systemTokens * 2 > stats.budgetTokens || stats.droppedMessages > 0) {
       this.o.logger.warn(
         `[chat] prompt budget: system ~${stats.systemTokens} tokens (sdk reference ~${stats.sdkReferenceTokens}) of ${stats.budgetTokens}; ` +
@@ -400,6 +400,7 @@ export class ChatService {
         provider,
         model,
         system,
+        systemStablePrefixChars: stablePrefixLength,
         messages,
         useTools,
         maxActionRounds: settings.maxActionRounds,

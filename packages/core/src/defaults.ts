@@ -8,11 +8,16 @@ export function defaultSettings(): AppSettings {
 }
 
 /** Merge a stored/partial settings object onto the defaults (run limits merged field by field). */
+/** `contextTokenBudget` default before the abridged SDK index; migrated on load. */
+export const LEGACY_CONTEXT_TOKEN_BUDGET = 24_000;
+
 export function mergeSettings(stored: Partial<AppSettings> | undefined, base: AppSettings = defaultSettings()): AppSettings {
   if (!stored) return base;
   const runLimits: RunLimits = { ...base.runLimits, ...(stored.runLimits ?? {}) };
   const merged: AppSettings = { ...base, ...stored, runLimits };
   if (!Array.isArray(merged.providers)) merged.providers = [];
+  // The 24k default of early builds left almost no room for the transcript; move it to the current default.
+  if (stored.contextTokenBudget === LEGACY_CONTEXT_TOKEN_BUDGET) merged.contextTokenBudget = base.contextTokenBudget;
   // Nested records are merged per key so a patch of one entry keeps the others. Command templates
   // are also filtered to the known names so keys from older versions (e.g. the removed input
   // templates) are dropped instead of carried along forever.

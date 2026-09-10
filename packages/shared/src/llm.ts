@@ -40,6 +40,12 @@ export interface LlmMessage {
 export interface LlmChatRequest {
   model: string;
   system: string;
+  /**
+   * Number of leading characters of `system` that are identical from turn to turn (rules,
+   * persona, pack, SDK reference). Providers with prompt caching mark that prefix cacheable;
+   * the rest (memory, mood, time) changes every turn and is sent uncached.
+   */
+  systemStablePrefixChars?: number;
   messages: LlmMessage[];
   tools?: ToolDefinition[];
   temperature?: number;

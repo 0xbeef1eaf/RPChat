@@ -74,6 +74,8 @@ export interface BuiltPrompt {
   system: string;
   messages: LlmMessage[];
   stats: PromptStats;
+  /** Length of the turn-invariant prefix of `system` (engine rules, persona, pack, SDK reference). */
+  stablePrefixLength: number;
 }
 
 /** Content prefix of the `role: 'system'` message a self-wake appends to the transcript. */
@@ -95,7 +97,7 @@ function engineRules(name: string, useTools: boolean): string {
     `You can act on the user's computer by writing small TypeScript programs against the \`sdk\` object described in <sdk_reference>. ${how}`,
     'Act only when it serves the conversation. One action per intention, a few sdk calls each, and keep the code short. Never loop or wait inside an action; use sdk.timers to do something later.',
     'Choose media by meaning: the asset list in <pack> shows each file with its tags and description, and the Tags line explains the vocabulary. Pick by tags (sdk.pack.findAssets({ anyTags: [...] })) rather than guessing file names.',
-    'Results of your actions are sent back to you; read them before claiming success. If an action fails, recover gracefully in character and do not paste error text at the user.',
+    'Results of your actions are sent back to you; read them before claiming success. If an action fails because something is missing on the user\'s side (a PERMISSION_DENIED error, or a CAPABILITY_FAILED error saying a command is not configured or a service is not connected), tell the user plainly what is missing and where to fix it, in your own voice; the error message names the place. For other failures, recover gracefully in character and do not paste raw error text at the user.',
     'Do not narrate or explain the code you run unless the user asks; the conversation is what the user sees, the code is not.',
     'You can act on your own initiative: `sdk.llm.wake` gives you a turn later (or right after this action) with a note from your past self; `sdk.timers.runLater` runs code later without a turn. Use them to follow up, continue stories, or check in. Limits apply; do not chain wakes needlessly.',
     'Let your <mood> colour your tone and choices without announcing it; when something in the conversation moves you, use sdk.mood.nudge with a short reason. Respect your <routine>: if you are asleep or away, respond in character (groggy, brief, or promise to be back later).',
@@ -293,16 +295,19 @@ function hasToolUse(msg: LlmMessage): boolean {
 export class PromptBuilder {
   build(input: PromptInput): BuiltPrompt {
     const reference = generateSdkIndex(input.registry, { modules: input.allowedModules, deniedModules: input.deniedModules });
-    const system = [
+    const stable = [
       section('engine_rules', engineRules(input.character.definition.name, input.useTools)),
       section('persona', persona(input.character)),
       section('pack', packContext(input)),
       section('sdk_reference', reference),
+    ].join('\n\n');
+    const dynamic = [
       section('memory', memory(input)),
       ...(input.mood ? [section('mood', moodPromptText(input.mood))] : []),
       ...(input.routine ? [section('routine', RoutineService.promptText(input.routine))] : []),
       section('session', sessionNotes(input)),
     ].join('\n\n');
+    const system = `${stable}\n\n${dynamic}`;
 
     const systemTokens = estimateTokens(system);
     const budget = Math.max(MIN_TRANSCRIPT_BUDGET, input.contextTokenBudget - systemTokens);
@@ -316,6 +321,6 @@ export class PromptBuilder {
       transcriptTokens: messages.reduce((n, m) => n + estimateTokens(JSON.stringify(m.content)), 0),
       droppedMessages: all.length - messages.length,
     };
-    return { system, messages, stats };
+    return { system, messages, stats, stablePrefixLength: stable.length };
   }
 }

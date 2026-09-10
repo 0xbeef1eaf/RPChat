@@ -74,8 +74,8 @@ describe('permission policy (requested ∩ global ∩ per-pack)', () => {
     const system = t.provider.requests.at(-1)!.system;
     expect(system).toContain('## sdk.media —');
     expect(system).not.toContain('## sdk.ui —');
-    expect(system).toContain('ui (denied by your settings)');
-    expect(system).toContain('system (not requested by the pack)');
+    expect(system).toContain('ui (denied by your settings: switched off globally by the user under Settings → Permissions)');
+    expect(system).toContain('system (not requested by the pack: the pack does not request it');
 
     const inspection = await t.engine.packs.inspect(LUNA_DIR);
     expect(inspection.manifest.id).toBe(LUNA_ID);

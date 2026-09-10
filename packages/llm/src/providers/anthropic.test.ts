@@ -351,3 +351,16 @@ describe('AnthropicProvider.chat (fake client)', () => {
     expect((err as RpError).details).toEqual({ status: 429, body: { type: 'rate_limit_error' } });
   });
 });
+
+describe('prompt caching', () => {
+  it('splits the system prompt at the stable prefix and marks the prefix cacheable', () => {
+    const request: LlmChatRequest = { model: 'm', system: 'STABLE-PART\n\ndynamic', systemStablePrefixChars: 11, messages: transcript };
+    const params = toAnthropicParams(request, true);
+    expect(params.system).toEqual([
+      { type: 'text', text: 'STABLE-PART', cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: '\n\ndynamic' },
+    ]);
+    expect(toAnthropicParams({ ...request, systemStablePrefixChars: undefined }, true).system).toBe('STABLE-PART\n\ndynamic');
+    expect(toAnthropicParams({ ...request, systemStablePrefixChars: 999 }, true).system).toBe('STABLE-PART\n\ndynamic');
+  });
+});

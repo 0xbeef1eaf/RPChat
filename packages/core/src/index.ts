@@ -63,7 +63,7 @@ export type { MoodServiceOptions } from './services/mood.js';
 export { RoutineService, evaluateRoutine, normalizeEntries } from './services/routine.js';
 export type { RoutineServiceOptions, RoutineTransition, RoutineOverride } from './services/routine.js';
 export { EventsHandler, MoodHandler, RoutineHandler, subscriptionInfo } from './handlers/living.js';
-export { policyAllows, DENIAL_TEXT } from './services/permissions.js';
+export { policyAllows, DENIAL_TEXT, DENIAL_HINT } from './services/permissions.js';
 export type { DenialReason, EffectiveCapabilities } from './services/permissions.js';
 export { dayPartOf } from './services/chat.js';
 export type { SelfWakeSource } from './services/chat.js';
