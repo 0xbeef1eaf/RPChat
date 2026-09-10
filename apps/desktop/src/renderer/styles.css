@@ -967,6 +967,52 @@ textarea:disabled {
   gap: 10px;
 }
 
+/* Model traffic drawer (Settings → General → Debug) */
+.traffic-row {
+  gap: 6px;
+}
+.traffic-summary {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.traffic-details {
+  width: 100%;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.traffic-pre {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.traffic-section .action-body {
+  max-height: 60vh;
+  overflow: auto;
+}
+.traffic-message {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+.traffic-role {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+}
+.traffic-role-assistant {
+  color: var(--accent);
+}
+
 /* ---------- Packs ---------- */
 .pack-grid {
   display: flex;

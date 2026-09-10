@@ -13,6 +13,7 @@ import type { ProviderFactory, SettingsService } from './settings.js';
 import type { TimerService } from './timers.js';
 import type { Clock, EngineEmitter, Logger } from '../types.js';
 import { characterScope } from '../handlers/state.js';
+import { providerLabel } from './exchanges.js';
 import { DENIAL_HINT, DENIAL_TEXT } from './permissions.js';
 
 export interface ChatServiceOptions {
@@ -421,6 +422,8 @@ export class ChatService {
         limits: settings.runLimits,
         signal: controller.signal,
         origin,
+        captureExchanges: settings.debug.showModelTraffic,
+        providerLabel: providerLabel(config),
       };
       const hints = character.definition.modelHints;
       if (hints?.temperature !== undefined) turn.temperature = hints.temperature;

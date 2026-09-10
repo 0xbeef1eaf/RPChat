@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { estimateTokens } from '@rp/llm';
-import type { ChatMessage, LlmProvider, MemoryEntry, MemoryImportance, MemorySource, Storage } from '@rp/shared';
+import type { ChatMessage, LlmChatRequest, LlmProvider, MemoryEntry, MemoryImportance, MemorySource, Storage } from '@rp/shared';
 import { RpError, parseCharacterRef } from '@rp/shared';
 import { jaccard, promptOrder, rankMemories, tokenize } from '../memory/rank.js';
+import { providerLabel, recordExchange } from './exchanges.js';
 import type { PackService } from './packs.js';
 import type { ProviderFactory, SettingsService } from './settings.js';
 import type { Clock, EngineEmitter, Logger } from '../types.js';
@@ -272,13 +273,16 @@ export class MemoryService {
     ].join('\n');
     const transcript = this.renderTranscript(fresh, characterName, settings.userDisplayName);
 
-    const response = await provider.chat({
+    const request: LlmChatRequest = {
       model,
       system,
       messages: [{ role: 'user', content: [{ type: 'text', text: transcript }] }],
       maxTokens: CONSOLIDATION_MAX_TOKENS,
       temperature: 0,
-    });
+    };
+    const response = settings.debug.showModelTraffic
+      ? await recordExchange(this.o.emitter, this.o.now, { sessionId, kind: 'memory', provider: providerLabel(config) }, request, () => provider.chat(request))
+      : await provider.chat(request);
     const reply = response.message.content
       .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
       .map((p) => p.text)

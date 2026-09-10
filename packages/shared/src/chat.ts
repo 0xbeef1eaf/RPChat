@@ -1,6 +1,7 @@
 import type { ActionRecord } from './action.js';
 import type { SerializedError } from './errors.js';
 import type { CharacterRef, MessageId, SessionId } from './ids.js';
+import type { ModelExchange } from './llm.js';
 import type { MemoryEntry } from './memory.js';
 import type { MoodState, RoutineStatus } from './senses.js';
 
@@ -68,6 +69,8 @@ export type ChatEvent =
   | { type: 'routine-changed'; sessionId: SessionId; routine: RoutineStatus }
   | { type: 'event-fired'; sessionId: SessionId; subscriptionId: string; event: string }
   | { type: 'turn-finished'; sessionId: SessionId; turnId: string }
+  /** A provider call and its outcome; only emitted while `settings.debug.showModelTraffic` is on. */
+  | { type: 'model-exchange'; sessionId: SessionId; exchange: ModelExchange }
   | { type: 'error'; sessionId: SessionId; error: SerializedError };
 
 /**

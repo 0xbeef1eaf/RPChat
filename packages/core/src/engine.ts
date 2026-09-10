@@ -176,6 +176,8 @@ export class Engine {
         timers: this.timers,
         sessions: this.sessions,
         chat: () => this.chat,
+        emitter: this.events,
+        now,
       }),
     ];
     this.dispatcher = new CapabilityDispatcher({

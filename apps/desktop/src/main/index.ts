@@ -12,7 +12,7 @@ import { handleAssetRequest } from './asset-protocol.js';
 import { isHyprland } from './display/layers.js';
 import { createApp } from './engine.js';
 import type { AppServices } from './engine.js';
-import { isSmokeRun, runSmokeTurn, smokeLoadPlugin } from './dev-mode.js';
+import { isSmokeRun, runSmokeTurn, smokeEnableModelTraffic, smokeLoadPlugin } from './dev-mode.js';
 import { registerIpc } from './ipc.js';
 import { createLogger } from './logger.js';
 import { WindowManager } from './windows.js';
@@ -132,6 +132,7 @@ async function main(): Promise<void> {
   protocol.handle(ASSET_PROTOCOL, (request) => handleAssetRequest(request, { packRootFor: (packId) => active.packRootFor(packId), logger }));
 
   registerIpc({ services, windows, logger, version });
+  if (isSmokeRun(env)) await smokeEnableModelTraffic(engine);
   if (START_HIDDEN) tray = createTray(windows, active, () => void shutdown().finally(() => app.quit()));
   const win = windows.createMainWindow({ hidden: START_HIDDEN });
   win.once('ready-to-show', () => {

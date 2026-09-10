@@ -39,6 +39,7 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   if (stored.desktop && typeof stored.desktop === 'object') merged.desktop = { ...base.desktop, ...stored.desktop };
   if (stored.messaging && typeof stored.messaging === 'object') merged.messaging = { ...base.messaging, ...stored.messaging };
   if (stored.updates && typeof stored.updates === 'object') merged.updates = { ...base.updates, ...stored.updates };
+  if (stored.debug && typeof stored.debug === 'object') merged.debug = { ...base.debug, ...stored.debug };
   if (stored.permissions && typeof stored.permissions === 'object') {
     merged.permissions = { ...base.permissions, ...stored.permissions, moduleAllow: { ...base.permissions.moduleAllow, ...(stored.permissions.moduleAllow ?? {}) } };
   }

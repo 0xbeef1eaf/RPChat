@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { ActionRecord, ChatMessage, PermissionRequest, Session } from '@rp/shared';
+import type { ActionRecord, ChatMessage, ModelExchange, PermissionRequest, Session } from '@rp/shared';
 import {
+  MAX_EXCHANGES,
   applyChatEvent,
+  clearExchanges,
   dequeuePermissionRequest,
   enqueuePermissionRequest,
   pushToast,
@@ -39,7 +41,7 @@ describe('applyChatEvent', () => {
     s = applyChatEvent(s, { type: 'error', sessionId: S, error: { code: 'INTERNAL', message: 'boom' } });
     expect(runtimeFor(s, S).error?.message).toBe('boom');
     s = applyChatEvent(s, { type: 'turn-started', sessionId: S, turnId: 't1' });
-    expect(runtimeFor(s, S)).toEqual({ turnId: 't1', status: null, error: null, eventMarkers: [], eventsVersion: 0 });
+    expect(runtimeFor(s, S)).toEqual({ turnId: 't1', status: null, error: null, eventMarkers: [], eventsVersion: 0, exchanges: [] });
     s = applyChatEvent(s, { type: 'turn-finished', sessionId: S, turnId: 't1' });
     expect(runtimeFor(s, S).turnId).toBeNull();
   });
@@ -130,6 +132,34 @@ describe('applyChatEvent', () => {
     });
     expect(next.memoryVersion).toBe(s.memoryVersion + 1);
     expect(next.messages).toBe(s.messages);
+  });
+
+  it('model-exchange appends to the session runtime (capped), messages-cleared and clearExchanges empty it', () => {
+    const exchange = (id: string): ModelExchange => ({
+      id,
+      sessionId: S,
+      kind: 'turn',
+      round: 0,
+      startedAt: '2026-01-01T00:00:00Z',
+      request: { provider: 'Mock', model: 'm', system: 'sys', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] },
+      response: { message: { role: 'assistant', content: [{ type: 'text', text: 'hey' }] }, stopReason: 'end', usage: { inputTokens: 1, outputTokens: 1 }, model: 'm' },
+    });
+    // tracked even before the session's messages are loaded
+    let s = initialState();
+    for (let i = 0; i < MAX_EXCHANGES + 5; i += 1) s = applyChatEvent(s, { type: 'model-exchange', sessionId: S, exchange: exchange(`x${i}`) });
+    const kept = runtimeFor(s, S).exchanges;
+    expect(kept).toHaveLength(MAX_EXCHANGES);
+    expect(kept[0]?.id).toBe('x5');
+    expect(kept.at(-1)?.id).toBe(`x${MAX_EXCHANGES + 4}`);
+    expect(s.messages[S]).toBeUndefined();
+
+    const other = applyChatEvent(s, { type: 'model-exchange', sessionId: 'other', exchange: { ...exchange('o1'), sessionId: 'other' } });
+    expect(runtimeFor(other, S).exchanges).toBe(kept);
+    expect(runtimeFor(other, 'other').exchanges.map((x) => x.id)).toEqual(['o1']);
+
+    expect(clearExchanges(s, 'unknown')).toBe(s);
+    expect(runtimeFor(clearExchanges(s, S), S).exchanges).toEqual([]);
+    expect(runtimeFor(applyChatEvent(s, { type: 'messages-cleared', sessionId: S }), S).exchanges).toEqual([]);
   });
 
   it('event-fired appends an inline marker and bumps eventsVersion', () => {

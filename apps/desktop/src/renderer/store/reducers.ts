@@ -15,6 +15,8 @@ import { EMPTY_RUNTIME, type AppState, type MemoriesPanelTarget, type SessionRun
 
 const MAX_TOASTS = 4;
 const MAX_EVENT_MARKERS = 30;
+/** Per session; older exchanges drop off the front. */
+export const MAX_EXCHANGES = 40;
 
 function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
   const idx = list.findIndex((x) => x.id === item.id);
@@ -86,7 +88,7 @@ export function applyChatEvent(state: AppState, event: ChatEvent): AppState {
     case 'messages-cleared': {
       const runtime = state.runtime[event.sessionId];
       const next = { ...state, messages: { ...state.messages, [event.sessionId]: [] } };
-      return runtime ? patchRuntime(next, event.sessionId, { turnId: null, error: null, eventMarkers: [] }) : next;
+      return runtime ? patchRuntime(next, event.sessionId, { turnId: null, error: null, eventMarkers: [], exchanges: [] }) : next;
     }
     case 'memory-added':
       return { ...state, memoryVersion: state.memoryVersion + 1 };
@@ -103,6 +105,11 @@ export function applyChatEvent(state: AppState, event: ChatEvent): AppState {
       const eventMarkers = [...rt.eventMarkers, marker].slice(-MAX_EVENT_MARKERS);
       return patchRuntime(state, event.sessionId, { eventMarkers, eventsVersion: rt.eventsVersion + 1 });
     }
+    case 'model-exchange': {
+      const rt = state.runtime[event.sessionId] ?? EMPTY_RUNTIME;
+      const exchanges = [...rt.exchanges, event.exchange].slice(-MAX_EXCHANGES);
+      return patchRuntime(state, event.sessionId, { exchanges });
+    }
     case 'action-started':
     case 'action-finished':
       return patchMessage(state, event.sessionId, event.messageId, (m) => ({
@@ -112,6 +119,13 @@ export function applyChatEvent(state: AppState, event: ChatEvent): AppState {
     default:
       return state;
   }
+}
+
+/** Drop the captured model traffic of a session (renderer-side only; nothing is stored elsewhere). */
+export function clearExchanges(state: AppState, sessionId: SessionId): AppState {
+  const rt = state.runtime[sessionId];
+  if (!rt || rt.exchanges.length === 0) return state;
+  return patchRuntime(state, sessionId, { exchanges: [] });
 }
 
 export function setMessages(state: AppState, sessionId: SessionId, messages: ChatMessage[]): AppState {

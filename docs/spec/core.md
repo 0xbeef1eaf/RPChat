@@ -66,6 +66,7 @@ for round in 0..maxActionRounds:
 persist message, emit message-updated, turn-finished; on error attach error and emit error
 ```
 Abort: `chat.abort(sessionId)` aborts the provider `signal` and the runner `signal`; partial text is kept and persisted.
+Model traffic: with `TurnInput.captureExchanges` (ChatService passes `settings.debug.showModelTraffic`, plus `providerLabel` = the provider config's label or id) every provider call emits exactly one `model-exchange` chat event (`ModelExchange`: kind `turn`, `round` index from 0, the final text-only call after the action limit included, `turnId`, `messageId`, a `structuredClone` snapshot of system/messages/tools taken before the call, then `response` with usage/stop reason or the serialized `error`, and `durationMs`). `sdk.llm.ask` (and screenshot descriptions) emit the same event with kind `llm.ask`, memory extraction with kind `memory`; all three go through `services/exchanges.ts` `recordExchange`. When the setting is off nothing is copied or emitted.
 `sdk.chat.say` during an action appends a separate assistant message *before* the streaming one is finalised; that is fine — order them by createdAt.
 
 **ChatService**: `send(sessionId, text)` → persist user message, run `onUserMessage` behaviours (may return `{ skipLlm: true }`), run `ActionLoop.runTurn`. Serialise turns per session (a queue); `send` while a turn runs waits for it. `abort(sessionId)`.

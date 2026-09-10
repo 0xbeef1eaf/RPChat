@@ -48,6 +48,9 @@ Characters, their behaviours and their media are distributed as shareable
 - **External commands**: wallpaper, browser, desktop and voice actions run through
   command templates you edit in Settings. Input locking and injection are
   daemon-only (see *System integration* below).
+- **See what the model sees**: Settings → General → Debug → "Show model traffic"
+  adds a *Model traffic* button to the chat that lists every request sent to the
+  model for the session (full system prompt, messages, tools) and its response.
 - **Senses and events**: characters can see what you're doing (idle time,
   active window, now playing, battery, calendar), look at the screen through a
   vision model, and subscribe to events (you came back, a song changed, a file

@@ -161,6 +161,15 @@ export interface AppSettings {
     /** Shortest repeat interval for repeating timers, ms. Default 60_000. */
     minRepeatIntervalMs: number;
   };
+  /** Developer toggles; nothing here changes what the character can do. */
+  debug: {
+    /**
+     * Capture every request sent to the model for a chat session (turn rounds, `sdk.llm.ask`,
+     * memory extraction) and the response or error, as `model-exchange` chat events. Kept in
+     * memory by the app only (never persisted). Default false.
+     */
+    showModelTraffic: boolean;
+  };
 }
 
 export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: RunLimits } = {
@@ -202,4 +211,5 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
     maxTimersPerSession: 20,
     minRepeatIntervalMs: 60_000,
   },
+  debug: { showModelTraffic: false },
 };

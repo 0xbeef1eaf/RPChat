@@ -1,7 +1,9 @@
-import type { ActionContext, CapabilityHandler, Json, LlmChatRequest } from '@rp/shared';
+import type { ActionContext, CapabilityHandler, Json, LlmChatRequest, LlmChatResponse, LlmProvider } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import { resolveSupportsVision } from '@rp/llm';
 import type { ChatService } from '../services/chat.js';
+import { providerLabel, recordExchange } from '../services/exchanges.js';
+import type { Clock, EngineEmitter } from '../types.js';
 import type { ProviderFactory, SettingsService } from '../services/settings.js';
 import type { TimerService } from '../services/timers.js';
 import { TIMER_PROMPT_MAX } from '../services/timers.js';
@@ -20,6 +22,9 @@ export interface LlmHandlerOptions {
   sessions: { get(sessionId: string): Promise<{ providerId?: string; model?: string } | undefined> };
   /** Resolved lazily: the chat service is constructed after the handlers. */
   chat: () => Pick<ChatService, 'queueImmediateWake'>;
+  /** When set, calls are recorded as `model-exchange` events while `settings.debug.showModelTraffic` is on. */
+  emitter?: EngineEmitter;
+  now?: Clock;
 }
 
 /** `sdk.llm`: `ask` (tool-less side completion, off the transcript) and `wake` (self-triggered turn now or later). */
@@ -65,7 +70,7 @@ export class LlmHandler implements CapabilityHandler {
     const timeout = setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
     timeout.unref?.();
     try {
-      const response = await provider.chat({
+      const request: LlmChatRequest = {
         model: session?.model ?? config.model,
         system: 'You describe screenshots precisely and concisely for a companion character. Mention what the user is doing, visible apps, text that matters, and anything notable. Never invent details.',
         messages: [
@@ -79,7 +84,8 @@ export class LlmHandler implements CapabilityHandler {
         ],
         maxTokens: ASK_MAX_TOKENS,
         signal: controller.signal,
-      });
+      };
+      const response = await this.chat(sessionId, provider, providerLabel(config), request);
       return response.message.content
         .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
         .map((p) => p.text)
@@ -131,7 +137,7 @@ export class LlmHandler implements CapabilityHandler {
         signal: controller.signal,
       };
       if (temperature !== undefined) request.temperature = temperature;
-      const response = await provider.chat(request);
+      const response = await this.chat(context.sessionId, provider, providerLabel(config), request);
       return response.message.content
         .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
         .map((p) => p.text)
@@ -158,6 +164,13 @@ export class LlmHandler implements CapabilityHandler {
     }
     const timer = await this.o.timers.schedulePrompt(context, delay, prompt, typeof opts.label === 'string' ? opts.label : undefined);
     return { queued: false, timer: timerInfo(timer) };
+  }
+
+  /** `provider.chat`, wrapped in a `model-exchange` record (kind `llm.ask`) when the debug setting is on. */
+  private async chat(sessionId: string, provider: LlmProvider, label: string, request: LlmChatRequest): Promise<LlmChatResponse> {
+    const emitter = this.o.emitter;
+    if (!emitter || !(await this.o.settings.get()).debug.showModelTraffic) return provider.chat(request);
+    return recordExchange(emitter, this.o.now ?? (() => new Date()), { sessionId, kind: 'llm.ask', provider: label }, request, () => provider.chat(request));
   }
 
   private options(value: unknown): Record<string, Json> {

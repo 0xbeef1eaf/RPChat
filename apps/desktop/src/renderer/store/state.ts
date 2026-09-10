@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   CharacterSummary,
   InstalledPackView,
+  ModelExchange,
   PermissionRequest,
   SerializedError,
   Session,
@@ -40,6 +41,8 @@ export interface SessionRuntime {
   eventMarkers: EventMarker[];
   /** Bumped on `event-fired` so an open Events drawer re-fetches subscriptions. */
   eventsVersion: number;
+  /** Captured provider calls (`model-exchange`, only while `settings.debug.showModelTraffic` is on), newest last (capped). */
+  exchanges: ModelExchange[];
 }
 
 export interface MemoriesPanelTarget {
@@ -88,7 +91,7 @@ export interface AppState {
   };
 }
 
-export const EMPTY_RUNTIME: SessionRuntime = { turnId: null, status: null, error: null, eventMarkers: [], eventsVersion: 0 };
+export const EMPTY_RUNTIME: SessionRuntime = { turnId: null, status: null, error: null, eventMarkers: [], eventsVersion: 0, exchanges: [] };
 
 export function initialState(): AppState {
   return {

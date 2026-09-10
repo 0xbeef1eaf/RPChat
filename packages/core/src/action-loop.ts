@@ -17,6 +17,7 @@ import type {
   Session,
 } from '@rp/shared';
 import { RUN_ACTION_TOOL_NAME, RpError, serializeError } from '@rp/shared';
+import { recordExchange } from './services/exchanges.js';
 import type { Clock, EngineEmitter, Logger } from './types.js';
 import { NOOP_LOGGER } from './types.js';
 
@@ -51,6 +52,10 @@ export interface TurnInput {
   limits?: Partial<RunLimits>;
   signal?: AbortSignal;
   origin?: 'llm' | 'timer';
+  /** Emit a `model-exchange` event per provider call (`settings.debug.showModelTraffic`). Default false. */
+  captureExchanges?: boolean;
+  /** Provider config label/id written into the exchange records. */
+  providerLabel?: string;
 }
 
 export const ACTION_LIMIT_NOTICE = '[system] action limit reached, reply with text only';
@@ -124,7 +129,7 @@ export class ActionLoop {
     const usage = { inputTokens: 0, outputTokens: 0 };
     const conversation: LlmMessage[] = [...input.messages];
 
-    const callProvider = async (withTools: boolean): Promise<LlmChatResponse> => {
+    const callProvider = async (withTools: boolean, round: number): Promise<LlmChatResponse> => {
       const request: LlmChatRequest = { model: input.model, system: input.system, messages: conversation };
       if (input.systemStablePrefixChars) request.systemStablePrefixChars = input.systemStablePrefixChars;
       if (withTools) request.tools = [RUN_ACTION_TOOL];
@@ -134,13 +139,23 @@ export class ActionLoop {
 
       const before = message.content;
       let streamed = '';
-      const response = await input.provider.chat(request, {
-        onTextDelta: (delta) => {
-          streamed += delta;
-          message.content = joinText(before, streamed);
-          emit({ type: 'text-delta', sessionId, messageId: message.id, delta });
-        },
-      });
+      const chat = (): Promise<LlmChatResponse> =>
+        input.provider.chat(request, {
+          onTextDelta: (delta) => {
+            streamed += delta;
+            message.content = joinText(before, streamed);
+            emit({ type: 'text-delta', sessionId, messageId: message.id, delta });
+          },
+        });
+      const response = input.captureExchanges
+        ? await recordExchange(
+            this.emitter,
+            this.now,
+            { sessionId, kind: 'turn', provider: input.providerLabel ?? input.provider.config.label ?? input.provider.id, turnId, messageId: message.id, round },
+            request,
+            chat,
+          )
+        : await chat();
       usage.inputTokens += response.usage.inputTokens;
       usage.outputTokens += response.usage.outputTokens;
       return response;
@@ -164,7 +179,7 @@ export class ActionLoop {
       for (;;) {
         this.throwIfAborted(input.signal);
         const before = message.content;
-        const response = await callProvider(input.useTools && round < input.maxActionRounds);
+        const response = await callProvider(input.useTools && round < input.maxActionRounds, round);
 
         const pending: PendingAction[] = [];
         if (input.useTools) {
@@ -186,6 +201,7 @@ export class ActionLoop {
           exhausted = true;
           conversation.push(response.message);
           conversation.push({ role: 'user', content: this.refusedResults(pending) });
+          round += 1; // the text-only call below is its own round in the exchange log
           break;
         }
 
@@ -232,7 +248,7 @@ export class ActionLoop {
       if (exhausted) {
         conversation.push({ role: 'user', content: [{ type: 'text', text: ACTION_LIMIT_NOTICE }] });
         const before = message.content;
-        const response = await callProvider(false);
+        const response = await callProvider(false, round);
         settleText(before, response, true);
       }
     } catch (err) {

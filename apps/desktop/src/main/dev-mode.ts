@@ -141,6 +141,14 @@ export async function smokeLoadPlugin(plugins: { install(dir?: string): Promise<
   }
 }
 
+/**
+ * Smoke runs capture model traffic (Settings → General → Debug in a real run) so the tour can open
+ * the Model traffic drawer. Must run before the main window loads: the renderer reads settings once at boot.
+ */
+export async function smokeEnableModelTraffic(engine: Engine): Promise<void> {
+  await engine.settings.update({ debug: { showModelTraffic: true } });
+}
+
 export function isSmokeRun(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.RP_SMOKE === '1';
 }
@@ -156,8 +164,10 @@ export async function runSmokeTurn(engine: Engine, logger: Logger, mediaList: ()
     return;
   }
   const events: string[] = [];
+  let exchanges = 0;
   const off = engine.events.on('chat', (ev) => {
     events.push(ev.type === 'error' ? `error(${ev.error.code}: ${ev.error.message})` : ev.type);
+    if (ev.type === 'model-exchange') exchanges += 1;
     if (ev.type === 'action-finished') logger.info(`[smoke] action ${ev.action.result?.ok ? 'ok' : 'failed'}: ${JSON.stringify(ev.action.result?.returnValue ?? ev.action.result?.error ?? null)} calls=${JSON.stringify((ev.action.result?.calls ?? []).map((c) => `${c.module}.${c.method}:${c.ok ? 'ok' : c.error?.code}`))}`);
   });
   try {
@@ -165,6 +175,7 @@ export async function runSmokeTurn(engine: Engine, logger: Logger, mediaList: ()
     logger.info(`[smoke] session ${session.id} with ${character.ref}`);
     await engine.chat.send(session.id, 'hi there, show me something');
     logger.info(`[smoke] chat events: ${events.join(' → ')}`);
+    logger.info(`[smoke] model exchanges: ${exchanges}`);
     await new Promise((r) => setTimeout(r, 1500));
     logger.info(`[smoke] open media items: ${JSON.stringify(mediaList())}`);
     const messages = await engine.sessions.messages(session.id);
@@ -194,6 +205,9 @@ export async function captureWindows(logger: Logger, mediaList: () => unknown[] 
   // Tour the main UI: open the smoke session (chat with the action card), then Packs and Settings.
   const tour: Array<[string, string]> = [
     ['chat-session', "document.querySelector('.session-item')?.click()"],
+    ['chat-model-traffic', "[...document.querySelectorAll('.chat-header button')].find(b => b.textContent.trim().startsWith('Model traffic'))?.click()"],
+    ['chat-model-traffic-open', "document.querySelector('.traffic-summary')?.click(); document.querySelector('.traffic-summary')?.scrollIntoView()"],
+    ['chat-model-traffic-close', "[...document.querySelectorAll('.session-panel .btn')].find(b => b.textContent.trim() === 'Close')?.click()"],
     ['packs', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Packs'))?.click()"],
     ['settings', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Settings'))?.click()"],
     ['settings-updates', "[...document.querySelectorAll('.tabs .tab')].find(b => b.textContent.trim() === 'Updates')?.click()"],

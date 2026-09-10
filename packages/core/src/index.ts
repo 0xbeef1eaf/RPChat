@@ -66,6 +66,8 @@ export { EventsHandler, MoodHandler, RoutineHandler, subscriptionInfo } from './
 export { policyAllows, DENIAL_TEXT, DENIAL_HINT } from './services/permissions.js';
 export type { DenialReason, EffectiveCapabilities } from './services/permissions.js';
 export { dayPartOf } from './services/chat.js';
+export { recordExchange, snapshotRequest, providerLabel } from './services/exchanges.js';
+export type { ExchangeMeta } from './services/exchanges.js';
 export type { SelfWakeSource } from './services/chat.js';
 
 export { extractFencedActions } from '@rp/llm';

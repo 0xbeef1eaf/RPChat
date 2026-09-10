@@ -245,6 +245,21 @@ export function SettingsView() {
             </label>
             <span className="field-hint">Otherwise actions are exchanged as fenced ```action blocks.</span>
           </div>
+          <div className="field">
+            <span className="field-label">Debug</span>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings.debug.showModelTraffic}
+                onChange={(e) => patchSettings({ debug: { ...settings.debug, showModelTraffic: e.target.checked } })}
+              />
+              Show model traffic
+            </label>
+            <span className="field-hint">
+              Capture every request and response sent to the model for the chat view (Model traffic button). Includes your full system
+              prompt and messages; kept in memory only.
+            </span>
+          </div>
         </div>
       </section>
 

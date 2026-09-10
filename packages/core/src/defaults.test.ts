@@ -30,6 +30,14 @@ describe('mergeSettings commandTemplates', () => {
   });
 });
 
+describe('mergeSettings nested defaults', () => {
+  it('fills debug from the defaults and merges a stored partial onto it', () => {
+    expect(mergeSettings({}).debug).toEqual({ showModelTraffic: false });
+    expect(mergeSettings({ debug: { showModelTraffic: true } }).debug).toEqual({ showModelTraffic: true });
+    expect(mergeSettings({ debug: {} as AppSettings['debug'] }).debug).toEqual({ showModelTraffic: false });
+  });
+});
+
 describe('mergeSettings budget migration', () => {
   it('moves the legacy 24k context budget to the current default and keeps other values', async () => {
     const { LEGACY_CONTEXT_TOKEN_BUDGET, mergeSettings } = await import('./defaults.js');

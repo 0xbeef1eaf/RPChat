@@ -1,4 +1,5 @@
-import type { ProviderId } from './ids.js';
+import type { SerializedError } from './errors.js';
+import type { MessageId, ProviderId, SessionId } from './ids.js';
 
 export type ProviderKind = 'anthropic' | 'openai-compatible' | 'mock';
 
@@ -89,4 +90,37 @@ export interface LlmProvider {
   listModels?(): Promise<ModelInfo[]>;
   /** Cheap connectivity/auth check. */
   test?(): Promise<{ ok: boolean; message?: string }>;
+}
+
+/**
+ * One provider call made on behalf of a chat session, captured when
+ * `settings.debug.showModelTraffic` is on (`model-exchange` chat event). The request is a
+ * snapshot taken before the call, so later edits to the running conversation do not alter it.
+ */
+export interface ModelExchange {
+  id: string;
+  sessionId: SessionId;
+  /** Turn and assistant message the call belongs to (`turn` kind only). */
+  turnId?: string;
+  messageId?: MessageId;
+  /** `turn` = one round of a chat turn (round index from 0), `llm.ask` = `sdk.llm.ask` (and screenshot descriptions), `memory` = memory extraction. */
+  kind: 'turn' | 'llm.ask' | 'memory';
+  round?: number;
+  startedAt: string;
+  durationMs?: number;
+  request: {
+    /** Provider config label (or id) the call went through. */
+    provider: string;
+    model: string;
+    system: string;
+    systemStablePrefixChars?: number;
+    messages: LlmMessage[];
+    tools?: ToolDefinition[];
+    temperature?: number;
+    maxTokens?: number;
+  };
+  /** Present when the provider answered. */
+  response?: { message: LlmMessage; stopReason: StopReason; usage: LlmUsage; model: string };
+  /** Present when the call threw (aborts included). */
+  error?: SerializedError;
 }

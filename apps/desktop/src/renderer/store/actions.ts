@@ -9,6 +9,7 @@ import { truncate } from '../lib/format';
 import { newId } from '../lib/ids';
 import {
   applyChatEvent,
+  clearExchanges,
   closeMemoriesPanel,
   openMemoriesPanel,
   dequeuePermissionRequest,
@@ -288,4 +289,9 @@ export function openMemories(target: MemoriesPanelTarget): void {
 
 export function closeMemories(): void {
   update((s) => closeMemoriesPanel(s));
+}
+
+/** Forget the captured model traffic of a session (Model traffic drawer → Clear). */
+export function clearModelTraffic(sessionId: SessionId): void {
+  update((s) => clearExchanges(s, sessionId));
 }

@@ -5,6 +5,7 @@ import { CharacterStatus } from '../components/chat/CharacterStatus';
 import { Composer } from '../components/chat/Composer';
 import { EventsDrawer } from '../components/chat/EventsDrawer';
 import { MessageList } from '../components/chat/MessageList';
+import { ModelTrafficDrawer } from '../components/chat/ModelTrafficDrawer';
 import { SessionPanel } from '../components/chat/SessionPanel';
 import { Avatar } from '../components/common/Avatar';
 import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, saveSession, sendMessage } from '../store/actions';
@@ -20,6 +21,7 @@ export function ChatView() {
   const runtime = useAppState((s) => runtimeFor(s, activeSessionId));
   const [panelOpen, setPanelOpen] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
+  const [trafficOpen, setTrafficOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
 
@@ -62,6 +64,7 @@ export function ChatView() {
 
   const characterName = character?.name ?? session.characterRef.split('/').pop() ?? 'Character';
   const running = runtime.turnId !== null;
+  const showTraffic = settings?.debug.showModelTraffic === true;
 
   return (
     <div className="chat">
@@ -81,6 +84,18 @@ export function ChatView() {
         <button type="button" className="btn btn-sm" onClick={() => setEventsOpen((v) => !v)} aria-expanded={eventsOpen} title="Host events this character subscribed to">
           Events
         </button>
+        {showTraffic ? (
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setTrafficOpen((v) => !v)}
+            aria-expanded={trafficOpen}
+            title="Every request sent to the model for this session and its response (Settings → General → Debug)"
+          >
+            Model traffic
+            {runtime.exchanges.length > 0 ? <span className="badge badge-accent">{runtime.exchanges.length}</span> : null}
+          </button>
+        ) : null}
         <button
           type="button"
           className="btn btn-sm"
@@ -106,6 +121,7 @@ export function ChatView() {
         </button>
       </header>
       {eventsOpen ? <EventsDrawer sessionId={session.id} onClose={() => setEventsOpen(false)} /> : null}
+      {showTraffic && trafficOpen ? <ModelTrafficDrawer sessionId={session.id} onClose={() => setTrafficOpen(false)} /> : null}
       {panelOpen ? (
         <SessionPanel
           session={session}
