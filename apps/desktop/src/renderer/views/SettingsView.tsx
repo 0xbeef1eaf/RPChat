@@ -137,7 +137,7 @@ export function SettingsView() {
   const newProvider = (): ProviderConfig => ({ id: newId('prov'), kind: 'anthropic', label: '', model: '' });
 
   return (
-    <div className="view view-narrow">
+    <div className="view">
       <div className="view-header">
         <h1>Settings</h1>
       </div>
