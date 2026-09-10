@@ -57,16 +57,16 @@ async function input(transcript: ChatMessage[], overrides: Partial<PromptInput> 
 describe('PromptBuilder', () => {
   it('assembles the six sections in order with filtered SDK reference', async () => {
     const { system, messages, stats } = new PromptBuilder().build(await input([msg(1, 'user', 'hi')]));
-    const order = ['engine_rules', 'persona', 'pack', 'sdk_reference', 'memory', 'session'].map((tag) => system.search(new RegExp(`^<${tag}>$`, 'm')));
+    const order = ['engine_rules', 'persona', 'sdk_reference', 'memory', 'session'].map((tag) => system.search(new RegExp(`^<${tag}>$`, 'm')));
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(order[0]).toBeGreaterThanOrEqual(0);
     expect(system).toContain('You are Luna.');
     expect(system).toContain('run_action');
     expect(system).toContain('## Example dialogue');
-    expect(system).toMatch(/- image:\n  - characters\/luna\/avatar\.png \(image, \d+ (B|KB)\)/);
-    expect(system).toMatch(/  - media\/images\/luna-smile\.png \(image, \d+ (B|KB)\)/);
-    expect(system).toMatch(/- audio:\n  - media\/audio\/chime\.wav \(audio, \d+ (B|KB)\)/);
-    expect(system).toContain('Granted sdk modules: chat, log, state, pack, timers, media');
+    expect(system).not.toContain('<pack>'); // media is discovered through sdk.pack, not listed
+    expect(system).not.toContain('characters/luna/avatar.png');
+    expect(system).toContain('sdk.pack.findAssets');
+    expect(system).toContain('Granted modules: sdk.chat, sdk.log, sdk.state, sdk.pack, sdk.timers, sdk.media.');
     expect(system).toContain('## sdk.media — Media playback (pack)');
     expect(system).toContain('- showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>');
     expect(system).not.toContain('interface MediaApi'); // abridged index, not the full d.ts
@@ -87,14 +87,14 @@ describe('PromptBuilder', () => {
     expect(denied).toContain('## sdk.display');
     for (const id of ['wallpaper', 'browser', 'input', 'media']) {
       expect(denied).not.toContain(`## sdk.${id} —`);
-      expect(denied).not.toMatch(new RegExp(`^Granted sdk modules: .*\\b${id}\\b`, 'm'));
+      expect(denied).not.toMatch(new RegExp(`^Granted modules: .*\\bsdk\\.${id}\\b`, 'm'));
     }
     expect(denied).not.toContain('Not available'); // no list of what the character cannot do
     expect(denied).not.toContain('are not granted in this session');
 
     const granted = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display', 'wallpaper', 'browser', 'input'] })).system;
     for (const id of ['display', 'wallpaper', 'browser', 'input']) expect(granted).toContain(`## sdk.${id}`);
-    expect(granted).toContain('Granted sdk modules: chat, log, state, pack, timers, display, wallpaper, browser, input');
+    expect(granted).toContain('Granted modules: sdk.chat, sdk.log, sdk.state, sdk.pack, sdk.timers, sdk.display, sdk.wallpaper, sdk.browser, sdk.input.');
     expect(granted).not.toContain('Not available');
   });
 
@@ -145,13 +145,14 @@ describe('PromptBuilder', () => {
     expect((text.match(/return 1;/g) ?? []).length).toBe(1);
   });
 
-  it('keeps the pack manifest description out of the system prompt', async () => {
+  it('keeps the pack manifest and asset list out of the system prompt', async () => {
     const description = (await luna()).manifest.description ?? '';
     expect(description.length).toBeGreaterThan(0);
     const { system } = new PromptBuilder().build(await input([]));
     expect(system).not.toContain(description);
     expect(system).not.toContain('Description:');
-    expect(system).toContain('Pack: Luna (com.example.luna v1.0.0)'); // the identifying line stays
+    expect(system).not.toContain('Pack: Luna');
+    expect(system).not.toContain('Assets (paths');
   });
 
   it('renders <state> and <memories> inside <memory>, with guidance in the engine rules', async () => {
@@ -176,14 +177,14 @@ describe('PromptBuilder', () => {
     expect(system).toContain('<action_result>');
   });
 
-  it('caps the asset list and the state JSON', async () => {
+  it('caps the state JSON and ignores the size of the asset list', async () => {
     const pack = await luna();
     const assets = Array.from({ length: 250 }, (_, i) => ({ path: `media/images/${i}.png`, kind: 'image' as const, bytes: 1, mime: 'image/png' }));
     const big = { blob: 'x'.repeat(10_000) };
     const { system } = new PromptBuilder().build(await input([], { pack: { ...pack, assets }, state: big }));
-    expect(system).toContain('… and 50 more');
+    expect(system).not.toContain('media/images/249.png');
     expect(system).toContain('(truncated');
-    expect(system.length).toBeLessThan(80_000); // caps hold: the asset list and state are bounded even with 250 assets and 10 KB of state
+    expect(system.length).toBeLessThan(40_000);
   });
 
   it('expands actions to tool pairs, merges same-role text and prefixes system messages', () => {

@@ -249,9 +249,7 @@ System prompt sections, in order (each a stable `<section>` block):
    one action per intention, keep code short, never loop forever, results come
    back to you, do not narrate what code you are running unless asked.
 2. **Character persona** – `persona.md` verbatim, plus example dialogue.
-3. **Pack context** – pack name/description, list of assets grouped by kind
-   (so the model knows which files exist), granted capabilities, denied ones.
-4. **SDK reference** – the abridged SDK index (`generateSdkIndex`): general
+3. **SDK reference** – the abridged SDK index (`generateSdkIndex`): general
    rules, then per granted module one line per method (signature + first TSDoc
    sentence), its helper types on one line each and one example, then only the
    shared types those modules reference. Denied modules are listed by name with
@@ -259,8 +257,8 @@ System prompt sections, in order (each a stable `<section>` block):
    demand through `sdk.help.module(id)`. With every module granted the section is
    about 8k tokens (the full reference is about 23k, which used to crowd the
    transcript out of the default budget).
-5. **Memory** – current character `state` (JSON, truncated), active timers.
-6. **Session notes** – time, locale, user display name, any user-configured
+4. **Memory** – current character `state` (JSON, truncated), active timers.
+5. **Session notes** – time, locale, user display name, any user-configured
    scenario text.
 
 Messages: the transcript, windowed by token budget (approximate 4 chars/token

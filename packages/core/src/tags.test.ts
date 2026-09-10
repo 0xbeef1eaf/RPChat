@@ -91,33 +91,11 @@ describe('prompt rendering with tags', () => {
     });
     expect(assetLine(ASSETS[0]!)).toBe('media/images/beach/sunset.png (image, 1000 B) [beach, images, summer, sunset] — Luna on the beach at sunset');
     expect(assetLine(ASSETS[5]!)).toBe('media/legacy.png (image, 5 B)');
-    expect(system).toContain('- image:\n  - media/images/beach/sunset.png (image, 1000 B) [beach, images, summer, sunset] — Luna on the beach at sunset\n  - media/images/beach/morning.png (image, 1000 B) [beach, images, summer]\n');
-    expect(system).toContain('- audio:\n  - media/audio/waves.mp3 (audio, 1000 B) [audio, beach, ambient] — Gentle waves loop');
-    expect(system).toContain('Tags: beach (3): Seaside shots; images (3); summer (2); ');
-    expect(system).toContain('cozy (1): Warm indoor scenes');
-    expect(system).toContain('sdk.pack.findAssets({ anyTags: [...] })');
-  });
-
-  it('caps the Tags line at 40 entries', async () => {
-    const luna = await loadPack(LUNA_DIR);
-    const many = Array.from({ length: 60 }, (_, i) => asset(`media/images/${i}.png`, 'image', [`tag${String(i).padStart(2, '0')}`]));
-    const { system } = new PromptBuilder().build({
-      pack: { ...luna, assets: many },
-      character: luna.characters[0]!,
-      registry: createStandardRegistry(),
-      allowedModules: ['chat'],
-      session: { id: 's', characterRef: LUNA_REF, title: 'T', createdAt: 't', updatedAt: 't', messageCount: 0 },
-      transcript: [],
-      state: {},
-      timers: [],
-      userDisplayName: 'You',
-      contextTokenBudget: 24_000,
-      useTools: true,
-      now: new Date(),
-    });
-    const tagsLine = system.split('\n').find((l) => l.startsWith('Tags: '))!;
-    expect(tagsLine.split('; ').length).toBe(41); // 40 tags + the "… and N more" tail
-    expect(tagsLine).toContain('… and 20 more');
+    // The prompt no longer lists assets or tags; the character discovers them through sdk.pack.
+    expect(system).not.toContain('sunset.png');
+    expect(system).not.toContain('Tags: beach');
+    expect(system).toContain('sdk.pack.tags()');
+    expect(system).toContain('sdk.pack.findAssets({ anyTags: [...], kind })');
   });
 });
 
@@ -193,7 +171,8 @@ describe('Luna media.json (loader-dependent)', () => {
     expect((await t.engine.packs.view(LUNA_ID)).assetTags).toEqual(tags.value);
     await t.engine.chat.send(session.id, 'hi').catch(() => undefined); // no provider configured beyond mock
     const system = t.provider.requests.at(-1)?.system ?? '';
-    for (const tag of Object.keys(manifest.tags ?? {})) expect(system).toContain(`${tag} (`);
+    // The vocabulary comes from sdk.pack.tags() now; the prompt has no "Tags: beach (3): …" line.
+    expect(system.split('\n').some((line) => line.startsWith('Tags: ') && Object.keys(manifest.tags ?? {}).some((tag) => line.includes(`${tag} (`)))).toBe(false);
   });
 
   it('is a placeholder until media.json exists', async () => {

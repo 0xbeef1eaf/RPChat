@@ -62,8 +62,7 @@ describe('engine.capabilities.register / unregister', () => {
     let system = t.provider.requests.at(-1)!.system;
     expect(system).toContain('## sdk.clock —');
     expect(system).toContain('## sdk.clock');
-    expect(system).toContain('Granted sdk modules: ');
-    expect(system).toMatch(/Granted sdk modules: .*\bclock\b/);
+    expect(system).toMatch(/Granted modules: .*\bsdk\.clock\b/);
 
     // grant off → denied like any pack-level module
     await t.engine.permissions.setGrant(LUNA_ID, 'clock', false);

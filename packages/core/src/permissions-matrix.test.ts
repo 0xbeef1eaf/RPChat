@@ -93,12 +93,12 @@ describe('permission matrix (pack request × global policy × per-pack grant)', 
     const system = t.provider.requests.at(-1)!.system;
     if (want.allowed) {
       expect(system).toContain(`## sdk.${module} —`);
-      expect(system).toMatch(new RegExp(`^Granted sdk modules: .*\\b${module}\\b`, 'm'));
+      expect(system).toMatch(new RegExp(`^Granted modules: .*\\bsdk\\.${module}\\b`, 'm'));
     } else {
       // A module the pack cannot use is absent from the prompt entirely, reason included: the
       // character learns what is missing from the PERMISSION_DENIED error, not from the prompt.
       expect(system).not.toContain(`## sdk.${module} —`);
-      expect(system).not.toMatch(new RegExp(`^Granted sdk modules: .*\\b${module}\\b`, 'm'));
+      expect(system).not.toMatch(new RegExp(`^Granted modules: .*\\bsdk\\.${module}\\b`, 'm'));
       expect(system).not.toContain('Not available');
     }
   });

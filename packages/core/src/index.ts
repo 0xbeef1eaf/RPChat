@@ -11,7 +11,7 @@ export type { FileStorageOptions } from './storage/file.js';
 export { MemoryStorage } from './storage/memory.js';
 export { FakeRunner } from './fake-runner.js';
 export type { FakeRunHandler, FakeRunOutcome } from './fake-runner.js';
-export { PromptBuilder, transcriptToMessages, ASSET_LIST_CAP, STATE_JSON_CAP } from './prompt.js';
+export { PromptBuilder, transcriptToMessages, STATE_JSON_CAP } from './prompt.js';
 export type { PromptInput, BuiltPrompt } from './prompt.js';
 export { ActionLoop, ACTION_LIMIT_NOTICE, resultPayload } from './action-loop.js';
 export type { ActionLoopOptions, TurnInput } from './action-loop.js';
@@ -24,7 +24,7 @@ export type { Unsubscribe } from './emitter.js';
 export { defaultSettings, mergeSettings } from './defaults.js';
 export { resolvePackAsset, coerceAssetArg, toAssetRef, findAssets, summariseTags, tagsOf, FIND_ASSETS_DEFAULT_LIMIT, FIND_ASSETS_MAX_LIMIT } from './assets.js';
 export type { AssetRef, FindAssetsQuery } from './assets.js';
-export { assetLine, TAG_LIST_CAP } from './prompt.js';
+export { assetLine } from './prompt.js';
 export type { Logger, Clock, EngineEvents, EngineEmitter, BehaviourHooks, BehaviourInput, SensesProvider } from './types.js';
 
 export { AuditService } from './services/audit.js';
