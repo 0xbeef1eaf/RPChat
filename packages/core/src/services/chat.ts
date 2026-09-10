@@ -14,7 +14,6 @@ import type { TimerService } from './timers.js';
 import type { Clock, EngineEmitter, Logger } from '../types.js';
 import { characterScope } from '../handlers/state.js';
 import { providerLabel } from './exchanges.js';
-import { DENIAL_HINT, DENIAL_TEXT } from './permissions.js';
 
 export interface ChatServiceOptions {
   storage: Pick<Storage, 'state'>;
@@ -355,7 +354,6 @@ export class ChatService {
     const useTools = settings.useToolCalling && config.supportsTools !== false;
 
     const allowedModules = await this.o.permissions.allowedModules(pack.manifest.id);
-    const deniedModules = await this.o.permissions.deniedModules(pack.manifest.id);
     const surface = await this.o.behaviours.surfaceFor(pack.manifest.id);
     const state = await this.o.storage.state.all(characterScope({ packId: pack.manifest.id, characterId: character.definition.id }));
     const timers = await this.o.timers.list({ characterRef: session.characterRef });
@@ -372,7 +370,6 @@ export class ChatService {
       character,
       registry: this.o.registry,
       allowedModules,
-      deniedModules,
       session,
       transcript,
       state,
@@ -384,9 +381,6 @@ export class ChatService {
       now: this.o.now(),
     };
     if (this.o.locale !== undefined) promptInput.locale = this.o.locale;
-    promptInput.deniedReasons = Object.fromEntries(
-      Object.entries((await this.o.permissions.effective(pack.manifest.id)).denied).map(([id, reason]) => [id, `${DENIAL_TEXT[reason]}: ${DENIAL_HINT[reason]}`]),
-    );
     if (this.o.senses && settings.senses.includeInPrompt && allowedModules.includes('presence')) {
       try {
         promptInput.senses = this.completeSnapshot(await this.o.senses.snapshot(session.id), transcript);

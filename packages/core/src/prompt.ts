@@ -29,10 +29,6 @@ export interface PromptInput {
   registry: CapabilityRegistry;
   /** Module ids the character may use (trusted + granted). */
   allowedModules: string[];
-  /** Module ids listed as "not available". */
-  deniedModules: string[];
-  /** Optional reason per denied module (e.g. "denied by your settings"). */
-  deniedReasons?: Record<string, string>;
   session: Session;
   transcript: ChatMessage[];
   /** Current persistent character state. */
@@ -163,13 +159,12 @@ function assetList(assets: AssetEntry[], tagDescriptions: Record<string, string>
 
 function packContext(input: PromptInput): string {
   const { pack, character } = input;
+  // The manifest description is store copy for the Packs page, not context: pack authors routinely
+  // paste the whole persona into it, which duplicates <persona> and costs thousands of tokens.
   const lines = [`Pack: ${pack.manifest.name} (${pack.manifest.id} v${pack.manifest.version})`];
-  if (pack.manifest.description) lines.push(`Description: ${pack.manifest.description}`);
   lines.push(`Active character: ${character.definition.name} (${character.definition.id})`);
   lines.push(assetList(pack.assets, pack.tagDescriptions ?? {}));
   lines.push(`Granted sdk modules: ${input.allowedModules.length > 0 ? input.allowedModules.join(', ') : 'none'}`);
-  const denied = input.deniedModules.map((id) => (input.deniedReasons?.[id] ? `${id} (${input.deniedReasons[id]})` : id));
-  lines.push(`Not available: ${denied.length > 0 ? denied.join(', ') : 'none'}`);
   return lines.join('\n');
 }
 
@@ -294,7 +289,7 @@ function hasToolUse(msg: LlmMessage): boolean {
 /** Builds the system prompt (ARCHITECTURE §6) and the windowed transcript. */
 export class PromptBuilder {
   build(input: PromptInput): BuiltPrompt {
-    const reference = generateSdkIndex(input.registry, { modules: input.allowedModules, deniedModules: input.deniedModules });
+    const reference = generateSdkIndex(input.registry, { modules: input.allowedModules });
     const stable = [
       section('engine_rules', engineRules(input.character.definition.name, input.useTools)),
       section('persona', persona(input.character)),

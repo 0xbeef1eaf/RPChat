@@ -42,7 +42,6 @@ async function input(transcript: ChatMessage[], overrides: Partial<PromptInput> 
     character: pack.characters[0]!,
     registry: createStandardRegistry(),
     allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'media'],
-    deniedModules: ['ui', 'system'],
     session,
     transcript,
     state: { userName: 'Sam' },
@@ -72,7 +71,7 @@ describe('PromptBuilder', () => {
     expect(system).toContain('- showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>');
     expect(system).not.toContain('interface MediaApi'); // abridged index, not the full d.ts
     expect(system).not.toContain('sdk.system —');
-    expect(system).toContain('`sdk.ui`, `sdk.system`');
+    expect(system).not.toContain('Not available'); // ungranted modules are omitted entirely
     expect(stats.sdkReferenceTokens).toBeLessThan(3000);
     expect(stats.systemTokens).toBeLessThan(stats.budgetTokens / 2);
     expect(stats.droppedMessages).toBe(0);
@@ -83,17 +82,29 @@ describe('PromptBuilder', () => {
     expect(messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]);
   });
 
-  it('includes the new modules when granted and lists them as not available otherwise', async () => {
-    const denied = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display'], deniedModules: ['media', 'ui', 'system', 'wallpaper', 'browser', 'input'] })).system;
+  it('includes the new modules when granted and says nothing at all about the rest', async () => {
+    const denied = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display'] })).system;
     expect(denied).toContain('## sdk.display');
-    for (const id of ['wallpaper', 'browser', 'input', 'media']) expect(denied).not.toContain(`## sdk.${id} —`);
-    expect(denied).toContain('`sdk.wallpaper`, `sdk.browser`, `sdk.input`');
-    expect(denied).toContain('Not available: media, ui, system, wallpaper, browser, input');
+    for (const id of ['wallpaper', 'browser', 'input', 'media']) {
+      expect(denied).not.toContain(`## sdk.${id} —`);
+      expect(denied).not.toMatch(new RegExp(`^Granted sdk modules: .*\\b${id}\\b`, 'm'));
+    }
+    expect(denied).not.toContain('Not available'); // no list of what the character cannot do
+    expect(denied).not.toContain('are not granted in this session');
 
-    const granted = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display', 'wallpaper', 'browser', 'input'], deniedModules: ['media', 'ui', 'system'] })).system;
+    const granted = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display', 'wallpaper', 'browser', 'input'] })).system;
     for (const id of ['display', 'wallpaper', 'browser', 'input']) expect(granted).toContain(`## sdk.${id}`);
     expect(granted).toContain('Granted sdk modules: chat, log, state, pack, timers, display, wallpaper, browser, input');
-    expect(granted).not.toContain('`sdk.wallpaper`, ');
+    expect(granted).not.toContain('Not available');
+  });
+
+  it('keeps the pack manifest description out of the system prompt', async () => {
+    const description = (await luna()).manifest.description ?? '';
+    expect(description.length).toBeGreaterThan(0);
+    const { system } = new PromptBuilder().build(await input([]));
+    expect(system).not.toContain(description);
+    expect(system).not.toContain('Description:');
+    expect(system).toContain('Pack: Luna (com.example.luna v1.0.0)'); // the identifying line stays
   });
 
   it('renders <state> and <memories> inside <memory>, with guidance in the engine rules', async () => {
