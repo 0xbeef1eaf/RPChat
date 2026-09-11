@@ -3,8 +3,9 @@ name: Release
 # Every push to main becomes a tagged release: v<major>.<minor>.<N> where major.minor come from the
 # root package.json and N is the number of commits on main, so versions are monotonic and need no
 # version-bump commits. Linux installers (AppImage and deb, with the native layer-shell helper)
-# are attached with generated release notes. Windows and macOS builds are intentionally not
-# produced for now; re-add matrix entries here when they are wanted.
+# are attached with generated release notes straight from the build job (no Actions artifacts, so
+# the artifact storage quota cannot block a release). Windows and macOS builds are intentionally
+# not produced for now; re-add matrix entries here when they are wanted.
 
 on:
   push:
@@ -83,38 +84,18 @@ jobs:
       - run: pnpm test
       - name: Package
         run: pnpm --filter @rp/desktop exec electron-builder --publish never
-      - name: Collect artifacts
+      - name: Collect installers and update manifest
         run: |
           mkdir -p dist-out
           find apps/desktop/release -maxdepth 1 -type f \( -name '*.AppImage' -o -name '*.deb' \) -exec cp {} dist-out/ \;
-          # The in-app updater reads this manifest from the release assets; a release without it cannot be updated to.
           if [ ! -f apps/desktop/release/latest-linux.yml ]; then echo "latest-linux.yml was not produced (check build.publish in apps/desktop/package.json)"; exit 1; fi
           cp apps/desktop/release/latest-linux.yml dist-out/
-          ls -la dist-out
-      - uses: actions/upload-artifact@v7
-        with:
-          name: installers-linux
-          path: dist-out/*
-          if-no-files-found: error
-          retention-days: 1 # only carried to the publish job; the release keeps the files
-
-  release:
-    name: Tag and publish
-    needs: [version, build]
-    if: needs.version.outputs.exists == 'false'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: installers-*
-          merge-multiple: true
-          path: installers
-      - name: Checksums
-        run: |
-          cd installers
+          cd dist-out
           sha256sum * > SHA256SUMS.txt
+          ls -la
           cat SHA256SUMS.txt
+      # The installers go straight from this job to the release: no Actions artifact in between, so
+      # the artifact storage quota never blocks a release.
       - name: Create tag and release
         uses: softprops/action-gh-release@v3
         with:
@@ -122,7 +103,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: rp-code ${{ needs.version.outputs.version }}
           generate_release_notes: true
-          files: installers/*
+          files: dist-out/*
           body: |
             Automated release of `${{ github.sha }}` from `main`.
 

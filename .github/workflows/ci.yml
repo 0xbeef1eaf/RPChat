@@ -67,6 +67,7 @@ jobs:
           RP_APP_BIN=apps/desktop/release/linux-unpacked/rp-code scripts/headful-smoke.sh "$RUNNER_TEMP/packaged"
       - name: Upload smoke screenshots
         if: always()
+        continue-on-error: true # diagnostics only; an artifact-storage quota must not fail CI
         uses: actions/upload-artifact@v7
         with:
           name: smoke-screenshots
