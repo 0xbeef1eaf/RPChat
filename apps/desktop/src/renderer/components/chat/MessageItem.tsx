@@ -21,7 +21,7 @@ function originLabel(origin: ChatMessage['origin']): string | null {
     case 'behaviour':
       return 'script';
     case 'timer':
-      return 'timer';
+      return null; // an unprompted message reads like one; no badge
     case 'greeting':
       return 'greeting';
     default:

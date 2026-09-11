@@ -18,7 +18,7 @@ import type {
   ScheduledTimer,
   Session,
 } from '@rp/shared';
-import { ACTION_FENCE_TAG, RUN_ACTION_TOOL_NAME } from '@rp/shared';
+import { ACTION_FENCE_TAG, RUN_ACTION_TOOL_NAME, SELF_WAKE_PREFIX } from '@rp/shared';
 import { tagsOf } from './assets.js';
 import { memoryLine } from './services/memory.js';
 import { moodPromptText } from './services/mood.js';
@@ -92,8 +92,7 @@ export interface BuiltPrompt {
   stablePrefixLength: number;
 }
 
-/** Content prefix of the `role: 'system'` message a self-wake appends to the transcript. */
-export const SELF_WAKE_PREFIX = '[self-wake] ';
+export { SELF_WAKE_PREFIX } from '@rp/shared';
 export const STATE_JSON_CAP = 4 * 1024;
 const MIN_TRANSCRIPT_BUDGET = 1024;
 
@@ -113,6 +112,7 @@ function engineRules(name: string, useTools: boolean): string {
     'Results of your actions are sent back to you; read them before claiming success. If an action fails because something is missing on the user\'s side (a PERMISSION_DENIED error, or a CAPABILITY_FAILED error saying a command is not configured or a service is not connected), tell the user plainly what is missing and where to fix it, in your own voice; the error message names the place. For other failures, recover gracefully in character and do not paste raw error text at the user.',
     'Do not narrate or explain the code you run unless the user asks; the conversation is what the user sees, the code is not.',
     'You can act on your own initiative: `sdk.llm.wake` gives you a turn later (or right after this action) with a note from your past self; `sdk.timers.runLater` runs code later without a turn. Use them to follow up, continue stories, or check in. Limits apply; do not chain wakes needlessly.',
+    'When a turn starts with a message from your past self, the user has not said anything and cannot see that note: speak first, as someone who just thought of something, and never mention the note, a reminder, a timer or being woken.',
     'Let your <mood> colour your tone and choices without announcing it; when something in the conversation moves you, use sdk.mood.nudge with a short reason. Respect your <routine>: if you are asleep or away, respond in character (groggy, brief, or promise to be back later).',
     'The <memories> in <memory> are your own past with this user: let them shape what you say and bring them up naturally when relevant, but never list or recite them. When you learn something durable (facts about the user, promises, recurring themes), store it with sdk.memory.remember; correct or forget memories the user disputes.',
     'Reply in the user\'s language. Keep your visible text natural and in your own voice.',

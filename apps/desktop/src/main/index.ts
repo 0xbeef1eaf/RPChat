@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BrowserWindow, Menu, Notification, Tray, app, dialog, nativeImage, protocol, session } from 'electron';
 import { ASSET_PROTOCOL } from '@rp/shared';
-import type { UpdateStatus } from '@rp/shared';
+import type { ChatMessage, UpdateStatus } from '@rp/shared';
 import { handleAssetRequest } from './asset-protocol.js';
 import { isHyprland } from './display/layers.js';
 import { createApp } from './engine.js';
@@ -140,6 +140,7 @@ async function main(): Promise<void> {
     active.updates.start();
   });
   watchUpdateReady(active, windows);
+  watchUnpromptedMessages(active, windows);
   logger.info(`[main] rp-code ${version} ready; ${engine.packs.characters().length} character(s) available`);
   if (isSmokeRun(env)) {
     await smokeLoadPlugin(active.plugins, APP_ROOT, logger, env);
@@ -193,6 +194,56 @@ function watchUpdateReady(services: AppServices, windows: WindowManager): void {
       w.focus();
     });
     note.show();
+  });
+}
+
+/**
+ * A character speaking on its own initiative (sdk.llm.wake, timers, behaviours) while the window
+ * is hidden or unfocused gets a desktop notification, so the message reaches the user like a text
+ * from a friend rather than sitting unseen in the tray.
+ */
+function watchUnpromptedMessages(services: AppServices, windows: WindowManager): void {
+  const pending = new Map<string, ChatMessage>(); // sessionId → latest unprompted turn reply, announced when the turn ends
+  const shouldNotify = (): boolean => {
+    const win = windows.getMainWindow();
+    return !(win && win.isVisible() && win.isFocused()) && Notification.isSupported();
+  };
+  const announce = (m: ChatMessage): void => {
+    const text = m.content.trim();
+    if (text.length === 0 || !shouldNotify()) return;
+    void services.engine.sessions
+      .get(m.sessionId)
+      .then((session) => {
+        const character = session ? services.engine.packs.characters().find((c) => c.ref === session.characterRef) : undefined;
+        const note = new Notification({ title: character?.name ?? 'rp-code', body: text.length > 240 ? `${text.slice(0, 237)}…` : text });
+        note.on('click', () => {
+          const w = windows.getMainWindow() ?? windows.createMainWindow();
+          w.show();
+          w.focus();
+        });
+        note.show();
+      })
+      .catch((err: unknown) => logger.debug('[main] unprompted-message notification skipped', err));
+  };
+  services.engine.events.on('chat', (event) => {
+    switch (event.type) {
+      case 'message-added':
+        // sdk.chat.say from a behaviour or timer script is complete when added.
+        if (event.message.role === 'assistant' && event.message.origin === 'behaviour') announce(event.message);
+        return;
+      case 'message-updated':
+        // A self-wake turn streams into its reply; remember it and announce once the turn is over.
+        if (event.message.role === 'assistant' && event.message.origin === 'timer') pending.set(event.sessionId, event.message);
+        return;
+      case 'turn-finished': {
+        const m = pending.get(event.sessionId);
+        pending.delete(event.sessionId);
+        if (m) announce(m);
+        return;
+      }
+      default:
+        return;
+    }
   });
 }
 

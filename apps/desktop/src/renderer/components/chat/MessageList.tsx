@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { SELF_WAKE_PREFIX } from '@rp/shared';
 import type { ChatMessage, SerializedError } from '@rp/shared';
 import { formatTime } from '../../lib/format';
 import type { EventMarker } from '../../store/state';
@@ -19,9 +20,14 @@ interface MessageListProps {
 type Row = { kind: 'message'; at: string; message: ChatMessage } | { kind: 'marker'; at: string; marker: EventMarker };
 
 /** Merge messages and markers by time (stable: messages first on ties). */
+/** Self-wake notes are for the model only; showing them would reveal that the character was prompted. */
+export function isWakeNote(m: ChatMessage): boolean {
+  return m.role === 'system' && m.content.startsWith(SELF_WAKE_PREFIX);
+}
+
 export function mergeRows(messages: ChatMessage[], markers: EventMarker[]): Row[] {
   const rows: Row[] = [
-    ...messages.map((m): Row => ({ kind: 'message', at: m.createdAt, message: m })),
+    ...messages.filter((m) => !isWakeNote(m)).map((m): Row => ({ kind: 'message', at: m.createdAt, message: m })),
     ...markers.map((k): Row => ({ kind: 'marker', at: k.at, marker: k })),
   ];
   return rows.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.kind === b.kind ? 0 : a.kind === 'message' ? -1 : 1));

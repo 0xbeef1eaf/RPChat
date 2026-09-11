@@ -55,6 +55,9 @@ export interface Session {
   lastMessagePreview?: string;
 }
 
+/** Content prefix of the `role: 'system'` message a `sdk.llm.wake` self-wake appends to the transcript. The chat view hides these. */
+export const SELF_WAKE_PREFIX = '[self-wake] ';
+
 export interface CreateSessionInput {
   characterRef: CharacterRef;
   title?: string;

@@ -251,3 +251,16 @@ describe('queues', () => {
     expect(s.toasts.at(-1)?.id).toBe('t9');
   });
 });
+
+describe('mergeRows', () => {
+  it('hides self-wake notes and keeps other system messages', async () => {
+    const { mergeRows, isWakeNote } = await import('../components/chat/MessageList');
+    const { SELF_WAKE_PREFIX } = await import('@rp/shared');
+    const wake = { ...msg('w', `${SELF_WAKE_PREFIX}check on them`), role: 'system' as const, origin: 'timer' as const };
+    const sys = { ...msg('s', 'pack updated'), role: 'system' as const };
+    const reply = { ...msg('r', 'Hey, thinking of you.'), role: 'assistant' as const, origin: 'timer' as const };
+    expect(isWakeNote(wake)).toBe(true);
+    expect(isWakeNote(sys)).toBe(false);
+    expect(mergeRows([wake, sys, reply], []).map((row) => (row.kind === 'message' ? row.message.id : row.marker.id))).toEqual(['s', 'r']);
+  });
+});
