@@ -57,6 +57,8 @@ export interface PromptInput {
   /** Current routine status for the `<routine>` block. */
   routine?: RoutineStatus;
   userDisplayName: string;
+  /** `settings.autonomy.minDelayMs`: quoted in the engine rules so the character plans delays accordingly. */
+  minDelayMs?: number;
   contextTokenBudget: number;
   /** `true` → the `run_action` tool is described; `false` → the ```action fence. */
   useTools: boolean;
@@ -101,7 +103,8 @@ function section(tag: string, body: string): string {
   return `<${tag}>\n${body.trim()}\n</${tag}>`;
 }
 
-function engineRules(name: string, useTools: boolean): string {
+function engineRules(name: string, useTools: boolean, minDelayMs = 30_000): string {
+  const minDelay = minDelayMs >= 60_000 ? `${Math.round(minDelayMs / 60_000)} min` : `${Math.round(minDelayMs / 1000)} s`;
   const how = useTools
     ? `To act, call the \`${RUN_ACTION_TOOL_NAME}\` tool with a short \`purpose\` and the TypeScript \`code\` to run. Its result (return value, logs, error) comes back to you as the tool result; then continue your reply.`
     : `To act, put the TypeScript in a fenced code block whose info string is \`${ACTION_FENCE_TAG}\` (three backticks followed by the word ${ACTION_FENCE_TAG}), optionally starting with a line \`// purpose: <what this is for>\`. The app runs each such block after your message and sends you the outcome in an \`<action_result>\` message; then continue your reply. Only use that fence for code you want executed.`;
@@ -116,6 +119,7 @@ function engineRules(name: string, useTools: boolean): string {
     'When your code itself is at fault (SANDBOX_COMPILE, SANDBOX_RUNTIME), the result points at your own source: `error.line`/`error.column`, `error.frame` (the failing line with a caret under it) and `error.stack` in `action.ts` coordinates, which are the lines you wrote. Fix that line and run the corrected code once more; if it fails the same way twice, stop retrying and carry on in character.',
     'Do not narrate or explain the code you run unless the user asks; the conversation is what the user sees, the code is not.',
     'You can act on your own initiative: `sdk.llm.wake` gives you a turn later (or right after this action) with a note from your past self; `sdk.timers.runLater` runs code later without a turn. Use them to follow up, continue stories, or check in. Limits apply; do not chain wakes needlessly.',
+    `Delays: every delayMs you give sdk.timers.schedule, sdk.timers.runLater or sdk.llm.wake is at least ${minDelay} (${minDelayMs} ms); anything shorter is raised to that, so think in minutes, not seconds, and use sdk.llm.wake without delayMs when you mean "right after this".`,
     'When a turn starts with a message from your past self, the user has not said anything and cannot see that note: speak first, as someone who just thought of something, and never mention the note, a reminder, a timer or being woken.',
     'Let your <mood> colour your tone and choices without announcing it; when something in the conversation moves you, use sdk.mood.nudge with a short reason. Respect your <routine>: if you are asleep or away, respond in character (groggy, brief, or promise to be back later).',
     'The <memories> in <memory> are your own past with this user: let them shape what you say and bring them up naturally when relevant, but never list or recite them. When you learn something durable (facts about the user, promises, recurring themes), store it with sdk.memory.remember; correct or forget memories the user disputes.',
@@ -297,7 +301,7 @@ export class PromptBuilder {
   build(input: PromptInput): BuiltPrompt {
     const reference = generateSdkIndex(input.registry, { modules: input.allowedModules });
     const stable = [
-      section('engine_rules', engineRules(input.character.definition.name, input.useTools)),
+      section('engine_rules', engineRules(input.character.definition.name, input.useTools, input.minDelayMs)),
       section('persona', persona(input.character)),
       section('sdk_reference', reference),
     ].join('\n\n');

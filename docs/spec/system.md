@@ -127,7 +127,7 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
 
 | Key | Managed paths | Notes |
 |---|---|---|
-| `autonomy` | `autonomy.maxSelfWakesPerHour`, `autonomy.maxConsecutiveSelfWakes`, `autonomy.maxTimersPerSession`, `autonomy.minRepeatIntervalMs` | non-negative numbers |
+| `autonomy` | `autonomy.maxSelfWakesPerHour`, `autonomy.maxConsecutiveSelfWakes`, `autonomy.maxTimersPerSession`, `autonomy.minRepeatIntervalMs`, `autonomy.minDelayMs` | non-negative numbers |
 | `maxInputLockMs` | `maxInputLockMs` | ≥ 1000; also capped by `inputLock.maxDurationMs` |
 | `permissions` | `permissions.moduleAllow.<module>` | booleans per module |
 | `web` | `web.allowlist` | string[] |

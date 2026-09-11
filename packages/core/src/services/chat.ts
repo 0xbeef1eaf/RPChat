@@ -406,6 +406,7 @@ export class ChatService {
       timers,
       memories,
       userDisplayName: settings.userDisplayName,
+      minDelayMs: Math.max(1000, settings.autonomy.minDelayMs),
       contextTokenBudget: settings.contextTokenBudget,
       keepActionDetailFor: Math.max(0, Math.floor(settings.history.keepActionDetailFor)),
       useTools,

@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const llmModule: CapabilityModuleSpec = {
   id: 'llm',
-  version: '1.0.0',
+  version: '1.1.0',
   title: 'Language model',
   summary: 'Ask the model a side question, or wake yourself with a prompt now or later so you can act without the user typing.',
   permission: 'trusted',
@@ -28,7 +28,8 @@ interface LlmApi {
    * message from your past self and can speak and act as usual. Rate-limited by the user's settings
    * (per hour, and consecutive turns without a user message); when the limit is hit the wake is dropped.
    * @param prompt What future-you should do or consider, e.g. "It's been an hour; ask how the interview went."
-   * @param opts delayMs 0 or 1000..604800000; label shown in the timers list.
+   * @param opts delayMs: omit or 0 to wake right after this action; otherwise at least 30000 (30 s, configurable — shorter
+   *   values are raised to it) and at most 604800000 (7 days). label: shown in the timers list.
    * @returns timer: the created timer when delayed; queued: true when it will run right after this action.
    * @example await sdk.llm.wake("Check whether they started the essay and offer help.", { delayMs: 45 * 60 * 1000 });
    * @example await sdk.llm.wake("Continue the story from where you left off, one scene.");

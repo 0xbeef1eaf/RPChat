@@ -193,6 +193,12 @@ export interface AppSettings {
     maxTimersPerSession: number;
     /** Shortest repeat interval for repeating timers, ms. Default 60_000. */
     minRepeatIntervalMs: number;
+    /**
+     * Shortest delay for sdk.timers.schedule / runLater and a delayed sdk.llm.wake, ms. Shorter
+     * values are raised to this (never rejected), so a character cannot pepper the user with
+     * near-instant follow-ups. Default 30_000.
+     */
+    minDelayMs: number;
   };
   /** Developer toggles; nothing here changes what the character can do. */
   debug: {
@@ -244,6 +250,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
     maxConsecutiveSelfWakes: 10,
     maxTimersPerSession: 20,
     minRepeatIntervalMs: 60_000,
+    minDelayMs: 30_000,
   },
   debug: { showModelTraffic: false },
 };

@@ -27,7 +27,7 @@ describe('timers.runLater (code timers)', () => {
     const ctx = ctxFor(session.id);
     const bad = async (...args: Json[]) => (await invoke(ctx, 'timers', 'runLater', ...args)) as { ok: boolean; error?: { code: string } };
 
-    expect((await bad(500, 'return 1;')).error?.code).toBe('INVALID_ARGUMENT');
+    expect((await bad(-5, 'return 1;')).error?.code).toBe('INVALID_ARGUMENT');
     expect((await bad(5000, '   ')).error?.code).toBe('INVALID_ARGUMENT');
     expect((await bad(5000, 'x'.repeat(17_000))).error?.code).toBe('INVALID_ARGUMENT');
     expect((await bad(5000, 'return 1;', { repeatEveryMs: 1000 })).error?.code).toBe('INVALID_ARGUMENT');
@@ -171,6 +171,7 @@ describe('self-wakes', () => {
     t = await createTestEngine({ script: [{ text: 'Later!' }] });
     await t.engine.packs.install(MINIMAL_DIR);
     const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    await t.engine.settings.update({ autonomy: { ...(await t.engine.settings.get()).autonomy, minDelayMs: 5000 } });
     const result = (await invoke(ctxFor(session.id), 'llm', 'wake', 'Ask how the interview went.', { delayMs: 5000, label: 'interview' })) as {
       ok: true;
       value: { queued: boolean; timer: { id: string; kind: string; label: string; fireAt: string } };
@@ -178,7 +179,12 @@ describe('self-wakes', () => {
     expect(result.value.queued).toBe(false);
     expect(result.value.timer).toMatchObject({ kind: 'prompt', label: 'interview', fireAt: '2026-01-01T12:00:05.000Z' });
     expect((await t.engine.timers.get(result.value.timer.id))?.prompt).toBe('Ask how the interview went.');
-    expect(await invoke(ctxFor(session.id), 'llm', 'wake', 'x', { delayMs: 500 })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT' } });
+    // Too short is raised to the configured minimum, not rejected.
+    const short = (await invoke(ctxFor(session.id), 'llm', 'wake', 'x', { delayMs: 500 })) as { ok: true; value: { timer: { id: string; fireAt: string } } };
+    expect(short.ok).toBe(true);
+    expect(short.value.timer.fireAt).toBe('2026-01-01T12:00:05.000Z');
+    expect(await t.engine.timers.cancel(short.value.timer.id)).toBe(true);
+    expect(await invoke(ctxFor(session.id), 'llm', 'wake', 'x', { delayMs: -1 })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT' } });
     expect(await invoke(ctxFor(session.id), 'llm', 'wake', 'y'.repeat(2001))).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT' } });
 
     expect(t.provider.requests).toHaveLength(0);
@@ -268,5 +274,21 @@ describe('llm.ask', () => {
     expect(messages[1]!.content).toBe('done');
     const audit = await t.engine.audit.list({ sessionId: session.id });
     expect(audit.filter((a) => a.module === 'llm' && a.method === 'ask').map((a) => a.outcome)).toEqual(['failed', 'failed', 'allowed']);
+  });
+});
+
+describe('validateDelay', () => {
+  it('raises short delays to the configured floor (never below 1 s) and rejects only bad numbers', async () => {
+    const { validateDelay, minDelayOf, TIMER_MAX_DELAY_MS } = await import('./services/timers.js');
+    expect(validateDelay(500, 30_000)).toBe(30_000);
+    expect(validateDelay(45_000.7, 30_000)).toBe(45_000);
+    expect(validateDelay(0, 30_000)).toBe(30_000);
+    expect(validateDelay(500, 10)).toBe(1000); // hard floor
+    expect(validateDelay(5000)).toBe(5000);
+    expect(() => validateDelay(-1, 30_000)).toThrow(/non-negative/);
+    expect(() => validateDelay('5', 30_000)).toThrow(/non-negative/);
+    expect(() => validateDelay(TIMER_MAX_DELAY_MS + 1, 30_000)).toThrow(/at most/);
+    expect(minDelayOf({ minDelayMs: 0 })).toBe(1000);
+    expect(minDelayOf({})).toBe(30_000);
   });
 });

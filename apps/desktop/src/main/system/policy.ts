@@ -6,7 +6,7 @@ import * as fs from 'node:fs/promises';
 import type { AppSettings, ManagedSettingsPaths, PolicyFile } from '@rp/shared';
 import { POLICY_FILE_PATH, RpError } from '@rp/shared';
 
-const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTimersPerSession', 'minRepeatIntervalMs'] as const;
+const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTimersPerSession', 'minRepeatIntervalMs', 'minDelayMs'] as const;
 const MEMORY_KEYS = ['enabled', 'consolidateEveryTurns', 'maxEntriesPerCharacter', 'promptBudgetTokens'] as const;
 const SENSES_KEYS = ['includeInPrompt', 'watchDirs', 'calendarSources'] as const;
 const UPDATES_KEYS = ['automatic', 'enabled'] as const;

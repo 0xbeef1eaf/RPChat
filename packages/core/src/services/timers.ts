@@ -17,6 +17,8 @@ export const TIMER_PROMPT_MAX = 2000;
 export interface TimerLimits {
   maxTimersPerSession: number;
   minRepeatIntervalMs: number;
+  /** Floor for every delay; lower values are raised to it (see `validateDelay`). */
+  minDelayMs?: number;
 }
 
 export interface RunLaterOptions {
@@ -26,15 +28,23 @@ export interface RunLaterOptions {
   maxRuns?: number;
 }
 
-export function validateDelay(delayMs: unknown): number {
-  if (typeof delayMs !== 'number' || !Number.isFinite(delayMs)) throw new RpError('INVALID_ARGUMENT', 'delayMs must be a number');
-  if (delayMs < TIMER_MIN_DELAY_MS || delayMs > TIMER_MAX_DELAY_MS) {
-    throw new RpError('INVALID_ARGUMENT', `delayMs must be between ${TIMER_MIN_DELAY_MS} and ${TIMER_MAX_DELAY_MS}`, {
-      min: TIMER_MIN_DELAY_MS,
-      max: TIMER_MAX_DELAY_MS,
-    });
+/**
+ * A usable delay: must be a finite non-negative number no larger than 7 days. Values below the
+ * configured minimum (`minDelayMs`, default 30 s; never below 1 s) are raised to it rather than
+ * rejected — characters routinely ask for a few seconds, and an error there only costs a round.
+ */
+export function validateDelay(delayMs: unknown, minDelayMs: number = TIMER_MIN_DELAY_MS): number {
+  if (typeof delayMs !== 'number' || !Number.isFinite(delayMs) || delayMs < 0) throw new RpError('INVALID_ARGUMENT', 'delayMs must be a non-negative number');
+  if (delayMs > TIMER_MAX_DELAY_MS) {
+    throw new RpError('INVALID_ARGUMENT', `delayMs must be at most ${TIMER_MAX_DELAY_MS} (7 days)`, { max: TIMER_MAX_DELAY_MS });
   }
-  return Math.floor(delayMs);
+  const floor = Math.max(TIMER_MIN_DELAY_MS, Number.isFinite(minDelayMs) ? Math.floor(minDelayMs) : TIMER_MIN_DELAY_MS);
+  return Math.max(floor, Math.floor(delayMs));
+}
+
+/** The delay floor from the limits (settings), never below the hard minimum. */
+export function minDelayOf(limits: Pick<TimerLimits, 'minDelayMs'>): number {
+  return Math.max(TIMER_MIN_DELAY_MS, limits.minDelayMs ?? DEFAULT_SETTINGS.autonomy.minDelayMs);
 }
 
 export function validateLabel(label: unknown): string | undefined {
@@ -100,7 +110,7 @@ export class TimerService {
 
   /** `wake` timer: the character is woken with `payload` (onTimer behaviour or an LLM turn). */
   async scheduleWake(ctx: ActionContext, delayMs: number, payload: Json, opts: { label?: string } = {}): Promise<ScheduledTimer> {
-    const delay = validateDelay(delayMs);
+    const delay = validateDelay(delayMs, minDelayOf(await this.limits()));
     const label = validateLabel(opts.label);
     await this.assertCapacity(ctx.sessionId);
     const timer = this.base(ctx, delay, 'wake', payload ?? null);
@@ -110,7 +120,7 @@ export class TimerService {
 
   /** `code` timer: `code` runs later with `input` in scope, without an LLM turn; optionally repeating. */
   async runLater(ctx: ActionContext, delayMs: number, code: string, opts: RunLaterOptions = {}): Promise<ScheduledTimer> {
-    const delay = validateDelay(delayMs);
+    const delay = validateDelay(delayMs, minDelayOf(await this.limits()));
     if (typeof code !== 'string' || code.trim().length === 0) throw new RpError('INVALID_ARGUMENT', 'code must be a non-empty string');
     if (Buffer.byteLength(code, 'utf8') > TIMER_CODE_MAX_BYTES) {
       throw new RpError('INVALID_ARGUMENT', `code must be at most ${TIMER_CODE_MAX_BYTES} bytes`, { limit: TIMER_CODE_MAX_BYTES });
@@ -148,7 +158,7 @@ export class TimerService {
 
   /** `prompt` timer: the character wakes itself with `prompt` (subject to the autonomy limits). */
   async schedulePrompt(ctx: ActionContext, delayMs: number, prompt: string, label?: string): Promise<ScheduledTimer> {
-    const delay = validateDelay(delayMs);
+    const delay = validateDelay(delayMs, minDelayOf(await this.limits()));
     const text = typeof prompt === 'string' ? prompt.trim() : '';
     if (text.length === 0) throw new RpError('INVALID_ARGUMENT', 'prompt must be a non-empty string');
     if (text.length > TIMER_PROMPT_MAX) throw new RpError('INVALID_ARGUMENT', `prompt must be at most ${TIMER_PROMPT_MAX} characters`);

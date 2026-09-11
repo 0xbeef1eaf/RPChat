@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const timersModule: CapabilityModuleSpec = {
   id: 'timers',
-  version: '1.1.0',
+  version: '1.2.0',
   title: 'Timers',
   summary: 'Schedule future wake-ups or a handler to run later (setTimeout-style), once or repeating.',
   permission: 'trusted',
@@ -17,7 +17,8 @@ export const timersModule: CapabilityModuleSpec = {
 interface TimersApi {
   /**
    * Schedule a timer.
-   * @param delayMs Delay from now in milliseconds. Minimum 1000 (1 s), maximum 604800000 (7 days).
+   * @param delayMs Delay from now in milliseconds. MINIMUM 30000 (30 s, configurable by the user): shorter values are raised to it,
+   *   so plan in minutes; maximum 604800000 (7 days). The returned fireAt is authoritative.
    * @param payload Json you want to receive when it fires, e.g. { reason: "ask about the walk" }.
    *   Make it self-explanatory: it is all you will get.
    * @param opts label: short text shown to the user in the timers list.
@@ -28,7 +29,7 @@ interface TimersApi {
   /**
    * Run a handler later, like setTimeout, without waking the LLM. It runs with your permissions
    * and the full sdk when the timer fires.
-   * @param delayMs Delay from now in ms. Minimum 1000, maximum 604800000 (7 days).
+   * @param delayMs Delay from now in ms. MINIMUM 30000 (30 s, configurable; shorter values are raised to it), maximum 604800000 (7 days).
    * @param handler Write it as a function taking input: it is checked like the rest of your code.
    *   It runs in a fresh run, so nothing around it is in scope — no variable from this action, no
    *   closures. Put what it needs in opts.input. (A string with the body of an async function still works.)
@@ -54,7 +55,7 @@ interface TimersApi {
 }`,
   docs: `Ask to be woken later. Use it for follow-ups ("did you eat?"), scheduled surprises, reminders the user asked for, or checking back after a pause.
 
-- \`delayMs\` is 1 second to 7 days. Put everything you will need into the \`payload\` — when the timer fires you only get that payload (plus your normal context).
+- \`delayMs\`: at least 30 s (the user can raise this), at most 7 days; anything shorter is silently raised to the minimum, so think in minutes and read \`fireAt\` from the result. Put everything you will need into the \`payload\` — when the timer fires you only get that payload (plus your normal context).
 - Check \`list()\` before scheduling repeated timers so you do not stack duplicates; \`cancel(id)\` to remove one.
 - An action cannot sleep or wait; a timer is the only way to act after a delay.
 - \`runLater(delayMs, handler, { input })\` is your setTimeout: write the handler as a function \`async (input) => { ... }\` so it is checked like the rest of your code; it runs later with the sdk, no LLM turn needed. It runs in a fresh run, so nothing around it is in scope — everything it needs goes in \`opts.input\`. Use \`sdk.llm.wake\` instead when you want to *think* later.

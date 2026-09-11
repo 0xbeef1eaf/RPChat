@@ -55,7 +55,7 @@ export { StateHandler, STATE_MAX_KEYS, STATE_MAX_VALUE_BYTES, characterScope, se
 export { TimersHandler, timerInfo, TIMER_MAX_DELAY_MS, TIMER_MIN_DELAY_MS } from './handlers/timers.js';
 export { LlmHandler, ASK_DEFAULT_MAX_TOKENS, ASK_MAX_TOKENS, ASK_TIMEOUT_MS, ASK_DEFAULT_SYSTEM } from './handlers/llm.js';
 export type { LlmHandlerOptions } from './handlers/llm.js';
-export { normalizeTimer, validateDelay, TIMER_CODE_MAX_BYTES, TIMER_PROMPT_MAX, TIMER_LABEL_MAX } from './services/timers.js';
+export { normalizeTimer, validateDelay, minDelayOf, TIMER_CODE_MAX_BYTES, TIMER_PROMPT_MAX, TIMER_LABEL_MAX } from './services/timers.js';
 export type { RunLaterOptions, TimerLimits } from './services/timers.js';
 export { SELF_WAKE_PREFIX, sensesLine } from './prompt.js';
 export { EventService, matchesFilter, isCustomEvent, isKnownEvent, HOST_EVENT_NAMES, SUBSCRIPTIONS_PER_SESSION, EVENT_DEBOUNCE_MS } from './services/events.js';

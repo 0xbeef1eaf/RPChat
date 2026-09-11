@@ -207,6 +207,8 @@ export async function createTestEngine(options: TestEngineOptions = {}): Promise
     providers: [{ ...MOCK_PROVIDER, supportsTools: options.supportsTools ?? true }],
     defaultProviderId: MOCK_PROVIDER.id,
     useToolCalling: options.useToolCalling ?? true,
+    // Tests schedule things seconds apart; the production floor is 30 s.
+    autonomy: { ...(await engine.settings.get()).autonomy, minDelayMs: 1000 },
   });
   await engine.start();
 

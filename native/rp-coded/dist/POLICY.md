@@ -43,7 +43,7 @@ Only these keys are accepted; each maps to a dotted settings path shown in the U
 | Key | Type | Effect |
 |---|---|---|
 | `maxInputLockMs` | number ≥ 0 | Hard cap the app applies to `sdk.input.lock` requests (the daemon applies `inputLock.maxDurationMs` on top; the lower wins). |
-| `autonomy` | object | Any of `maxSelfWakesPerHour`, `maxConsecutiveSelfWakes`, `maxTimersPerSession`, `minRepeatIntervalMs` (numbers). Limits how much a character may act without the user. |
+| `autonomy` | object | Any of `maxSelfWakesPerHour`, `maxConsecutiveSelfWakes`, `maxTimersPerSession`, `minRepeatIntervalMs`, `minDelayMs` (numbers). Limits how much a character may act without the user. |
 | `permissions` | `{ "moduleAllow": { "<module>": boolean } }` | Global allow/deny per SDK module (`input`, `desktop`, `web`, …). `false` makes the module unavailable to every pack. |
 | `web` | `{ "allowlist": string[] }` | Hostname patterns (`example.com`, `*.example.com`) `sdk.web` may fetch. Empty = any host. |
 | `desktop` | `{ "launchAllowlist": string[] }` | Executables `sdk.desktop.launch` may start. Empty = any. |
