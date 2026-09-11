@@ -75,3 +75,4 @@ jobs:
             ${{ runner.temp }}/wlr/*.png
             ${{ runner.temp }}/packaged/*.png
           if-no-files-found: ignore
+          retention-days: 3

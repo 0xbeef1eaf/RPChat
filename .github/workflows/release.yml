@@ -96,6 +96,7 @@ jobs:
           name: installers-linux
           path: dist-out/*
           if-no-files-found: error
+          retention-days: 1 # only carried to the publish job; the release keeps the files
 
   release:
     name: Tag and publish

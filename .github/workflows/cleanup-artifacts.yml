@@ -1,0 +1,44 @@
+name: Cleanup artifacts
+
+# Deletes workflow artifacts. Release installers only transit between the build and publish jobs
+# (the release itself keeps the files), and smoke screenshots are only useful for a failed run, so
+# nothing here needs to live long. Runs weekly and on demand; `older_than_days: 0` clears everything.
+on:
+  workflow_dispatch:
+    inputs:
+      older_than_days:
+        description: Delete artifacts older than this many days (0 = all)
+        required: false
+        default: '0'
+  schedule:
+    - cron: '17 4 * * 1'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/github-script@v8
+        env:
+          OLDER_THAN_DAYS: ${{ github.event.inputs.older_than_days || '7' }}
+        with:
+          script: |
+            const days = Number(process.env.OLDER_THAN_DAYS || '0');
+            const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+            const { owner, repo } = context.repo;
+            let deleted = 0, kept = 0, bytes = 0;
+            for await (const page of github.paginate.iterator(github.rest.actions.listArtifactsForRepo, { owner, repo, per_page: 100 })) {
+              for (const artifact of page.data) {
+                if (artifact.expired) continue;
+                if (Date.parse(artifact.created_at) > cutoff) { kept += 1; continue; }
+                await github.rest.actions.deleteArtifact({ owner, repo, artifact_id: artifact.id });
+                deleted += 1;
+                bytes += artifact.size_in_bytes ?? 0;
+                core.info(`deleted ${artifact.name} #${artifact.id} (${Math.round((artifact.size_in_bytes ?? 0) / 1048576)} MB, ${artifact.created_at})`);
+              }
+            }
+            core.summary.addHeading('Artifact cleanup').addRaw(`Deleted ${deleted} artifact(s), ${Math.round(bytes / 1048576)} MB freed; kept ${kept} newer than ${days} day(s).`).write();
+            core.info(`deleted=${deleted} freedMB=${Math.round(bytes / 1048576)} kept=${kept}`);
