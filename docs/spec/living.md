@@ -26,7 +26,7 @@ all mirroring `@rp/shared` (add them to the structural-identity test where they 
 | `screen` | pack | `look(opts?: { monitor?: MonitorSelector; question?: string }): { description: string; width; height }` (D) — screenshot described by a vision model; `draw(shapes: DrawShape[], opts?: { monitor?; durationMs? }): { ids: string[] }`; `clear(ids?: string[]): void` |
 | `calendar` | pack | `upcoming(hours?: number): CalendarEvent[]` (default 24 h, max 14 d); `today(): CalendarEvent[]` |
 | `web` | pack | `fetch(url, opts?: { method?: 'GET'\|'POST'; headers?; body?: string; maxBytes? }): { status; headers; text }` (D; restricted to the allowlist when one is set); `rss(url, limit?): Array<{ title; link; published?; summary? }>` (allowlist likewise); `weather(place: string): { place; tempC; feelsLikeC; condition; windKph; humidity; forecast: Array<{ day; minC; maxC; condition }> }` (open-meteo, always allowed) |
-| `events` | trusted | `on(event: HostEventName, code: string, opts?: { filter?: Record<string, Json>; input?: Json; once?: boolean; label?: string }): EventSubscriptionInfo`; `off(id): boolean`; `list(): EventSubscriptionInfo[]`; `emit(name: string, data?: Json): void` (custom `custom:<name>` events a character can raise for its own subscriptions) |
+| `events` | trusted | `on(event: HostEventName, handler: Handler, opts?: { filter?: Record<string, Json>; input?: Json; once?: boolean; label?: string }): EventSubscriptionInfo`; `off(id): boolean`; `list(): EventSubscriptionInfo[]`; `emit(name: string, data?: Json): void` (custom `custom:<name>` events a character can raise for its own subscriptions) |
 | `avatar` | pack | `show(opts?: { expression?; size?; monitor?; position?; x?; y?; layer?; opacity?; clickThrough?; lookAtCursor? }): AvatarStateInfo`; `set(patch: { expression?; size?; lookAtCursor?; opacity?; clickThrough? }): AvatarStateInfo`; `say(text, opts?: { durationMs? }): void` (speech bubble); `animate(name: AvatarAnimation): void`; `moveTo(target: { monitor?; position?; x?; y? }, opts?: { durationMs? }): void`; `hide(): void`; `state(): AvatarStateInfo \| null`; `expressions(): string[]` |
 | `widgets` | pack | `show(spec: { id?; title?; html; width?; height? } & OverlayOptions): WidgetInfo`; `update(id, patch: { html?; title?; postMessage?: Json }): void`; `close(id): void`; `closeAll(): void`; `list(): WidgetInfo[]` |
 | `voice` | pack | `speak(text, opts?: { rate?: number; voice?: string; wait?: boolean }): void`; `stop(): void`; `listen(opts?: { maxSeconds?: number }): { text: string }` (D) |
@@ -93,14 +93,22 @@ effective set; blocked modules are listed as not available with the reason "deni
 - Host events arrive via `SensesProvider.subscribe` or `hostEvents.emit`; core also generates: `time`
   (evaluates every minute: filter `{ hour?, minute?, weekday? }`, missing = any; `minute` defaults to 0
   when only `hour` is given), `custom:*` (from `sdk.events.emit`), `routine-changed`.
-- Matching: `user-idle` fires when `data.idleMs >= filter.idleMs ?? 300000` and the subscription is
-  not already in the idle state (per-subscription edge detection; `user-back` resets). `battery-low`:
+- Matching: `user-idle` fires when `data.idleMs >= filter.idleMs ?? 0` — no filter means "as soon as
+  the host says they are idle", i.e. at `settings.senses.idleThresholdMs` — and the subscription is
+  not already in the idle state (per-subscription edge detection; `user-back` resets). For this to work
+  for longer waits, the host repeats `user-idle` with the grown `idleMs` every `IDLE_REPEAT_MS` (30 s)
+  while the user stays away; an `onEvent` behaviour is only run for the first of them. `battery-low`:
   edge below `filter.percent ?? 20`. `window-changed`/`app-launched`: optional `filter.app`/`filter.title`
   (case-insensitive substring). `file-added`: optional `filter.dir`, `filter.ext`. `song-changed`: any.
   `widget-message`: `filter.widgetId`. Generic: any other filter key must equal `data[key]`.
 - Firing: run `code` via `BehaviourRunner.runScript` with `input = { event, data, ...input }`, trigger
   `{ kind: 'event', subscriptionId, event }`; if the character has an `onEvent` behaviour it also runs
-  (input `{ event, data }`) for events with no matching subscription; audit as `events.fire`
+  (input `{ event, data }`) for events with no matching subscription; audit as `events.fire`.
+  `Handler` is a function `(input) => …` or, as before, the body of an async function as a string:
+  the isolate turns a function argument into `return await (<source>)(input);` before it crosses to
+  the host (see `docs/spec/sandbox.md` §4), so the host still stores and runs a string and the model
+  gets to write — and have checked — real code. A handler runs in a fresh isolate: it closes over
+  nothing, and everything it needs travels in `opts.input`
   allowed/failed; `fired++`; `once` → remove. Event code runs do not count toward autonomy limits, but
   wakes they trigger do. Emit `event-fired` chat event. Debounce identical event+subscription within 2 s.
 - `setInterest` is called whenever the subscription set changes (union of event names + always `time`
@@ -147,16 +155,30 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
 ## 4. Desktop main (`apps/desktop`)
 
 - **SensesProvider** (`src/main/senses/`): `presence.ts` samples every `settings.senses.pollMs` only
-  while something needs it (prompt inclusion or subscriptions): idle via `powerMonitor.getSystemIdleTime()`,
+  while something needs it (prompt inclusion or subscriptions): idle via the compositor on Wayland and
+  `powerMonitor.getSystemIdleTime()` elsewhere (see below),
   lock via `powerMonitor` `lock-screen`/`unlock-screen`, battery via `powerMonitor.isOnBatteryPower()` +
-  Linux `/sys/class/power_supply/*/capacity` (else null), active window via Hyprland `j/activewindow`
+  Linux `/sys/class/power_supply/*/capacity`, skipping entries with `scope: Device` — a wireless mouse,
+  keyboard or headset is a `type: Battery` too, and on a desktop it is the only one, which otherwise
+  reported the peripheral's charge as the machine's and fired `battery-low` when it ran down (else null), active window via Hyprland `j/activewindow`
   (and the event socket `activewindow>>` for instant `window-changed`) or the `activeWindow` template
   (JSON or `title\tapp`), now-playing via the `nowPlaying` template (default `playerctl metadata
   --format '{"title":"{{title}}","artist":"{{artist}}","album":"{{album}}","app":"{{playerName}}","status":"{{status}}"}'`
   when `playerctl` is on PATH). Emits edge events (`user-idle`/`user-back` with the threshold
   `settings.senses.idleThresholdMs`, `battery-low`, `screen-*`, `song-changed`, `window-changed`,
-  `app-launched`). `watch.ts`: `fs.watch` on `settings.senses.watchDirs` → `file-added` (debounced,
-  ignore dotfiles/partial downloads `.part/.crdownload`). Widget/avatar page events → `widget-message` /
+  `app-launched`; `user-idle` again every 30 s while the absence lasts, so a subscription asking for a
+  longer idle than the threshold is reached instead of waiting for an event that never comes).
+  `watch.ts`: `fs.watch` on `settings.senses.watchDirs` → `file-added` (debounced,
+  ignore dotfiles/partial downloads `.part/.crdownload`). `wayland-idle.ts`: `powerMonitor.getSystemIdleTime()`
+  reads X11's screensaver extension, so under a Wayland session it never sees input and answers 0 for
+  ever — `user-idle`/`user-back` never fired and the presence line always said "at keyboard". The monitor
+  therefore speaks `ext-idle-notify-v1` straight over the display socket (wlroots compositors, KDE,
+  recent GNOME; no native module, no dependency): bind `wl_seat` and `ext_idle_notifier_v1`, ask for a
+  notification at a 1 s timeout, and derive `idleMs` from the `idled`/`resumed` events. It stays
+  unavailable (and the Electron value is used) when the socket, the global or the session is missing,
+  and reconnects if the compositor restarts. The poll loop captures `pollMs` when it is
+  scheduled, so a `settings.senses` patch calls `senses.refresh()` → `provider.refreshSettings()`,
+  which reschedules the running loop (and stays idle when nothing is interested). Widget/avatar page events → `widget-message` /
   `avatar-clicked`.
 - **Handlers** (`src/main/capabilities/`): `presence` (from the provider), `screen` (`look`: screenshot
   via `desktopCapturer` on X11/Windows/macOS, `screenshot` template on Wayland (Hyprland default

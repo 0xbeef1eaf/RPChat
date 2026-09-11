@@ -20,6 +20,8 @@ import type { ElectronOverlay } from './electron.js';
 import { ElectronBackend, OVERLAY_TITLE_PREFIX } from './electron.js';
 import { HelperBackend } from './helper-backend.js';
 import { HelperProcess } from './helper-process.js';
+import type { HyprParser } from './hypr-lua.js';
+import { OVERLAY_NAMESPACE, isLuaParserResponse, luaDisableRulesCommand, luaPlacementCommand, luaRulesCommand } from './hypr-lua.js';
 import { clampOpacity, isOverlayLayer } from './layers.js';
 import type { Bounds } from './placement.js';
 
@@ -349,10 +351,47 @@ export function buildUpdateCommands(patch: OverlayUpdate, address: string, optio
   return out;
 }
 
-/** Permanent window rules registered once at startup so overlays never get tiled/animated. */
-export function windowRuleCommands(): string[] {
+/** `windowrule` (Hyprland 0.45+) or the older `windowrulev2`; both take the same matcher. */
+export type RuleKeyword = 'windowrule' | 'windowrulev2';
+
+const OVERLAY_RULES = ['float', 'noinitialfocus', 'pin', 'noborder', 'noshadow', 'norounding', 'noblur', 'nodim', 'noanim', 'nomaxsize'];
+
+/**
+ * Window rules registered once at startup so overlays never get tiled or
+ * animated before the address lookup lands (legacy config parser only; a Lua
+ * session gets `luaRulesCommand()` instead). They live until the next
+ * `hyprctl reload`, after which `configreloaded` makes us send them again.
+ */
+export function windowRuleCommands(keyword: RuleKeyword = 'windowrule'): string[] {
   const match = `title:^(${OVERLAY_TITLE_PREFIX}.*)$`;
-  return ['float', 'noinitialfocus', 'noborder', 'noshadow', 'noblur', 'noanim', 'pin'].map((rule) => `keyword windowrulev2 ${rule},${match}`);
+  return [...OVERLAY_RULES.map((rule) => `keyword ${keyword} ${rule},${match}`), `keyword layerrule noanim,^(${OVERLAY_NAMESPACE}.*)$`];
+}
+
+export interface HyprVersion {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+/** Version from `j/version` JSON (`tag`) or the plain-text `version` output. */
+export function parseHyprVersion(raw: string): HyprVersion | undefined {
+  let text = raw;
+  try {
+    const json = JSON.parse(raw) as { tag?: unknown };
+    if (typeof json.tag === 'string') text = json.tag;
+  } catch {
+    /* plain text output */
+  }
+  const m = /v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(text);
+  if (!m) return undefined;
+  return { major: Number(m[1]), minor: Number(m[2]), patch: m[3] ? Number(m[3]) : 0 };
+}
+
+/** Hyprland 0.45 merged `windowrulev2` into `windowrule`; unknown versions are assumed current. */
+export function ruleKeyword(version?: HyprVersion): RuleKeyword {
+  if (!version) return 'windowrule';
+  if (version.major > 0) return 'windowrule';
+  return version.minor >= 45 ? 'windowrule' : 'windowrulev2';
 }
 
 export function batch(commands: string[]): string {
@@ -392,6 +431,8 @@ export class HyprlandIpcBackend extends ElectronBackend {
   private readonly windows = new Map<string, WindowState>();
   private legacyProps = false;
   private rulesRegistered = false;
+  /** Which config dialect this session speaks; learned from Hyprland's first answer. */
+  private parser: HyprParser | undefined;
   private unsubscribe: (() => void) | undefined;
 
   constructor(
@@ -433,24 +474,62 @@ export class HyprlandIpcBackend extends ElectronBackend {
     return super.monitors();
   }
 
-  /** Register the `rp-overlay:` window rules (idempotent, best effort). */
+  /**
+   * Register the `rp-overlay:` window rules (idempotent, best effort). The
+   * first attempt also settles which dialect the session speaks: a Lua config
+   * rejects `keyword` outright, and everything after this goes through `eval`.
+   */
   async registerWindowRules(): Promise<void> {
     if (this.rulesRegistered) return;
     this.rulesRegistered = true;
-    const commands = windowRuleCommands();
+    if (this.parser === 'lua') {
+      await this.sendLuaRules();
+      return;
+    }
+    const commands = windowRuleCommands(await this.ruleKeyword());
     try {
       const res = await this.transport.request(batch(commands));
-      if (isOkResponse(res)) return;
+      if (isOkResponse(res)) {
+        this.parser ??= 'legacy';
+        return;
+      }
+      if (isLuaParserResponse(res)) {
+        this.useLuaParser();
+        await this.sendLuaRules();
+        return;
+      }
       this.log.debug?.('[display:hyprland-ipc] batch window rules answered', res.trim());
     } catch (err) {
       this.log.debug?.('[display:hyprland-ipc] batch window rules failed; sending individually', err);
     }
     for (const cmd of commands) {
       try {
-        await this.transport.request(cmd);
+        const res = await this.transport.request(cmd);
+        if (isLuaParserResponse(res)) {
+          this.useLuaParser();
+          await this.sendLuaRules();
+          return;
+        }
+        if (!isOkResponse(res)) this.log.warn?.(`[display:hyprland-ipc] window rule "${cmd}" answered: ${res.trim()}`);
       } catch (err) {
         this.log.warn?.(`[display:hyprland-ipc] window rule failed: ${cmd}`, err);
       }
+    }
+    this.parser ??= 'legacy';
+  }
+
+  private useLuaParser(): void {
+    if (this.parser === 'lua') return;
+    this.parser = 'lua';
+    this.log.info?.('[display:hyprland-ipc] Hyprland runs a Lua config: switching to `eval` (hl.dispatch/hl.window_rule) for rules and placement');
+  }
+
+  private async sendLuaRules(): Promise<void> {
+    try {
+      const res = await this.transport.request(luaRulesCommand());
+      if (!isOkResponse(res)) this.log.warn?.(`[display:hyprland-ipc] Lua window rules answered: ${res.trim()}`);
+    } catch (err) {
+      this.log.warn?.('[display:hyprland-ipc] Lua window rules failed', err);
     }
   }
 
@@ -472,6 +551,22 @@ export class HyprlandIpcBackend extends ElectronBackend {
     const { client, state } = found;
     const monitors = await this.monitors().catch(() => [] as MonitorInfo[]);
     const currentMonitor = typeof client.monitor === 'number' ? monitors.find((m) => m.id === String(client.monitor))?.name : undefined;
+    if (this.parser === 'lua') {
+      await this.runLua(
+        luaPlacementCommand(
+          {
+            bounds,
+            layer: options.layer,
+            opacity: options.opacity,
+            clickThrough: options.clickThrough,
+            ...(currentMonitor !== options.monitor.name ? { monitorName: options.monitor.name } : {}),
+          },
+          state.address,
+        ),
+      );
+      state.chromeApplied = true;
+      return;
+    }
     const commandOptions: BuildCommandOptions = {
       legacyProps: this.legacyProps,
       currentlyPinned: client.pinned === true,
@@ -496,10 +591,27 @@ export class HyprlandIpcBackend extends ElectronBackend {
 
   override async dispose(): Promise<void> {
     await super.dispose();
+    if (this.parser === 'lua') {
+      try {
+        await this.transport.request(luaDisableRulesCommand());
+      } catch (err) {
+        this.log.debug?.('[display:hyprland-ipc] dropping the Lua overlay rules failed', err);
+      }
+    }
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.windows.clear();
     await this.transport.close?.();
+  }
+
+  /** One `eval` request carrying the whole placement; Lua reports every failed line in the answer. */
+  private async runLua(command: string): Promise<void> {
+    try {
+      const res = await this.transport.request(command);
+      if (!isOkResponse(res)) this.log.warn?.(`[display:hyprland-ipc] placement answered: ${res.trim()}`);
+    } catch (err) {
+      this.log.warn?.('[display:hyprland-ipc] placement failed', err);
+    }
   }
 
   /** Send commands one by one; when the `dispatch setprop …` form is rejected, switch to the legacy syntax for good. */
@@ -516,6 +628,11 @@ export class HyprlandIpcBackend extends ElectronBackend {
         continue;
       }
       if (isOkResponse(res)) continue;
+      if (isLuaParserResponse(res)) {
+        this.useLuaParser();
+        this.rulesRegistered = false;
+        return;
+      }
       if (!this.legacyProps && cmd.startsWith('dispatch setprop ')) {
         this.log.info?.(`[display:hyprland-ipc] "dispatch setprop" rejected (${res.trim()}); switching to legacy setprop syntax`);
         this.legacyProps = true;
@@ -556,6 +673,16 @@ export class HyprlandIpcBackend extends ElectronBackend {
     return undefined;
   }
 
+  /** `windowrule` from Hyprland 0.45 on, `windowrulev2` before it (and when the version is unreadable). */
+  private async ruleKeyword(): Promise<RuleKeyword> {
+    try {
+      return ruleKeyword(parseHyprVersion(await this.transport.request('j/version')));
+    } catch (err) {
+      this.log.debug?.('[display:hyprland-ipc] version lookup failed; assuming the current rule syntax', err);
+      return ruleKeyword(undefined);
+    }
+  }
+
   private async json<T>(command: string): Promise<T> {
     const text = await this.transport.request(command);
     try {
@@ -572,6 +699,10 @@ export class HyprlandIpcBackend extends ElectronBackend {
         if (event === 'closewindow') {
           const address = normalizeAddress(data);
           for (const [id, state] of this.windows) if (state.address === address) this.windows.delete(id);
+        } else if (event === 'configreloaded') {
+          // A reload drops every rule we registered dynamically; put them back.
+          this.rulesRegistered = false;
+          void this.registerWindowRules().catch((err: unknown) => this.log.debug?.('[display:hyprland-ipc] re-registering rules after a config reload failed', err));
         } else if (event === 'monitoradded' || event === 'monitorremoved') {
           this.log.debug?.(`[display:hyprland-ipc] ${event}: ${data}`);
         }

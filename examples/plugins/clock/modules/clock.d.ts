@@ -13,12 +13,12 @@ interface ClockApi {
   now(): Promise<{ iso: string; local: string; weekday: string; unix: number }>;
   /**
    * Start a countdown. When it ends the host raises the `custom:countdown` event with
-   * `{ label, seconds, id }`; subscribe with sdk.events.on("custom:countdown", code) to react.
+   * `{ label, seconds, id }`; subscribe with sdk.events.on("custom:countdown", handler) to react.
    * @param seconds 1 .. 86400 (a day). Longer values are clamped.
    * @param label Optional label handed back in the event, e.g. "tea".
    * @returns id of the countdown and the ISO time it ends.
    * @example
-   * await sdk.events.on("custom:countdown", 'await sdk.chat.say(`Your ${input.data.label} is ready!`)', { once: true });
+   * await sdk.events.on("custom:countdown", async (input) => { await sdk.chat.say(`Your ${input.data.label} is ready!`); }, { once: true });
    * await sdk.clock.countdown(180, "tea");
    */
   countdown(seconds: number, label?: string): Promise<{ id: string; endsAt: string }>;

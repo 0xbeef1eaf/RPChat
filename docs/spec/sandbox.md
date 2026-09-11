@@ -10,7 +10,7 @@ export class QuickJsRunner implements CodeRunner {
   run(request: CodeRunRequest): Promise<CodeRunResult>;
   dispose(): Promise<void>;
 }
-export function transpile(code: string, language: 'ts' | 'js'): { js: string } // throws RpError('SANDBOX_COMPILE', message, { line, column })
+export function transpile(code: string, language: 'ts' | 'js'): { js: string; map?: string } // throws RpError('SANDBOX_COMPILE', message, { line, column })
 export function wrapAsAsyncFunctionBody(js: string): string;   // `(async () => {\n${js}\n})()` — must keep `return` valid
 ```
 
@@ -26,7 +26,31 @@ export function wrapAsAsyncFunctionBody(js: string): string;   // `(async () => 
    - No `setTimeout` etc. Provide `sleep(ms)` as a host-backed helper? No — keep v1 minimal; document that timers are via `sdk.timers`.
 5. Evaluate the bootstrap, then the user code with `evalCodeAsync`; the result is a promise handle — `resolvePromise` → `runtime.executePendingJobs()` loop as required by quickjs-emscripten. Convert the settled value with `context.dump`, enforce `maxResultBytes` (truncate → error `SANDBOX_RUNTIME` "result too large").
 6. Errors: compile → `SANDBOX_COMPILE`; interrupt/timeout → `SANDBOX_TIMEOUT`; out of memory → `SANDBOX_MEMORY`; thrown → `SANDBOX_RUNTIME` with message + stack (from the isolate error's `stack` property).
+
+### 3.1 Failures the model can act on (`sourcemap.ts`, `stack.ts`)
+
+The code that runs is not the code the model wrote: esbuild reformats it and the runner wraps it (`__rp_main`, then the async IIFE), so an isolate frame like `action.js:6:38` names a line the model never typed. `transpile` therefore also returns esbuild's source map, and `withSourceContext` rewrites every failure against the model's own source before it leaves the sandbox:
+
+- `SourceMapper` (a base64-VLQ decoder, no dependency) maps a position in the evaluated code back through `ASYNC_WRAPPER_LINES` and `PRELUDE_LINES` to the model's line and column.
+- `mapStack` rewrites each frame as `at <fn> (action.ts:<line>:<col>)`, keeps `(native)` frames, renames the entry function to `<your code>`, and drops what the model cannot act on: `bootstrap.js`, unmapped wrapper lines, frames past the end of its source, and anything after the first ten.
+- `codeFrame` quotes the failing line with two lines of context and a caret under the column.
+- Compile errors get the same `line`/`column`/`frame` from esbuild's location, and their host stack (the `RpError` thrown in `transpile`) is dropped — host paths are noise.
+
+The result is `SerializedError` with a mapped `stack` and `details: { line, column, frame, … }`. Core's `errorForModel` (used by both the live tool result and the replayed `<action_result>`, so they read alike) forwards `code`, `message`, `line`, `column`, `frame`, `details` and `stack`, and the system prompt tells the model those fields point at its own `action.ts` lines and that it may fix them and run once more.
 7. Always release every handle (use `Scope` / `using` helpers), dispose the context, and return `durationMs` and `compiledCode`.
+
+## 4. Function arguments (handlers)
+
+`sdk.events.on` and `sdk.timers.runLater` store code to run later, in a fresh isolate. Written as a
+string it is unchecked and awkward; written as a function it is part of the model's own code. JSON has
+no functions, so the bootstrap's `JSON.stringify` replacer turns a function argument into the action
+body that calls it — `return await (<its source>)(input);` — using the source the isolate compiled,
+which is already plain JavaScript (esbuild stripped the types). The host is unchanged: it still
+receives, validates and stores a string, and `wrapBehaviourScript` binds `input` when it runs.
+
+A handler therefore closes over nothing: no variable from the surrounding action, no helper defined
+above it. Whatever it needs travels in `opts.input`. Arguments that are not serialisable at all still
+reject with `sdk.<module>.<method>: arguments must be JSON-serialisable`.
 
 ## Tests (must run in vitest under Node 22 — wasm only, no native)
 
@@ -38,5 +62,6 @@ export function wrapAsAsyncFunctionBody(js: string): string;   // `(async () => 
 - host call budget enforced
 - host error propagates as a catchable Error inside the isolate with `.code`
 - TypeScript syntax (types, generics, `satisfies`) transpiles; syntax error → SANDBOX_COMPILE with line
+- a runtime failure reports the model's own line/column, a caret frame and a stack in `action.ts` coordinates
 - `signal.abort()` mid-await rejects with SANDBOX_TIMEOUT
 - runner survives 200 sequential runs without leaking (assert no exceptions; optional memory check)

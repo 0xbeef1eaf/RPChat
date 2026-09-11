@@ -61,6 +61,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Same key as the CI workflow: this job runs on main, so what it saves
+          # is what pull requests restore.
+          shared-key: native-linux
           workspaces: |
             native/overlay-wlr
             native/rp-coded

@@ -1,5 +1,7 @@
 import { RpError } from '@rp/shared';
 import type { SerializedError } from '@rp/shared';
+import type { SourceMapper } from './sourcemap.js';
+import { codeFrame, mapStack } from './stack.js';
 
 /** Why a run was cut short by the host. */
 export type TerminationKind = 'timeout' | 'cpu' | 'aborted' | 'host-call-timeout';
@@ -129,4 +131,33 @@ export function mapHostCrash(err: unknown): SerializedError {
     return { code: 'SANDBOX_MEMORY', message: 'isolate crashed: out of memory', details: { host: message } };
   }
   return { code: 'INTERNAL', message: `isolate crashed: ${message}`, details: { host: message } };
+}
+
+/**
+ * Point a failure at the model's own code: the stack is mapped back through the
+ * source map, and the failing line is quoted with a caret. Compile errors have
+ * no isolate stack but do carry a position, so they get the same treatment; the
+ * host stack of the `RpError` the transpiler threw is dropped — host paths are
+ * noise the model cannot act on.
+ */
+export function withSourceContext(error: SerializedError, source: string, mapper?: SourceMapper): SerializedError {
+  const details = error.details && typeof error.details === 'object' && !Array.isArray(error.details) ? { ...(error.details as Record<string, unknown>) } : undefined;
+  const mapped = mapStack(error.stack, mapper, source.split('\n').length);
+  let at = mapped.at;
+  if (!at && details && typeof details['line'] === 'number') {
+    const column = typeof details['column'] === 'number' ? details['column'] : 1;
+    at = { line: details['line'], column };
+  }
+  const out: SerializedError = { code: error.code, message: error.message };
+  if (mapped.stack.length > 0) out.stack = mapped.stack;
+  const extra: Record<string, unknown> = { ...(details ?? {}) };
+  if (at) {
+    extra['line'] = at.line;
+    extra['column'] = at.column;
+    const frame = codeFrame(source, at);
+    if (frame !== undefined) extra['frame'] = frame;
+  }
+  if (Object.keys(extra).length > 0) out.details = extra;
+  else if (error.details !== undefined) out.details = error.details;
+  return out;
 }

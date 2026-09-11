@@ -3,6 +3,7 @@ import { createStandardRegistry } from '@rp/sdk';
 import { estimateMessageTokens, estimateTokens } from '@rp/llm';
 import { loadPack } from '@rp/pack';
 import type { ChatMessage, LoadedPack, Session } from '@rp/shared';
+import { errorForModel, resultPayload } from './action-loop.js';
 import { PromptBuilder, transcriptToMessages } from './prompt.js';
 import type { PromptInput } from './prompt.js';
 import { LUNA_DIR } from './test/helpers.js';
@@ -254,5 +255,57 @@ describe('PromptBuilder', () => {
     // the newest pair is always kept (last transcript entry is an action message → tool_result reply)
     expect(messages.at(-1)!.role).toBe('user');
     expect(messages.at(-1)!.content[0]!.type).toBe('tool_result');
+  });
+});
+
+describe('engine rules', () => {
+  it('tells the character to use the sdk rather than describe using it', async () => {
+    const { system } = new PromptBuilder().build(await input([msg(1, 'user', 'hi')]));
+    const rules = system.slice(system.indexOf('<engine_rules>'), system.indexOf('</engine_rules>'));
+    // The failure this guards against: a character that narrates an action it never ran.
+    expect(rules).toContain('Never mime what you can actually do');
+    expect(rules).toContain('*shows you the photo*');
+    expect(rules).toMatch(/Reach for the sdk whenever/);
+    // …without turning into a machine that acts for its own sake.
+    expect(rules).toContain('Do not act for the sake of acting');
+    expect(rules).toContain('one action per intention');
+  });
+});
+
+describe('errorForModel', () => {
+  /** What the sandbox produces for a failing action, already mapped to the model's own source. */
+  const sandboxError = {
+    code: 'SANDBOX_RUNTIME' as const,
+    message: "TypeError: cannot read property 'deep' of undefined",
+    stack: '    at pick (action.ts:3:3)\n    at <your code> (action.ts:5:8)',
+    details: { name: 'TypeError', line: 3, column: 29, frame: "> 3 |   return list.find((x) => x.missing.deep);\n    |                             ^" },
+  };
+
+  it('hands the model the position, the quoted line and the stack, so it can fix and retry', () => {
+    const out = errorForModel(sandboxError);
+    expect(out).toMatchObject({
+      code: 'SANDBOX_RUNTIME',
+      message: sandboxError.message,
+      line: 3,
+      column: 29,
+      stack: sandboxError.stack,
+    });
+    expect(out['frame']).toContain('> 3 |');
+  });
+
+  it('keeps working for errors that carry nothing to point at', () => {
+    expect(errorForModel({ code: 'PERMISSION_DENIED', message: 'denied' })).toEqual({ code: 'PERMISSION_DENIED', message: 'denied' });
+  });
+
+  it('is the same shape live and in the replayed transcript', () => {
+    const result = { ok: false, error: sandboxError, logs: [], calls: [], durationMs: 1 };
+    const live = resultPayload(result);
+    const replayed = transcriptToMessages(
+      [msg(1, 'assistant', 'text', { actions: [{ id: 'a1', purpose: 'p', code: 'return 1;', language: 'ts' as const, source: 'fence' as const, startedAt: 't', result }] })],
+      false,
+    );
+    const rendered = replayed.flatMap((m) => m.content).map((part) => ('text' in part ? part.text : '')).join('\n');
+    expect(rendered).toContain('<action_result>');
+    expect(rendered).toContain(JSON.stringify(live.error));
   });
 });

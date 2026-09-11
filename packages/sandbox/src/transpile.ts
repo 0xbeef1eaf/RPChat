@@ -11,17 +11,23 @@ export const ENTRY_FUNCTION_NAME = '__rp_main';
  * numbers are shifted by one when reported.
  */
 const PRELUDE = `async function ${ENTRY_FUNCTION_NAME}() { "use strict";\n`;
-const PRELUDE_LINES = 1;
+/** Lines the wrapper adds before the model's first line (used to map positions back). */
+export const PRELUDE_LINES = 1;
+/** Lines `wrapAsAsyncFunctionBody` adds before the transpiled code. */
+export const ASYNC_WRAPPER_LINES = 1;
 
 /**
  * Transpile the body of an async function (TypeScript or JavaScript) to plain
  * ES2020 JavaScript. The result declares `async function __rp_main() { ... }`
  * (preceded by any esbuild helper definitions); it does not invoke it.
  *
+ * `map` is esbuild's source map: the runner uses it to report failures against
+ * the code the model wrote instead of the reformatted output.
+ *
  * @throws RpError('SANDBOX_COMPILE') with `details: { line, column, lineText? }`
  *   (1-based, relative to the user's code) on syntax errors.
  */
-export function transpile(code: string, language: ActionLanguage): { js: string } {
+export function transpile(code: string, language: ActionLanguage): { js: string; map?: string } {
   const wrapped = `${PRELUDE}${code}\n}`;
   try {
     const out = transformSync(wrapped, {
@@ -31,8 +37,9 @@ export function transpile(code: string, language: ActionLanguage): { js: string 
       legalComments: 'none',
       logLevel: 'silent',
       sourcefile: 'action.ts',
+      sourcemap: true,
     });
-    return { js: out.code };
+    return out.map ? { js: out.code, map: out.map } : { js: out.code };
   } catch (err) {
     throw toCompileError(err);
   }

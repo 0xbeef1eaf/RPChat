@@ -270,6 +270,24 @@ type HostEventName =
 /** A host event or one of your own custom events ('custom:<name>', raised with sdk.events.emit()). */
 type EventName = HostEventName | \`custom:\${string}\`;
 
+/**
+ * What a handler receives when its event fires or its timer runs: the event
+ * that triggered it, that event's data, and whatever you passed as opts.input.
+ * Handlers run later, in a fresh run: nothing from the surrounding action is in
+ * scope, so everything the handler needs must come through here.
+ */
+interface HandlerInput {
+  /** The event that fired ('user-idle', 'custom:tea-ready', …); absent for sdk.timers.runLater. */
+  event?: EventName;
+  /** Event-specific payload (see HostEventName for the shape per event). */
+  data?: Json;
+  /** Anything you passed as opts.input. */
+  [key: string]: Json | undefined;
+}
+
+/** A handler you write as a function (preferred) or as the body of an async function in a string. */
+type Handler = ((input: HandlerInput) => unknown | Promise<unknown>) | string;
+
 /** A live event subscription (from sdk.events.on() / sdk.events.list()). */
 interface EventSubscriptionInfo {
   /** Opaque id; pass to sdk.events.off(). */

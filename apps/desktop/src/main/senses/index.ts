@@ -6,6 +6,7 @@ import type { CommandRunner } from '../capabilities/commands-runner.js';
 import type { HyprTransport } from '../display/hyprland.js';
 import { PresenceProvider } from './presence.js';
 import { CompositeSampler, activeWindowSource, nowPlayingSource, parseHyprActiveWindowEvent, readLinuxBatteryPercent } from './samplers.js';
+import { WaylandIdleMonitor, waylandSocketPath } from './wayland-idle.js';
 import { DirWatcher } from './watch.js';
 
 export interface SensesDeps {
@@ -14,12 +15,13 @@ export interface SensesDeps {
   hypr?: HyprTransport;
   logger: Logger;
   platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface Senses {
   provider: PresenceProvider;
   watcher: DirWatcher;
-  /** Re-read `settings.senses` (watch dirs). */
+  /** Re-read `settings.senses`: watched directories and the poll interval. */
   refresh(): Promise<void>;
   dispose(): Promise<void>;
 }
@@ -27,9 +29,19 @@ export interface Senses {
 export function createSenses(deps: SensesDeps): Senses {
   const platform = deps.platform ?? process.platform;
   let locked: boolean | null = null;
+  /**
+   * `powerMonitor.getSystemIdleTime()` reads X11's screensaver extension: in a
+   * Wayland session it never sees input and answers 0 forever, so idle events
+   * never fired. Ask the compositor instead where the protocol exists.
+   */
+  let waylandIdle: WaylandIdleMonitor | undefined;
+  if (platform === 'linux' && waylandSocketPath(deps.env ?? process.env) !== undefined) {
+    waylandIdle = new WaylandIdleMonitor({ ...(deps.env ? { env: deps.env } : {}), logger: deps.logger });
+    waylandIdle.start();
+  }
   const sampler = new CompositeSampler(
     {
-      idleMs: () => powerMonitor.getSystemIdleTime() * 1000,
+      idleMs: () => waylandIdle?.idleMs() ?? powerMonitor.getSystemIdleTime() * 1000,
       screenLocked: () => locked,
       onBattery: () => (platform === 'linux' || platform === 'win32' || platform === 'darwin' ? powerMonitor.isOnBatteryPower() : null),
       batteryPercent: () => (platform === 'linux' ? readLinuxBatteryPercent() : null),
@@ -75,6 +87,8 @@ export function createSenses(deps: SensesDeps): Senses {
   const refresh = async (): Promise<void> => {
     const s = await deps.settings();
     watcher.setDirs(s.senses.watchDirs);
+    // The running poll loop still holds the previous `pollMs`; restart it.
+    await provider.refreshSettings();
   };
   return {
     provider,
@@ -88,6 +102,7 @@ export function createSenses(deps: SensesDeps): Senses {
       } catch {
         /* ignore */
       }
+      waylandIdle?.stop();
       watcher.dispose();
       await provider.dispose();
     },

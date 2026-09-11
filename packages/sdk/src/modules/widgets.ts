@@ -39,13 +39,15 @@ interface WidgetsApi {
   docs: `Build tiny tools on the desktop: a countdown, a shared note, a mood board, a two-button poll. Requires the \`widgets\` capability.
 
 - Write compact self-contained HTML with inline CSS/JS; there is no network inside the widget. Keep it readable at 300 px.
-- Two-way talk: in the widget, \`parent.postMessage({ choice: "tea" }, "*")\` → subscribe with \`sdk.events.on("widget-message", code, { filter: { widgetId: "poll" } })\`. From you: \`update(id, { postMessage })\`.
+- Two-way talk: in the widget, \`parent.postMessage({ choice: "tea" }, "*")\` → subscribe with \`sdk.events.on("widget-message", async (input) => { ... }, { filter: { widgetId: "poll" } })\`. From you: \`update(id, { postMessage })\`.
 - Use stable ids and \`closeAll()\` when the play is over; do not leave stale windows around.
 
 \`\`\`ts
 await sdk.widgets.show({ id: "poll", title: "Tea or coffee?", width: 240, height: 120, position: "bottom-left",
   html: '<button onclick="parent.postMessage({c:\\'tea\\'},\\'*\\')">Tea</button> <button onclick="parent.postMessage({c:\\'coffee\\'},\\'*\\')">Coffee</button>' });
-await sdk.events.on("widget-message", 'await sdk.llm.wake({ reason: "poll answer: " + input.data.message.c });', { filter: { widgetId: "poll" }, once: true });
+await sdk.events.on("widget-message", async (input) => {
+  await sdk.llm.wake({ reason: "poll answer: " + JSON.stringify(input.data) });
+}, { filter: { widgetId: "poll" }, once: true });
 \`\`\``,
   methods: {
     show: { description: 'Open or replace a widget window.' },

@@ -12,7 +12,14 @@ export const HOST_EVENT_NAMES: readonly HostEventName[] = [
 export const SUBSCRIPTIONS_PER_SESSION = 30;
 export const SUBSCRIPTION_CODE_MAX_BYTES = 16 * 1024;
 export const EVENT_DEBOUNCE_MS = 2000;
-export const DEFAULT_IDLE_MS = 300_000;
+/**
+ * A subscription with no `filter.idleMs` fires as soon as the host says the
+ * user is idle — that is what "run when they go idle" means, and the host's own
+ * threshold (`settings.senses.idleThresholdMs`) is what the user configured.
+ * The previous default of five minutes was above that threshold, so with the
+ * host reporting the crossing only, such a subscription never fired at all.
+ */
+export const DEFAULT_IDLE_MS = 0;
 export const DEFAULT_BATTERY_PERCENT = 20;
 const CUSTOM_PREFIX = 'custom:';
 const CUSTOM_NAME_RE = /^[a-zA-Z0-9_.-]{1,64}$/;
@@ -42,6 +49,9 @@ interface EdgeState {
   idle?: boolean;
   lowBattery?: boolean;
 }
+
+/** Events whose repeats an `onEvent` behaviour should not be run for again. */
+const REPEATING_EVENTS: ReadonlySet<string> = new Set(['user-idle']);
 
 export function isCustomEvent(name: string): boolean {
   return name.startsWith(CUSTOM_PREFIX) && CUSTOM_NAME_RE.test(name.slice(CUSTOM_PREFIX.length));
@@ -111,6 +121,8 @@ export function matchesFilter(event: string, data: Json, filter: Record<string, 
 /** Event subscriptions (`sdk.events`), host-event routing, `time` / `custom:*` generation and `onEvent` behaviours. */
 export class EventService {
   private readonly edges = new Map<string, EdgeState>();
+  /** Repeating events an `onEvent` behaviour has already been run for (cleared when they end). */
+  private readonly behaviourRanFor = new Set<string>();
   private readonly lastFired = new Map<string, number>();
   private readonly firing = new Set<string>();
   private lastTimeTick: string | undefined;
@@ -252,6 +264,7 @@ export class EventService {
     if (event.name === 'user-back') this.resetIdleEdges(); // the user is back: every idle edge may fire again
     let subs = await this.o.storage.subscriptions.list(scope.sessionId);
     if (scope.characterRef !== undefined) subs = subs.filter((s) => s.characterRef === scope.characterRef);
+    if (event.name === 'user-back') this.behaviourRanFor.delete('user-idle');
     const bySession = new Map<string, EventSubscription[]>();
     for (const s of subs) {
       if (s.event !== event.name) continue;
@@ -276,6 +289,12 @@ export class EventService {
     }
 
     if (!scope.runOnEvent || event.name === 'time') return;
+    // `user-idle` repeats while the user stays away (so longer subscription
+    // thresholds are reached); an onEvent behaviour only wants the first one.
+    if (REPEATING_EVENTS.has(event.name)) {
+      if (this.behaviourRanFor.has(event.name)) return;
+      this.behaviourRanFor.add(event.name);
+    }
     // onEvent behaviours: for each character with one, its most recent session, unless a subscription handled it there.
     const sessions = (await this.o.storage.sessions.list()).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
     const seen = new Set<string>();

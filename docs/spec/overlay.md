@@ -110,7 +110,22 @@ Window identification: each overlay `BrowserWindow` gets a unique title `rp-over
 | chrome | `setprop noborder 1`, `noshadow 1`, `noblur 1`, `nodim 1`, `norounding 1`, `noanim 1` |
 | monitor | `dispatch movewindow mon:<name>,address:…` before placement when the target monitor differs |
 
-Also register once at startup a permanent window rule so Hyprland never tiles or animates overlays even before the address lookup lands: `keyword windowrulev2 float,title:^(rp-overlay:.*)$`, `keyword windowrulev2 noinitialfocus,title:^(rp-overlay:.*)$`, `keyword windowrulev2 noborder,title:^(rp-overlay:.*)$`, `keyword windowrulev2 noshadow,...`, `keyword windowrulev2 noblur,...`, `keyword windowrulev2 noanim,...`. Batch with `[[BATCH]]` where supported.
+Also register once at startup permanent window rules so Hyprland never tiles or animates overlays even before the address lookup lands: `keyword windowrule float,title:^(rp-overlay:.*)$`, then `noinitialfocus`, `pin`, `noborder`, `noshadow`, `norounding`, `noblur`, `nodim`, `noanim`, `nomaxsize` for the same matcher, plus `keyword layerrule noanim,^(rp-overlay.*)$` for the helper's surfaces. Batch with `[[BATCH]]` where supported. The keyword is `windowrule` from Hyprland 0.45 on and `windowrulev2` below it (`j/version` → `tag`; an unreadable version is assumed current). Everything is set over IPC — the app never writes to the user's Hyprland config. Dynamic rules are dropped by `hyprctl reload`, so the `configreloaded` event re-registers them.
+
+#### 1.2.2 Lua-config sessions (`display/hypr-lua.ts`)
+
+From 0.5x a Hyprland whose config is Lua (`hyprland.lua`) refuses the legacy command set: `keyword …` answers `keyword can't work with non-legacy parsers. Use eval.` and a legacy `dispatch setfloating address:0x…` comes back as a Lua syntax error (`return hl.dispatch(setfloating address:0x…)`). Both answers mean the same thing, so `isLuaParserResponse` treats either as the signal to speak Lua from then on — the dialect is never guessed from the version or from files on disk. Everything then goes through `eval <lua>`:
+
+| purpose | legacy | Lua |
+| --- | --- | --- |
+| rules | `keyword windowrule float,title:…` | `hl.window_rule({ name = "rp-code-overlays", match = { title = "^(rp-overlay:.*)$" }, float = true, … })`, `hl.layer_rule({ match = { namespace = … }, no_anim = true })` |
+| float / pin | `dispatch setfloating`, `dispatch pin` (set) | `hl.dsp.window.float/pin` are **toggles**: guard with `if not w.floating`, `if w.pinned ~= <wanted>` |
+| geometry | `resizewindowpixel exact`, `movewindowpixel exact`, `movewindow mon:` | `hl.dsp.window.resize({ x, y, window })` then `move({ x, y, monitor, window })` — absolute layout coordinates |
+| chrome | `setprop noborder/norounding/nodim 1` | rule fields `border_size = 0`, `rounding = 0`, `decorate = false`, `no_anim`, `no_blur`, `no_dim`, `no_shadow`, `no_max_size`, `no_initial_focus`, `suppress_event = "maximize"` |
+| opacity | `setprop alpha <v>` + `alphaoverride 1` | `set_prop({ window = w, prop = "opacity", value = <v> })` + `opacity_override` |
+| click-through | `setprop nofocus 1` | `set_prop({ window = w, prop = "no_focus", value = 1 })` — `value` takes a number or string, **never** a Lua boolean |
+
+One `eval` carries the whole placement (window lookup by `x.address`, then the dispatches), so a placement is one round trip and Lua reports each failed line in the answer. Rule handles are kept in the Lua global `__rp_overlay_rules`: re-registering disables the previous ones (no duplicates after a reload) and `dispose()` disables them, so an IPC-only session leaves nothing behind. Z-order among overlays follows `pin` (a pinned window draws above unpinned floating ones); `bring_to_top` is sent for `top`/`overlay` as a best effort and `bottom`/`background` stay emulated, as `info()` already reports.
 
 monitors: `j/monitors` → `MonitorInfo` (name, id, `x`,`y`,`width/scale`,`height/scale` minus `reserved`, `focused` → `hasCursor`, primary = index 0 / `focused` if none is marked), `j/cursorpos` for the cursor.
 

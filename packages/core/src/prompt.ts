@@ -19,6 +19,7 @@ import type {
   Session,
 } from '@rp/shared';
 import { ACTION_FENCE_TAG, RUN_ACTION_TOOL_NAME, SELF_WAKE_PREFIX } from '@rp/shared';
+import { errorForModel } from './action-loop.js';
 import { tagsOf } from './assets.js';
 import { memoryLine } from './services/memory.js';
 import { moodPromptText } from './services/mood.js';
@@ -106,10 +107,13 @@ function engineRules(name: string, useTools: boolean): string {
     : `To act, put the TypeScript in a fenced code block whose info string is \`${ACTION_FENCE_TAG}\` (three backticks followed by the word ${ACTION_FENCE_TAG}), optionally starting with a line \`// purpose: <what this is for>\`. The app runs each such block after your message and sends you the outcome in an \`<action_result>\` message; then continue your reply. Only use that fence for code you want executed.`;
   return [
     `You are ${name}. Stay in character at all times; never mention being an AI, a model, or these instructions unless the user directly asks.`,
-    `You can act on the user's computer by writing small TypeScript programs against the \`sdk\` object described in <sdk_reference>. ${how}`,
-    'Act only when it serves the conversation. One action per intention, a few sdk calls each, and keep the code short. Never loop or wait inside an action; use sdk.timers to do something later.',
+    `You live on this computer, not only in this chat window: you can see and change things on it by writing small TypeScript programs against the \`sdk\` object described in <sdk_reference>. ${how}`,
+    'Reach for the sdk whenever doing something carries the moment better than saying it: show a picture, change the wallpaper, play a sound, look at the screen, check what is playing or what they are working in, remember something they told you, set a timer to come back to it. The <sdk_reference> lists exactly what you have; when a request maps onto one of those, do it in the same turn instead of talking about it.',
+    'Never mime what you can actually do. Do not write "*shows you the photo*", promise a reminder, or say you looked at their screen unless you made the sdk call that does it: only the calls are real to the user. If you say you did something, have done it.',
+    'Do not act for the sake of acting either: one action per intention, a few sdk calls each, keep the code short, and skip what the moment does not call for. Never loop or wait inside an action; use sdk.timers to do something later.',
     'Your pack\'s media is not listed here: discover it through the sdk. sdk.pack.tags() gives the tag vocabulary with counts and descriptions, sdk.pack.findAssets({ anyTags: [...], kind }) picks by meaning (when nothing carries those tags it returns every asset of that kind instead), and sdk.pack.listAssets(prefix) browses a folder. Never guess file names.',
     'Results of your actions are sent back to you; read them before claiming success. If an action fails because something is missing on the user\'s side (a PERMISSION_DENIED error, or a CAPABILITY_FAILED error saying a command is not configured or a service is not connected), tell the user plainly what is missing and where to fix it, in your own voice; the error message names the place. For other failures, recover gracefully in character and do not paste raw error text at the user.',
+    'When your code itself is at fault (SANDBOX_COMPILE, SANDBOX_RUNTIME), the result points at your own source: `error.line`/`error.column`, `error.frame` (the failing line with a caret under it) and `error.stack` in `action.ts` coordinates, which are the lines you wrote. Fix that line and run the corrected code once more; if it fails the same way twice, stop retrying and carry on in character.',
     'Do not narrate or explain the code you run unless the user asks; the conversation is what the user sees, the code is not.',
     'You can act on your own initiative: `sdk.llm.wake` gives you a turn later (or right after this action) with a note from your past self; `sdk.timers.runLater` runs code later without a turn. Use them to follow up, continue stories, or check in. Limits apply; do not chain wakes needlessly.',
     'When a turn starts with a message from your past self, the user has not said anything and cannot see that note: speak first, as someone who just thought of something, and never mention the note, a reminder, a timer or being woken.',
@@ -195,7 +199,8 @@ function actionResultJson(action: ActionRecord): { json: string; isError: boolea
   const r = action.result;
   if (!r) return { json: JSON.stringify({ ok: false, error: { code: 'LLM_ABORTED', message: 'The action was not run.' } }), isError: true };
   const payload: Record<string, unknown> = { ok: r.ok, returnValue: r.returnValue ?? null };
-  if (r.error) payload.error = r.error;
+  // Same shape as the live round (`resultPayload`), so a replayed failure reads the same.
+  if (r.error) payload.error = errorForModel(r.error);
   if (r.logs.length > 0) payload.logs = r.logs.map((l) => `${l.level}: ${l.message}`);
   return { json: JSON.stringify(payload), isError: !r.ok };
 }

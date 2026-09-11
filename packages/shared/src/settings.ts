@@ -148,6 +148,8 @@ export interface AppSettings {
     calendarSources: string[];
     /** Directories watched for `file-added` events (e.g. ~/Downloads). */
     watchDirs: string[];
+    /** Keep the Settings → Senses "Live snapshot" card refreshing itself. Default false. */
+    liveSnapshotAutoRefresh: boolean;
   };
   web: {
     /** Hostname patterns (`example.com`, `*.example.com`) `sdk.web` may fetch. Empty = any http(s) host. */
@@ -227,7 +229,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
     doNotDisturb: { command: '' },
     theme: { command: '' },
   },
-  senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [] },
+  senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [], liveSnapshotAutoRefresh: false },
   web: { allowlist: [], maxBytes: 512 * 1024 },
   desktop: { launchAllowlist: [] },
   messaging: { channels: [] },

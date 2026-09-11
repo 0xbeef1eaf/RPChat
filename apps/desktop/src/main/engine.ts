@@ -182,7 +182,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const input = new InputHandler({ maxLockMs: async () => (await settingsOf()).maxInputLockMs, logger, ...(process.platform === 'linux' ? { daemon } : {}) });
 
   // ---- phase 2: senses + handlers ------------------------------------------
-  const senses = createSenses({ settings: settingsOf, commands, ...(hypr ? { hypr } : {}), logger });
+  const senses = createSenses({ settings: settingsOf, commands, env, ...(hypr ? { hypr } : {}), logger });
   const emit = (event: Parameters<typeof senses.provider.push>[0]): void => senses.provider.push(event);
   const avatar = new AvatarHandler({ backend: () => backend, packs, emit, logger });
   const widgets = new WidgetsHandler({ backend: () => backend, emit, defaultLayer: async () => ((await settingsOf()).mediaAlwaysOnTop ? 'top' : 'bottom') });
