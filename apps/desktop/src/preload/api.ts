@@ -29,6 +29,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   settings: ['get', 'managed', 'update', 'testProvider', 'listModels', 'testCommand', 'defaultCommands'],
   audit: ['list'],
   memories: ['list', 'add', 'update', 'remove', 'consolidate'],
+  prompts: ['pending'],
   ui: ['respondPrompt'],
   system: ['status', 'install', 'setAutostart', 'installerPath', 'createPolicy', 'policyTemplate'],
   updates: ['status', 'check', 'download', 'install', 'setToken'],

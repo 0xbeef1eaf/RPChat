@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CHAT_ZOOM_MAX, CHAT_ZOOM_MIN } from '@rp/shared';
 import type { AppSettings } from '@rp/shared';
 import { defaultSettings, mergeSettings } from './defaults.js';
 
@@ -45,5 +46,19 @@ describe('mergeSettings budget migration', () => {
     expect(mergeSettings({ contextTokenBudget: 30_000 }).contextTokenBudget).toBe(30_000);
     expect(mergeSettings({ history: { keepActionDetailFor: 2 } as never }).history.keepActionDetailFor).toBe(0);
     expect(mergeSettings({ history: { keepActionDetailFor: 3 } as never }).history.keepActionDetailFor).toBe(3);
+  });
+});
+
+describe('mergeSettings chatZoom', () => {
+  it('defaults to 100% and holds a stored value inside the offered range', () => {
+    expect(mergeSettings({}).chatZoom).toBe(1);
+    expect(mergeSettings({ chatZoom: 1.5 }).chatZoom).toBe(1.5);
+    // A hand-edited file or an older build must not leave the chat unreadable.
+    expect(mergeSettings({ chatZoom: 12 }).chatZoom).toBe(CHAT_ZOOM_MAX);
+    expect(mergeSettings({ chatZoom: 0.05 }).chatZoom).toBe(CHAT_ZOOM_MIN);
+    expect(mergeSettings({ chatZoom: Number.NaN }).chatZoom).toBe(1);
+    expect(mergeSettings({ chatZoom: 'big' } as unknown as Partial<AppSettings>).chatZoom).toBe(1);
+    // Steps accumulate in floating point; the stored value stays a whole percent.
+    expect(mergeSettings({ chatZoom: 0.1 + 0.2 + 0.8 }).chatZoom).toBe(1.1);
   });
 });

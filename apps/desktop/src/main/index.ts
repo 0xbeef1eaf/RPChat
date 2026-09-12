@@ -83,8 +83,16 @@ async function main(): Promise<void> {
     ...(env.ELECTRON_RENDERER_URL ? { rendererUrl: env.ELECTRON_RENDERER_URL } : {}),
     logger,
     onMainClosed: () => {
-      services?.permissionPrompts.rejectAll();
-      services?.uiPrompts.rejectAll();
+      // Questions asked in windows of their own outlive the chat window; only those that fell
+      // back to its in-app modal go away with it.
+      const inMainWindow = (id: string): boolean => !windows.hasPromptWindow(id);
+      services?.permissionPrompts.rejectAll(inMainWindow);
+      services?.uiPrompts.rejectAll(inMainWindow);
+    },
+    onPromptDismissed: (id) => {
+      // Closing the window is a dismissal: deny the permission, cancel the question.
+      services?.permissionPrompts.respond(id, 'deny');
+      services?.uiPrompts.respond(id, null);
     },
   });
 

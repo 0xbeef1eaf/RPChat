@@ -155,10 +155,23 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   logger.info(`[display] backend: ${backend.name} (${JSON.stringify(backend.info().supports)})`);
 
   // ---- prompts ------------------------------------------------------------
-  const permissionPrompts = new PendingPrompts<PermissionDecision>({ fallback: 'deny' });
-  const uiPrompts = new PendingPrompts<UiPromptAnswer>({ fallback: null });
+  // Every question gets a focused window of its own; the in-app modal is the fallback for when
+  // one cannot be opened. Answering (or timing out) closes the window it was asked in.
+  const closePromptWindow = (id: string): void => windows.closePromptWindow(id);
+  const permissionPrompts = new PendingPrompts<PermissionDecision>({ fallback: 'deny', onSettled: closePromptWindow });
+  const uiPrompts = new PendingPrompts<UiPromptAnswer>({ fallback: null, onSettled: closePromptWindow });
+  const characterOf = (packId: string, characterId: string): { name: string; packName: string } => {
+    const found = engine.packs.characters().find((c) => c.ref === `${packId}/${characterId}`);
+    return { name: found?.name ?? characterId, packName: found?.packName ?? packId };
+  };
   const permissionPrompter = (request: PermissionRequest): Promise<PermissionDecision> =>
-    permissionPrompts.ask(request.requestId, () => windows.sendToMain(IPC_EVENT_CHANNELS.permissionRequest, request));
+    permissionPrompts.ask(request.requestId, () => {
+      const who = characterOf(request.context.packId, request.context.characterId);
+      return (
+        windows.openPromptWindow({ kind: 'permission', request, characterName: who.name, packName: who.packName }) ||
+        windows.sendToMain(IPC_EVENT_CHANNELS.permissionRequest, request)
+      );
+    });
 
   // ---- handlers -----------------------------------------------------------
   const settingsOf = (): Promise<AppSettings> => engine.settings.get();
@@ -167,7 +180,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const media = new MediaManager({ backend: () => backend, audioWindow: () => windows.audioWindow(), packs, settings: settingsOf, logger });
   const ui = new UiHandler({
     prompts: uiPrompts,
-    deliver: (request: UiPromptRequest) => windows.sendToMain(IPC_EVENT_CHANNELS.uiPrompt, request),
+    deliver: (request: UiPromptRequest) => windows.openPromptWindow({ kind: 'ui', prompt: request }) || windows.sendToMain(IPC_EVENT_CHANNELS.uiPrompt, request),
     characterName: (context): string => {
       try {
         return engine.packs.getCharacter(`${context.packId}/${context.characterId}`).character.definition.name;

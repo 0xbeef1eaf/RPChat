@@ -4,8 +4,10 @@
  * API directly except for one-off reads that do not touch shared state.
  */
 import type { CharacterRef, PackInspection, PermissionDecision, Session, SessionId, UiPromptAnswer } from '@rp/shared';
+import { clampChatZoom } from '@rp/shared';
 import { api, errorMessage } from '../api';
 import { truncate } from '../lib/format';
+import { applyTheme } from '../lib/theme';
 import { newId } from '../lib/ids';
 import {
   applyChatEvent,
@@ -52,12 +54,6 @@ export function navigate(route: RouteName): void {
 
 export function setEditorLocation(patch: Partial<Omit<AppState['editor'], 'visited'>>): void {
   update((s) => ({ ...s, editor: { ...s.editor, ...patch } }));
-}
-
-export function applyTheme(theme: 'system' | 'light' | 'dark'): void {
-  const root = document.documentElement;
-  if (theme === 'system') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', theme);
 }
 
 export async function refreshSettings(): Promise<void> {
@@ -218,6 +214,25 @@ export async function abortTurn(sessionId: SessionId): Promise<void> {
     await api().chat.abort(sessionId);
   } catch (err) {
     reportError('Abort failed', err);
+  }
+}
+
+/**
+ * Change the chat text scale and remember it. The store is updated first so the transcript
+ * resizes on the keypress rather than a settings round-trip later; a write that fails puts the
+ * old scale back, so what is on screen is always what is stored.
+ */
+export async function setChatZoom(zoom: number): Promise<void> {
+  const chatZoom = clampChatZoom(zoom);
+  const before = appStore.getState().settings;
+  if (!before || before.chatZoom === chatZoom) return;
+  update((s) => (s.settings ? { ...s, settings: { ...s.settings, chatZoom } } : s));
+  try {
+    const next = await api().settings.update({ chatZoom });
+    update((s) => ({ ...s, settings: next }));
+  } catch (err) {
+    update((s) => (s.settings ? { ...s, settings: { ...s.settings, chatZoom: before.chatZoom } } : s));
+    reportError('Could not save the chat text size', err);
   }
 }
 

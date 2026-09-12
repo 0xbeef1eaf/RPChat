@@ -273,6 +273,9 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       reload: (_e, id) => services.plugins.reload(requireString(id, 'id')),
       openFolder: () => services.plugins.openFolder(),
     },
+    prompts: {
+      pending: async (event) => windows.promptPayloadFor(event.sender),
+    },
     ui: {
       respondPrompt: async (_e, promptId, answer: UiPromptAnswer) => {
         const clean: UiPromptAnswer = typeof answer === 'boolean' || typeof answer === 'string' ? answer : null;

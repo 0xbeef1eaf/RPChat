@@ -48,6 +48,16 @@ Characters, their behaviours and their media are distributed as shareable
 - **External commands**: wallpaper, browser, desktop and voice actions run through
   command templates you edit in Settings. Input locking and injection are
   daemon-only (see *System integration* below).
+- **Questions come to you**: when a character asks something (`sdk.ui.confirm`,
+  `choose`, `ask`) or a call needs your permission, it opens its own small window
+  in front of whatever you are doing, focused and ready to answer — not a modal
+  waiting in a chat window you may not have open. Closing it is a "no".
+  Notifications carry the urgency the character chose: quiet, normal, or one that
+  stays on screen until you dismiss it.
+- **Readable at your size**: zoom the chat text with the `A− 100% A+` buttons in
+  the chat header, <kbd>Ctrl</kbd> `+` / `-` / `0`, or Settings → Appearance. The
+  reading column widens with the text, so bigger type takes from the side gutters
+  rather than from the line length.
 - **See what the model sees**: Settings → General → Debug → "Show model traffic"
   adds a *Model traffic* button to the chat that lists every request sent to the
   model for the session (full system prompt, messages, tools) and its response.
@@ -112,12 +122,13 @@ Try it without an API key: `RP_MOCK_LLM=1 pnpm dev` uses a scripted mock
 provider that shows an image from the sample pack and replies.
 
 `pnpm test:headful` runs the built app headful on an Xvfb display with a
-file-backed framebuffer, drives one mock-LLM turn, screenshots every window
-(chat with the action card, Packs, Settings, SDK reference, the overlays and the
-whole framebuffer) into `/tmp/rp-headful-shots`, verifies from pixel data that
-the image overlay shows the pack image and the video overlay is playing (colour
-spread and frame advance), checks audio playback was accepted, and fails if the
-main process raised an uncaught exception. Needs `Xvfb`, `xwd`, `xdotool` and ImageMagick.
+file-backed framebuffer, drives two mock-LLM turns, screenshots every window
+(chat with the action card, Packs, Settings, SDK reference, the prompt window,
+the overlays and the whole framebuffer) into `/tmp/rp-headful-shots`, verifies
+from pixel data that the image overlay shows the pack image and the video overlay
+is playing (colour spread and frame advance), checks audio playback was accepted,
+checks a character's question opened a prompt window and that answering it there
+reached the action, and fails if the main process raised an uncaught exception. Needs `Xvfb`, `xwd`, `xdotool` and ImageMagick.
 
 `pnpm test:wlr` does the same for the Hyprland path: it runs the native
 layer-shell helper against a nested headless Sway compositor (real

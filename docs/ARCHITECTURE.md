@@ -177,7 +177,7 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `memory` | trusted    | `remember(text, opts?)`, `recall(query, limit?)`, `recent(limit?)`, `update(id, patch)`, `forget(id)` — long-term memory, also consolidated automatically (see `docs/spec/memory.md`) |
 | `display`| trusted    | `monitors()`, `backend()` — read-only screen/backend info for placement decisions   |
 | `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `update(id, changes)`, `close(id)`, `closeAll()`, `list()`; overlay options: monitor, position or x/y, layer (background/bottom/top/overlay), opacity, clickThrough, width/height |
-| `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`, `ask(question, opts?)` (free text), `pickFile(opts?)`, `pickFolder(opts?)` (native pickers) |
+| `ui`     | pack       | `notify(title, body?, opts?)` (urgency low/normal/critical), `confirm(question)`, `choose(question, options[])`, `ask(question, opts?)` (free text), `pickFile(opts?)`, `pickFolder(opts?)` (native pickers) |
 | `wallpaper` | pack    | `set(asset, { monitor? })`, `restore()`, `current()` — via the user's wallpaper command template |
 | `browser`| pack       | `open(url, { newWindow? })` — via the user's browser command template               |
 | `input`  | pack       | `lock(durationMs, { reason?, devices? })`, `unlock()`, `status()`, `type`, `key`, `click`, `moveMouse` — daemon-only (`rp-coded`, Linux), duration capped; `CAPABILITY_FAILED` without the daemon |
@@ -376,13 +376,18 @@ JSONL, size-capped).
 
 - **Chat view**: session list sidebar, message stream with streaming text,
   collapsible action cards (purpose, code, result/logs), abort button,
-  character status line.
+  character status line, and a text size the user can zoom (`settings.chatZoom`;
+  the reading column widens with the text).
 - **Packs view**: installed packs, install from `.rppack`/folder, capability
   grants with toggles, uninstall, pack README.
 - **Settings**: LLM providers (add/edit: type, base URL, API key, model),
   default model, action limits, appearance.
-- **Permission prompt** modal for `prompt`-level calls (allow once / allow for
-  session / deny).
+- **Prompt window**: every pending question — a `prompt`-level permission request
+  (allow once / allow for session / deny) and a character's `sdk.ui` question —
+  opens its own small window, centred, above other windows and focused, so it is
+  answered where the user is looking rather than in a chat window they may not
+  have open. Closing the window dismisses the question (deny / no answer). The
+  in-app modals remain as the fallback when no window can be opened.
 - **Action log** view (audit entries).
 - **Pack editor**: projects are pack folders (workspace or any folder); forms for
   manifest, characters, media tags and README with live validation, export and

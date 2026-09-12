@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { DEFAULT_RUN_LIMITS, type AppSettings, type ProviderConfig, type RunLimits } from '@rp/shared';
+import { CHAT_ZOOM_MAX, CHAT_ZOOM_MIN, CHAT_ZOOM_STEP, DEFAULT_RUN_LIMITS, type AppSettings, type ProviderConfig, type RunLimits } from '@rp/shared';
 import { api } from '../api';
 import { CommandsSection } from '../components/settings/CommandsSection';
 import { DisplayInfo } from '../components/settings/DisplayInfo';
@@ -14,7 +14,8 @@ import { ProviderEditor } from '../components/settings/ProviderEditor';
 import { ConfirmDialog } from '../components/common/Modal';
 import { newId } from '../lib/ids';
 import { maskSecret } from '../lib/format';
-import { applyTheme, reportError, toast } from '../store/actions';
+import { applyTheme } from '../lib/theme';
+import { reportError, setChatZoom, toast } from '../store/actions';
 import { useAppState, update } from '../store/store';
 
 async function patchSettings(patch: Partial<AppSettings>): Promise<boolean> {
@@ -398,6 +399,21 @@ export function SettingsView() {
               <option value="light">Light</option>
               <option value="dark">Dark</option>
             </select>
+          </div>
+          <div className="field">
+            <label htmlFor="chat-zoom">Chat text size — {Math.round(settings.chatZoom * 100)}%</label>
+            <input
+              id="chat-zoom"
+              type="range"
+              min={CHAT_ZOOM_MIN}
+              max={CHAT_ZOOM_MAX}
+              step={CHAT_ZOOM_STEP}
+              value={settings.chatZoom}
+              onChange={(e) => void setChatZoom(Number(e.target.value))}
+            />
+            <span className="field-hint">
+              Scales the messages and the message box only. <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>−</kbd> / <kbd>0</kbd> does the same from the chat.
+            </span>
           </div>
           <div className="field">
             <span className="field-label">Media windows</span>

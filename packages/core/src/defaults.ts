@@ -1,4 +1,4 @@
-import { DEFAULT_RUN_LIMITS, DEFAULT_SETTINGS } from '@rp/shared';
+import { DEFAULT_RUN_LIMITS, DEFAULT_SETTINGS, clampChatZoom } from '@rp/shared';
 import type { AppSettings, CommandTemplates, RunLimits } from '@rp/shared';
 
 /** A fresh, fully populated `AppSettings` (deep copies of the defaults). */
@@ -18,6 +18,9 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   const runLimits: RunLimits = { ...base.runLimits, ...(stored.runLimits ?? {}) };
   const merged: AppSettings = { ...base, ...stored, runLimits };
   if (!Array.isArray(merged.providers)) merged.providers = [];
+  // Every read goes through here, so a value from an older build or a hand-edited file cannot
+  // leave the chat unreadably small or large.
+  merged.chatZoom = clampChatZoom(merged.chatZoom);
   // The 24k default of early builds left almost no room for the transcript; move it to the current default.
   if (stored.contextTokenBudget === LEGACY_CONTEXT_TOKEN_BUDGET) merged.contextTokenBudget = base.contextTokenBudget;
   // Nested records are merged per key so a patch of one entry keeps the others. Command templates

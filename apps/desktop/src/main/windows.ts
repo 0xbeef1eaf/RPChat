@@ -1,18 +1,34 @@
 /**
- * BrowserWindow management: the main UI window, overlay windows (media.html,
- * one per item, driven by the display backend) and the hidden audio window.
+ * BrowserWindow management: the main UI window, prompt windows (prompt.html,
+ * one per pending question), overlay windows (media.html, one per item, driven
+ * by the display backend) and the hidden audio window.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { BrowserWindow, shell } from 'electron';
 import type { WebContents } from 'electron';
-import type { MediaCommand, MediaWindowEvent } from '@rp/shared';
+import type { MediaCommand, MediaWindowEvent, PromptWindowPayload } from '@rp/shared';
 import { IPC_EVENT_CHANNELS } from '@rp/shared';
 import type { Logger } from '@rp/core';
 import type { OverlayWindowLike } from './display/backend.js';
 import type { Bounds } from './display/placement.js';
 
-export type WindowKind = 'main' | 'media';
+export type WindowKind = 'main' | 'media' | 'prompt';
+
+/** The id a `PromptWindowPayload` is answered by (`permissions.respond` / `ui.respondPrompt`). */
+export function promptIdOf(payload: PromptWindowPayload): string {
+  return payload.kind === 'permission' ? payload.request.requestId : payload.prompt.promptId;
+}
+
+/**
+ * Window title and size for one question. A permission request carries an arguments block, a
+ * list of options or a multi-line answer needs room; anything taller than the window scrolls.
+ */
+function promptWindowChrome(payload: PromptWindowPayload): { title: string; width: number; height: number } {
+  if (payload.kind === 'permission') return { title: `${payload.characterName} needs permission`, width: 620, height: 660 };
+  const roomy = payload.prompt.kind === 'choose' || payload.prompt.multiline === true;
+  return { title: `${payload.prompt.characterName} asks`, width: 520, height: roomy ? 460 : 380 };
+}
 
 export interface WindowManagerOptions {
   /** `out/` directory of the built app (contains main/, preload/, renderer/). */
@@ -22,6 +38,11 @@ export interface WindowManagerOptions {
   logger: Logger;
   /** Runs in the main window when it is about to close (reject pending prompts, …). */
   onMainClosed?: () => void;
+  /**
+   * A prompt window was closed while its question was still unanswered (the user pressed the
+   * window's close button). The question must be answered with its fallback.
+   */
+  onPromptDismissed?: (promptId: string) => void;
 }
 
 /** Wraps a BrowserWindow hosting media.html as an `OverlayWindowLike`. */
@@ -134,6 +155,10 @@ export class WindowManager {
   private main: BrowserWindow | undefined;
   private readonly kinds = new Map<number, WindowKind>();
   private readonly overlays = new Map<number, ElectronOverlayWindow>();
+  /** promptId → the window asking it, while it is unanswered. */
+  private readonly prompts = new Map<string, { win: BrowserWindow; payload: PromptWindowPayload }>();
+  /** webContents id → promptId, so a prompt page can ask which question it is showing. */
+  private readonly promptSenders = new Map<number, string>();
   private audio: ElectronOverlayWindow | undefined;
 
   constructor(private readonly opts: WindowManagerOptions) {}
@@ -161,7 +186,7 @@ export class WindowManager {
     };
   }
 
-  private load(win: BrowserWindow, page: 'index.html' | 'media.html'): void {
+  private load(win: BrowserWindow, page: 'index.html' | 'media.html' | 'prompt.html'): void {
     const url = this.opts.rendererUrl;
     if (url) void win.loadURL(`${url.replace(/\/+$/, '')}/${page}`);
     else void win.loadFile(path.join(this.rendererDir, page));
@@ -221,6 +246,83 @@ export class WindowManager {
 
   getMainWindow(): BrowserWindow | undefined {
     return this.main && !this.main.isDestroyed() ? this.main : undefined;
+  }
+
+  /**
+   * Open a focused window asking one question (prompt.html). One window per question, so a
+   * request that arrives while the app is in the background reaches the user instead of waiting
+   * on a chat window they are not looking at. Returns false when no window could be opened, so
+   * the caller can fall back to the main window's in-app modal.
+   */
+  openPromptWindow(payload: PromptWindowPayload): boolean {
+    const id = promptIdOf(payload);
+    if (this.prompts.has(id)) return true;
+    const { title, width, height } = promptWindowChrome(payload);
+    let win: BrowserWindow;
+    try {
+      win = new BrowserWindow({
+        width,
+        height,
+        minWidth: 380,
+        minHeight: 260,
+        show: false,
+        center: true,
+        frame: true,
+        autoHideMenuBar: true,
+        alwaysOnTop: true,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        title,
+        backgroundColor: '#1b1b1f',
+        webPreferences: this.webPreferences(),
+      });
+    } catch (err) {
+      this.opts.logger.warn('[windows] could not open a prompt window', err);
+      return false;
+    }
+    win.setMenuBarVisibility(false);
+    // The page sets its own <title>; keep the one the question was opened with.
+    win.on('page-title-updated', (event) => event.preventDefault());
+    this.track(win, 'prompt');
+    const contentsId = win.webContents.id;
+    this.prompts.set(id, { win, payload });
+    this.promptSenders.set(contentsId, id);
+    win.once('ready-to-show', () => {
+      // A question the user has not seen is worth interrupting for: show it in front, focused.
+      win.show();
+      win.moveTop();
+      win.focus();
+    });
+    win.once('closed', () => {
+      this.promptSenders.delete(contentsId);
+      // Still registered → the user closed the window instead of answering.
+      if (this.prompts.get(id)?.win === win) {
+        this.prompts.delete(id);
+        this.opts.onPromptDismissed?.(id);
+      }
+    });
+    this.load(win, 'prompt.html');
+    return true;
+  }
+
+  /** Whether this question is being asked in a window of its own. */
+  hasPromptWindow(promptId: string): boolean {
+    return this.prompts.has(promptId);
+  }
+
+  /** Close the window of an answered question (no-op when it has none). */
+  closePromptWindow(promptId: string): void {
+    const entry = this.prompts.get(promptId);
+    if (!entry) return;
+    this.prompts.delete(promptId);
+    if (!entry.win.isDestroyed()) entry.win.destroy();
+  }
+
+  /** The question a prompt page is showing, for `prompts.pending()`. */
+  promptPayloadFor(sender: WebContents): PromptWindowPayload | null {
+    const id = this.promptSenders.get(sender.id);
+    return (id && this.prompts.get(id)?.payload) || null;
   }
 
   /** Send a push event to the main window. Returns false when there is no window. */

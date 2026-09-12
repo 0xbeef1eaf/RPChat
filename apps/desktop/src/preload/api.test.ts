@@ -48,6 +48,7 @@ describe('buildApi', () => {
     expect(invokeChannels()).toContain('memories:consolidate');
     expect(invokeChannels()).toContain('updates:setToken');
     expect(invokeChannels()).toContain('system:createPolicy');
+    expect(invokeChannels()).toContain('prompts:pending');
     expect(invokeChannels()).toContain('system:policyTemplate');
     expect(await api.system.createPolicy('{"version":1}')).toBe('result of system:createPolicy');
     expect(ipc.invoked.at(-1)).toEqual({ channel: 'system:createPolicy', args: ['{"version":1}'] });

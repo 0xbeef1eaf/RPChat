@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { CHAT_ZOOM_MAX, CHAT_ZOOM_MIN, CHAT_ZOOM_STEP } from '@rp/shared';
 import { ConfirmDialog } from '../components/common/Modal';
 import { EmptyState } from '../components/common/EmptyState';
 import { CharacterStatus } from '../components/chat/CharacterStatus';
@@ -8,7 +9,8 @@ import { MessageList } from '../components/chat/MessageList';
 import { ModelTrafficDrawer } from '../components/chat/ModelTrafficDrawer';
 import { SessionPanel } from '../components/chat/SessionPanel';
 import { Avatar } from '../components/common/Avatar';
-import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, resetSessionState, saveSession, sendMessage } from '../store/actions';
+import { ZoomControl } from '../components/chat/ZoomControl';
+import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, resetSessionState, saveSession, sendMessage, setChatZoom } from '../store/actions';
 import { runtimeFor } from '../store/state';
 import { useAppState } from '../store/store';
 
@@ -25,6 +27,21 @@ export function ChatView() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+
+  const zoom = settings?.chatZoom ?? 1;
+
+  // Ctrl/Cmd +/-/0 resize the transcript, as in a browser (the digits 1-6 switch views).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const step = e.key === '+' || e.key === '=' ? CHAT_ZOOM_STEP : e.key === '-' || e.key === '_' ? -CHAT_ZOOM_STEP : null;
+      if (step === null && e.key !== '0') return;
+      e.preventDefault();
+      void setChatZoom(step === null ? 1 : zoom + step);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zoom]);
 
   const session = useMemo(() => sessions.find((s) => s.id === activeSessionId), [sessions, activeSessionId]);
   const character = useMemo(() => (session ? characters.find((c) => c.ref === session.characterRef) : undefined), [characters, session]);
@@ -68,7 +85,8 @@ export function ChatView() {
   const showTraffic = settings?.debug.showModelTraffic === true;
 
   return (
-    <div className="chat">
+    // --chat-zoom scales the transcript and the composer; the header keeps its own size.
+    <div className="chat" style={{ '--chat-zoom': zoom } as CSSProperties}>
       <header className="chat-header">
         <Avatar name={characterName} url={character?.avatarUrl} />
         <div className="item-text">
@@ -82,6 +100,7 @@ export function ChatView() {
             {character ? <CharacterStatus characterRef={session.characterRef} /> : null}
           </div>
         </div>
+        <ZoomControl zoom={zoom} min={CHAT_ZOOM_MIN} max={CHAT_ZOOM_MAX} step={CHAT_ZOOM_STEP} onChange={(v) => void setChatZoom(v)} />
         <button type="button" className="btn btn-sm" onClick={() => setEventsOpen((v) => !v)} aria-expanded={eventsOpen} title="Host events this character subscribed to">
           Events
         </button>

@@ -126,6 +126,11 @@ export interface AppSettings {
   useToolCalling: boolean;
   userDisplayName: string;
   theme: 'system' | 'light' | 'dark';
+  /**
+   * Text scale of the chat transcript and composer; 1 = 100%. Clamped to
+   * [`CHAT_ZOOM_MIN`, `CHAT_ZOOM_MAX`] on save. Nothing else in the app scales with it.
+   */
+  chatZoom: number;
   /** Whether media windows stay above other windows (used as the default layer: true → `top`, false → `bottom`). */
   mediaAlwaysOnTop: boolean;
   /** Display backend: `auto` picks `hyprland` when running under Hyprland, else `electron`. */
@@ -218,6 +223,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   useToolCalling: true,
   userDisplayName: 'You',
   theme: 'system',
+  chatZoom: 1,
   mediaAlwaysOnTop: true,
   displayBackend: 'auto',
   commandTemplates: {
@@ -254,3 +260,20 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   },
   debug: { showModelTraffic: false },
 };
+
+/** Smallest chat text scale offered (80%). */
+export const CHAT_ZOOM_MIN = 0.8;
+/** Largest chat text scale offered (200%). */
+export const CHAT_ZOOM_MAX = 2;
+/** One press of "bigger"/"smaller". */
+export const CHAT_ZOOM_STEP = 0.1;
+
+/**
+ * Round a chat zoom to whole percents and hold it inside the offered range, so a stored value
+ * from an older build, a hand-edited settings file or a long chain of steps can never leave the
+ * chat unreadable. Anything that is not a finite number falls back to 1 (100%).
+ */
+export function clampChatZoom(value: unknown): number {
+  const n = typeof value === 'number' && Number.isFinite(value) ? value : 1;
+  return Math.round(Math.min(CHAT_ZOOM_MAX, Math.max(CHAT_ZOOM_MIN, n)) * 100) / 100;
+}
