@@ -2,6 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 import { chatModule } from './chat.js';
 import { logModule } from './log.js';
 import { helpModule } from './help.js';
+import { libModule } from './lib.js';
 import { stateModule } from './state.js';
 import { packModule } from './pack.js';
 import { timersModule } from './timers.js';
@@ -29,7 +30,7 @@ import { routineModule } from './routine.js';
 import { messagingModule } from './messaging.js';
 
 export {
-  chatModule, logModule, helpModule, stateModule, packModule, timersModule, llmModule, memoryModule, displayModule,
+  chatModule, logModule, helpModule, libModule, stateModule, packModule, timersModule, llmModule, memoryModule, displayModule,
   mediaModule, uiModule, wallpaperModule, browserModule, inputModule,
   presenceModule, screenModule, calendarModule, webModule, eventsModule, avatarModule, widgetsModule,
   voiceModule, desktopModule, filesModule, moodModule, routineModule, messagingModule,
@@ -41,6 +42,7 @@ export const standardModules: readonly CapabilityModuleSpec[] = [
   chatModule,
   logModule,
   helpModule,
+  libModule,
   stateModule,
   packModule,
   timersModule,

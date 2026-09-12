@@ -10,7 +10,7 @@ export class QuickJsRunner implements CodeRunner {
   run(request: CodeRunRequest): Promise<CodeRunResult>;
   dispose(): Promise<void>;
 }
-export function transpile(code: string, language: 'ts' | 'js'): { js: string; map?: string } // throws RpError('SANDBOX_COMPILE', message, { line, column })
+export function transpile(code: string, language: 'ts' | 'js', options?: { prelude?: string }): { js: string; map?: string; preludeLines: number } // throws RpError('SANDBOX_COMPILE', message, { line, column }) — or { library: true, libraryLine, libraryColumn } for a prelude error (§5)
 export function wrapAsAsyncFunctionBody(js: string): string;   // `(async () => {\n${js}\n})()` — must keep `return` valid
 ```
 
@@ -52,6 +52,25 @@ A handler therefore closes over nothing: no variable from the surrounding action
 above it. Whatever it needs travels in `opts.input`. Arguments that are not serialisable at all still
 reject with `sdk.<module>.<method>: arguments must be JSON-serialisable`.
 
+## 5. Prelude (`CodeRunRequest.prelude`)
+
+The host may put source in front of the user's code: the character's function library, which core's
+`LibraryService` renders as `const lib = Object.freeze({ "<name>": (<source>), … });` (or
+`const lib = Object.freeze({});` when empty). `transpile(code, language, { prelude })` places it between
+the wrapper's first line and the code, plus a newline, inside the same `async function __rp_main`, so
+`lib` is a local const the user's code sees and nothing else changes: same isolate, same `sdk`, same
+limits. `Transpiled.preludeLines` counts its lines and the `SourceMapper` subtracts them
+(`originalLineOffset = PRELUDE_LINES + preludeLines`), so `line`, `column`, `frame` and `stack` keep
+pointing at the user's own lines.
+
+Failures that belong to the library are named as such rather than mapped onto the action: a stack frame
+inside the prelude is kept as `at lib.<name> (library:<line>:<col>)` (QuickJS names the function after
+the property it sits under) but never becomes the code frame, and a syntax error inside the prelude is a
+`SANDBOX_COMPILE` whose message starts with `syntax error in your function library` and whose details
+carry `{ library: true, libraryLine, libraryColumn }` instead of `line`/`column` — no caret ever points
+into code the model did not write this turn. Without `prelude` nothing is prepended and `lib` is
+undefined.
+
 ## Tests (must run in vitest under Node 22 — wasm only, no native)
 
 - returns JSON value; `await sdk.x.y()` reaches the invoker with parsed args and context
@@ -64,4 +83,5 @@ reject with `sdk.<module>.<method>: arguments must be JSON-serialisable`.
 - TypeScript syntax (types, generics, `satisfies`) transpiles; syntax error → SANDBOX_COMPILE with line
 - a runtime failure reports the model's own line/column, a caret frame and a stack in `action.ts` coordinates
 - `signal.abort()` mid-await rejects with SANDBOX_TIMEOUT
+- prelude: `lib.double` defined by the prelude is callable from the code; a failure in the code after a three-line prelude still reports the user's line; a failure inside a library function shows `at lib.<name> (library:…)`; a prelude syntax error is reported as a library problem without a caret into the action
 - runner survives 200 sequential runs without leaking (assert no exceptions; optional memory check)

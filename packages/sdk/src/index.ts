@@ -14,6 +14,7 @@ export {
   describeSurface,
   GENERAL_DOCS,
   CONSOLE_TYPINGS,
+  LIB_TYPINGS,
   TYPINGS_HEADER,
 } from './generate.js';
 export type { GenerateTypingsOptions, GenerateDocsOptions, DescribeSurfaceOptions } from './generate.js';

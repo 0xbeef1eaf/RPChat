@@ -317,6 +317,59 @@ describe('QuickJsRunner', () => {
     expect(result.error?.stack).toBeUndefined();
   });
 
+  describe('prelude (the character\'s function library)', () => {
+    const prelude = ['const lib = Object.freeze({', '  "double": (async (n: number) => n * 2),', '});'].join('\n');
+
+    it('defines lib in front of the user code, inside the same async wrapper', async () => {
+      const result = await runner.run(req('const four = await lib.double(2);\nreturn { four, keys: Object.keys(lib) };', { prelude }));
+      expect(result.error).toBeUndefined();
+      expect(result.returnValue).toEqual({ four: 4, keys: ['double'] });
+    });
+
+    it('still reports the user\'s own line numbers after a three-line prelude', async () => {
+      const code = ['const items = [1, 2, 3];', 'function pick(list: any[]) {', '  return list.find((x) => x.missing.deep);', '}', 'return pick(items);'].join('\n');
+      const result = await runner.run(req(code, { prelude }));
+      expect(result.ok).toBe(false);
+      const details = result.error?.details as { line?: number; frame?: string };
+      expect(details.line).toBe(3);
+      expect(details.frame).toContain('> 3 |   return list.find((x) => x.missing.deep);');
+      expect(result.error?.stack).toContain('at pick (action.ts:3:');
+      expect(result.error?.stack).not.toContain('library');
+    });
+
+    it('names the library function when the failure is inside it, and keeps the frame in the user\'s code', async () => {
+      const broken = ['const lib = Object.freeze({', '  "boom": (async (x: any) => {', '    return x.missing.deep;', '  }),', '});'].join('\n');
+      const result = await runner.run(req('const a = 1;\nreturn await lib.boom(a);', { prelude: broken }));
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe('SANDBOX_RUNTIME');
+      expect(result.error?.stack).toMatch(/at lib\.boom \(library:3:/);
+      const details = result.error?.details as { line?: number; frame?: string };
+      // The caret never points into the library: `line`/`frame` are the user's call site (if any frame of theirs is left).
+      if (details.line !== undefined) {
+        expect(details.line).toBe(2);
+        expect(details.frame).toContain('lib.boom(a)');
+      }
+    });
+
+    it('reports a syntax error in the prelude as a library problem, not as a line of the action', async () => {
+      const result = await runner.run(req('return 1;', { prelude: 'const lib = Object.freeze({\n  "bad": (async ( => 1),\n});' }));
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe('SANDBOX_COMPILE');
+      expect(result.error?.message).toMatch(/function library/);
+      expect(result.error?.message).toMatch(/library line 2/);
+      expect(result.error?.details).toMatchObject({ library: true, libraryLine: 2 });
+      expect((result.error?.details as { line?: number }).line).toBeUndefined();
+      expect((result.error?.details as { frame?: string }).frame).toBeUndefined();
+    });
+
+    it('compile errors in the user code are still reported against its own lines', async () => {
+      const result = await runner.run(req('const a = 1;\nconst b = ;', { prelude }));
+      expect(result.error?.code).toBe('SANDBOX_COMPILE');
+      expect(result.error?.details).toMatchObject({ line: 2 });
+      expect((result.error?.details as { frame?: string }).frame).toContain('> 2 | const b = ;');
+    });
+  });
+
   it('sends a function argument as the action body that calls it, and runs that body later', async () => {
     const invoker = makeInvoker();
     const stored = await runner.run(

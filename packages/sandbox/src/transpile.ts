@@ -16,6 +16,30 @@ export const PRELUDE_LINES = 1;
 /** Lines `wrapAsAsyncFunctionBody` adds before the transpiled code. */
 export const ASYNC_WRAPPER_LINES = 1;
 
+export interface TranspileOptions {
+  /**
+   * Source placed between the wrapper's first line and the user's code (plus a
+   * newline), inside the same async function: the character's function library
+   * (`CodeRunRequest.prelude`). Its lines are counted in `preludeLines` so that
+   * positions can still be reported against the user's own code.
+   */
+  prelude?: string;
+}
+
+export interface Transpiled {
+  js: string;
+  /** esbuild's source map (JSON). */
+  map?: string;
+  /** Lines the prelude occupies in front of the user's code (0 without one). */
+  preludeLines: number;
+}
+
+/** Number of lines a prelude occupies once its trailing newline is added. */
+export function countPreludeLines(prelude: string | undefined): number {
+  if (prelude === undefined || prelude.length === 0) return 0;
+  return prelude.split('\n').length;
+}
+
 /**
  * Transpile the body of an async function (TypeScript or JavaScript) to plain
  * ES2020 JavaScript. The result declares `async function __rp_main() { ... }`
@@ -27,8 +51,10 @@ export const ASYNC_WRAPPER_LINES = 1;
  * @throws RpError('SANDBOX_COMPILE') with `details: { line, column, lineText? }`
  *   (1-based, relative to the user's code) on syntax errors.
  */
-export function transpile(code: string, language: ActionLanguage): { js: string; map?: string } {
-  const wrapped = `${PRELUDE}${code}\n}`;
+export function transpile(code: string, language: ActionLanguage, options: TranspileOptions = {}): Transpiled {
+  const preludeLines = countPreludeLines(options.prelude);
+  const preludeText = preludeLines > 0 ? `${options.prelude}\n` : '';
+  const wrapped = `${PRELUDE}${preludeText}${code}\n}`;
   try {
     const out = transformSync(wrapped, {
       loader: language === 'ts' ? 'ts' : 'js',
@@ -39,9 +65,9 @@ export function transpile(code: string, language: ActionLanguage): { js: string;
       sourcefile: 'action.ts',
       sourcemap: true,
     });
-    return out.map ? { js: out.code, map: out.map } : { js: out.code };
+    return out.map ? { js: out.code, map: out.map, preludeLines } : { js: out.code, preludeLines };
   } catch (err) {
-    throw toCompileError(err);
+    throw toCompileError(err, preludeLines);
   }
 }
 
@@ -57,7 +83,7 @@ interface EsbuildFailure {
   errors?: Message[];
 }
 
-function toCompileError(err: unknown): RpError {
+function toCompileError(err: unknown, preludeLines: number): RpError {
   if (err instanceof RpError) return err;
   const failure = err as EsbuildFailure | undefined;
   const first = failure?.errors?.[0];
@@ -70,8 +96,17 @@ function toCompileError(err: unknown): RpError {
   if (!loc) {
     return new RpError('SANDBOX_COMPILE', first.text, { errors: failure?.errors?.map((e) => e.text) });
   }
-  const line = Math.max(1, loc.line - PRELUDE_LINES);
   const column = loc.column + 1;
+  const inSource = loc.line - PRELUDE_LINES; // 1-based line in prelude + user code
+  if (preludeLines > 0 && inSource >= 1 && inSource <= preludeLines) {
+    // The library, not the code the model just wrote: say so instead of pointing at its lines.
+    return new RpError(
+      'SANDBOX_COMPILE',
+      `syntax error in your function library, not in this action: ${first.text} (library line ${inSource}, column ${column}); fix or remove the function with sdk.lib`,
+      { library: true, libraryLine: inSource, libraryColumn: column, lineText: loc.lineText },
+    );
+  }
+  const line = Math.max(1, inSource - preludeLines);
   return new RpError('SANDBOX_COMPILE', `${first.text} (line ${line}, column ${column})`, {
     line,
     column,

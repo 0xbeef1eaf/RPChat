@@ -50,6 +50,8 @@ export interface TurnInput {
   /** Who is acting (trigger is filled in per action). */
   actor: Pick<ActionContext, 'packId' | 'characterId' | 'packRoot'>;
   surface: SdkSurface;
+  /** The character's function library prelude (`CodeRunRequest.prelude`), prepended to every action of the turn. */
+  prelude?: string;
   limits?: Partial<RunLimits>;
   signal?: AbortSignal;
   origin?: 'llm' | 'timer';
@@ -311,6 +313,7 @@ export class ActionLoop {
         surface: input.surface,
         invoker: this.invoker,
       };
+      if (input.prelude !== undefined) request.prelude = input.prelude;
       if (input.limits) request.limits = input.limits;
       if (input.signal) request.signal = input.signal;
       return await this.runner.run(request);

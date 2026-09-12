@@ -99,11 +99,14 @@ export class QuickJsRunner implements CodeRunner {
     let compiledCode: string;
     let mapper: SourceMapper | undefined;
     try {
-      const transpiled = transpile(request.code, request.language);
+      const transpileOptions = request.prelude !== undefined ? { prelude: request.prelude } : {};
+      const transpiled = transpile(request.code, request.language, transpileOptions);
       compiledCode = transpiled.js;
       // Positions the isolate reports are in the wrapped, reformatted output;
-      // this maps them back to the lines the model actually wrote.
-      if (transpiled.map) mapper = new SourceMapper(transpiled.map, ASYNC_WRAPPER_LINES, PRELUDE_LINES);
+      // this maps them back to the lines the model actually wrote (skipping the prelude).
+      if (transpiled.map) {
+        mapper = new SourceMapper(transpiled.map, ASYNC_WRAPPER_LINES, PRELUDE_LINES + transpiled.preludeLines, transpiled.preludeLines);
+      }
     } catch (err) {
       return {
         ok: false,

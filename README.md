@@ -45,6 +45,9 @@ Characters, their behaviours and their media are distributed as shareable
 - **Initiative**: characters can schedule code to run later, wake themselves
   with a self-written prompt, and keep a session moving without you typing,
   within rate limits you control.
+- **A function library of their own**: a character can save reusable functions with
+  `sdk.lib.define` and call them as `lib.<name>(...)` from any later action, timer
+  or event handler; the library persists per character and is listed in its prompt.
 - **External commands**: wallpaper, browser, desktop and voice actions run through
   command templates you edit in Settings. Input locking and injection are
   daemon-only (see *System integration* below).

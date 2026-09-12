@@ -124,6 +124,9 @@ importers:
       '@rp/shared':
         specifier: workspace:*
         version: link:../shared
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
     devDependencies:
       '@types/node':
         specifier: ^22

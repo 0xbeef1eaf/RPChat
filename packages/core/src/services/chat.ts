@@ -15,6 +15,8 @@ import type { TimerService } from './timers.js';
 import type { Clock, EngineEmitter, Logger } from '../types.js';
 import { characterScope } from '../handlers/state.js';
 import { providerLabel } from './exchanges.js';
+import { LIB_STATE_KEY } from './library.js';
+import type { LibraryService } from './library.js';
 
 export interface ChatServiceOptions {
   storage: Pick<Storage, 'state'>;
@@ -42,6 +44,8 @@ export interface ChatServiceOptions {
   senses?: Pick<import('../types.js').SensesProvider, 'snapshot'>;
   mood?: Pick<import('./mood.js').MoodService, 'get'>;
   routine?: Pick<import('./routine.js').RoutineService, 'status'>;
+  /** The character's function library: its prelude goes into every action, its listing into the prompt. */
+  library?: Pick<LibraryService, 'preludeFor' | 'functions'>;
 }
 
 export type SelfWakeSource = 'immediate' | 'timer' | 'wake-timer';
@@ -410,7 +414,11 @@ export class ChatService {
 
     const allowedModules = await this.o.permissions.allowedModules(pack.manifest.id);
     const surface = await this.o.behaviours.surfaceFor(pack.manifest.id);
-    const state = await this.o.storage.state.all(characterScope({ packId: pack.manifest.id, characterId: character.definition.id }));
+    const target = { packId: pack.manifest.id, characterId: character.definition.id };
+    const state = await this.o.storage.state.all(characterScope(target));
+    delete state[LIB_STATE_KEY]; // the library has its own <library> section; the raw sources would only bloat <state>
+    const library = this.o.library ? await this.o.library.functions(target) : [];
+    const prelude = this.o.library ? await this.o.library.preludeFor(target.packId, target.characterId) : undefined;
     const timers = await this.o.timers.list({ characterRef: session.characterRef });
     const transcript = await this.o.sessions.messages(session.id);
     let memories: import('@rp/shared').MemoryEntry[] = [];
@@ -440,6 +448,7 @@ export class ChatService {
       now: this.o.now(),
     };
     if (summary) promptInput.historySummary = summary;
+    if (library.length > 0) promptInput.library = library;
     if (this.o.locale !== undefined) promptInput.locale = this.o.locale;
     if (this.o.senses && settings.senses.includeInPrompt && allowedModules.includes('presence')) {
       try {
@@ -481,6 +490,7 @@ export class ChatService {
         captureExchanges: settings.debug.showModelTraffic,
         providerLabel: providerLabel(config),
       };
+      if (prelude !== undefined) turn.prelude = prelude;
       const hints = character.definition.modelHints;
       if (hints?.temperature !== undefined) turn.temperature = hints.temperature;
       if (hints?.maxTokens !== undefined) turn.maxTokens = hints.maxTokens;

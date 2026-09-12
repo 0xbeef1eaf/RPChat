@@ -14,6 +14,8 @@ import { ENTRY_FUNCTION_NAME } from './transpile.js';
 export const ACTION_FILE = 'action.ts';
 /** Frame name for the model's top level (its code is wrapped in a function). */
 export const TOP_LEVEL_FRAME = '<your code>';
+/** File name used for frames inside the prelude (the character's function library). */
+export const LIBRARY_FILE = 'library';
 
 const FRAME_RE = /^\s*at\s+(?<fn>.*?)\s*\((?<file>[^()]*?):(?<line>\d+):(?<column>\d+)\)\s*$/;
 const NATIVE_FRAME_RE = /^\s*at\s+(?<fn>.*?)\s*\((?<where>native)\)\s*$/;
@@ -32,6 +34,10 @@ export interface MappedStack {
  * Rewrite a QuickJS stack so every frame points at the model's source. Frames
  * inside the sandbox's own wrappers (`bootstrap.js`, the `<eval>` shim, and
  * anything mapping past `sourceLines`) are dropped: noise the model cannot act on.
+ * A frame inside the prelude (a library function) is kept as
+ * `at lib.<name> (library:<line>:<col>)` — the name QuickJS gives the function,
+ * which is the property it was defined under — but never becomes `at`, so the
+ * code frame stays in the code the model just wrote.
  */
 export function mapStack(stack: string | undefined, mapper: SourceMapper | undefined, sourceLines?: number): MappedStack {
   if (!stack) return { stack: '' };
@@ -51,9 +57,15 @@ export function mapStack(stack: string | undefined, mapper: SourceMapper | undef
     const generatedLine = Number(frame.groups['line']);
     const generatedColumn = Number(frame.groups['column']);
     const position = mapper?.originalPositionFor(generatedLine, generatedColumn);
-    // No mapping, or a line past the end of the model's code: the wrapper, not its code.
-    if (!position || (sourceLines !== undefined && position.line > sourceLines)) continue;
+    if (!position) continue;
     const fn = frame.groups['fn'] ?? '<anonymous>';
+    if (position.library) {
+      const name = /^[A-Za-z_$][\w$]*$/.test(fn) && fn !== ENTRY_FUNCTION_NAME ? `lib.${fn}` : LIBRARY_FILE;
+      out.push(`    at ${name} (${LIBRARY_FILE}:${position.line}:${position.column})`);
+      continue;
+    }
+    // A line past the end of the model's code: the wrapper, not its code.
+    if (sourceLines !== undefined && position.line > sourceLines) continue;
     const name = fn === ENTRY_FUNCTION_NAME || fn === '<eval>' ? TOP_LEVEL_FRAME : fn;
     out.push(`    at ${name} (${ACTION_FILE}:${position.line}:${position.column})`);
     at ??= position;

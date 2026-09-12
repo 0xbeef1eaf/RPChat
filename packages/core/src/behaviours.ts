@@ -27,6 +27,8 @@ export interface BehaviourRunnerOptions {
   runner: CodeRunner;
   invoker: CapabilityInvoker;
   logger: Logger;
+  /** The character's function library prelude (`LibraryService.preludeFor`), prepended to every run when given. */
+  prelude?: (packId: string, characterId: string) => Promise<string>;
 }
 
 export interface BehaviourRunOptions {
@@ -101,6 +103,8 @@ export class BehaviourRunner implements BehaviourHooks {
       invoker: this.o.invoker,
       limits: await this.limits(),
     };
+    const prelude = await this.preludeFor(packId, characterId);
+    if (prelude !== undefined) request.prelude = prelude;
     if (options.signal) request.signal = options.signal;
     return this.o.runner.run(request);
   }
@@ -113,6 +117,11 @@ export class BehaviourRunner implements BehaviourHooks {
 
   async limits(): Promise<RunLimits> {
     return (await this.o.settings.get()).runLimits;
+  }
+
+  /** The `const lib = …` prelude for a character, when a library is wired in. */
+  async preludeFor(packId: string, characterId: string): Promise<string | undefined> {
+    return this.o.prelude ? this.o.prelude(packId, characterId) : undefined;
   }
 
   private async runFor(
@@ -144,6 +153,8 @@ export class BehaviourRunner implements BehaviourHooks {
       invoker: this.o.invoker,
       limits: await this.limits(),
     };
+    const prelude = await this.preludeFor(packId, characterId);
+    if (prelude !== undefined) request.prelude = prelude;
     if (options.signal) request.signal = options.signal;
     const result = await this.o.runner.run(request);
     if (!result.ok) {

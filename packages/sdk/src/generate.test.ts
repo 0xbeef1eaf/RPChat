@@ -67,6 +67,7 @@ describe('generateSdkTypings', () => {
     expect(out).toContain('/** The SDK available to character code as the global `sdk`. */\ndeclare const sdk: Sdk;\ninterface Sdk {');
     expect(out).toContain('  /** Show images and play video/audio from the pack in an overlay window on the user\'s screen. (permission: pack) */\n  media: MediaApi;');
     expect(out).toContain('declare const console: {');
+    expect(out).toContain('declare const lib: { [name: string]: (...args: any[]) => any };');
     for (const spec of registry.list()) {
       expect(out).toContain(`// ---- module: ${spec.id} v${spec.version} ----\n${spec.typings.trim()}`);
     }
@@ -251,7 +252,7 @@ describe('describeSurface', () => {
   it('lists modules with their method names, dotted for nested members', () => {
     const surface = describeSurface(registry);
     expect(surface.modules.map((m) => m.id)).toEqual([
-      'chat', 'log', 'help', 'state', 'pack', 'timers', 'llm', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input',
+      'chat', 'log', 'help', 'lib', 'state', 'pack', 'timers', 'llm', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input',
       'presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging',
       'system',
     ]);

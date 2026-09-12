@@ -22,6 +22,8 @@ export interface Position {
   line: number;
   /** 1-based. */
   column: number;
+  /** Set when the position is inside the prelude (the function library), with `line` relative to it. */
+  library?: true;
 }
 
 /** Decode a base64-VLQ `mappings` string into one segment list per generated line. */
@@ -82,30 +84,39 @@ export class SourceMapper {
     mappingsOrMap: string,
     /** Lines added before the transpiled code in what the isolate evaluated. */
     private readonly generatedLineOffset = 0,
-    /** Lines the transpile wrapper adds before the model's own first line. */
+    /** Lines the transpile wrapper adds before the model's own first line (prelude lines included). */
     private readonly originalLineOffset = 0,
+    /** Of those, the lines that belong to the prelude (`CodeRunRequest.prelude`). */
+    private readonly preludeLines = 0,
   ) {
     this.lines = decodeMappings(mappingsFrom(mappingsOrMap));
   }
 
   /**
    * Position in the model's source for a position in the evaluated code, or
-   * undefined when the line maps to the wrapper rather than to its code.
+   * undefined when the line maps to the wrapper rather than to its code. A
+   * position inside the prelude comes back flagged `library`, with `line`
+   * relative to the prelude.
    */
   originalPositionFor(generatedLine: number, generatedColumn: number): Position | undefined {
     const lineIndex = generatedLine - 1 - this.generatedLineOffset;
     const segments = this.lines[lineIndex];
     if (!segments || segments.length === 0) return undefined;
-    const column = Math.max(0, generatedColumn - 1);
+    const wanted = Math.max(0, generatedColumn - 1);
     let found: Segment | undefined;
     for (const segment of segments) {
-      if (segment.generatedColumn > column) break;
+      if (segment.generatedColumn > wanted) break;
       found = segment;
     }
     const best = found ?? (segments[0] as Segment);
     const line = best.originalLine + 1 - this.originalLineOffset;
-    if (line < 1) return undefined;
-    return { line, column: best.originalColumn + 1 };
+    const column = best.originalColumn + 1;
+    if (line < 1) {
+      const inPrelude = line + this.preludeLines;
+      if (inPrelude < 1) return undefined;
+      return { line: inPrelude, column, library: true };
+    }
+    return { line, column };
   }
 }
 

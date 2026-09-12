@@ -5,6 +5,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   chat: { permission: 'trusted', methods: ['say', 'emote', 'history', 'setStatus'] },
   log: { permission: 'trusted', methods: ['debug', 'info', 'warn', 'error'] },
   help: { permission: 'trusted', methods: ['modules', 'module'] },
+  lib: { permission: 'trusted', methods: ['define', 'remove', 'list', 'source'] },
   state: {
     permission: 'trusted',
     methods: ['get', 'set', 'delete', 'keys', 'all', 'session.get', 'session.set', 'session.delete', 'session.keys', 'session.all'],
@@ -61,10 +62,13 @@ describe('standard modules', () => {
 
   it('are exported individually and registered in canonical order', () => {
     const r = createStandardRegistry();
-    expect(r.list().map((m) => m.id)).toEqual(Object.keys(EXPECTED));
+    const ids0 = r.list().map((m) => m.id);
+    expect(ids0).toEqual(Object.keys(EXPECTED));
     expect(modules.standardModules.map((m) => m.id)).toEqual(Object.keys(EXPECTED));
     expect(modules.chatModule.id).toBe('chat');
     expect(modules.logModule.id).toBe('log');
+    expect(modules.libModule.id).toBe('lib');
+    expect(ids0.indexOf('lib')).toBe(ids0.indexOf('help') + 1);
     expect(modules.stateModule.id).toBe('state');
     expect(modules.packModule.id).toBe('pack');
     expect(modules.timersModule.id).toBe('timers');

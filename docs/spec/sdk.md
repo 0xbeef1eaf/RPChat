@@ -41,6 +41,7 @@ interface Sdk {
   ...
 }
 declare const console: { log(...a: unknown[]): void; ... };   // maps to sdk.log
+declare const lib: { [name: string]: (...args: any[]) => any };  // the character's function library (LIB_TYPINGS); defined at run time by CodeRunRequest.prelude
 <each module's typings verbatim, separated by a `// ---- module: <id> vX.Y.Z ----` banner>
 ```
 
@@ -84,6 +85,11 @@ timers (trusted)
 - `schedule(delayMs: number, payload: Json, opts?: { label?: string }): Promise<TimerInfo>` — min 1000 ms, max 7 days; fires an `onTimer` behaviour or wakes the LLM with the payload.
 - `cancel(id: string): Promise<boolean>`
 - `list(): Promise<TimerInfo[]>`
+
+lib (trusted) — the character's own function library, persisted per character (core: `LibraryService`, docs/spec/core.md)
+- `define(name: string, fn: ((...args: any[]) => unknown) | string, opts?: { description?: string }): Promise<LibFunctionInfo>` — save or replace a function. `fn` crosses the boundary exactly like a `Handler`: the sandbox serialises a function argument to the action body `return await (<its compiled source>)(input);` (docs/spec/sandbox.md §4) and core unwraps that to the function expression; a string holding a function expression is accepted as is. Names `^[a-zA-Z_$][\w$]*$`, ≤ 64 chars, no reserved words; ≤ 50 functions per character, ≤ 16 KiB per source, ≤ 128 KiB in total; the source must parse (esbuild) as a single function expression → `INVALID_ARGUMENT` otherwise.
+- `remove(name: string): Promise<boolean>`, `list(): Promise<LibFunctionInfo[]>`, `source(name: string): Promise<string>` (NOT_FOUND).
+- `LibFunctionInfo { name; description?; bytes; updatedAt }` is declared in the module typings. A library function may be async and may use `sdk` and `lib` (its siblings) but nothing else from the defining action's scope; redefining a name replaces it. Every later run (action, timer handler, event handler, behaviour hook) sees `lib.<name>(...)`; the prompt lists the library under `<library>`. Docs example: `await sdk.lib.define("cheer", async (mood: string) => { … }, { description: "show a picture for a mood" })`, then `await lib.cheer("happy")`.
 
 media (pack)
 - `showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>`

@@ -27,6 +27,7 @@ import { LlmHandler } from './handlers/llm.js';
 import { EventsHandler, MoodHandler, RoutineHandler } from './handlers/living.js';
 import { LogHandler } from './handlers/log.js';
 import { HelpHandler } from './handlers/help.js';
+import { LibHandler } from './handlers/lib.js';
 import { MemoryHandler } from './handlers/memory.js';
 import { PackHandler } from './handlers/pack.js';
 import { StateHandler } from './handlers/state.js';
@@ -37,6 +38,7 @@ import { EventService } from './services/events.js';
 import { MoodService } from './services/mood.js';
 import { RoutineService } from './services/routine.js';
 import { HistoryService } from './services/history.js';
+import { LibraryService } from './services/library.js';
 import { MemoryService } from './services/memory.js';
 import { PackService } from './services/packs.js';
 import { PermissionService } from './services/permissions.js';
@@ -88,6 +90,8 @@ export class Engine {
   readonly memories: MemoryService;
   /** Background summarisation of the older messages of a session. */
   readonly history: HistoryService;
+  /** Per-character function libraries (`sdk.lib`): the `lib` prelude of every run. */
+  readonly library: LibraryService;
   /** Event subscriptions + host-event routing (`hostEvents`/`subscriptions` are the host-facing views). */
   readonly eventService: EventService;
   readonly mood: MoodService;
@@ -159,6 +163,7 @@ export class Engine {
     this.sessions.setBeforeRemove(async (session) => {
       await this.memories.consolidate(session.id, { auto: true });
     });
+    this.library = new LibraryService(opts.storage.state, now);
 
     this.routine = new RoutineService({
       storage: opts.storage,
@@ -178,6 +183,7 @@ export class Engine {
       new ChatHandler(this.sessions, opts.storage.messages, this.events),
       new LogHandler(logger),
       new HelpHandler(opts.registry, this.permissions),
+      new LibHandler(this.library),
       new StateHandler(opts.storage.state),
       new PackHandler(this.packs),
       new TimersHandler(this.timers),
@@ -225,6 +231,7 @@ export class Engine {
       runner: opts.runner,
       invoker: this.dispatcher,
       logger,
+      prelude: (packId, characterId) => this.library.preludeFor(packId, characterId),
     });
     this.sessions.setBehaviours(this.behaviours);
     this.packs.setInstallHookRunner((pack) => this.behaviours.runInstallHooks(pack));
@@ -257,6 +264,7 @@ export class Engine {
       audit: this.audit,
       mood: this.mood,
       routine: this.routine,
+      library: this.library,
     };
     if (opts.locale !== undefined) chatOptions.locale = opts.locale;
     if (opts.senses) chatOptions.senses = opts.senses;
@@ -282,6 +290,7 @@ export class Engine {
     this.sessions.setAfterReset((session) => this.eventService.removeForSession(session.id));
     this.sessions.setAfterCreate(() => this.eventService.updateInterest());
     this.packs.onPacksChanged(() => this.eventService.updateInterest());
+    this.packs.onPacksChanged(() => this.library.invalidate());
     const llmHandler = this.dispatcher.handlerFor('llm') as LlmHandler;
     this.llm = { describeImage: (sessionId, png, question) => llmHandler.describeImage(sessionId, png, question) };
 

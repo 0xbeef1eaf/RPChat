@@ -120,7 +120,8 @@ process. The renderer is a thin UI over the typed `IpcApi` in
 ### 4.1 What character code looks like
 
 The LLM writes the **body of an async function**. A global `sdk` object is in
-scope, plus `console`. `return` sends a JSON value back to the model.
+scope, plus `console` and `lib` (the character's own function library, see
+`sdk.lib`). `return` sends a JSON value back to the model.
 
 ```ts
 // Luna decides to show a picture and set a reminder
@@ -173,6 +174,7 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `state`  | trusted    | `get/set/delete/keys` (character-scoped, persistent), `session.get/set/delete/keys` |
 | `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `readText(path)`, `info()`                    |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `runLater(delayMs, code, opts?)` (setTimeout-style stored code, optionally repeating), `cancel(id)`, `list()` |
+| `lib`    | trusted    | `define(name, fn, opts?)`, `remove(name)`, `list()`, `source(name)` — the character's own persistent function library, available as `lib.<name>(...)` in every run (`CodeRunRequest.prelude`) |
 | `llm`    | trusted    | `ask(prompt, opts?)` (private side completion), `wake(prompt, { delayMs? })` (self-triggered turn now or later; rate-limited by autonomy settings) |
 | `memory` | trusted    | `remember(text, opts?)`, `recall(query, limit?)`, `recent(limit?)`, `update(id, patch)`, `forget(id)` — long-term memory, also consolidated automatically (see `docs/spec/memory.md`) |
 | `display`| trusted    | `monitors()`, `backend()` — read-only screen/backend info for placement decisions   |

@@ -12,6 +12,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
-  "dependencies": { "@rp/shared": "workspace:*", "@rp/sdk": "workspace:*", "@rp/pack": "workspace:*", "@rp/llm": "workspace:*" },
+  "dependencies": { "@rp/shared": "workspace:*", "@rp/sdk": "workspace:*", "@rp/pack": "workspace:*", "@rp/llm": "workspace:*", "esbuild": "^0.28.2" },
   "devDependencies": { "typescript": "^5.9.3", "vitest": "^4.1.11", "@types/node": "^22" }
 }

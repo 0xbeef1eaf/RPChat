@@ -29,6 +29,17 @@ declare const console: {
   error(...args: unknown[]): void;
 };`;
 
+/**
+ * Typings for the `lib` local the host defines in front of character code
+ * (`CodeRunRequest.prelude`): the character's own function library (`sdk.lib`).
+ * The members are only known at run time, so it is typed as an open record.
+ */
+export const LIB_TYPINGS = `/**
+ * Your own function library: everything you saved with sdk.lib.define(), callable as lib.<name>(...).
+ * Available in every action, timer handler and event handler; see <library> in your prompt for the names.
+ */
+declare const lib: { [name: string]: (...args: any[]) => any };`;
+
 function selectModules(registry: CapabilityRegistry, modules?: string[]): CapabilityModuleSpec[] {
   const all = registry.list();
   if (!modules) return all;
@@ -53,7 +64,7 @@ export function generateSdkTypings(registry: CapabilityRegistry, options: Genera
     out.push(`  /** ${spec.summary.trim()} (permission: ${spec.permission}) */`);
     out.push(`  ${spec.id}: ${spec.apiTypeName};`);
   }
-  out.push('}', '', CONSOLE_TYPINGS);
+  out.push('}', '', CONSOLE_TYPINGS, '', LIB_TYPINGS);
 
   for (const spec of specs) {
     out.push('', `// ---- module: ${spec.id} v${spec.version} ----`, spec.typings.trim());

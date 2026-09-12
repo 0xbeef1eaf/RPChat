@@ -40,6 +40,13 @@ export interface CodeRunRequest {
   /** Body of an async function. `sdk` and `console` are in scope. */
   code: string;
   language: ActionLanguage;
+  /**
+   * Source prepended to `code` (plus a newline) inside the same async wrapper, before transpiling:
+   * the character's function library, which defines the `lib` local (`const lib = Object.freeze({...})`).
+   * Errors are still reported against `code`'s own line numbers; a failure inside the prelude is
+   * reported as `library`. Omitted → no `lib` is defined.
+   */
+  prelude?: string;
   context: ActionContext;
   /** Modules/methods to expose as `sdk`. Denied modules are simply absent. */
   surface: SdkSurface;
