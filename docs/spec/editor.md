@@ -59,6 +59,12 @@ Tests: scaffold → loadPack ok; write/read round trips; addAssetFile naming; re
   instead of a `<video>` element — and it defaults to `--reasoning-effort none` with the schema on,
   because a local thinking model is otherwise unusable for tagging. `--debug` wraps the provider to
   print each request and stream the answer, `--dry-run` prints the manifest instead of writing it.
+- `checkScript(source)` compiles one behaviour script with the sandbox's own `transpile` and returns
+  `ScriptProblem[]` (message plus 1-based line/column and the offending line). The pack format has no
+  opinion on whether a script compiles — `validatePack` only checks the file exists — so a syntax
+  error used to save, install and show a green tick, then cost the whole hook at the next session
+  start: a session-start script that never reached its `sdk.events.on` call is indistinguishable from
+  an event system that does not work. The Characters section calls it while the author types.
 - Pickers via `dialog.showOpenDialog`; `addMediaFiles` accepts absolute paths from renderer drag and drop (`File.path` via `webUtils.getPathForFile` in preload — expose `editor.pathsForFiles` if needed; simpler: renderer passes `webUtils.getPathForFile(file)` obtained in preload through a small `app.pathForFile(file)` helper added to the preload API only, not to IpcApi).
 - `installToApp` → `engine.packs.install(dir)` (replaces an installed pack with the same id, keeping grants). `exportPack` → `dialog.showSaveDialog` + `packDirectory`. `importInstalled` → copies the installed root into the workspace (refuses if a project with the same dir exists).
 - `revealInFolder` → `shell.showItemInFolder`.
@@ -69,6 +75,9 @@ Tests: scaffold → loadPack ok; write/read round trips; addAssetFile naming; re
 - Project list: cards (name, id, version, characters, installed badge), "New pack" (form: name → id suggestion `com.<user>.<slug>`, first character name), "Open folder", "Import installed pack…" (select from installed), remove from list (does not delete files).
 - Editor layout: left rail with sections **Pack**, **Characters** (one entry per character + add), **Media**, **README**, **Check & publish**; sticky header with pack name, "Install to app", "Export .rppack", "Reveal folder", validation status pill (ok / N problems / N warnings).
 - Pack: id (locked after creation with an "advanced" unlock), name, version (semver hint), description, author name/url, license, homepage, tags (chips), capabilities checklist from `capabilities.list()` grouped by permission with summaries (trusted ones shown as always-on, not selectable), min app version.
+- Character → behaviours: each enabled hook's editor compiles its script ~400 ms after the last
+  keystroke (`editor.checkScript`) and on opening the character; a failure marks the box and prints
+  the compiler's message, line and source line under it. It is advisory — saving is never blocked.
 - Character: id (locked after creation), name, tagline, greeting, avatar (preview + pick), persona editor (textarea with monospaced font, word count, and a side-by-side markdown preview toggle), example dialogue (list of user/character pairs), behaviours (per hook: enable toggle → code editor textarea with the template inserted, "Insert template"), extra capabilities checklist, model hints (temperature, max tokens, model), avatarSet expressions (name → pick file, default expression select, size), mood baselines (two sliders). Save button (dirty tracking) + Ctrl/Cmd+S.
 - Media: grid/list of assets with thumbnails (images), kind badge, size; drag-and-drop zone + "Add files" button; per asset: folder tags (read-only chips), editable manifest tags (chips input with suggestions from the vocabulary), description; the editor maintains `media.json` as one exact-path entry per asset plus a "Rules" panel for glob entries (match, tags, description) and a "Tag vocabulary" table (tag → meaning, unused tags flagged). Remove asset with confirm.
 - Media → auto-tagging: the dialog also carries "Thinking" (`reasoningEffort`, empty = leave it to the

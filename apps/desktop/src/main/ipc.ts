@@ -240,6 +240,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       suggestMediaTags: (_e, key, paths, options) => services.editor.suggestMediaTags(requireString(key, 'key'), paths, options ?? {}),
       saveReadme: (_e, key, text) => services.editor.saveReadme(requireString(key, 'key'), text),
       validate: (_e, key) => services.editor.validate(requireString(key, 'key')),
+      checkScript: (_e, source) => services.editor.checkScript(requireString(source, 'source')),
       exportPack: (_e, key) => services.editor.exportPack(requireString(key, 'key')),
       installToApp: (_e, key) => services.editor.installToApp(requireString(key, 'key')),
       revealInFolder: (_e, key) => services.editor.revealInFolder(requireString(key, 'key')),

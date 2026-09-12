@@ -6,7 +6,7 @@ import type { CharacterSummary, InstalledPackRecord, MediaManifest, PackManifest
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
-import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, TagMediaOptions } from './editor.js';
+import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
 import type { ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
 import type { UpdateStatus } from './updates.js';
@@ -259,6 +259,11 @@ export interface IpcApi {
     suggestMediaTags(key: string, paths: string[], options?: TagMediaOptions): Promise<MediaTagSuggestion[]>;
     saveReadme(key: string, text: string): Promise<EditorProject>;
     validate(key: string): Promise<EditorValidation>;
+    /**
+     * Compile a behaviour script without saving it: what the editor calls while the author types,
+     * so a syntax error shows up under the box instead of at the next session start.
+     */
+    checkScript(source: string): Promise<ScriptProblem[]>;
     /** Save dialog → writes the .rppack; returns the file path or null when cancelled. */
     exportPack(key: string): Promise<string | null>;
     /** Install (or replace) the pack in the app from the project folder. */

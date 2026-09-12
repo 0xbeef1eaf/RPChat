@@ -12,6 +12,7 @@ import type {
   EditorProject,
   EditorProjectSummary,
   EditorValidation,
+  ScriptProblem,
   InstalledPackView,
   LoadedPack,
   MediaManifest,
@@ -40,6 +41,7 @@ import {
   validateMediaManifest,
   validatePack,
 } from '@rp/pack';
+import { transpile } from '@rp/sandbox';
 import { expandHome } from '../commands.js';
 import { packWriters, fallbackSlugify } from './pack-writers.js';
 import type { PackWriters } from './pack-writers.js';
@@ -348,6 +350,30 @@ export class EditorService {
     const warnings = result.warnings;
     const problems = result.problems.filter((p) => !warnings.includes(p));
     return { ok: result.ok, problems, warnings };
+  }
+
+  /**
+   * Compile one behaviour script the way the sandbox will, without saving it. The pack format has
+   * no opinion on whether a script compiles — `validatePack` only checks that the file exists — so
+   * until the editor asked this question a syntax error saved, installed and showed a green tick,
+   * then failed at the next session start where the only sign was a hook that quietly did nothing.
+   * A session-start script that never reached its `sdk.events.on` call looks exactly like an event
+   * system that does not work.
+   */
+  async checkScript(source: string): Promise<ScriptProblem[]> {
+    if (typeof source !== 'string' || source.trim().length === 0) return [];
+    try {
+      transpile(source, 'ts');
+      return [];
+    } catch (err) {
+      const rp = RpError.from(err, 'SANDBOX_COMPILE');
+      const details = (rp.details ?? {}) as { line?: unknown; column?: unknown; lineText?: unknown };
+      const problem: ScriptProblem = { message: rp.message };
+      if (typeof details.line === 'number') problem.line = details.line;
+      if (typeof details.column === 'number') problem.column = details.column;
+      if (typeof details.lineText === 'string') problem.lineText = details.lineText;
+      return [problem];
+    }
   }
 
   // ---- writes ----------------------------------------------------------------------

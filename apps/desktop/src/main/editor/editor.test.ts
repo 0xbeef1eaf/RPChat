@@ -165,6 +165,46 @@ describe('EditorService media options', () => {
   });
 });
 
+describe('EditorService.checkScript', () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-editor-check-'));
+  });
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  function svc(): EditorService {
+    return new EditorService({
+      userData: tmp,
+      registry: new ProjectRegistry(path.join(tmp, 'data', 'editor-projects.json')),
+      packs: { install: async () => { throw new Error('not in test'); }, tryGetLoaded: () => undefined, installedIds: async () => [] },
+      dialogs: { openDirectory: async () => undefined, openFiles: async () => [], saveFile: async () => undefined },
+      reveal: () => undefined,
+      logger: { warn: () => undefined, debug: () => undefined },
+    });
+  }
+
+  it('reports where a script stops compiling, so the editor can say so while it is typed', async () => {
+    // `wake(prompt: …)` is missing its braces: one bad line costs the whole script, including the
+    // `sdk.events.on` call under it.
+    const broken = [
+      'const n = 1;',
+      'await sdk.llm.wake(prompt: `hello`);',
+      'await sdk.events.on("window-changed", async () => {}, {});',
+    ].join('\n');
+    const [problem] = await svc().checkScript(broken);
+    expect(problem?.message).toContain('Expected ")"');
+    expect(problem).toMatchObject({ line: 2 });
+    expect(problem?.lineText).toContain('sdk.llm.wake');
+  });
+
+  it('is quiet for a script that compiles, and for an empty one', async () => {
+    const s = svc();
+    expect(await s.checkScript('await sdk.events.on("window-changed", async (input) => { await sdk.log.info(String(input.data)); }, {});')).toEqual([]);
+    expect(await s.checkScript('   ')).toEqual([]);
+    expect(await s.checkScript(undefined as unknown as string)).toEqual([]);
+  });
+});
+
 describe('EditorService.suggestMediaTags', () => {
   let tmp: string;
   beforeAll(() => {

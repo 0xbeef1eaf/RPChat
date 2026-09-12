@@ -1563,6 +1563,31 @@ textarea.persona {
   white-space: pre-wrap;
   min-height: 320px;
 }
+
+/* A behaviour script that does not compile: the box is marked and the compiler's own words go under it. */
+textarea.code.invalid {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+}
+.script-problem {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: var(--danger-soft);
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.script-problem pre {
+  margin: 0;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-x: auto;
+}
 .split {
   display: grid;
   grid-template-columns: 1fr 1fr;

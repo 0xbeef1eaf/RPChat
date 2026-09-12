@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { BehaviourHook, BehaviourTemplate, CharacterDefinition, EditorCharacter, ExampleDialogueTurn } from '@rp/shared';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { BehaviourHook, BehaviourTemplate, CharacterDefinition, EditorCharacter, ExampleDialogueTurn, ScriptProblem } from '@rp/shared';
 import { api } from '../../api';
 import { Markdown } from '../../components/common/Markdown';
 import { ConfirmDialog } from '../../components/common/Modal';
@@ -18,6 +18,9 @@ interface CharacterDraft {
   personaText: string;
   behaviours: Partial<Record<BehaviourHook, string>>;
 }
+
+/** How long the author has to stop typing before the script is compiled again. */
+const CHECK_DEBOUNCE_MS = 400;
 
 const HOOKS: Array<{ hook: BehaviourHook; label: string; hint: string }> = [
   { hook: 'onInstall', label: 'onInstall', hint: 'Once, after the user accepted the grants.' },
@@ -41,12 +44,42 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
   const [removing, setRemoving] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
+  const [scriptProblems, setScriptProblems] = useState<Partial<Record<BehaviourHook, ScriptProblem>>>({});
+  const checkTimers = useRef<Partial<Record<BehaviourHook, number>>>({});
+
   useEffect(() => {
     api()
       .editor.behaviourTemplates()
       .then(setTemplates)
       .catch((err) => console.error('behaviourTemplates failed', err));
   }, []);
+
+  /**
+   * Compile the script the author is typing, a moment after they stop. Writing a behaviour blind —
+   * save, install, start a session, watch nothing happen — is the worst part of the editor, and a
+   * syntax error costs the whole hook: nothing in the script runs, including the `sdk.events.on`
+   * call at the bottom of it.
+   */
+  const checkHook = useCallback((hook: BehaviourHook, source: string | undefined) => {
+    if (source === undefined || source.trim().length === 0) {
+      setScriptProblems((p) => ({ ...p, [hook]: undefined }));
+      return;
+    }
+    api()
+      .editor.checkScript(source)
+      .then((problems) => setScriptProblems((p) => ({ ...p, [hook]: problems[0] })))
+      .catch(() => undefined); // the check is a convenience; never let it interrupt editing
+  }, []);
+
+  useEffect(() => {
+    const timers = checkTimers.current;
+    setScriptProblems({});
+    for (const { hook } of HOOKS) checkHook(hook, character.behaviours[hook]);
+    return () => {
+      for (const t of Object.values(timers)) if (t !== undefined) window.clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dir]);
 
   const save = useCallback(
     async (draft: CharacterDraft) => {
@@ -125,13 +158,17 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
     if (!t) return;
     edit((dr) => ({ ...dr, behaviours: { ...dr.behaviours, [hook]: dr.behaviours[hook] ? `${dr.behaviours[hook]}\n\n${t.source}` : t.source } }));
   };
-  const setHook = (hook: BehaviourHook, source: string | undefined) =>
+  const setHook = (hook: BehaviourHook, source: string | undefined) => {
     edit((dr) => {
       const behaviours = { ...dr.behaviours };
       if (source === undefined) delete behaviours[hook];
       else behaviours[hook] = source;
       return { ...dr, behaviours };
     });
+    const pending = checkTimers.current;
+    if (pending[hook] !== undefined) window.clearTimeout(pending[hook]);
+    pending[hook] = window.setTimeout(() => checkHook(hook, source), CHECK_DEBOUNCE_MS);
+  };
 
   const words = useMemo(() => wordCount(draft.personaText), [draft.personaText]);
   const packCaps = project.manifest.capabilities ?? [];
@@ -236,6 +273,7 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
         <div className="stack" style={{ gap: 8, marginTop: 4 }}>
           {HOOKS.map(({ hook, label, hint }) => {
             const enabled = draft.behaviours[hook] !== undefined;
+            const problem = enabled ? scriptProblems[hook] : undefined;
             return (
               <div key={hook} className="hook">
                 <div className="row">
@@ -250,7 +288,25 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
                     </button>
                   ) : null}
                 </div>
-                {enabled ? <textarea className="code" value={draft.behaviours[hook] ?? ''} spellCheck={false} onChange={(e) => setHook(hook, e.target.value)} style={{ marginTop: 8 }} /> : null}
+                {enabled ? (
+                  <>
+                    <textarea
+                      className={`code${problem ? ' invalid' : ''}`}
+                      value={draft.behaviours[hook] ?? ''}
+                      spellCheck={false}
+                      onChange={(e) => setHook(hook, e.target.value)}
+                      style={{ marginTop: 8 }}
+                    />
+                    {problem ? (
+                      <div className="script-problem">
+                        <strong>{problem.line !== undefined ? `Line ${problem.line}${problem.column !== undefined ? `, column ${problem.column}` : ''}: ` : ''}</strong>
+                        {problem.message}
+                        {problem.lineText ? <pre>{problem.lineText.trim()}</pre> : null}
+                        <span className="muted small">Nothing in this script runs until it compiles — not even the calls below the error.</span>
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
               </div>
             );
           })}

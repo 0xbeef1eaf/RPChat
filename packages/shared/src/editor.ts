@@ -73,6 +73,18 @@ export interface SaveCharacterInput {
   behaviours: Partial<Record<BehaviourHook, string>>;
 }
 
+/**
+ * One problem in a behaviour script, from compiling it exactly as the sandbox will. `line`/`column`
+ * are 1-based and relative to the script the author is looking at.
+ */
+export interface ScriptProblem {
+  message: string;
+  line?: number;
+  column?: number;
+  /** The offending line, as the compiler saw it. */
+  lineText?: string;
+}
+
 /** Hook script templates offered by the editor. */
 export interface BehaviourTemplate {
   hook: BehaviourHook;
