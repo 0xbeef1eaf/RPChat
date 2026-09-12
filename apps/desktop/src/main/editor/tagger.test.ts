@@ -173,6 +173,28 @@ describe('MediaTagger.suggest', () => {
     expect(request?.messages[0]?.content[0]).toEqual({ type: 'image', mime: 'image/jpeg', data: 'AAAA' });
   });
 
+  it('treats a renderer-decoded still as the image itself, not a video frame', async () => {
+    const { tagger: t, provider } = tagger(['{"tags":["portrait"]}']);
+    const webp = asset({ path: 'media/images/luna.webp', mime: 'image/webp', frame: 'UE5H' });
+    const [out] = await t.suggest(pack, [webp]);
+    expect(out?.basis).toBe('image'); // 'frame' would tell the UI (and the model) it came from a video
+    expect(provider.requests[0]?.messages[0]?.content[0]).toEqual({ type: 'image', mime: 'image/png', data: 'UE5H' });
+  });
+
+  it('tells the model a still of an animated file may not be the whole story', () => {
+    const gif = buildTagPrompt(context({ asset: asset({ path: 'media/images/wave.gif', mime: 'image/gif' }) }));
+    expect(gif.text).toContain('it may be animated');
+    expect(buildTagPrompt(context()).text).toContain('The image itself is attached.');
+  });
+
+  it('names the cause when main cannot decode a file itself', async () => {
+    const provider = new FakeProvider(visionConfig, []);
+    const t = new MediaTagger({ resolveProvider: async () => visionConfig, providerFactory: () => provider, readImage: async () => undefined });
+    const [out] = await t.suggest(pack, [asset({ path: 'media/images/luna.avif', mime: 'image/avif' })]);
+    expect(out?.error).toContain('PNG and JPEG only');
+    expect(out?.error).toContain('.avif');
+  });
+
   it('uses a renderer-supplied video frame and quotes text files', async () => {
     const { tagger: t, provider } = tagger(['{"tags":["loop"]}', '{"tags":["diary"]}']);
     const video = asset({ path: 'media/video/ring.webm', kind: 'video', mime: 'video/webm', frame: 'RlJBTUU=' });
@@ -206,8 +228,8 @@ describe('MediaTagger.suggest', () => {
     provider.chat = async () => ({ message: { role: 'assistant', content: [] }, stopReason: 'max_tokens', usage: { inputTokens: 1, outputTokens: 1 }, model: 'qwen3-vl:8b' });
     const t = new MediaTagger({ resolveProvider: async () => visionConfig, providerFactory: () => provider, readImage: async () => ({ mime: 'image/jpeg', data: 'AAAA' }) });
     const [out] = await t.suggest(pack, [asset()]);
-    expect(out?.error).toContain('ran out of tokens');
-    expect(out?.error).toContain('non-thinking vision model');
+    expect(out?.error).toContain('spent all 3000 tokens reasoning');
+    expect(out?.error).toContain('instruct build');
   });
 
   it('turns a provider failure into an error entry and keeps going', async () => {

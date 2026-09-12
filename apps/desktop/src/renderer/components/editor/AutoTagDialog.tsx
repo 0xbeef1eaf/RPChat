@@ -3,7 +3,7 @@ import type { AppSettings, EditorAsset, MediaTagSuggestion, ModelInfo, ProviderC
 import { api, errorMessage } from '../../api';
 import { Modal } from '../common/Modal';
 import type { MediaEditModel } from '../../lib/editor';
-import { captureVideoFrame } from '../../lib/frames';
+import { frameFor } from '../../lib/frames';
 import { DEFAULT_TAG_SETTINGS, initialProviderId, summarise, taggableAssets, visionProviders, type TagRunSettings } from '../../lib/tagging';
 
 interface AutoTagDialogProps {
@@ -85,7 +85,7 @@ export function AutoTagDialog({ projectKey, assets, model, settings, onSettings,
       if (cancelled.current) break;
       setCurrent(asset.path);
       try {
-        const frame = asset.kind === 'video' ? await captureVideoFrame(asset.url) : undefined;
+        const frame = await frameFor(asset);
         if (cancelled.current) break;
         const [suggestion] = await api().editor.suggestMediaTags(projectKey, [asset.path], {
           providerId: provider.id,

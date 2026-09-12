@@ -16,7 +16,7 @@ import {
   wallpaperWarnings,
   withWallpaperCapability,
 } from '../../lib/wallpaper';
-import { captureVideoFrame } from '../../lib/frames';
+import { frameFor } from '../../lib/frames';
 import { applySuggestions, DEFAULT_TAG_SETTINGS, summarise, type TagRunSettings } from '../../lib/tagging';
 import { reportError, toast } from '../../store/actions';
 import { useDraft, useEditor } from './context';
@@ -139,7 +139,7 @@ export function MediaSection() {
   const suggestForAsset = async (asset: EditorAsset) => {
     setTagging(asset.path);
     try {
-      const frame = asset.kind === 'video' ? await captureVideoFrame(asset.url) : undefined;
+      const frame = await frameFor(asset);
       const [suggestion] = await api().editor.suggestMediaTags(key, [asset.path], {
         ...(tagSettings.providerId ? { providerId: tagSettings.providerId } : {}),
         ...(tagSettings.model.trim() ? { model: tagSettings.model.trim() } : {}),

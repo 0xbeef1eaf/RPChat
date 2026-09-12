@@ -34,6 +34,19 @@ export const DEFAULT_TAG_SETTINGS: TagRunSettings = {
   scope: 'untagged',
 };
 
+/**
+ * Formats the main process can decode on its own. Electron's `nativeImage` reads PNG and JPEG and
+ * nothing else, so every other image (WebP, AVIF, GIF, BMP, SVG) is decoded here with a canvas and
+ * sent along as a frame — otherwise tagging fails with "could not be decoded".
+ */
+const MAIN_DECODES = new Set(['image/png', 'image/jpeg']);
+
+/** Which assets this side has to decode before asking for tags: video (always) and exotic images. */
+export function needsRendererFrame(asset: Pick<EditorAsset, 'kind' | 'mime'>): boolean {
+  if (asset.kind === 'video') return true;
+  return asset.kind === 'image' && !MAIN_DECODES.has(asset.mime);
+}
+
 /** Same rule as `@rp/llm`'s `resolveSupportsVision`, without pulling the provider SDKs into the renderer. */
 export function supportsVision(config: Pick<ProviderConfig, 'kind' | 'supportsVision'>): boolean {
   return config.supportsVision ?? config.kind === 'anthropic';

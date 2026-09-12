@@ -7,6 +7,7 @@
  * decoding image files is injected (`readImage`) because it needs Electron's `nativeImage`.
  */
 import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import type {
   AssetKind,
   LlmChatRequest,
@@ -102,10 +103,15 @@ const KIND_WORD: Record<AssetKind, string> = {
   other: 'file',
 };
 
+/** Formats that hold several frames: the model sees one still and should describe the whole file. */
+const ANIMATED_MIME = new Set(['image/gif', 'image/apng', 'image/webp']);
+
 function basisLine(basis: MediaTagBasis, asset: TagAsset): string {
   switch (basis) {
     case 'image':
-      return 'The image itself is attached.';
+      return ANIMATED_MIME.has(asset.mime)
+        ? 'One frame of the image is attached; it may be animated, so describe what the file shows overall rather than this instant.'
+        : 'The image itself is attached.';
     case 'frame':
       return 'A single frame grabbed from the middle of the video is attached; describe the video, not the still.';
     case 'text':
@@ -325,11 +331,12 @@ export class MediaTagger {
     let excerpt = '';
     try {
       if (asset.frame && asset.frame.length > 0) {
+        // The renderer decoded this one for us: a still for an image, a grabbed frame for a video.
         image = { mime: 'image/png', data: asset.frame };
-        basis = 'frame';
+        basis = asset.kind === 'video' ? 'frame' : 'image';
       } else if (asset.kind === 'image') {
         image = await this.deps.readImage(asset.absolutePath, TAG_IMAGE_MAX_PX);
-        if (!image) return fail(`${asset.path} could not be decoded as an image`);
+        if (!image) return fail(`${asset.path} could not be decoded here (Electron reads PNG and JPEG only); the editor normally decodes ${path.extname(asset.path) || 'this format'} itself`);
         basis = 'image';
       } else if (asset.kind === 'text') {
         excerpt = (await fs.readFile(asset.absolutePath, 'utf8')).slice(0, TAG_TEXT_MAX_CHARS);
@@ -377,7 +384,7 @@ export class MediaTagger {
       if (answer.trim().length === 0) {
         return fail(
           response.stopReason === 'max_tokens'
-            ? `${run.model} ran out of tokens before answering. Reasoning models spend the whole budget thinking: pick a non-thinking vision model (qwen3-vl, llava, …).`
+            ? `${run.model} spent all ${TAG_MAX_TOKENS} tokens reasoning and never reached an answer. Turn the model's thinking mode off, or use an instruct build of it (e.g. qwen3-vl:4b-instruct).`
             : `${run.model} returned nothing to tag with.`,
           basis,
         );

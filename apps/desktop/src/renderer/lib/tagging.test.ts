@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EditorAsset, MediaTagSuggestion, ProviderConfig } from '@rp/shared';
 import type { MediaEditModel } from './editor';
-import { applySuggestions, applyToAsset, initialProviderId, isUntagged, summarise, supportsVision, taggableAssets, visionProviders } from './tagging';
+import { applySuggestions, applyToAsset, initialProviderId, isUntagged, needsRendererFrame, summarise, supportsVision, taggableAssets, visionProviders } from './tagging';
 
 const providers: ProviderConfig[] = [
   { id: 'claude', kind: 'anthropic', label: 'Claude', model: 'claude-sonnet-5' },
@@ -10,8 +10,8 @@ const providers: ProviderConfig[] = [
   { id: 'mock', kind: 'mock', label: 'Mock', model: 'mock' },
 ];
 
-function assetOf(path: string, kind: EditorAsset['kind'] = 'image'): EditorAsset {
-  return { path, kind, bytes: 10, mime: 'image/png', tags: [], url: `rp-asset://editor-x/${path}`, folderTags: [], manifestTags: [] };
+function assetOf(path: string, kind: EditorAsset['kind'] = 'image', mime = 'image/png'): EditorAsset {
+  return { path, kind, bytes: 10, mime, tags: [], url: `rp-asset://editor-x/${path}`, folderTags: [], manifestTags: [] };
 }
 
 function model(over: Partial<MediaEditModel> = {}): MediaEditModel {
@@ -32,6 +32,26 @@ describe('provider choice', () => {
     expect(initialProviderId(providers, 'ollama-text', 'claude')).toBe('claude');
     expect(initialProviderId(providers, '', 'ollama-text')).toBe('claude');
     expect(initialProviderId([providers[1] as ProviderConfig], '', undefined)).toBe('');
+  });
+});
+
+describe('needsRendererFrame', () => {
+  it('leaves the formats Electron can decode to the main process', () => {
+    expect(needsRendererFrame(assetOf('a.png', 'image', 'image/png'))).toBe(false);
+    expect(needsRendererFrame(assetOf('a.jpg', 'image', 'image/jpeg'))).toBe(false);
+  });
+
+  it('decodes everything nativeImage returns empty for', () => {
+    // Verified against Electron: WebP, AVIF, GIF, BMP and SVG all decode to an empty nativeImage.
+    for (const mime of ['image/webp', 'image/avif', 'image/gif', 'image/bmp', 'image/svg+xml']) {
+      expect(needsRendererFrame(assetOf(`a.x`, 'image', mime)), mime).toBe(true);
+    }
+  });
+
+  it('always grabs a frame for video and never for audio or text', () => {
+    expect(needsRendererFrame(assetOf('a.webm', 'video', 'video/webm'))).toBe(true);
+    expect(needsRendererFrame(assetOf('a.wav', 'audio', 'audio/wav'))).toBe(false);
+    expect(needsRendererFrame(assetOf('a.md', 'text', 'text/markdown'))).toBe(false);
   });
 });
 

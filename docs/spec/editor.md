@@ -30,9 +30,11 @@ Tests: scaffold → loadPack ok; write/read round trips; addAssetFile naming; re
   vision model (qwen3-vl on a local OpenAI-compatible server, Claude, …) for tags and a description per
   asset and returns `MediaTagSuggestion[]` — it never writes; the renderer folds accepted suggestions into
   its `media.json` draft. One provider call per asset (at most `MAX_TAG_BATCH` = 25 per call, 180 s each):
-  images are decoded and downscaled to 768 px by `electronImageReader` (JPEG, PNG when the art has alpha),
-  video uses a frame the renderer grabbed (`options.frames[path]`), text files are quoted, audio and
-  anything else is tagged from its name only (`basis` says which). The prompt carries the pack name and
+  PNG and JPEG are decoded and downscaled to 768 px by `electronImageReader` (JPEG, PNG when the art
+  has alpha) — Electron's `nativeImage` reads nothing else, so every other image (WebP, AVIF, GIF, BMP,
+  SVG) and every video arrives as a still the renderer decoded with a canvas (`options.frames[path]`);
+  text files are quoted, audio and anything else is tagged from its name only. `basis` says which, and
+  a frame for a non-video asset still counts as `image`. The prompt carries the pack name and
   description, the character names, the asset's folder tags (never suggested again), its current tags and
   description, the tag vocabulary with meanings and the other tags in use, so the model reuses the
   author's vocabulary; the answer is one JSON object (`tags`, `description`, `meanings`) parsed
@@ -55,7 +57,8 @@ Tests: scaffold → loadPack ok; write/read round trips; addAssetFile naming; re
   model field and "Fetch" models, scope = untagged only / everything currently listed, tags per asset,
   free-text guidance, and switches for vocabulary-only, adding new tags to the vocabulary, replacing tags
   instead of merging, overwriting written descriptions). It runs the assets one at a time with a progress
-  line and a Stop button, grabbing a frame from `<video>` elements (`lib/frames.ts`) for video, then shows
+  line and a Stop button, decoding a still for anything main cannot read (`needsRendererFrame` →
+  `frameFor` in `lib/frames.ts`: `<video>` for video, `<img>` + canvas for WebP/AVIF/GIF/BMP/SVG), then shows
   every suggestion (tags, description, a badge when the model only saw a frame, the text or the file name)
   with per-asset checkboxes; "Apply" folds them into the draft, which the author still has to save. Each
   asset card also has a "✨ Suggest" button that applies one suggestion straight away with the dialog's
