@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
-import type { AddMediaOptions, EditorAsset, MediaManifestEntry } from '@rp/shared';
-import { api } from '../../api';
+import type { AddMediaOptions, EditorAsset, MediaManifestEntry, MediaTagSuggestion } from '@rp/shared';
+import { api, errorMessage } from '../../api';
+import { AutoTagDialog } from '../../components/editor/AutoTagDialog';
 import { ConfirmDialog } from '../../components/common/Modal';
 import { TagInput } from '../../components/editor/TagInput';
 import { fromEditModel, toEditModel, undocumentedTags, unusedVocabulary, type MediaEditModel } from '../../lib/editor';
@@ -15,6 +16,8 @@ import {
   wallpaperWarnings,
   withWallpaperCapability,
 } from '../../lib/wallpaper';
+import { captureVideoFrame } from '../../lib/frames';
+import { applySuggestions, DEFAULT_TAG_SETTINGS, summarise, type TagRunSettings } from '../../lib/tagging';
 import { reportError, toast } from '../../store/actions';
 import { useDraft, useEditor } from './context';
 import { SaveBar } from './SaveBar';
@@ -43,6 +46,9 @@ export function MediaSection() {
   const [capPrompt, setCapPrompt] = useState(false);
   const [removing, setRemoving] = useState<EditorAsset | null>(null);
   const [view, setView] = useState<'assets' | 'rules' | 'vocabulary'>('assets');
+  const [autoTag, setAutoTag] = useState(false);
+  const [tagSettings, setTagSettings] = useState<TagRunSettings>(DEFAULT_TAG_SETTINGS);
+  const [tagging, setTagging] = useState<string | null>(null);
 
   const save = useCallback(
     async (draft: MediaEditModel) => {
@@ -122,6 +128,36 @@ export function MediaSection() {
     }
   };
 
+  /** Fold accepted suggestions into the draft; the user still has to save media.json. */
+  const applySuggested = (list: MediaTagSuggestion[], settings: TagRunSettings) => {
+    if (list.length === 0) return;
+    edit((dr) => applySuggestions(dr, list, settings));
+    toast('success', `${summarise(list)} — review and save media.json`);
+  };
+
+  /** The ✨ button on one asset: one call with the dialog's current settings, applied straight away. */
+  const suggestForAsset = async (asset: EditorAsset) => {
+    setTagging(asset.path);
+    try {
+      const frame = asset.kind === 'video' ? await captureVideoFrame(asset.url) : undefined;
+      const [suggestion] = await api().editor.suggestMediaTags(key, [asset.path], {
+        ...(tagSettings.providerId ? { providerId: tagSettings.providerId } : {}),
+        ...(tagSettings.model.trim() ? { model: tagSettings.model.trim() } : {}),
+        maxTags: tagSettings.maxTags,
+        vocabularyOnly: tagSettings.vocabularyOnly,
+        ...(tagSettings.guidance.trim() ? { guidance: tagSettings.guidance.trim() } : {}),
+        ...(frame ? { frames: { [asset.path]: frame } } : {}),
+      });
+      if (!suggestion) return;
+      if (suggestion.error) toast('error', suggestion.error);
+      else applySuggested([suggestion], tagSettings);
+    } catch (err) {
+      toast('error', `Could not tag ${asset.path}: ${errorMessage(err)}`);
+    } finally {
+      setTagging(null);
+    }
+  };
+
   const setAsset = (path: string, patch: Partial<{ tags: string[]; description: string }>) =>
     edit((dr) => ({ ...dr, perAsset: { ...dr.perAsset, [path]: { ...(dr.perAsset[path] ?? { tags: [], description: '' }), ...patch } } }));
   const setRule = (i: number, patch: Partial<MediaManifestEntry>) => edit((dr) => ({ ...dr, rules: dr.rules.map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
@@ -172,6 +208,15 @@ export function MediaSection() {
         </button>
         <button type="button" className="btn btn-sm" onClick={() => addFiles(WALLPAPER_OPTIONS)} disabled={busy} title="Images copied into media/images/wallpapers/ (tagged “wallpapers” by folder)">
           Add wallpapers…
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => setAutoTag(true)}
+          disabled={busy || project.assets.length === 0}
+          title="Describe and tag the listed assets with a vision model (e.g. qwen3-vl on a local server)"
+        >
+          ✨ Auto-tag…
         </button>
       </div>
 
@@ -295,7 +340,16 @@ export function MediaSection() {
                     ) : null}
                     <TagInput tags={e.tags} suggestions={suggestions} onChange={(tags) => setAsset(a.path, { tags })} aria-label={`Tags for ${a.path}`} />
                     <input type="text" value={e.description} placeholder="Description for the model" onChange={(ev) => setAsset(a.path, { description: ev.target.value })} />
-                    <div>
+                    <div className="row" style={{ gap: 6 }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => suggestForAsset(a)}
+                        disabled={tagging !== null}
+                        title="Ask the vision model for tags and a description for this asset"
+                      >
+                        {tagging === a.path ? <span className="spinner" aria-hidden /> : '✨'} Suggest
+                      </button>
                       <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={() => setRemoving(a)}>
                         Remove
                       </button>
@@ -399,6 +453,17 @@ export function MediaSection() {
       ) : null}
 
       <SaveBar dirty={d.dirty} onSave={d.save} onDiscard={() => d.reset(savedModel)} label="Save media.json" />
+      {autoTag ? (
+        <AutoTagDialog
+          projectKey={key}
+          assets={visibleAssets}
+          model={draft}
+          settings={tagSettings}
+          onSettings={setTagSettings}
+          onApply={applySuggested}
+          onClose={() => setAutoTag(false)}
+        />
+      ) : null}
       {capPrompt ? (
         <ConfirmDialog
           title="Save media.json first?"

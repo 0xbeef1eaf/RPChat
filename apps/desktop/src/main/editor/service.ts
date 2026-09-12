@@ -15,8 +15,10 @@ import type {
   InstalledPackView,
   LoadedPack,
   MediaManifest,
+  MediaTagSuggestion,
   PackManifest,
   SaveCharacterInput,
+  TagMediaOptions,
 } from '@rp/shared';
 import { CHARACTER_MANIFEST_FILENAME, MEDIA_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME, RpError, assetUrl } from '@rp/shared';
 import {
@@ -43,6 +45,7 @@ import { packWriters, fallbackSlugify } from './pack-writers.js';
 import type { PackWriters } from './pack-writers.js';
 import { ProjectRegistry, editorAssetHost } from './registry.js';
 import type { ProjectEntry } from './registry.js';
+import type { MediaTagger, TagAsset, TagPackContext } from './tagger.js';
 
 export interface EditorDialogs {
   openDirectory(title: string): Promise<string | undefined>;
@@ -62,7 +65,12 @@ export interface EditorServiceDeps {
   reveal(absolute: string): void;
   logger: Pick<Console, 'warn' | 'debug'>;
   writers?: PackWriters;
+  /** Vision-model tagging for the Media section; absent in builds/tests without an LLM. */
+  tagger?: MediaTagger;
 }
+
+/** Assets asked for in one `suggestMediaTags` call, so a stray loop cannot hammer the model. */
+export const MAX_TAG_BATCH = 25;
 
 const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'apng'];
 const EXPRESSION_EXT = [...IMAGE_EXT, 'webm', 'mp4'];
@@ -487,6 +495,49 @@ export class EditorService {
     const { dir } = this.entry(key);
     await this.writers.writeMediaManifest(dir, validateMediaManifest(manifest));
     return this.read(key);
+  }
+
+  /**
+   * Ask a vision model for tags and a description per asset (docs/spec/editor.md "Auto-tagging").
+   * Read-only: the suggestions go back to the editor, which applies them to its media.json draft.
+   */
+  async suggestMediaTags(key: string, paths: string[], options: TagMediaOptions = {}): Promise<MediaTagSuggestion[]> {
+    const { dir } = this.entry(key);
+    const tagger = this.deps.tagger;
+    if (!tagger) throw new RpError('INTERNAL', 'Auto-tagging is not available in this build');
+    if (!Array.isArray(paths) || paths.length === 0) throw new RpError('INVALID_ARGUMENT', 'paths must be a non-empty array of asset paths');
+    if (paths.length > MAX_TAG_BATCH) throw new RpError('INVALID_ARGUMENT', `At most ${MAX_TAG_BATCH} assets per call (got ${paths.length})`);
+    const o = options && typeof options === 'object' ? options : {};
+    const project = await this.read(key);
+    const pack: TagPackContext = {
+      id: project.manifest.id,
+      name: project.manifest.name,
+      ...(project.manifest.description ? { description: project.manifest.description } : {}),
+      characters: project.characters.map((c) => c.definition.name),
+      vocabulary: project.mediaManifest.tags ?? {},
+      knownTags: project.tags.map((t) => t.tag),
+    };
+    const frames = o.frames && typeof o.frames === 'object' ? o.frames : {};
+    const assets: TagAsset[] = paths.map((p) => {
+      const n = normalizeRelativePath(String(p ?? ''));
+      if (!n.ok) throw new RpError('PATH_ESCAPE', `Unsafe asset path "${String(p)}"`);
+      const asset = project.assets.find((a) => a.path === n.path);
+      if (!asset) throw new RpError('NOT_FOUND', `${n.path} is not an asset of this pack`);
+      const description = project.mediaManifest.entries.filter((e) => e.match.replace(/^\.?\//, '') === asset.path).map((e) => e.description).filter((d): d is string => typeof d === 'string' && d.length > 0).at(-1);
+      const frame = frames[asset.path];
+      return {
+        path: asset.path,
+        kind: asset.kind,
+        mime: asset.mime,
+        bytes: asset.bytes,
+        absolutePath: resolveAssetPath(dir, asset.path),
+        folderTags: asset.folderTags,
+        tags: asset.manifestTags,
+        ...(description ? { description } : {}),
+        ...(typeof frame === 'string' && frame.length > 0 ? { frame } : {}),
+      };
+    });
+    return tagger.suggest(pack, assets, o);
   }
 
   async saveReadme(key: string, text: string): Promise<EditorProject> {

@@ -1207,6 +1207,9 @@ table.table {
   flex-direction: column;
   gap: 12px;
 }
+.modal-wide {
+  width: min(760px, 100%);
+}
 .modal h2 {
   font-size: 16px;
 }
@@ -1698,4 +1701,28 @@ textarea.persona {
 }
 .problem-list li {
   margin-bottom: 4px;
+}
+
+.suggestion-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 46vh;
+  overflow: auto;
+  padding-right: 4px;
+}
+.suggestion {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+}
+.suggestion .mono {
+  overflow-wrap: anywhere;
+}
+.suggestion.failed {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
 }

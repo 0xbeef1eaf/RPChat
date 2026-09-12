@@ -78,3 +78,46 @@ export interface BehaviourTemplate {
   title: string;
   source: string;
 }
+
+/**
+ * How a tag suggestion was made: the model saw the image itself, a frame grabbed from a video,
+ * the file's text, or only its name and folder (audio and undecodable files).
+ */
+export type MediaTagBasis = 'image' | 'frame' | 'text' | 'filename';
+
+/** Options for one auto-tagging run (pack editor → vision model, e.g. qwen3-vl on Ollama). */
+export interface TagMediaOptions {
+  /** Provider to call; default: the app's default provider. Must be vision-capable for images. */
+  providerId?: string;
+  /** Model override, e.g. `qwen3-vl:8b`. Default: the provider's model. */
+  model?: string;
+  /** Most tags to suggest per asset (1..20). Default 6. */
+  maxTags?: number;
+  /** Only suggest tags the pack already uses or documents. Default false. */
+  vocabularyOnly?: boolean;
+  /** Extra guidance from the author ("a noir detective pack; tag by mood"). */
+  guidance?: string;
+  /**
+   * Base64 PNG frames (no `data:` prefix) for assets main cannot decode itself, by asset path.
+   * The renderer grabs these from `<video>` elements.
+   */
+  frames?: Record<string, string>;
+}
+
+/** What the model suggested for one asset. Nothing is written: the editor applies these to its draft. */
+export interface MediaTagSuggestion {
+  path: string;
+  /** Normalised, deduplicated, capped at `maxTags`; folder tags are left out (they apply anyway). */
+  tags: string[];
+  /** Subset of `tags` the pack does not use or document yet. */
+  newTags: string[];
+  /** One line for `media.json`, at most 200 characters. Empty when the model gave none. */
+  description: string;
+  /** Meanings for `newTags`, for the tag vocabulary table. */
+  vocabulary: Record<string, string>;
+  basis: MediaTagBasis;
+  /** Model that answered, as reported by the provider. */
+  model?: string;
+  /** Set when this asset could not be tagged; `tags` and `description` are then empty. */
+  error?: string;
+}

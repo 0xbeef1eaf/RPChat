@@ -73,7 +73,9 @@ Characters, their behaviours and their media are distributed as shareable
 - **Built-in pack editor**: create or import a pack, edit the manifest,
   characters (persona, greeting, behaviours, avatar and expressions), media with
   tags and descriptions, and the README, with live validation, then install it
-  into the app or export an `.rppack` to share.
+  into the app or export an `.rppack` to share. Media can be tagged and described
+  by a vision model (qwen3-vl on a local Ollama, Claude, …): the editor sends each
+  asset to the model, shows what it suggests, and only writes what you accept.
 
 ## Repository
 
@@ -212,6 +214,13 @@ the nested-Sway layer-shell smoke and a smoke run of the packaged app
 The quickest way is the **Pack editor** inside the app (sidebar → Pack editor →
 New pack): it scaffolds the folder, lets you fill in everything through forms,
 validates as you go, and installs or exports with one click.
+
+Under **Media**, "✨ Auto-tag…" hands your images, video frames and audio to a
+vision model and proposes tags and one-line descriptions for `media.json`, reusing
+the tag vocabulary you already have; you tick what to keep before it touches the
+draft. It uses the providers from **Settings → Providers** — for a local model, an
+OpenAI-compatible provider on `http://localhost:11434/v1` with model `qwen3-vl:8b`
+and "Model accepts images" ticked.
 
 For the on-disk format, see [examples/packs/README.md](examples/packs/README.md), the
 behaviour hooks and a tour of the SDK. The SDK reference the characters see is

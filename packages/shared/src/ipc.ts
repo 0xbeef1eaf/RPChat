@@ -6,7 +6,7 @@ import type { CharacterSummary, InstalledPackRecord, MediaManifest, PackManifest
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
-import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, SaveCharacterInput } from './editor.js';
+import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
 import type { ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
 import type { UpdateStatus } from './updates.js';
@@ -251,6 +251,12 @@ export interface IpcApi {
     addMediaFiles(key: string, files: string[], options?: AddMediaOptions): Promise<EditorProject>;
     removeMedia(key: string, assetPath: string): Promise<EditorProject>;
     saveMediaManifest(key: string, manifest: MediaManifest): Promise<EditorProject>;
+    /**
+     * Ask a vision model (e.g. qwen3-vl on a local OpenAI-compatible server) for tags and a
+     * description for each asset. Nothing is written: the editor applies the suggestions to its
+     * media.json draft. One entry per requested path, in order; failures carry `error`.
+     */
+    suggestMediaTags(key: string, paths: string[], options?: TagMediaOptions): Promise<MediaTagSuggestion[]>;
     saveReadme(key: string, text: string): Promise<EditorProject>;
     validate(key: string): Promise<EditorValidation>;
     /** Save dialog → writes the .rppack; returns the file path or null when cancelled. */

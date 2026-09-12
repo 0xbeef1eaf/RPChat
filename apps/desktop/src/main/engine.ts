@@ -27,6 +27,8 @@ import { WidgetsHandler } from './capabilities/widgets.js';
 import { electronCapturer } from './capture.js';
 import { ProjectRegistry, keyFromAssetHost } from './editor/registry.js';
 import { EditorService } from './editor/service.js';
+import { electronImageReader } from './editor/images.js';
+import { MediaTagger } from './editor/tagger.js';
 import { PluginRegistry } from './plugins/registry.js';
 import { PluginService } from './plugins/service.js';
 import { DaemonClient } from './system/daemon-client.js';
@@ -206,6 +208,15 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const web = new WebHandler({ settings: async () => (await settingsOf()).web });
   const calendar = new CalendarHandler({ sources: async () => (await settingsOf()).senses.calendarSources, logger });
 
+  const mock = isMockLlm(env);
+  const providerFactory: ProviderFactory = mock ? mockProviderFactory() : createProvider;
+  const tagger = new MediaTagger({
+    resolveProvider: (providerId) => engine.settings.resolveProvider(providerId),
+    providerFactory,
+    readImage: electronImageReader(),
+    logger,
+  });
+
   const editor = new EditorService({
     userData: opts.userData,
     registry,
@@ -230,10 +241,9 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     },
     reveal: (absolute) => shell.showItemInFolder(absolute),
     logger,
+    tagger,
   });
 
-  const mock = isMockLlm(env);
-  const providerFactory: ProviderFactory = mock ? mockProviderFactory() : createProvider;
   engine = new Engine({
     storage,
     registry: createStandardRegistry(),

@@ -237,6 +237,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       addMediaFiles: (_e, key, files, options) => services.editor.addMediaFiles(requireString(key, 'key'), files, options ?? {}),
       removeMedia: (_e, key, assetPath) => services.editor.removeMedia(requireString(key, 'key'), requireString(assetPath, 'assetPath')),
       saveMediaManifest: (_e, key, manifest) => services.editor.saveMediaManifest(requireString(key, 'key'), manifest),
+      suggestMediaTags: (_e, key, paths, options) => services.editor.suggestMediaTags(requireString(key, 'key'), paths, options ?? {}),
       saveReadme: (_e, key, text) => services.editor.saveReadme(requireString(key, 'key'), text),
       validate: (_e, key) => services.editor.validate(requireString(key, 'key')),
       exportPack: (_e, key) => services.editor.exportPack(requireString(key, 'key')),

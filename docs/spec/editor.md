@@ -26,6 +26,19 @@ Tests: scaffold → loadPack ok; write/read round trips; addAssetFile naming; re
 - Registry of open projects in `<userData>/data/editor-projects.json` (`{ key, dir }`), key = sha1(dir) first 12 chars.
 - `read(key)` = `loadPack` (tolerant: on `PACK_INVALID` still return manifest/characters that parse, with `validation.problems` filled) + `validatePack` + `summariseTags` + per-asset `folderTags`/`manifestTags` split (from `folderTagsFor` and the manifest entries) + `rp-asset://` URLs.
 - Assets served for previews: the asset protocol accepts `rp-asset://editor-<key>/<path>` for registered project dirs (same path guard as installed packs).
+- Auto-tagging (`editor/tagger.ts`, `editor/images.ts`): `suggestMediaTags(key, paths, options)` asks a
+  vision model (qwen3-vl on a local OpenAI-compatible server, Claude, …) for tags and a description per
+  asset and returns `MediaTagSuggestion[]` — it never writes; the renderer folds accepted suggestions into
+  its `media.json` draft. One provider call per asset (at most `MAX_TAG_BATCH` = 25 per call, 180 s each):
+  images are decoded and downscaled to 768 px by `electronImageReader` (JPEG, PNG when the art has alpha),
+  video uses a frame the renderer grabbed (`options.frames[path]`), text files are quoted, audio and
+  anything else is tagged from its name only (`basis` says which). The prompt carries the pack name and
+  description, the character names, the asset's folder tags (never suggested again), its current tags and
+  description, the tag vocabulary with meanings and the other tags in use, so the model reuses the
+  author's vocabulary; the answer is one JSON object (`tags`, `description`, `meanings`) parsed
+  tolerantly, normalised with `normalizeTag`, capped at `options.maxTags` and — with `vocabularyOnly` —
+  restricted to known tags. A provider that is not vision-capable, a missing provider, a timeout or a
+  provider error becomes a per-asset `error` (the run itself only throws when no provider resolves).
 - Pickers via `dialog.showOpenDialog`; `addMediaFiles` accepts absolute paths from renderer drag and drop (`File.path` via `webUtils.getPathForFile` in preload — expose `editor.pathsForFiles` if needed; simpler: renderer passes `webUtils.getPathForFile(file)` obtained in preload through a small `app.pathForFile(file)` helper added to the preload API only, not to IpcApi).
 - `installToApp` → `engine.packs.install(dir)` (replaces an installed pack with the same id, keeping grants). `exportPack` → `dialog.showSaveDialog` + `packDirectory`. `importInstalled` → copies the installed root into the workspace (refuses if a project with the same dir exists).
 - `revealInFolder` → `shell.showItemInFolder`.
@@ -38,6 +51,15 @@ Tests: scaffold → loadPack ok; write/read round trips; addAssetFile naming; re
 - Pack: id (locked after creation with an "advanced" unlock), name, version (semver hint), description, author name/url, license, homepage, tags (chips), capabilities checklist from `capabilities.list()` grouped by permission with summaries (trusted ones shown as always-on, not selectable), min app version.
 - Character: id (locked after creation), name, tagline, greeting, avatar (preview + pick), persona editor (textarea with monospaced font, word count, and a side-by-side markdown preview toggle), example dialogue (list of user/character pairs), behaviours (per hook: enable toggle → code editor textarea with the template inserted, "Insert template"), extra capabilities checklist, model hints (temperature, max tokens, model), avatarSet expressions (name → pick file, default expression select, size), mood baselines (two sliders). Save button (dirty tracking) + Ctrl/Cmd+S.
 - Media: grid/list of assets with thumbnails (images), kind badge, size; drag-and-drop zone + "Add files" button; per asset: folder tags (read-only chips), editable manifest tags (chips input with suggestions from the vocabulary), description; the editor maintains `media.json` as one exact-path entry per asset plus a "Rules" panel for glob entries (match, tags, description) and a "Tag vocabulary" table (tag → meaning, unused tags flagged). Remove asset with confirm.
+- Media → auto-tagging: "✨ Auto-tag…" opens a dialog (provider limited to vision-capable ones with a
+  model field and "Fetch" models, scope = untagged only / everything currently listed, tags per asset,
+  free-text guidance, and switches for vocabulary-only, adding new tags to the vocabulary, replacing tags
+  instead of merging, overwriting written descriptions). It runs the assets one at a time with a progress
+  line and a Stop button, grabbing a frame from `<video>` elements (`lib/frames.ts`) for video, then shows
+  every suggestion (tags, description, a badge when the model only saw a frame, the text or the file name)
+  with per-asset checkboxes; "Apply" folds them into the draft, which the author still has to save. Each
+  asset card also has a "✨ Suggest" button that applies one suggestion straight away with the dialog's
+  current settings. Pure helpers in `lib/tagging.ts` (provider filtering, scope, merge, vocabulary).
 - README: textarea + preview.
 - Check & publish: validation problems/warnings list (re-run button), export, install to app, "Start a chat with …" after install.
 - Tests: pure helpers (id suggestion/slug, media.json ↔ per-asset edit model, dirty tracking reducer).

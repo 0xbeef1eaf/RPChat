@@ -134,6 +134,20 @@ export function ProviderEditor({ initial, isNew, onSave, onCancel }: ProviderEdi
           </label>
           <span className="field-hint">Untick for models that only work with fenced ```action blocks.</span>
         </div>
+        <div className="field">
+          <span className="field-label">Vision</span>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={cfg.supportsVision ?? cfg.kind === 'anthropic'}
+              onChange={(e) => patch({ supportsVision: e.target.checked })}
+            />
+            Model accepts images
+          </label>
+          <span className="field-hint">
+            Needed for screenshots (<code>sdk.screen.look</code>) and the pack editor's auto-tagging. Tick it for vision models such as qwen3-vl or llava.
+          </span>
+        </div>
       </div>
       {models.length > 0 ? (
         <div className="field">
