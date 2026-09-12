@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ActionContext, ChatEvent, Json } from '@rp/shared';
 import { ASK_DEFAULT_SYSTEM } from './handlers/llm.js';
-import { ECHO_REF, MINIMAL_DIR, MINIMAL_ID, createTestEngine, runAction } from './test/helpers.js';
+import { ECHO_REF, FakeSenses, MINIMAL_DIR, MINIMAL_ID, createTestEngine, runAction } from './test/helpers.js';
 import type { TestEngine } from './test/helpers.js';
 
 let t: TestEngine | undefined;
@@ -125,6 +125,33 @@ describe('timers.runLater (code timers)', () => {
 });
 
 describe('self-wakes', () => {
+  it('runs a wake queued by event code with no turn in flight and nobody watching', async () => {
+    // The engine has no idea which view the app is showing; a host event arriving while the user
+    // is in Settings must wake the character then and there, not when they look back.
+    const senses = new FakeSenses();
+    t = await createTestEngine({
+      senses,
+      script: [{ text: 'Good song.' }],
+      runnerHandler: async (request, runner) => {
+        if (request.context.trigger.kind !== 'event') return;
+        expect(await runner.call(request, 'llm', 'wake', 'The song changed; say something.')).toEqual({ queued: true });
+        return null;
+      },
+    });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    await invoke(ctxFor(session.id), 'events', 'on', 'song-changed', 'await sdk.llm.wake("x");');
+
+    senses.push('song-changed', { title: 'Blue', artist: 'X' });
+    await t.engine.eventService.idle();
+    await t.engine.chat.idle();
+
+    expect((await t.engine.sessions.messages(session.id)).map((m) => [m.role, m.origin ?? '', m.content])).toEqual([
+      ['system', 'timer', '[self-wake] The song changed; say something.'],
+      ['assistant', 'timer', 'Good song.'],
+    ]);
+  });
+
   it('runs an immediate wake right after turn-finished with the past-self prompt', async () => {
     t = await createTestEngine({
       script: [

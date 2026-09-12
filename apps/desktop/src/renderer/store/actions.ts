@@ -12,6 +12,7 @@ import { newId } from '../lib/ids';
 import {
   applyChatEvent,
   clearExchanges,
+  clearUnread,
   closeMemoriesPanel,
   openMemoriesPanel,
   dequeuePermissionRequest,
@@ -48,7 +49,9 @@ export function navigate(route: RouteName): void {
   update((s) => {
     if (s.route === route) return s;
     const editor = route === 'editor' && !s.editor.visited ? { ...s.editor, visited: true } : s.editor;
-    return { ...s, route, editor };
+    const next = { ...s, route, editor };
+    // Coming back to the chat is reading it.
+    return route === 'chat' && next.activeSessionId ? clearUnread(next, next.activeSessionId) : next;
   });
 }
 
@@ -98,6 +101,24 @@ function scheduleSessionsRefresh(): void {
   }, 250);
 }
 
+/**
+ * Tell main which conversation is on screen, whenever that changes. Main decides from it whether
+ * a character speaking on its own initiative deserves a desktop notification: being in the app
+ * with Settings open is not the same as watching that chat.
+ */
+function watchVisibleSession(): void {
+  let reported: string | null | undefined;
+  const push = (): void => {
+    const state = appStore.getState();
+    const visible = state.route === 'chat' ? state.activeSessionId : null;
+    if (visible === reported) return;
+    reported = visible;
+    void api().app.setVisibleSession(visible).catch((err: unknown) => console.warn('app.setVisibleSession failed', err));
+  };
+  appStore.subscribe(push);
+  push();
+}
+
 /** Load everything the shell needs and wire the push channels. Idempotent per page load. */
 let booted = false;
 export async function bootstrap(): Promise<void> {
@@ -114,6 +135,9 @@ export async function bootstrap(): Promise<void> {
       toast('info', `remembered: ${truncate(event.memory.text, 90)}`, 4500);
     }
   });
+  // A notification about a character's unprompted message opens that conversation.
+  rp.app.onShowSession((sessionId) => void openSession(sessionId));
+  watchVisibleSession();
   rp.permissions.onRequest((request) => update((s) => enqueuePermissionRequest(s, request)));
   rp.ui.onPrompt((request) => update((s) => enqueueUiPrompt(s, request)));
 
@@ -126,7 +150,7 @@ export async function bootstrap(): Promise<void> {
 }
 
 export async function openSession(sessionId: SessionId): Promise<void> {
-  update((s) => ({ ...s, activeSessionId: sessionId, route: 'chat' }));
+  update((s) => clearUnread({ ...s, activeSessionId: sessionId, route: 'chat' }, sessionId));
   if (appStore.getState().messages[sessionId]) return;
   try {
     const messages = await api().sessions.messages(sessionId);

@@ -17,7 +17,7 @@ type Namespaces = keyof IpcApi;
 
 /** Every request/response method, per namespace (event subscriptions are listed in `EVENT_METHODS`). */
 export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] & string> } = {
-  app: ['version', 'windowKind', 'openPath'],
+  app: ['version', 'windowKind', 'openPath', 'setVisibleSession'],
   packs: ['list', 'pickInstallSource', 'inspect', 'install', 'uninstall', 'setGrant', 'exportPack'],
   capabilities: ['list', 'typings'],
   characters: ['list', 'status'],
@@ -45,6 +45,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
 
 /** `namespace.method` → push channel. */
 export const EVENT_METHODS: { [K in Namespaces]?: Partial<Record<keyof IpcApi[K] & string, string>> } = {
+  app: { onShowSession: IPC_EVENT_CHANNELS.showSession },
   chat: { onEvent: IPC_EVENT_CHANNELS.chatEvent },
   permissions: { onRequest: IPC_EVENT_CHANNELS.permissionRequest },
   ui: { onPrompt: IPC_EVENT_CHANNELS.uiPrompt },

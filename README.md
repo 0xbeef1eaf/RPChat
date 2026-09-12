@@ -54,6 +54,11 @@ Characters, their behaviours and their media are distributed as shareable
   waiting in a chat window you may not have open. Closing it is a "no".
   Notifications carry the urgency the character chose: quiet, normal, or one that
   stays on screen until you dismiss it.
+- **It keeps living while you look away**: timers, events and self-wakes run in the
+  app's engine, not in the chat view — a character wakes up whether you are on
+  that conversation, in Settings or in the tray. When it speaks while you are
+  somewhere else you get a desktop notification (click it to jump straight to
+  that chat) and an unread count in the sidebar.
 - **Retry a reply**: not the answer you hoped for? `↻` on the newest reply (or
   **Try again** when a turn failed) throws it away and asks the character again
   from the same history — your message is not re-sent, and whatever the discarded

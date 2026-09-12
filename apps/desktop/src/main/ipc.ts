@@ -48,6 +48,8 @@ export interface RegisterIpcOptions {
   windows: WindowManager;
   logger: Logger;
   version: string;
+  /** The UI reports which session's chat is on screen (null on any other view). */
+  setVisibleSession?: (sessionId: string | null) => void;
 }
 
 const COMMAND_NAMES: ReadonlySet<string> = new Set<keyof CommandTemplates>([
@@ -70,6 +72,9 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       openPath: async (_e, target) => {
         const error = await shell.openPath(requireString(target, 'path'));
         if (error) throw new RpError('CAPABILITY_FAILED', error);
+      },
+      setVisibleSession: async (_e, sessionId) => {
+        opts.setVisibleSession?.(typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null);
       },
     },
     packs: {

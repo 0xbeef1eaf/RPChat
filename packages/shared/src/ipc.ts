@@ -104,6 +104,14 @@ export interface IpcApi {
     /** Which window this renderer is: main UI, a media overlay or a prompt. */
     windowKind(): Promise<'main' | 'media' | 'prompt'>;
     openPath(path: string): Promise<void>;
+    /**
+     * Which session's chat the user is actually looking at (null on any other view). A character
+     * that speaks on its own initiative is announced with a notification unless its session is
+     * the one on screen — being in the app is not the same as watching that conversation.
+     */
+    setVisibleSession(sessionId: string | null): Promise<void>;
+    /** Clicking such a notification asks the UI to open that session. */
+    onShowSession(listener: (sessionId: string) => void): Unsubscribe;
   };
   packs: {
     list(): Promise<InstalledPackView[]>;
@@ -308,6 +316,7 @@ export const IPC_EVENT_CHANNELS = {
   permissionRequest: 'permissions:request',
   mediaCommand: 'media:command',
   uiPrompt: 'ui:prompt',
+  showSession: 'app:showSession',
   updateStatus: 'updates:status',
 } as const;
 
