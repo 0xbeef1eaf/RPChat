@@ -45,7 +45,10 @@ Tests: scaffold → loadPack ok; write/read round trips; addAssetFile naming; re
   (`TAG_RESPONSE_SCHEMA`); off by default because not every OpenAI-compatible server accepts a schema,
   but it is what makes a reasoning model answer at all instead of spending `TAG_MAX_TOKENS` thinking.
   `options.reasoningEffort` (`none` …) is the other half of that: on a model that honours it the
-  answer costs tens of tokens instead of thousands. Within one run each answer is folded back into
+  answer costs tens of tokens instead of thousands. Both are surfaced in the auto-tag dialog.
+  `options.learned` carries the tags and meanings a run has coined so far into the pack context
+  (the dialog makes one call per asset, so `media.json` — unsaved until the author says so — is
+  otherwise all main can see); blank meanings are dropped. Within one run each answer is folded back into
   the pack context (`absorbSuggestion`): tags it coined count as in use and meanings it gave join
   the vocabulary for the assets still to come, so a run over a whole pack converges on one word per
   idea instead of `cosy`/`cozy`/`snug`. A meaning the author wrote is never overwritten.
@@ -68,6 +71,10 @@ Tests: scaffold → loadPack ok; write/read round trips; addAssetFile naming; re
 - Pack: id (locked after creation with an "advanced" unlock), name, version (semver hint), description, author name/url, license, homepage, tags (chips), capabilities checklist from `capabilities.list()` grouped by permission with summaries (trusted ones shown as always-on, not selectable), min app version.
 - Character: id (locked after creation), name, tagline, greeting, avatar (preview + pick), persona editor (textarea with monospaced font, word count, and a side-by-side markdown preview toggle), example dialogue (list of user/character pairs), behaviours (per hook: enable toggle → code editor textarea with the template inserted, "Insert template"), extra capabilities checklist, model hints (temperature, max tokens, model), avatarSet expressions (name → pick file, default expression select, size), mood baselines (two sliders). Save button (dirty tracking) + Ctrl/Cmd+S.
 - Media: grid/list of assets with thumbnails (images), kind badge, size; drag-and-drop zone + "Add files" button; per asset: folder tags (read-only chips), editable manifest tags (chips input with suggestions from the vocabulary), description; the editor maintains `media.json` as one exact-path entry per asset plus a "Rules" panel for glob entries (match, tags, description) and a "Tag vocabulary" table (tag → meaning, unused tags flagged). Remove asset with confirm.
+- Media → auto-tagging: the dialog also carries "Thinking" (`reasoningEffort`, empty = leave it to the
+  model) and "Hold the model to the answer format" (`jsonSchema`), both off by default because
+  `response_format` and the `none`/`max` levels are not universal; `tagOptions()` builds the options
+  for both the dialog run and the per-asset ✨ button so a setting cannot reach one and miss the other.
 - Media → auto-tagging: "✨ Auto-tag…" opens a dialog (provider limited to vision-capable ones with a
   model field and "Fetch" models, scope = untagged only / everything currently listed, tags per asset,
   free-text guidance, and switches for vocabulary-only, adding new tags to the vocabulary, replacing tags

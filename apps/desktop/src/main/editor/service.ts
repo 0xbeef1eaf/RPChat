@@ -45,6 +45,7 @@ import { packWriters, fallbackSlugify } from './pack-writers.js';
 import type { PackWriters } from './pack-writers.js';
 import { ProjectRegistry, editorAssetHost } from './registry.js';
 import type { ProjectEntry } from './registry.js';
+import { absorbSuggestion } from './tagger.js';
 import type { MediaTagger, TagAsset, TagPackContext } from './tagger.js';
 
 export interface EditorDialogs {
@@ -509,7 +510,7 @@ export class EditorService {
     if (paths.length > MAX_TAG_BATCH) throw new RpError('INVALID_ARGUMENT', `At most ${MAX_TAG_BATCH} assets per call (got ${paths.length})`);
     const o = options && typeof options === 'object' ? options : {};
     const project = await this.read(key);
-    const pack: TagPackContext = {
+    let pack: TagPackContext = {
       id: project.manifest.id,
       name: project.manifest.name,
       ...(project.manifest.description ? { description: project.manifest.description } : {}),
@@ -517,6 +518,13 @@ export class EditorService {
       vocabulary: project.mediaManifest.tags ?? {},
       knownTags: project.tags.map((t) => t.tag),
     };
+    // What earlier assets of this run coined is not in media.json yet (the editor saves at the end).
+    if (o.learned && typeof o.learned === 'object') {
+      const tags = Array.isArray(o.learned.tags) ? o.learned.tags.filter((t): t is string => typeof t === 'string') : [];
+      const meanings = o.learned.vocabulary && typeof o.learned.vocabulary === 'object' ? o.learned.vocabulary : {};
+      const vocabulary = Object.fromEntries(Object.entries(meanings).filter(([, v]) => typeof v === 'string' && v.length > 0));
+      pack = absorbSuggestion(pack, { tags, vocabulary });
+    }
     const frames = o.frames && typeof o.frames === 'object' ? o.frames : {};
     const assets: TagAsset[] = paths.map((p) => {
       const n = normalizeRelativePath(String(p ?? ''));

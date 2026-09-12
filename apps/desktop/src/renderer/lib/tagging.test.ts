@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EditorAsset, MediaTagSuggestion, ProviderConfig } from '@rp/shared';
 import type { MediaEditModel } from './editor';
-import { applySuggestions, applyToAsset, initialProviderId, isUntagged, needsRendererFrame, summarise, supportsVision, taggableAssets, visionProviders } from './tagging';
+import { DEFAULT_TAG_SETTINGS, applySuggestions, applyToAsset, initialProviderId, isUntagged, learnedFrom, needsRendererFrame, summarise, supportsVision, tagOptions, taggableAssets, visionProviders } from './tagging';
 
 const providers: ProviderConfig[] = [
   { id: 'claude', kind: 'anthropic', label: 'Claude', model: 'claude-sonnet-5' },
@@ -119,5 +119,38 @@ describe('summarise', () => {
     const list = [suggestion(), suggestion({ path: 'b.png', tags: [], newTags: [], description: '' }), suggestion({ path: 'c.png', error: 'boom' })];
     expect(summarise(list)).toBe('1 tagged, 1 with nothing to say, 1 failed');
     expect(summarise([suggestion()])).toBe('1 tagged');
+  });
+});
+
+
+describe('tagOptions', () => {
+  const settings = { ...DEFAULT_TAG_SETTINGS, providerId: 'p1', model: '  qwen3-vl:8b ', maxTags: 4, guidance: '  by mood  ' };
+
+  it('trims the free-text fields and leaves empty ones out', () => {
+    expect(tagOptions(settings)).toEqual({ providerId: 'p1', model: 'qwen3-vl:8b', maxTags: 4, vocabularyOnly: false, jsonSchema: false, guidance: 'by mood' });
+    expect(tagOptions({ ...settings, model: '   ', guidance: '' })).toEqual({ providerId: 'p1', maxTags: 4, vocabularyOnly: false, jsonSchema: false });
+  });
+
+  it('sends the schema and effort the dialog asked for, and the frame for one asset', () => {
+    const out = tagOptions({ ...settings, jsonSchema: true, reasoningEffort: 'none' }, { assetPath: 'a.png', frame: 'BASE64' });
+    expect(out).toMatchObject({ jsonSchema: true, reasoningEffort: 'none', frames: { 'a.png': 'BASE64' } });
+  });
+
+  it('passes what the run has learned, but only when there is something to pass', () => {
+    expect(tagOptions(settings, { learned: { tags: [], vocabulary: {} } }).learned).toBeUndefined();
+    expect(tagOptions(settings, { learned: { tags: ['cosy'], vocabulary: {} } }).learned).toEqual({ tags: ['cosy'], vocabulary: {} });
+  });
+});
+
+describe('learnedFrom', () => {
+  it('collects the tags and meanings of the answers so far, skipping failures', () => {
+    expect(
+      learnedFrom([
+        suggestion({ tags: ['smile', 'cosy'], vocabulary: { cosy: 'Warm and relaxed' } }),
+        suggestion({ path: 'b.png', tags: ['cosy', 'wave'], vocabulary: { cosy: 'a later, weaker wording' } }),
+        suggestion({ path: 'c.png', tags: ['ignored'], vocabulary: { ignored: 'from a failed call' }, error: 'timed out' }),
+      ]),
+    ).toEqual({ tags: ['smile', 'cosy', 'wave'], vocabulary: { cosy: 'Warm and relaxed' } });
+    expect(learnedFrom([])).toEqual({ tags: [], vocabulary: {} });
   });
 });

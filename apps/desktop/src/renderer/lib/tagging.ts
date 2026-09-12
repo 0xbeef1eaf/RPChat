@@ -1,5 +1,5 @@
 /** Pure helpers for the editor's "auto-tag with a vision model" run (no DOM, no API). */
-import type { EditorAsset, MediaTagSuggestion, ProviderConfig } from '@rp/shared';
+import type { EditorAsset, LlmReasoningEffort, MediaTagSuggestion, ProviderConfig, TagMediaOptions } from '@rp/shared';
 import type { AssetEdit, MediaEditModel } from './editor';
 
 /** What the auto-tag dialog collects; kept between runs in the Media section. */
@@ -16,9 +16,16 @@ export interface TagRunSettings {
   overwriteDescriptions: boolean;
   /** Add invented tags to the tag vocabulary with the model's meaning. */
   addToVocabulary: boolean;
+  /** Constrain the answer with `response_format` instead of only asking for JSON in the prompt. */
+  jsonSchema: boolean;
+  /** How much the model may think first; empty leaves it to the model. */
+  reasoningEffort: LlmReasoningEffort | '';
   guidance: string;
   scope: TagScope;
 }
+
+/** Levels offered in the dialog. `none` and `max` are Ollama's; OpenAI itself takes neither. */
+export const REASONING_EFFORTS: ReadonlyArray<LlmReasoningEffort> = ['none', 'low', 'medium', 'high', 'max'];
 
 export type TagScope = 'untagged' | 'all';
 
@@ -30,6 +37,11 @@ export const DEFAULT_TAG_SETTINGS: TagRunSettings = {
   replaceTags: false,
   overwriteDescriptions: false,
   addToVocabulary: true,
+  // Both off by default: `response_format` is refused by some OpenAI-compatible servers, and
+  // "none" is not an effort level OpenAI itself accepts. A local thinking model needs both — the
+  // dialog says so, and the error a model gives when it thinks its budget away points here.
+  jsonSchema: false,
+  reasoningEffort: '',
   guidance: '',
   scope: 'untagged',
 };
@@ -63,6 +75,42 @@ export function initialProviderId(providers: ProviderConfig[], lastUsed: string,
   if (vision.some((p) => p.id === lastUsed)) return lastUsed;
   if (defaultProviderId && vision.some((p) => p.id === defaultProviderId)) return defaultProviderId;
   return vision[0]?.id ?? '';
+}
+
+/**
+ * The options for one `suggestMediaTags` call. Both call sites (the dialog's run and the ✨ button
+ * on a single asset) go through this, so a setting cannot reach one and miss the other.
+ */
+export function tagOptions(
+  settings: TagRunSettings,
+  extra: { frame?: string; assetPath?: string; learned?: TagMediaOptions['learned'] } = {},
+): TagMediaOptions {
+  return {
+    ...(settings.providerId ? { providerId: settings.providerId } : {}),
+    ...(settings.model.trim() ? { model: settings.model.trim() } : {}),
+    maxTags: settings.maxTags,
+    vocabularyOnly: settings.vocabularyOnly,
+    jsonSchema: settings.jsonSchema,
+    ...(settings.reasoningEffort ? { reasoningEffort: settings.reasoningEffort } : {}),
+    ...(settings.guidance.trim() ? { guidance: settings.guidance.trim() } : {}),
+    ...(extra.learned && (extra.learned.tags?.length || Object.keys(extra.learned.vocabulary ?? {}).length) ? { learned: extra.learned } : {}),
+    ...(extra.frame && extra.assetPath ? { frames: { [extra.assetPath]: extra.frame } } : {}),
+  };
+}
+
+/**
+ * What a run has coined so far, to hand to the next asset: every tag suggested and every meaning
+ * given. Failed suggestions contribute nothing.
+ */
+export function learnedFrom(suggestions: MediaTagSuggestion[]): NonNullable<TagMediaOptions['learned']> {
+  const tags: string[] = [];
+  const vocabulary: Record<string, string> = {};
+  for (const s of suggestions) {
+    if (s.error) continue;
+    for (const tag of s.tags) if (!tags.includes(tag)) tags.push(tag);
+    for (const [tag, meaning] of Object.entries(s.vocabulary)) if (!(tag in vocabulary) && meaning) vocabulary[tag] = meaning;
+  }
+  return { tags, vocabulary };
 }
 
 /** An asset counts as untagged when the draft gives it neither a manifest tag nor a description. */

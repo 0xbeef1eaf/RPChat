@@ -219,6 +219,15 @@ describe('EditorService.suggestMediaTags', () => {
     });
     expect(call.options.maxTags).toBe(3);
 
+    // What earlier assets of the same run coined reaches the model even though media.json,
+    // which the editor only writes when the author saves, knows nothing about it yet.
+    await svc.suggestMediaTags(key, ['media/images/portraits/smile.png'], {
+      learned: { tags: ['cosy', 'smile'], vocabulary: { cosy: 'Warm and relaxed', blank: '' } },
+    });
+    const carried = tagger.calls[1]!.pack;
+    expect(carried.knownTags).toEqual(expect.arrayContaining(['smile', 'cosy']));
+    expect(carried.vocabulary).toEqual({ smile: 'a smile', cosy: 'Warm and relaxed' }); // no blank meaning
+
     await expect(svc.suggestMediaTags(key, [])).rejects.toThrow(/non-empty array/);
     await expect(svc.suggestMediaTags(key, ['media/images/gone.png'])).rejects.toThrow(/not an asset/);
     await expect(svc.suggestMediaTags(key, ['../secrets.png'])).rejects.toThrow(/Unsafe asset path/);

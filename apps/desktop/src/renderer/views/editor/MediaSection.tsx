@@ -17,7 +17,7 @@ import {
   withWallpaperCapability,
 } from '../../lib/wallpaper';
 import { frameFor } from '../../lib/frames';
-import { applySuggestions, DEFAULT_TAG_SETTINGS, summarise, type TagRunSettings } from '../../lib/tagging';
+import { applySuggestions, DEFAULT_TAG_SETTINGS, summarise, tagOptions, type TagRunSettings } from '../../lib/tagging';
 import { reportError, toast } from '../../store/actions';
 import { useDraft, useEditor } from './context';
 import { SaveBar } from './SaveBar';
@@ -140,14 +140,11 @@ export function MediaSection() {
     setTagging(asset.path);
     try {
       const frame = await frameFor(asset);
-      const [suggestion] = await api().editor.suggestMediaTags(key, [asset.path], {
-        ...(tagSettings.providerId ? { providerId: tagSettings.providerId } : {}),
-        ...(tagSettings.model.trim() ? { model: tagSettings.model.trim() } : {}),
-        maxTags: tagSettings.maxTags,
-        vocabularyOnly: tagSettings.vocabularyOnly,
-        ...(tagSettings.guidance.trim() ? { guidance: tagSettings.guidance.trim() } : {}),
-        ...(frame ? { frames: { [asset.path]: frame } } : {}),
-      });
+      const [suggestion] = await api().editor.suggestMediaTags(
+        key,
+        [asset.path],
+        tagOptions(tagSettings, { assetPath: asset.path, ...(frame ? { frame } : {}) }),
+      );
       if (!suggestion) return;
       if (suggestion.error) toast('error', suggestion.error);
       else applySuggested([suggestion], tagSettings);

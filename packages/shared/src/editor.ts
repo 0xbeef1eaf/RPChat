@@ -112,6 +112,13 @@ export interface TagMediaOptions {
    */
   reasoningEffort?: LlmReasoningEffort;
   /**
+   * Tags and meanings coined earlier in the same run. The editor tags one asset per call, so
+   * without this every asset is tagged against `media.json` as it stood when the run started and
+   * the model coins `cosy`, `cozy` and `snug` for one idea. (A multi-asset call carries its own
+   * answers forward by itself.)
+   */
+  learned?: { tags?: string[]; vocabulary?: Record<string, string> };
+  /**
    * Base64 PNG frames (no `data:` prefix) for assets main cannot decode itself, by asset path.
    * The renderer grabs these from `<video>` elements.
    */

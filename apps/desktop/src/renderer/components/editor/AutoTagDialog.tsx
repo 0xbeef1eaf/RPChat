@@ -4,7 +4,17 @@ import { api, errorMessage } from '../../api';
 import { Modal } from '../common/Modal';
 import type { MediaEditModel } from '../../lib/editor';
 import { frameFor } from '../../lib/frames';
-import { DEFAULT_TAG_SETTINGS, initialProviderId, summarise, taggableAssets, visionProviders, type TagRunSettings } from '../../lib/tagging';
+import {
+  DEFAULT_TAG_SETTINGS,
+  REASONING_EFFORTS,
+  initialProviderId,
+  learnedFrom,
+  summarise,
+  tagOptions,
+  taggableAssets,
+  visionProviders,
+  type TagRunSettings,
+} from '../../lib/tagging';
 
 interface AutoTagDialogProps {
   projectKey: string;
@@ -87,14 +97,13 @@ export function AutoTagDialog({ projectKey, assets, model, settings, onSettings,
       try {
         const frame = await frameFor(asset);
         if (cancelled.current) break;
-        const [suggestion] = await api().editor.suggestMediaTags(projectKey, [asset.path], {
-          providerId: provider.id,
-          ...(settings.model.trim() ? { model: settings.model.trim() } : {}),
-          maxTags: settings.maxTags,
-          vocabularyOnly: settings.vocabularyOnly,
-          ...(settings.guidance.trim() ? { guidance: settings.guidance.trim() } : {}),
-          ...(frame ? { frames: { [asset.path]: frame } } : {}),
-        });
+        const [suggestion] = await api().editor.suggestMediaTags(
+          projectKey,
+          [asset.path],
+          // `learned` keeps the run consistent: one call per asset means media.json is the only
+          // vocabulary main can see, and the draft is not saved until the author says so.
+          tagOptions({ ...settings, providerId: provider.id }, { assetPath: asset.path, ...(frame ? { frame } : {}), learned: learnedFrom(collected) }),
+        );
         if (suggestion) {
           collected.push(suggestion);
           setResults([...collected]);
@@ -179,6 +188,26 @@ export function AutoTagDialog({ projectKey, assets, model, settings, onSettings,
               <label htmlFor="tag-max">Tags per asset</label>
               <input id="tag-max" type="number" min={1} max={20} value={settings.maxTags} onChange={(e) => patch({ maxTags: Number(e.target.value) || 1 })} />
             </div>
+            <div className="field">
+              <label htmlFor="tag-thinking">Thinking</label>
+              <select
+                id="tag-thinking"
+                value={settings.reasoningEffort}
+                onChange={(e) => patch({ reasoningEffort: e.target.value as TagRunSettings['reasoningEffort'] })}
+              >
+                <option value="">Leave it to the model</option>
+                {REASONING_EFFORTS.map((effort) => (
+                  <option key={effort} value={effort}>
+                    {effort}
+                  </option>
+                ))}
+              </select>
+              <span className="field-hint">
+                A local model that thinks first can spend its whole answer budget deliberating and return nothing; <code>none</code> fixes that where the
+                model supports it (Qwen3.5 does, Qwen3-VL does not). <code>none</code> and <code>max</code> are Ollama's levels — OpenAI itself takes
+                neither.
+              </span>
+            </div>
           </div>
           <div className="field">
             <label htmlFor="tag-guidance">Guidance (optional)</label>
@@ -194,6 +223,10 @@ export function AutoTagDialog({ projectKey, assets, model, settings, onSettings,
             <label className="check small">
               <input type="checkbox" checked={settings.vocabularyOnly} onChange={(e) => patch({ vocabularyOnly: e.target.checked })} />
               Stay inside the pack's existing tag vocabulary
+            </label>
+            <label className="check small">
+              <input type="checkbox" checked={settings.jsonSchema} onChange={(e) => patch({ jsonSchema: e.target.checked })} />
+              Hold the model to the answer format (<code>response_format</code>)
             </label>
             <label className="check small">
               <input type="checkbox" checked={settings.addToVocabulary} onChange={(e) => patch({ addToVocabulary: e.target.checked })} />
