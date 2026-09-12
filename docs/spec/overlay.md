@@ -1,7 +1,7 @@
 # Display backends, overlays and external commands (desktop main process)
 
 This spec extends `docs/spec/desktop.md`. It covers how media overlays honour
-`OverlayOptions` (`layer`, `monitor`, `position`/`x`/`y` — default position `random`: a spot drawn once per overlay so the whole window stays on the monitor, re-clamped when the content size arrives; the helper receives `randomX`/`randomY` and applies the same formula —, `opacity`,
+`OverlayOptions` (`layer`, `monitor` — default `random` for media overlays (avatar and widgets default to `primary`), one of the connected monitors drawn per window —, `position`/`x`/`y` — default position `random`: a spot drawn once per overlay so the whole window stays on the monitor, re-clamped when the content size arrives; the helper receives `randomX`/`randomY` and applies the same formula —, `opacity`,
 `clickThrough`), how the app runs on **Hyprland** (Wayland), and how the
 `wallpaper`, `browser` and `input` modules execute user-configured command
 templates. Contracts: `@rp/shared/media.ts` (`OverlayOptions`, `OverlayUpdate`,

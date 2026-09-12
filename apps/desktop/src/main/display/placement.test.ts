@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MonitorInfo } from '@rp/shared';
-import { placeOverlay, resolvePlacement, selectMonitor } from './placement.js';
-import { applyOverlayUpdate, nearestLayer, resolveOverlayOptions, setRandomSource, visualPatch } from './backend.js';
+import { placeOverlay, resolvePlacement, selectMonitor, setRandomSource } from './placement.js';
+import { applyOverlayUpdate, nearestLayer, resolveOverlayOptions, setRandomSource as setBackendRandomSource, visualPatch } from './backend.js';
 
 const primary: MonitorInfo = { id: '1', name: 'DP-1', index: 0, primary: true, x: 0, y: 30, width: 1920, height: 1050, scale: 1, hasCursor: false };
 const second: MonitorInfo = { id: '2', name: 'HDMI-A-1', index: 1, primary: false, x: 1920, y: 0, width: 1280, height: 720, scale: 1, hasCursor: true };
@@ -18,6 +18,25 @@ describe('selectMonitor', () => {
     expect(selectMonitor('nope', monitors)).toBe(primary);
     expect(selectMonitor(7, monitors)).toBe(primary);
     expect(() => selectMonitor('primary', [])).toThrow();
+  });
+
+  it("'random' draws one of the connected monitors from the injectable source, clamped to the list", () => {
+    setRandomSource(() => 0.75);
+    expect(selectMonitor('random', monitors)).toBe(second);
+    setRandomSource(() => 0.25);
+    expect(selectMonitor('random', monitors)).toBe(primary);
+    setRandomSource(() => 1);
+    expect(selectMonitor('random', monitors)).toBe(second);
+    setRandomSource(() => Number.NaN);
+    expect(selectMonitor('random', monitors)).toBe(primary);
+    setRandomSource(() => -3);
+    expect(selectMonitor('random', monitors)).toBe(primary);
+    setRandomSource(() => 0.99);
+    expect(selectMonitor('random', [primary])).toBe(primary);
+    // The backend re-exports the same setter, so either import seeds the one source.
+    setBackendRandomSource(() => 0.75);
+    expect(selectMonitor('random', monitors)).toBe(second);
+    setRandomSource(() => 0.25);
   });
 });
 
@@ -45,9 +64,19 @@ describe('resolvePlacement', () => {
 
 describe('resolveOverlayOptions / applyOverlayUpdate', () => {
   it('applies defaults and validates', () => {
+    // Without a monitor the overlay lands on a random one (seed 0.25 → first of two), at a random spot.
     setRandomSource(() => 0.25);
     const r = resolveOverlayOptions(undefined, monitors, { layer: 'top' });
     expect(r).toEqual({ monitor: primary, layer: 'top', opacity: 1, clickThrough: false, anchor: 'random', marginPx: 24, width: 480, randomSeed: { x: 0.25, y: 0.25 } });
+    setRandomSource(() => 0.75);
+    expect(resolveOverlayOptions(undefined, monitors, { layer: 'top' })).toEqual({ monitor: second, layer: 'top', opacity: 1, clickThrough: false, anchor: 'random', marginPx: 24, width: 480, randomSeed: { x: 0.75, y: 0.75 } });
+    expect(resolveOverlayOptions({}, monitors, { layer: 'top' }).monitor).toBe(second);
+    // An explicit selector pins the monitor regardless of the seed.
+    expect(resolveOverlayOptions({ monitor: 'primary' }, monitors, { layer: 'top' })).toMatchObject({ monitor: primary, anchor: 'random', randomSeed: { x: 0.75, y: 0.75 } });
+    expect(resolveOverlayOptions({ monitor: 'cursor' }, monitors, { layer: 'top' }).monitor).toBe(second);
+    setRandomSource(() => 0.25);
+    expect(resolveOverlayOptions({ monitor: 'cursor' }, monitors, { layer: 'top' }).monitor).toBe(second);
+    expect(resolveOverlayOptions({ monitor: 'random' }, monitors, { layer: 'top' }).monitor).toBe(primary);
     expect(resolveOverlayOptions({ position: 'center' }, monitors, { layer: 'top' }).randomSeed).toBeUndefined();
     expect(resolveOverlayOptions({ x: 10 }, monitors, { layer: 'top' }).randomSeed).toBeUndefined();
     const r2 = resolveOverlayOptions({ layer: 'background', opacity: 2, clickThrough: true, position: 'top-right', x: 0.25, y: 300, width: 640, height: 0, monitor: 'cursor' }, monitors, { layer: 'bottom' });
@@ -62,6 +91,19 @@ describe('resolveOverlayOptions / applyOverlayUpdate', () => {
     expect(moved.x).toBeUndefined();
     expect(placeOverlay(moved, { width: 100, height: 50 })).toEqual({ x: 1920 + 24, y: 720 - 50 - 24, width: 100, height: 50 });
     expect(visualPatch({ opacity: 0.3, layer: 'top', width: 100, monitor: 2 })).toEqual({ opacity: 0.3, width: 100 });
+  });
+
+  it("an update with monitor 'random' re-draws the monitor; other updates keep it", () => {
+    setRandomSource(() => 0.25);
+    const base = resolveOverlayOptions({ position: 'top-left' }, monitors, { layer: 'top' });
+    expect(base.monitor).toBe(primary);
+    setRandomSource(() => 0.75);
+    expect(applyOverlayUpdate(base, { opacity: 0.5 }, monitors).monitor).toBe(primary);
+    const redrawn = applyOverlayUpdate(base, { monitor: 'random' }, monitors);
+    expect(redrawn).toMatchObject({ monitor: second, anchor: 'top-left', layer: 'top' });
+    setRandomSource(() => 0.25);
+    expect(applyOverlayUpdate(redrawn, { monitor: 'random' }, monitors).monitor).toBe(primary);
+    expect(applyOverlayUpdate(redrawn, { monitor: 'primary' }, monitors).monitor).toBe(primary);
   });
 });
 

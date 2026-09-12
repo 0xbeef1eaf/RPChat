@@ -48,7 +48,7 @@ type MediaPosition = 'random' | 'center' | 'top-left' | 'top-right' | 'bottom-le
 type OverlayLayer = 'background' | 'bottom' | 'top' | 'overlay';
 
 /** 'primary', 'cursor' (monitor under the pointer), a zero-based index, or a monitor name such as 'DP-1'. */
-type MonitorSelector = 'primary' | 'cursor' | number | string;
+type MonitorSelector = 'random' | 'primary' | 'cursor' | number | string;
 
 interface OverlayPlacement {
   /** Which monitor to use (see sdk.display.monitors()). Default 'primary'. */

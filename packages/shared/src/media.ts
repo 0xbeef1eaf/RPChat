@@ -15,7 +15,8 @@ export type MediaPosition = 'random' | 'center' | 'top-left' | 'top-right' | 'bo
 export type OverlayLayer = 'background' | 'bottom' | 'top' | 'overlay';
 
 /** `primary`, the monitor under the cursor, a zero-based index, or a monitor name (e.g. `DP-1`). */
-export type MonitorSelector = 'primary' | 'cursor' | number | string;
+/** `random` (the default for media overlays) picks one of the connected monitors per window. */
+export type MonitorSelector = 'random' | 'primary' | 'cursor' | number | string;
 
 export interface OverlayPlacement {
   /** Which monitor to use. Default `primary`. */

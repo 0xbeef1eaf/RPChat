@@ -79,7 +79,7 @@ export class WidgetsHandler implements CapabilityHandler {
     const backend = this.deps.backend();
     const monitors = await backend.monitors();
     const { html: _html, id: _id, title: _title, ...overlayOpts } = s;
-    const options = resolveOverlayOptions({ position: 'top-right', ...(overlayOpts as OverlayOptions), width: widget.width, height: widget.height }, monitors, { layer: await this.deps.defaultLayer() });
+    const options = resolveOverlayOptions({ monitor: 'primary', position: 'top-right', ...(overlayOpts as OverlayOptions), width: widget.width, height: widget.height }, monitors, { layer: await this.deps.defaultLayer() });
     const spec: OverlaySpec = { id: `widget-${id}`, kind: 'widget', file: '', assetUrl: '', packId: context.packId, asset: '', options, page: {}, widget };
     const handle = await backend.createOverlay(spec);
     const offs = [

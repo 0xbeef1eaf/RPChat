@@ -37,7 +37,7 @@ describe('ElectronBackend', () => {
   it('shows an overlay sized by the reported content, anchored bottom-right, on top and click-through', async () => {
     const { backend, windows } = make();
     const monitors = await backend.monitors();
-    const handle = await backend.createOverlay(spec('a', resolveOverlayOptions({ position: 'bottom-right', clickThrough: true, opacity: 0.5 }, monitors, { layer: 'top' })));
+    const handle = await backend.createOverlay(spec('a', resolveOverlayOptions({ monitor: 'primary', position: 'bottom-right', clickThrough: true, opacity: 0.5 }, monitors, { layer: 'top' })));
     const win = windows[0]!;
     expect(win.title).toMatch(/^rp-overlay:a-\d+$/);
     expect(win.sent[0]).toMatchObject({ type: 'show-image', id: 'a', url: 'rp-asset://com.x.p/media/a.png', options: { caption: 'hi', opacity: 0.5, clickThrough: true, width: 480 } });

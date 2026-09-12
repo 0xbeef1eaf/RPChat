@@ -18,14 +18,26 @@ export const DEFAULT_OVERLAY_HEIGHT = 320;
 export const DEFAULT_MARGIN_PX = 24;
 export const MIN_OVERLAY_SIZE = 16;
 
+/** Injectable for tests. */
+export let randomSource: () => number = Math.random;
+export function setRandomSource(fn: () => number): void {
+  randomSource = fn;
+}
+
 /**
- * Pick a monitor: `primary` (default), `cursor` (the one holding the pointer),
- * a zero-based index, or an id/name. Unknown selectors fall back to the primary.
+ * Pick a monitor: `primary` (default), `random` (any connected monitor, drawn once per call),
+ * `cursor` (the one holding the pointer), a zero-based index, or an id/name. Unknown selectors
+ * fall back to the primary.
  */
 export function selectMonitor(selector: MonitorSelector | undefined, monitors: MonitorInfo[]): MonitorInfo {
   if (monitors.length === 0) throw new Error('No monitors available');
   const primary = monitors.find((m) => m.primary) ?? (monitors[0] as MonitorInfo);
   if (selector === undefined || selector === null || selector === 'primary') return primary;
+  if (selector === 'random') {
+    const r = randomSource();
+    const i = Math.min(monitors.length - 1, Math.max(0, Math.floor((Number.isFinite(r) ? Math.min(0.999999, Math.max(0, r)) : 0) * monitors.length)));
+    return monitors[i] as MonitorInfo;
+  }
   if (selector === 'cursor') return monitors.find((m) => m.hasCursor) ?? primary;
   if (typeof selector === 'number') {
     if (!Number.isInteger(selector)) return primary;

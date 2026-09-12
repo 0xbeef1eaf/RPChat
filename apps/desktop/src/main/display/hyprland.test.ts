@@ -50,7 +50,7 @@ describe('parseMonitors', () => {
 
 describe('buildCommands', () => {
   const monitors = parseMonitors(MONITORS);
-  const options = resolveOverlayOptions({ layer: 'overlay', opacity: 0.75, clickThrough: true }, monitors, { layer: 'top' });
+  const options = resolveOverlayOptions({ monitor: 'primary', layer: 'overlay', opacity: 0.75, clickThrough: true }, monitors, { layer: 'top' });
   const hypr = { monitor: options.monitor, layer: options.layer, opacity: options.opacity, clickThrough: true, bounds: { x: 100, y: 200, width: 480, height: 320 } };
 
   it('emits float, placement, chrome, layer, opacity and focus commands with the address', () => {

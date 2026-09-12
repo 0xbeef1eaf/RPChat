@@ -20,7 +20,7 @@ interface MediaApi {
    * @param asset An AssetRef from sdk.pack, or a pack-relative path such as "media/images/smile.png".
    * @param options durationMs (auto-close), caption, plus OverlayOptions: monitor, position or x/y,
    *   layer ('top' default; 'background' puts it behind windows like a wallpaper), opacity, clickThrough, width, height.
-   *   Without position/x/y the window is placed at a random in-bounds spot on the monitor.
+   *   Without monitor/position/x/y the window is placed on a random monitor at a random in-bounds spot.
    * @returns Handle of the shown image.
    * @example await sdk.media.showImage("media/images/smile.png", { durationMs: 8000, position: "bottom-right" });
    * @example await sdk.media.showImage("media/images/rain.png", { monitor: "cursor", layer: "background", opacity: 0.6, clickThrough: true, width: 1920 });
@@ -67,7 +67,7 @@ interface MediaApi {
 - Images stay open until \`durationMs\` elapses or you \`close()\` them; videos close on end by default. Do not open many overlays at once — \`closeAll()\` before showing something new if the screen is getting busy.
 - Playback calls resolve when playback starts, not when it finishes; do not wait for the end inside an action (schedule a timer instead if you need to react later).
 - Keep a handle in session state if you want to close it in a later action: \`await sdk.state.session.set("song", handle.id)\`.
-- Placement: \`monitor\` ('primary', 'cursor', an index or a name from \`sdk.display.monitors()\`), an anchor \`position\`, or exact \`x\`/\`y\` (fractions 0..1 or px). With none of these each window lands at a random spot that stays fully on the monitor, so you do not need to place things unless it matters. \`layer\` picks stacking: 'top' (default) or 'overlay' float above windows; 'bottom' sits behind windows but above the wallpaper (use it for ambient art); 'background' shares the wallpaper's layer and is usually hidden by the wallpaper daemon. \`opacity\` fades; \`clickThrough: true\` lets the user keep working through the overlay — combine it with a background layer for decorations, never for things they must click.
+- Placement: \`monitor\` ('primary', 'cursor', an index or a name from \`sdk.display.monitors()\`), an anchor \`position\`, or exact \`x\`/\`y\` (fractions 0..1 or px). With none of these each window lands on a random monitor at a random spot that stays fully on it, so you do not need to place things unless it matters ('primary' or 'cursor' pin the monitor). \`layer\` picks stacking: 'top' (default) or 'overlay' float above windows; 'bottom' sits behind windows but above the wallpaper (use it for ambient art); 'background' shares the wallpaper's layer and is usually hidden by the wallpaper daemon. \`opacity\` fades; \`clickThrough: true\` lets the user keep working through the overlay — combine it with a background layer for decorations, never for things they must click.
 - Check \`sdk.display.backend()\` once per session to learn which of these the desktop honours; unsupported options degrade gracefully instead of failing. Only a display backend that cannot open an overlay at all throws CAPABILITY_FAILED (the message says why).
 
 \`\`\`ts

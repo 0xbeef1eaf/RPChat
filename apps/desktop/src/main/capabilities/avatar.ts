@@ -39,7 +39,7 @@ export function clampSize(v: unknown, fallback = AVATAR_DEFAULT_SIZE): number {
 /** Pure: resolved overlay options for an avatar (width = size; default bottom-right, top layer). */
 export function avatarPlacement(opts: AvatarShowOptions, size: number, monitors: MonitorInfo[]): ResolvedOverlayOptions {
   const { width: _w, height: _h, ...rest } = opts;
-  return resolveOverlayOptions({ position: 'bottom-right', ...rest, width: size }, monitors, { layer: 'top' });
+  return resolveOverlayOptions({ monitor: 'primary', position: 'bottom-right', ...rest, width: size }, monitors, { layer: 'top' });
 }
 
 export function toInfo(state: AvatarState): AvatarStateInfo {

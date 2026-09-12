@@ -21,7 +21,7 @@ import type {
   WidgetSpec,
 } from '@rp/shared';
 import type { Bounds } from './placement.js';
-import { DEFAULT_MARGIN_PX, DEFAULT_OVERLAY_WIDTH, selectMonitor } from './placement.js';
+import { DEFAULT_MARGIN_PX, DEFAULT_OVERLAY_WIDTH, randomSource, selectMonitor } from './placement.js';
 import type { ScreenLike } from './electron.js';
 import { ElectronBackend } from './electron.js';
 import { createHyprlandBackend } from './hyprland.js';
@@ -116,11 +116,7 @@ export interface OverlayWindowLike {
 
 const POSITIONS: ReadonlySet<string> = new Set(['random', 'center', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
 
-/** Injectable for tests. */
-export let randomSource: () => number = Math.random;
-export function setRandomSource(fn: () => number): void {
-  randomSource = fn;
-}
+export { setRandomSource } from './placement.js';
 export function newRandomSeed(): { x: number; y: number } {
   return { x: randomSource(), y: randomSource() };
 }
@@ -134,7 +130,8 @@ export function resolveOffset(value: number | undefined, extent: number): number
 /** Pure: defaults + monitor selection + validation. Layers are NOT clamped here; backends degrade them. */
 export function resolveOverlayOptions(opts: OverlayOptions | undefined, monitors: MonitorInfo[], defaults: { layer: OverlayLayer }): ResolvedOverlayOptions {
   const o = opts && typeof opts === 'object' ? opts : {};
-  const monitor = selectMonitor(o.monitor, monitors);
+  // Media overlays land on a random monitor unless the character picks one (avatar/widgets pass 'primary').
+  const monitor = selectMonitor(o.monitor ?? 'random', monitors);
   const resolved: ResolvedOverlayOptions = {
     monitor,
     layer: isOverlayLayer(o.layer) ? o.layer : defaults.layer,
