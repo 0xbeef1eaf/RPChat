@@ -50,7 +50,8 @@ body {
   background: #000;
 }
 
-.media-item.image {
+/* Only when a click actually closes it: a timed image goes on its own (see `closesOnClick`). */
+.media-item.image.click-closes {
   cursor: pointer;
 }
 

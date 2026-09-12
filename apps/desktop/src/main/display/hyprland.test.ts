@@ -68,6 +68,8 @@ describe('buildCommands', () => {
       'dispatch alterzorder top,address:0x55d2a1ff0000',
       'dispatch setprop address:0x55d2a1ff0000 alpha 0.75',
       'dispatch setprop address:0x55d2a1ff0000 alphaoverride 1',
+      'dispatch setprop address:0x55d2a1ff0000 alphainactive 0.75',
+      'dispatch setprop address:0x55d2a1ff0000 alphainactiveoverride 1',
       'dispatch setprop address:0x55d2a1ff0000 nofocus 1',
     ]);
   });
@@ -82,6 +84,8 @@ describe('buildCommands', () => {
       'dispatch alterzorder bottom,address:0x1',
       'dispatch setprop address:0x1 alpha 0.75',
       'dispatch setprop address:0x1 alphaoverride 1',
+      'dispatch setprop address:0x1 alphainactive 0.75',
+      'dispatch setprop address:0x1 alphainactiveoverride 1',
       'dispatch setprop address:0x1 nofocus 0',
     ]);
     const background = buildCommands({ ...hypr, layer: 'background' }, '0x1', { currentlyPinned: true, skipChrome: true });
@@ -90,11 +94,15 @@ describe('buildCommands', () => {
   });
 
   it('supports the legacy setprop syntax and update patches', () => {
-    expect(buildCommands({ ...hypr, opacity: 1 }, '0x2', { legacyProps: true, skipChrome: true })).toContain('setprop address:0x2 alpha 1 lock');
+    const legacy = buildCommands({ ...hypr, opacity: 1 }, '0x2', { legacyProps: true, skipChrome: true });
+    expect(legacy).toContain('setprop address:0x2 alpha 1 lock');
+    expect(legacy).toContain('setprop address:0x2 alphainactive 1 lock'); // no override prop in the legacy syntax; `lock` pins it
     expect(buildUpdateCommands({ opacity: 0.5, clickThrough: false, layer: 'top' }, '0x2', { currentlyPinned: true })).toEqual([
       'dispatch alterzorder top,address:0x2',
       'dispatch setprop address:0x2 alpha 0.5',
       'dispatch setprop address:0x2 alphaoverride 1',
+      'dispatch setprop address:0x2 alphainactive 0.5',
+      'dispatch setprop address:0x2 alphainactiveoverride 1',
       'dispatch setprop address:0x2 nofocus 0',
     ]);
   });

@@ -3,6 +3,7 @@ import {
   applyMediaCommand,
   applyMediaLocalEvent,
   applyUpdate,
+  closesOnClick,
   closesOnEnd,
   effectiveOpacity,
   effectiveVolume,
@@ -232,6 +233,17 @@ describe('helpers', () => {
     expect(isAllowedMediaUrl('file:///etc/passwd')).toBe(false);
     expect(isAllowedMediaUrl('rp-asset://')).toBe(false);
   });
+  it('closesOnClick is off for a timed image, click-through overlays and audio', () => {
+    const entry = (kind: 'image' | 'video' | 'audio', options: Record<string, unknown>) =>
+      ({ id: 'x', kind, url: 'rp-asset://p/a', options }) as unknown as Parameters<typeof closesOnClick>[0];
+    expect(closesOnClick(entry('image', {}))).toBe(true);
+    expect(closesOnClick(entry('image', { durationMs: 8000 }))).toBe(false); // it closes itself
+    expect(closesOnClick(entry('image', { durationMs: 0 }))).toBe(true); // no timer is armed for 0
+    expect(closesOnClick(entry('image', { clickThrough: true }))).toBe(false);
+    expect(closesOnClick(entry('video', {}))).toBe(true); // durationMs is an image-only option
+    expect(closesOnClick(entry('audio', {}))).toBe(false); // it has a stop button instead
+  });
+
   it('effectiveOpacity clamps', () => {
     expect(effectiveOpacity(undefined)).toBe(1);
     expect(effectiveOpacity(1.5)).toBe(1);
