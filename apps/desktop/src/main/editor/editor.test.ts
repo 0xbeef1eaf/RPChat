@@ -3,7 +3,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ProjectRegistry, editorAssetHost, isProjectKey, keyFromAssetHost, projectKey } from './registry.js';
-import { EditorService, extensionsFor, mediaFilters, normalizeSubfolder } from './service.js';
+import type { TagMediaOptions } from '@rp/shared';
+import { EditorService, MAX_TAG_BATCH, extensionsFor, mediaFilters, normalizeSubfolder } from './service.js';
+import type { MediaTagger, TagAsset, TagPackContext } from './tagger.js';
 import { parseAssetUrl } from '../asset-protocol.js';
 
 describe('project registry', () => {
@@ -160,5 +162,128 @@ describe('EditorService media options', () => {
     await expect(svc.addMediaFiles(key, [wav], { kinds: ['image'] })).rejects.toThrow(/not one of: image/);
     const plain = await svc.addMediaFiles(key, [wav]);
     expect(plain.assets.some((a) => a.path === 'media/audio/chime.wav')).toBe(true);
+  });
+});
+
+describe('EditorService.checkScript', () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-editor-check-'));
+  });
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  function svc(): EditorService {
+    return new EditorService({
+      userData: tmp,
+      registry: new ProjectRegistry(path.join(tmp, 'data', 'editor-projects.json')),
+      packs: { install: async () => { throw new Error('not in test'); }, tryGetLoaded: () => undefined, installedIds: async () => [] },
+      dialogs: { openDirectory: async () => undefined, openFiles: async () => [], saveFile: async () => undefined },
+      reveal: () => undefined,
+      logger: { warn: () => undefined, debug: () => undefined },
+    });
+  }
+
+  it('reports where a script stops compiling, so the editor can say so while it is typed', async () => {
+    // `wake(prompt: …)` is missing its braces: one bad line costs the whole script, including the
+    // `sdk.events.on` call under it.
+    const broken = [
+      'const n = 1;',
+      'await sdk.llm.wake(prompt: `hello`);',
+      'await sdk.events.on("window-changed", async () => {}, {});',
+    ].join('\n');
+    const [problem] = await svc().checkScript(broken);
+    expect(problem?.message).toContain('Expected ")"');
+    expect(problem).toMatchObject({ line: 2 });
+    expect(problem?.lineText).toContain('sdk.llm.wake');
+  });
+
+  it('is quiet for a script that compiles, and for an empty one', async () => {
+    const s = svc();
+    expect(await s.checkScript('await sdk.events.on("window-changed", async (input) => { await sdk.log.info(String(input.data)); }, {});')).toEqual([]);
+    expect(await s.checkScript('   ')).toEqual([]);
+    expect(await s.checkScript(undefined as unknown as string)).toEqual([]);
+  });
+});
+
+describe('EditorService.suggestMediaTags', () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-editor-tags-'));
+  });
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  /** Records what the tagger was handed instead of calling a model. */
+  function fakeTagger(): { calls: Array<{ pack: TagPackContext; assets: TagAsset[]; options: TagMediaOptions }> } & Pick<MediaTagger, 'suggest'> {
+    const calls: Array<{ pack: TagPackContext; assets: TagAsset[]; options: TagMediaOptions }> = [];
+    return {
+      calls,
+      suggest: async (pack, assets, options = {}) => {
+        calls.push({ pack, assets, options });
+        return assets.map((a) => ({ path: a.path, tags: ['tagged'], newTags: ['tagged'], description: 'a thing', vocabulary: {}, basis: 'image' as const }));
+      },
+    };
+  }
+
+  it('passes the pack context, absolute paths and video frames to the tagger', async () => {
+    const tagger = fakeTagger();
+    const svc = new EditorService({
+      userData: tmp,
+      registry: new ProjectRegistry(path.join(tmp, 'data', 'editor-projects.json')),
+      packs: { install: async () => { throw new Error('not in test'); }, tryGetLoaded: () => undefined, installedIds: async () => [] },
+      dialogs: { openDirectory: async () => undefined, openFiles: async () => [], saveFile: async () => undefined },
+      reveal: () => undefined,
+      logger: { warn: () => undefined, debug: () => undefined },
+      tagger: tagger as unknown as MediaTagger,
+    });
+    const project = await svc.create({ packId: 'com.test.tags', name: 'Tags', characterId: 'mia', characterName: 'Mia' });
+    const key = project.summary.key;
+    const dir = project.summary.dir;
+    fs.mkdirSync(path.join(dir, 'media', 'images', 'portraits'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'media', 'images', 'portraits', 'smile.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await svc.saveMediaManifest(key, { entries: [{ match: 'media/images/portraits/smile.png', tags: ['smile'], description: 'Mia smiling' }], tags: { smile: 'a smile' } });
+
+    const out = await svc.suggestMediaTags(key, ['media/images/portraits/smile.png'], { frames: { 'media/images/portraits/smile.png': 'RlJBTUU=' }, maxTags: 3 });
+    expect(out).toHaveLength(1);
+    expect(out[0]?.tags).toEqual(['tagged']);
+    const call = tagger.calls[0]!;
+    expect(call.pack).toMatchObject({ id: 'com.test.tags', name: 'Tags', characters: ['Mia'], vocabulary: { smile: 'a smile' } });
+    expect(call.pack.knownTags).toEqual(expect.arrayContaining(['smile', 'portraits']));
+    expect(call.assets[0]).toMatchObject({
+      path: 'media/images/portraits/smile.png',
+      kind: 'image',
+      folderTags: ['portraits'],
+      tags: ['smile'],
+      description: 'Mia smiling',
+      frame: 'RlJBTUU=',
+      absolutePath: path.join(dir, 'media', 'images', 'portraits', 'smile.png'),
+    });
+    expect(call.options.maxTags).toBe(3);
+
+    // What earlier assets of the same run coined reaches the model even though media.json,
+    // which the editor only writes when the author saves, knows nothing about it yet.
+    await svc.suggestMediaTags(key, ['media/images/portraits/smile.png'], {
+      learned: { tags: ['cosy', 'smile'], vocabulary: { cosy: 'Warm and relaxed', blank: '' } },
+    });
+    const carried = tagger.calls[1]!.pack;
+    expect(carried.knownTags).toEqual(expect.arrayContaining(['smile', 'cosy']));
+    expect(carried.vocabulary).toEqual({ smile: 'a smile', cosy: 'Warm and relaxed' }); // no blank meaning
+
+    await expect(svc.suggestMediaTags(key, [])).rejects.toThrow(/non-empty array/);
+    await expect(svc.suggestMediaTags(key, ['media/images/gone.png'])).rejects.toThrow(/not an asset/);
+    await expect(svc.suggestMediaTags(key, ['../secrets.png'])).rejects.toThrow(/Unsafe asset path/);
+    await expect(svc.suggestMediaTags(key, new Array(MAX_TAG_BATCH + 1).fill('media/images/portraits/smile.png'))).rejects.toThrow(/At most 25 assets/);
+  });
+
+  it('says so when the build has no tagger', async () => {
+    const svc = new EditorService({
+      userData: tmp,
+      registry: new ProjectRegistry(path.join(tmp, 'data', 'editor-projects.json')),
+      packs: { install: async () => { throw new Error('not in test'); }, tryGetLoaded: () => undefined, installedIds: async () => [] },
+      dialogs: { openDirectory: async () => undefined, openFiles: async () => [], saveFile: async () => undefined },
+      reveal: () => undefined,
+      logger: { warn: () => undefined, debug: () => undefined },
+    });
+    const project = await svc.create({ packId: 'com.test.notagger', name: 'No tagger', characterId: 'mia', characterName: 'Mia' });
+    await expect(svc.suggestMediaTags(project.summary.key, ['media/images/x.png'])).rejects.toThrow(/not available in this build/);
   });
 });

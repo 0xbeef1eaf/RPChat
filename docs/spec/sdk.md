@@ -94,8 +94,8 @@ media (pack)
 - `list(): Promise<MediaHandle[]>`
 
 ui (pack)
-- `notify(title: string, body?: string): Promise<void>` — OS notification.
-- `confirm(question: string): Promise<boolean>` — modal in the chat UI; the user answers.
+- `notify(title: string, body?: string, opts?: { urgency?: "low" | "normal" | "critical" }): Promise<void>` — OS notification; `low` is silent, `critical` stays until dismissed.
+- `confirm(question: string): Promise<boolean>` — a window of its own, in front of the user; the user answers.
 - `choose(question: string, options: string[]): Promise<string | null>`
 
 system (pack; was `prompt` before per-call prompts were dropped) — every method `dangerous: true`

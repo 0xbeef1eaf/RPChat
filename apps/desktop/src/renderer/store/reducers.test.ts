@@ -4,6 +4,7 @@ import {
   MAX_EXCHANGES,
   applyChatEvent,
   clearExchanges,
+  clearUnread,
   dequeuePermissionRequest,
   enqueuePermissionRequest,
   pushToast,
@@ -60,11 +61,29 @@ describe('applyChatEvent', () => {
     expect(runtimeFor(s, S).status).toBeNull();
   });
 
-  it('ignores message events for sessions that are not loaded', () => {
+  it('does not invent a transcript for a session that is not loaded, but still counts it unread', () => {
     const s = initialState();
     const next = applyChatEvent(s, { type: 'message-added', sessionId: 'other', message: msg('x') });
-    expect(next).toBe(s);
+    // The full list is fetched when the session opens; a partial one here would be wrong.
     expect(next.messages['other']).toBeUndefined();
+    // The user still has to be told the character said something.
+    expect(next.unread['other']).toBe(1);
+    // Nothing to count for the user's own message.
+    expect(applyChatEvent(s, { type: 'message-added', sessionId: 'other', message: msg('x', '', { role: 'user' }) })).toBe(s);
+  });
+
+  it('does not mark the chat the user is watching as unread, and clears it when they open it', () => {
+    let s = loaded();
+    s = { ...s, route: 'chat', activeSessionId: S };
+    s = applyChatEvent(s, { type: 'message-added', sessionId: S, message: msg('m2', 'hi') });
+    expect(s.unread[S]).toBeUndefined();
+
+    // Reading something else: what the character says now is unread until they come back.
+    s = { ...s, route: 'settings' };
+    s = applyChatEvent(s, { type: 'message-added', sessionId: S, message: msg('m3', 'still here?') });
+    s = applyChatEvent(s, { type: 'message-added', sessionId: S, message: msg('m4', 'anyway') });
+    expect(s.unread[S]).toBe(2);
+    expect(clearUnread(s, S).unread[S]).toBeUndefined();
   });
 
   it('appends new messages and de-duplicates by id', () => {
@@ -249,6 +268,21 @@ describe('queues', () => {
     for (let i = 0; i < 10; i++) s = pushToast(s, { id: `t${i}`, kind: 'info', text: String(i) });
     expect(s.toasts.length).toBeLessThanOrEqual(4);
     expect(s.toasts.at(-1)?.id).toBe('t9');
+  });
+});
+
+describe('canRetry', () => {
+  it('needs something for the character to answer', async () => {
+    const { canRetry } = await import('../components/chat/MessageList');
+    const greeting = { ...msg('g', 'Hey there.'), role: 'assistant' as const, origin: 'greeting' as const };
+    const user = { ...msg('u', 'hello'), role: 'user' as const };
+    const reply = { ...msg('r', 'Hi!'), role: 'assistant' as const };
+    expect(canRetry(undefined)).toBe(false);
+    expect(canRetry([])).toBe(false);
+    // A fresh session showing only its greeting: nothing to regenerate a reply to.
+    expect(canRetry([greeting])).toBe(false);
+    expect(canRetry([greeting, user])).toBe(true);
+    expect(canRetry([greeting, user, reply])).toBe(true);
   });
 });
 

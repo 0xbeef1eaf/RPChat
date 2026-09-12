@@ -18,12 +18,13 @@ export function Composer({ disabled, running, onSend, onAbort, sessionKey }: Com
     ref.current?.focus();
   }, [sessionKey]);
 
-  // Grow with content up to the CSS max-height.
+  // Grow with content up to the CSS max-height (which scales with the chat zoom).
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    const max = Number.parseFloat(getComputedStyle(el).maxHeight) || 220;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
   }, [text]);
 
   const canSend = !disabled && !running && text.trim().length > 0;

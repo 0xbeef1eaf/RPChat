@@ -146,6 +146,24 @@ describe('openai message mapping', () => {
     expect(p.max_tokens).toBe(50);
     expect(p.temperature).toBe(0.2);
     expect(toOpenAiParams(request, false).tools).toBeUndefined();
+    expect(toOpenAiParams(request, true).response_format).toBeUndefined();
+  });
+
+  it('sends a response format only when the request asks for one', () => {
+    const base: LlmChatRequest = { model: 'm', system: 's', messages: transcript };
+    expect(toOpenAiParams({ ...base, responseFormat: { type: 'json_object' } }, true).response_format).toEqual({ type: 'json_object' });
+    const schema = { type: 'object', properties: { tags: { type: 'array', items: { type: 'string' } } } };
+    expect(toOpenAiParams({ ...base, responseFormat: { type: 'json_schema', name: 'media_tags', schema } }, true).response_format).toEqual({
+      type: 'json_schema',
+      json_schema: { name: 'media_tags', strict: true, schema },
+    });
+  });
+
+  it('passes the reasoning effort through, including the Ollama-only levels', () => {
+    const base: LlmChatRequest = { model: 'm', system: 's', messages: transcript };
+    expect(toOpenAiParams(base, true).reasoning_effort).toBeUndefined();
+    expect(toOpenAiParams({ ...base, reasoningEffort: 'none' }, true).reasoning_effort).toBe('none');
+    expect(toOpenAiParams({ ...base, reasoningEffort: 'high' }, true).reasoning_effort).toBe('high');
   });
 });
 

@@ -6,10 +6,12 @@ interface ModalProps {
   /** Called on Escape / backdrop click. Omit to make the modal non-dismissable. */
   onClose?: () => void;
   labelledBy?: string;
+  /** Extra classes on the dialog box, e.g. `modal-wide`. */
+  className?: string;
 }
 
 /** Accessible dialog: traps initial focus, closes on Escape, restores focus when unmounted. */
-export function Modal({ title, children, onClose }: ModalProps) {
+export function Modal({ title, children, onClose, className }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -33,7 +35,7 @@ export function Modal({ title, children, onClose }: ModalProps) {
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={ref}>
+      <div className={className ? `modal ${className}` : 'modal'} role="dialog" aria-modal="true" aria-label={title} ref={ref}>
         <h2>{title}</h2>
         {children}
       </div>

@@ -145,8 +145,13 @@ export function luaPlacementCommand(placement: LuaPlacement, address: string): s
 function propLines(opacity?: number, clickThrough?: boolean): string[] {
   const out: string[] = [];
   if (opacity !== undefined) {
-    out.push(dispatch(`set_prop({ window = w, prop = "opacity", value = ${propValue(clampOpacity(opacity))} })`));
+    // `opacity_inactive` as well: an overlay is never focused, so without it the compositor's
+    // inactive opacity dims a window the pack asked to be fully opaque (see `opacityCommands`).
+    const value = propValue(clampOpacity(opacity));
+    out.push(dispatch(`set_prop({ window = w, prop = "opacity", value = ${value} })`));
     out.push(dispatch('set_prop({ window = w, prop = "opacity_override", value = 1 })'));
+    out.push(dispatch(`set_prop({ window = w, prop = "opacity_inactive", value = ${value} })`));
+    out.push(dispatch('set_prop({ window = w, prop = "opacity_inactive_override", value = 1 })'));
   }
   if (clickThrough !== undefined) out.push(dispatch(`set_prop({ window = w, prop = "no_focus", value = ${propValue(clickThrough)} })`));
   return out;

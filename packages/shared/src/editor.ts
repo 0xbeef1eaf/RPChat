@@ -1,4 +1,5 @@
 import type { BehaviourHook } from './capability.js';
+import type { LlmReasoningEffort } from './llm.js';
 import type { AssetEntry, CharacterDefinition, MediaManifest, PackManifest, TagSummary } from './pack.js';
 
 /** A pack folder open for editing (lives in the workspace dir or anywhere the user chose). */
@@ -72,9 +73,84 @@ export interface SaveCharacterInput {
   behaviours: Partial<Record<BehaviourHook, string>>;
 }
 
+/**
+ * One problem in a behaviour script, from compiling it exactly as the sandbox will. `line`/`column`
+ * are 1-based and relative to the script the author is looking at.
+ */
+export interface ScriptProblem {
+  message: string;
+  line?: number;
+  column?: number;
+  /** The offending line, as the compiler saw it. */
+  lineText?: string;
+}
+
 /** Hook script templates offered by the editor. */
 export interface BehaviourTemplate {
   hook: BehaviourHook;
   title: string;
   source: string;
+}
+
+/**
+ * How a tag suggestion was made: the model saw the image itself, a frame grabbed from a video,
+ * the file's text, or only its name and folder (audio and undecodable files).
+ */
+export type MediaTagBasis = 'image' | 'frame' | 'text' | 'filename';
+
+/** Options for one auto-tagging run (pack editor → vision model, e.g. qwen3-vl on Ollama). */
+export interface TagMediaOptions {
+  /** Provider to call; default: the app's default provider. Must be vision-capable for images. */
+  providerId?: string;
+  /** Model override, e.g. `qwen3-vl:8b`. Default: the provider's model. */
+  model?: string;
+  /** Most tags to suggest per asset (1..20). Default 6. */
+  maxTags?: number;
+  /** Only suggest tags the pack already uses or documents. Default false. */
+  vocabularyOnly?: boolean;
+  /** Extra guidance from the author ("a noir detective pack; tag by mood"). */
+  guidance?: string;
+  /**
+   * Ask the provider to constrain the answer to the tag schema (`response_format`) instead of
+   * only describing it in the prompt. Off by default: OpenAI-compatible servers support it, but
+   * not all of them. Worth turning on for a reasoning model, which otherwise thinks past its
+   * token budget without ever answering.
+   */
+  jsonSchema?: boolean;
+  /**
+   * How much the model may think first. `none` turns a local reasoning model from unusable
+   * (thousands of tokens of deliberation, no answer) into a fast one — when its template
+   * supports the switch; Qwen3.5 does, Qwen3-VL does not.
+   */
+  reasoningEffort?: LlmReasoningEffort;
+  /**
+   * Tags and meanings coined earlier in the same run. The editor tags one asset per call, so
+   * without this every asset is tagged against `media.json` as it stood when the run started and
+   * the model coins `cosy`, `cozy` and `snug` for one idea. (A multi-asset call carries its own
+   * answers forward by itself.)
+   */
+  learned?: { tags?: string[]; vocabulary?: Record<string, string> };
+  /**
+   * Base64 PNG frames (no `data:` prefix) for assets main cannot decode itself, by asset path.
+   * The renderer grabs these from `<video>` elements.
+   */
+  frames?: Record<string, string>;
+}
+
+/** What the model suggested for one asset. Nothing is written: the editor applies these to its draft. */
+export interface MediaTagSuggestion {
+  path: string;
+  /** Normalised, deduplicated, capped at `maxTags`; folder tags are left out (they apply anyway). */
+  tags: string[];
+  /** Subset of `tags` the pack does not use or document yet. */
+  newTags: string[];
+  /** One line for `media.json`, at most 200 characters. Empty when the model gave none. */
+  description: string;
+  /** Meanings for `newTags`, for the tag vocabulary table. */
+  vocabulary: Record<string, string>;
+  basis: MediaTagBasis;
+  /** Model that answered, as reported by the provider. */
+  model?: string;
+  /** Set when this asset could not be tagged; `tags` and `description` are then empty. */
+  error?: string;
 }

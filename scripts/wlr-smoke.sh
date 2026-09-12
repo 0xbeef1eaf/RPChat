@@ -45,12 +45,15 @@ cd "$ROOT/apps/desktop"
 # process probe Wayland/DRM and the window never paints); the helper gets the compositor via RP_OVERLAY_*.
 env -u WAYLAND_DISPLAY DISPLAY="$XDISPLAY" RP_OVERLAY_WAYLAND_DISPLAY="$WL" RP_OVERLAY_XDG_RUNTIME_DIR="$RUNTIME" \
 RP_OVERLAY_HELPER="$HELPER" RP_MOCK_LLM=1 RP_SMOKE=1 RP_USER_DATA="$USERDATA" RP_SCREENSHOT_DIR="$OUT" \
-  timeout "${RP_SMOKE_SECONDS:-60}" ./node_modules/.bin/electron --no-sandbox --ozone-platform=x11 out/main/index.js >"$OUT/app.log" 2>&1 &
+  timeout "${RP_SMOKE_SECONDS:-90}" ./node_modules/.bin/electron --no-sandbox --ozone-platform=x11 out/main/index.js >"$OUT/app.log" 2>&1 &
 APP_PID=$!
+# The mock turn's image closes itself 20 s after it is shown, so the compositor captures happen
+# as soon as the window captures are done — before the prompt-window check, which follows them.
 for _ in $(seq 1 100); do grep -q "\[smoke\] screenshots done" "$OUT/app.log" 2>/dev/null && break; sleep 0.5; done
 
 G() { XDG_RUNTIME_DIR="$RUNTIME" WAYLAND_DISPLAY="$WL" grim "$@"; }
 G "$OUT/00-compositor-a.png"; sleep 0.5; G "$OUT/00-compositor-b.png"
+for _ in $(seq 1 40); do grep -q "\[smoke\] smoke done" "$OUT/app.log" 2>/dev/null && break; sleep 0.5; done
 kill "$APP_PID" 2>/dev/null
 
 echo "--- app log"; grep -E "\[(smoke|display|error)\]" "$OUT/app.log" | cut -c1-170

@@ -1,10 +1,16 @@
-/** `sdk.ui`: OS notifications, and confirm/choose modals answered in the main window. */
+/** `sdk.ui`: OS notifications, and confirm/choose/ask questions answered in a window of their own. */
 import { randomUUID } from 'node:crypto';
 import { BrowserWindow, Notification, dialog } from 'electron';
 import type { ActionContext, CapabilityHandler, Json, UiPromptAnswer, UiPromptRequest } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import type { Logger } from '@rp/core';
 import type { PendingPrompts } from '../prompts.js';
+
+/**
+ * How much of the user's attention a notification asks for. Linux (libnotify) honours all three;
+ * Windows honours the "stays until dismissed" part; macOS decides for itself.
+ */
+export type NotificationUrgency = 'low' | 'normal' | 'critical';
 
 export const NOTIFY_TITLE_MAX = 100;
 export const NOTIFY_BODY_MAX = 300;
@@ -14,12 +20,12 @@ export const NOTIFICATIONS_UNSUPPORTED_MESSAGE = 'OS notifications are not suppo
 
 export interface UiHandlerDeps {
   prompts: PendingPrompts<UiPromptAnswer>;
-  /** Deliver a prompt to the main window; false when there is no window. */
+  /** Deliver a question to a window (its own, or the main window's modal); false when none could. */
   deliver(request: UiPromptRequest): boolean;
   characterName(context: ActionContext): string;
   logger: Logger;
   /** Injectable for tests. */
-  notify?: (title: string, body: string) => void;
+  notify?: (title: string, body: string, urgency: NotificationUrgency) => void;
   /** Native pickers (Electron `dialog`); injectable for tests. */
   pickFiles?: (opts: { title?: string; filters?: Array<{ name: string; extensions: string[] }>; multiple?: boolean }) => Promise<string[] | null>;
   pickFolder?: (opts: { title?: string }) => Promise<string | null>;
@@ -42,7 +48,8 @@ export class UiHandler implements CapabilityHandler {
         const title = clip(args[0], NOTIFY_TITLE_MAX, 'title');
         if (title.length === 0) throw new RpError('INVALID_ARGUMENT', 'title must not be empty');
         const body = args[1] === undefined || args[1] === null ? '' : clip(args[1], NOTIFY_BODY_MAX, 'body');
-        this.notify(title, body);
+        const opts = (args[2] && typeof args[2] === 'object' && !Array.isArray(args[2]) ? args[2] : {}) as Record<string, unknown>;
+        this.notify(title, body, urgencyOf(opts['urgency']));
         return;
       }
       case 'confirm': {
@@ -103,16 +110,16 @@ export class UiHandler implements CapabilityHandler {
     }
   }
 
-  private notify(title: string, body: string): void {
+  private notify(title: string, body: string, urgency: NotificationUrgency): void {
     if (this.deps.notify) {
-      this.deps.notify(title, body);
+      this.deps.notify(title, body, urgency);
       return;
     }
     if (!Notification.isSupported()) {
       this.deps.logger.info(`[ui] notification (unsupported here): ${title} — ${body}`);
       throw new RpError('CAPABILITY_FAILED', NOTIFICATIONS_UNSUPPORTED_MESSAGE);
     }
-    new Notification({ title, body, silent: false }).show();
+    new Notification({ title, body, ...notificationOptions(urgency) }).show();
   }
 
   private ask(partial: Pick<UiPromptRequest, 'kind' | 'question' | 'options' | 'placeholder' | 'defaultValue' | 'multiline'>, context: ActionContext): Promise<UiPromptAnswer> {
@@ -124,6 +131,20 @@ export class UiHandler implements CapabilityHandler {
     };
     return this.deps.prompts.ask(request.promptId, () => this.deps.deliver(request));
   }
+}
+
+/** An unknown or missing urgency is `normal`: a character cannot make itself louder by typos. */
+export function urgencyOf(value: unknown): NotificationUrgency {
+  return value === 'low' || value === 'critical' ? value : 'normal';
+}
+
+/**
+ * Map an urgency onto Electron's notification options. `critical` also keeps the notification
+ * on screen until the user dismisses it (`timeoutType: 'never'`), which is what makes it worth
+ * having; `low` is silent, so a character can leave a note without making a sound.
+ */
+export function notificationOptions(urgency: NotificationUrgency): { urgency: NotificationUrgency; silent: boolean; timeoutType: 'default' | 'never' } {
+  return { urgency, silent: urgency === 'low', timeoutType: urgency === 'critical' ? 'never' : 'default' };
 }
 
 async function defaultPickFiles(opts: { title?: string; filters?: Array<{ name: string; extensions: string[] }>; multiple?: boolean }): Promise<string[] | null> {

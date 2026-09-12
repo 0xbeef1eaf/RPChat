@@ -36,6 +36,16 @@ if (audios[0]) {
 }
 return result;`;
 
+/**
+ * The smoke run's second turn: a question the user answers in a prompt window of its own. Sent
+ * as a user message so the whole path is exercised (model → action → sdk.ui.confirm → window →
+ * answer → action result).
+ */
+export const PROMPT_SMOKE_MESSAGE = 'ask me something';
+
+const ASK_CODE = `const answered = await sdk.ui.confirm("Shall I keep the picture up a little longer?");
+return { answered };`;
+
 /** Last message carries a tool result → this is the second round of the turn. */
 export function lastMessageHasToolResult(request: LlmChatRequest): boolean {
   const last = request.messages[request.messages.length - 1];
@@ -50,12 +60,15 @@ export function mockTurnFor(request: LlmChatRequest): MockTurn {
   const lastUser = [...request.messages].reverse().find((m) => m.role === 'user');
   const text = lastUser?.content.find((p) => p.type === 'text');
   const echo = text && text.type === 'text' ? text.text.trim().slice(0, 80) : '';
+  const asking = echo.toLowerCase().startsWith(PROMPT_SMOKE_MESSAGE);
+  const code = asking ? ASK_CODE : SHOW_IMAGE_CODE;
+  const purpose = asking ? 'ask the user a yes/no question' : 'show a picture from the pack';
   if (!request.tools || request.tools.length === 0) {
-    return { text: `Mock reply${echo ? ` to "${echo}"` : ''}.\n\n\`\`\`action\n${SHOW_IMAGE_CODE}\n\`\`\`` };
+    return { text: `Mock reply${echo ? ` to "${echo}"` : ''}.\n\n\`\`\`action\n${code}\n\`\`\`` };
   }
   return {
-    text: echo ? `You said "${echo}". Let me show you something.` : 'Let me show you something.',
-    toolCalls: [{ name: 'run_action', input: { purpose: 'show a picture from the pack', code: SHOW_IMAGE_CODE } }],
+    text: asking ? 'Let me ask you something.' : echo ? `You said "${echo}". Let me show you something.` : 'Let me show you something.',
+    toolCalls: [{ name: 'run_action', input: { purpose, code } }],
   };
 }
 
@@ -181,11 +194,96 @@ export async function runSmokeTurn(engine: Engine, logger: Logger, mediaList: ()
     const messages = await engine.sessions.messages(session.id);
     logger.info(`[smoke] transcript: ${messages.map((m) => `${m.role}: ${m.content.replace(/\s+/g, ' ').slice(0, 60)}`).join(' | ')}`);
     if (prepareTour) await prepareTour().catch((err: unknown) => logger.warn('[smoke] tour preparation failed', err));
+    // The media checks come first and on their own clock: the mock turn's image closes itself
+    // after 20 s, so nothing slower may run before the tour and the compositor captures.
     await captureWindows(logger, mediaList);
+    await verifyPromptWindow(engine, session.id, logger);
+    logger.info('[smoke] smoke done');
   } catch (err) {
     logger.error('[smoke] turn failed', err);
   } finally {
     off();
+  }
+}
+
+/** The window a `sdk.ui` question or a permission request opened (`prompt.html`). */
+function promptWindow(): BrowserWindow | undefined {
+  return BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && (w.getTitle().endsWith(' asks') || w.getTitle().endsWith(' needs permission')));
+}
+
+/** Never let a smoke step hang on a turn that is waiting for an answer nobody will give. */
+async function settledWithin<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Prove a character's question reaches the user in a window of its own and that answering it
+ * there gets back into the action: send a message the mock model answers with `sdk.ui.confirm`,
+ * wait for the window, screenshot it, click Yes in it, and check what the action returned.
+ * The turn is deliberately not awaited first — it cannot finish until the question is answered.
+ */
+export async function verifyPromptWindow(engine: Engine, sessionId: string, logger: Logger, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  let returned: unknown = null;
+  const off = engine.events.on('chat', (ev) => {
+    if (ev.type === 'action-finished') returned = ev.action.result?.returnValue ?? null;
+  });
+  const turn = engine.chat.send(sessionId, PROMPT_SMOKE_MESSAGE).catch((err: unknown) => logger.warn('[smoke] prompt turn failed', err));
+  try {
+    // Wait for the window to be on screen, not merely constructed: a compositor that has not
+    // mapped it yet refuses to capture it.
+    let win: BrowserWindow | undefined;
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      win = promptWindow();
+      if (win?.isVisible()) break;
+    }
+    if (!win) {
+      logger.error('[smoke] verify prompt: FAIL (no prompt window opened for sdk.ui.confirm)');
+      return;
+    }
+    const bounds = win.getBounds();
+    logger.info(`[smoke] prompt window "${win.getTitle()}" ${bounds.width}x${bounds.height} visible=${win.isVisible()} focused=${win.isFocused()} onTop=${win.isAlwaysOnTop()}`);
+    const dir = env.RP_SCREENSHOT_DIR;
+    if (dir) {
+      // Diagnostics: a capture the compositor refuses must not cost us the check itself.
+      try {
+        await fs.promises.mkdir(dir, { recursive: true });
+        const file = path.join(dir, '00-prompt-window.png');
+        await fs.promises.writeFile(file, (await win.webContents.capturePage()).toPNG());
+        logger.info(`[smoke] screenshot ${file}`);
+      } catch (err) {
+        logger.warn('[smoke] prompt window capture failed', err);
+      }
+    }
+    const question = String(await win.webContents.executeJavaScript(`(() => document.querySelector('.prompt-card p')?.textContent ?? '')()`, true));
+    // Answering destroys the window, which can leave this call's reply promise pending for
+    // good — so bound it and judge the click by what the action got back, not by its result.
+    const clicked = await settledWithin(
+      win.webContents
+        .executeJavaScript(`(() => { const b = [...document.querySelectorAll('button')].find(x => x.textContent.trim() === 'Yes'); b?.click(); return Boolean(b); })()`, true)
+        .catch(() => undefined),
+      3_000,
+    );
+    await settledWithin(turn, 10_000);
+    const answered = Boolean(returned && typeof returned === 'object' && (returned as { answered?: unknown }).answered === true);
+    const ok = answered && question.length > 0;
+    logger[ok ? 'info' : 'error'](
+      `[smoke] verify prompt: ${ok ? 'PASS' : 'FAIL'} (question="${question.slice(0, 60)}", clickedYes=${clicked ?? 'window closed before it replied'}, actionReturned=${JSON.stringify(returned)})`,
+    );
+  } catch (err) {
+    logger.error('[smoke] verify prompt: FAIL', err);
+  } finally {
+    off();
+    // An unanswered question would otherwise hold this for the host-call timeout (10 minutes).
+    await settledWithin(turn, 10_000);
   }
 }
 

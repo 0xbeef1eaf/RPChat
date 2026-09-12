@@ -20,8 +20,12 @@ export function Sidebar() {
   const sessions = useAppState((s) => s.sessions);
   const activeSessionId = useAppState((s) => s.activeSessionId);
   const runtime = useAppState((s) => s.runtime);
+  const unread = useAppState((s) => s.unread);
   const appVersion = useAppState((s) => s.appVersion);
   const pendingPermissions = useAppState((s) => s.permissionRequests.length);
+
+  // What the character said while the user was on another view — the Chat entry carries the total.
+  const unreadTotal = useMemo(() => Object.values(unread).reduce((sum, n) => sum + n, 0), [unread]);
 
   const characterByRef = useMemo(() => new Map(characters.map((c) => [c.ref, c])), [characters]);
 
@@ -41,6 +45,11 @@ export function Sidebar() {
           >
             {n.label}
             {n.route === 'chat' && pendingPermissions > 0 ? <span className="badge badge-warning">{pendingPermissions}</span> : null}
+            {n.route === 'chat' && route !== 'chat' && unreadTotal > 0 ? (
+              <span className="badge badge-accent" title={`${unreadTotal} new message(s) while you were elsewhere`}>
+                {unreadTotal}
+              </span>
+            ) : null}
           </button>
         ))}
       </nav>
@@ -90,6 +99,7 @@ export function Sidebar() {
             sessions.map((s) => {
               const c = characterByRef.get(s.characterRef);
               const running = runtime[s.id]?.turnId != null;
+              const unseen = unread[s.id] ?? 0;
               return (
                 <button
                   key={s.id}
@@ -103,6 +113,11 @@ export function Sidebar() {
                     <span className="item-title">{s.title}</span>
                     <span className="item-sub">{s.lastMessagePreview ?? c?.name ?? s.characterRef}</span>
                   </div>
+                  {unseen > 0 ? (
+                    <span className="badge badge-accent" title={`${unseen} message(s) you have not read`}>
+                      {unseen}
+                    </span>
+                  ) : null}
                   {running ? <span className="spinner" /> : <span className="item-meta">{formatRelative(s.updatedAt)}</span>}
                 </button>
               );

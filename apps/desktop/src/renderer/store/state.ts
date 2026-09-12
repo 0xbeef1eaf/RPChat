@@ -69,6 +69,11 @@ export interface AppState {
   settings: AppSettings | null;
   /** Dotted settings paths forced by the system policy (`settings.managed()`). */
   managed: string[];
+  /**
+   * Messages that arrived in a session while the user was looking at something else, per
+   * session. Cleared when that chat is opened; the sidebar shows the count.
+   */
+  unread: Record<SessionId, number>;
   /** FIFO queues; the first entry is the one being shown. */
   permissionRequests: PermissionRequest[];
   uiPrompts: UiPromptRequest[];
@@ -108,6 +113,7 @@ export function initialState(): AppState {
     runtime: {},
     settings: null,
     managed: [],
+    unread: {},
     permissionRequests: [],
     uiPrompts: [],
     toasts: [],

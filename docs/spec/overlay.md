@@ -105,7 +105,7 @@ Window identification: each overlay `BrowserWindow` gets a unique title `rp-over
 | float + placement | `dispatch setfloating address:0x…`; `dispatch movewindowpixel exact X Y,address:0x…`; `dispatch resizewindowpixel exact W H,address:0x…` (X/Y are global logical coordinates from `j/monitors`) |
 | layer `overlay`/`top` | `dispatch pin address:0x…` (visible on all workspaces) + `dispatch alterzorder top,address:0x…` |
 | layer `bottom`/`background` | `dispatch alterzorder bottom,address:0x…` (below other floating windows; tiled windows still cover it — document this limitation; `pin` only for `background` so it follows workspaces like a wallpaper) |
-| opacity | `dispatch setprop address:0x… alpha <v>` and `alphaoverride 1` (fall back to legacy `setprop address:0x… alpha <v> lock` when the dispatcher form returns an error); plus CSS opacity |
+| opacity | `dispatch setprop address:0x… alpha <v>` and `alphaoverride 1`, then `alphainactive <v>` and `alphainactiveoverride 1` — an overlay is shown `nofocus`, so without the inactive pair `decoration:inactive_opacity` (or an `opacity <active> <inactive>` rule) dims it (fall back to legacy `setprop address:0x… alpha <v> lock` and `alphainactive <v> lock` when the dispatcher form returns an error); plus CSS opacity |
 | click-through | `dispatch setprop address:0x… nofocus 1` (never takes focus) + Electron `setIgnoreMouseEvents(true)`; report `supports.clickThrough = true` |
 | chrome | `setprop noborder 1`, `noshadow 1`, `noblur 1`, `nodim 1`, `norounding 1`, `noanim 1` |
 | monitor | `dispatch movewindow mon:<name>,address:…` before placement when the target monitor differs |
@@ -122,7 +122,7 @@ From 0.5x a Hyprland whose config is Lua (`hyprland.lua`) refuses the legacy com
 | float / pin | `dispatch setfloating`, `dispatch pin` (set) | `hl.dsp.window.float/pin` are **toggles**: guard with `if not w.floating`, `if w.pinned ~= <wanted>` |
 | geometry | `resizewindowpixel exact`, `movewindowpixel exact`, `movewindow mon:` | `hl.dsp.window.resize({ x, y, window })` then `move({ x, y, monitor, window })` — absolute layout coordinates |
 | chrome | `setprop noborder/norounding/nodim 1` | rule fields `border_size = 0`, `rounding = 0`, `decorate = false`, `no_anim`, `no_blur`, `no_dim`, `no_shadow`, `no_max_size`, `no_initial_focus`, `suppress_event = "maximize"` |
-| opacity | `setprop alpha <v>` + `alphaoverride 1` | `set_prop({ window = w, prop = "opacity", value = <v> })` + `opacity_override` |
+| opacity | `setprop alpha <v>` + `alphaoverride 1`, and the same pair for `alphainactive` | `set_prop({ window = w, prop = "opacity", value = <v> })` + `opacity_override`, and the same for `opacity_inactive` |
 | click-through | `setprop nofocus 1` | `set_prop({ window = w, prop = "no_focus", value = 1 })` — `value` takes a number or string, **never** a Lua boolean |
 
 One `eval` carries the whole placement (window lookup by `x.address`, then the dispatches), so a placement is one round trip and Lua reports each failed line in the answer. Rule handles are kept in the Lua global `__rp_overlay_rules`: re-registering disables the previous ones (no duplicates after a reload) and `dispose()` disables them, so an IPC-only session leaves nothing behind. Z-order among overlays follows `pin` (a pinned window draws above unpinned floating ones); `bring_to_top` is sent for `top`/`overlay` as a best effort and `bottom`/`background` stay emulated, as `info()` already reports.
@@ -172,6 +172,6 @@ All three templates are editable in **Settings → Commands** (renderer): comman
 
 ## 4. Media window additions
 
-- Renderer applies `options.opacity` as CSS opacity on the item and stops treating clicks as "close" when `options.clickThrough` is true.
+- Renderer applies `options.opacity` as CSS opacity on the item and stops treating clicks as "close" when `options.clickThrough` is true, or when an image has a `durationMs` — it closes itself, and a click on it is more likely the user carrying on with their work (`closesOnClick`).
 - After rendering an item the media window reports its content size: `MediaWindowEvent` gains `{ type: 'content-size'; id; width; height }` (added to `@rp/shared/media.ts`); main uses it to size the window when no explicit `width`/`height` was given, then re-applies placement.
 - `update` command: `{ type: 'update'; id; options: OverlayUpdate }` — the renderer applies only `opacity`/`width`/`height`/`clickThrough` visually; everything else is handled by the backend.

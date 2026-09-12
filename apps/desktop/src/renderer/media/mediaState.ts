@@ -119,6 +119,19 @@ export function applyUpdate(entry: MediaEntry, patch: OverlayUpdate): MediaEntry
   return { ...entry, options: { ...entry.options, ...visual } } as MediaEntry;
 }
 
+/**
+ * Whether clicking an overlay dismisses it. A timed image closes itself when `durationMs` elapses,
+ * and a click landing on it in the meantime is far more likely to be the user getting on with their
+ * work than asking for it to go — so a duration takes click-to-close off. Click-through overlays
+ * take no clicks at all, and audio has its own stop button.
+ */
+export function closesOnClick(entry: MediaEntry): boolean {
+  if (entry.kind === 'audio') return false;
+  if (entry.options.clickThrough) return false;
+  // Same condition as the auto-close timer in MediaItemView, so the two cannot disagree.
+  return !(entry.kind === 'image' && Boolean(entry.options.durationMs));
+}
+
 /** CSS opacity for an item container: clamp to 0..1, default 1. */
 export function effectiveOpacity(opacity: number | undefined): number {
   if (opacity === undefined || !Number.isFinite(opacity)) return 1;

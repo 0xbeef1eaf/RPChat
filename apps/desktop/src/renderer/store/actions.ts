@@ -4,12 +4,15 @@
  * API directly except for one-off reads that do not touch shared state.
  */
 import type { CharacterRef, PackInspection, PermissionDecision, Session, SessionId, UiPromptAnswer } from '@rp/shared';
+import { clampChatZoom } from '@rp/shared';
 import { api, errorMessage } from '../api';
 import { truncate } from '../lib/format';
+import { applyTheme } from '../lib/theme';
 import { newId } from '../lib/ids';
 import {
   applyChatEvent,
   clearExchanges,
+  clearUnread,
   closeMemoriesPanel,
   openMemoriesPanel,
   dequeuePermissionRequest,
@@ -46,18 +49,14 @@ export function navigate(route: RouteName): void {
   update((s) => {
     if (s.route === route) return s;
     const editor = route === 'editor' && !s.editor.visited ? { ...s.editor, visited: true } : s.editor;
-    return { ...s, route, editor };
+    const next = { ...s, route, editor };
+    // Coming back to the chat is reading it.
+    return route === 'chat' && next.activeSessionId ? clearUnread(next, next.activeSessionId) : next;
   });
 }
 
 export function setEditorLocation(patch: Partial<Omit<AppState['editor'], 'visited'>>): void {
   update((s) => ({ ...s, editor: { ...s.editor, ...patch } }));
-}
-
-export function applyTheme(theme: 'system' | 'light' | 'dark'): void {
-  const root = document.documentElement;
-  if (theme === 'system') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', theme);
 }
 
 export async function refreshSettings(): Promise<void> {
@@ -102,6 +101,24 @@ function scheduleSessionsRefresh(): void {
   }, 250);
 }
 
+/**
+ * Tell main which conversation is on screen, whenever that changes. Main decides from it whether
+ * a character speaking on its own initiative deserves a desktop notification: being in the app
+ * with Settings open is not the same as watching that chat.
+ */
+function watchVisibleSession(): void {
+  let reported: string | null | undefined;
+  const push = (): void => {
+    const state = appStore.getState();
+    const visible = state.route === 'chat' ? state.activeSessionId : null;
+    if (visible === reported) return;
+    reported = visible;
+    void api().app.setVisibleSession(visible).catch((err: unknown) => console.warn('app.setVisibleSession failed', err));
+  };
+  appStore.subscribe(push);
+  push();
+}
+
 /** Load everything the shell needs and wire the push channels. Idempotent per page load. */
 let booted = false;
 export async function bootstrap(): Promise<void> {
@@ -118,6 +135,9 @@ export async function bootstrap(): Promise<void> {
       toast('info', `remembered: ${truncate(event.memory.text, 90)}`, 4500);
     }
   });
+  // A notification about a character's unprompted message opens that conversation.
+  rp.app.onShowSession((sessionId) => void openSession(sessionId));
+  watchVisibleSession();
   rp.permissions.onRequest((request) => update((s) => enqueuePermissionRequest(s, request)));
   rp.ui.onPrompt((request) => update((s) => enqueueUiPrompt(s, request)));
 
@@ -130,7 +150,7 @@ export async function bootstrap(): Promise<void> {
 }
 
 export async function openSession(sessionId: SessionId): Promise<void> {
-  update((s) => ({ ...s, activeSessionId: sessionId, route: 'chat' }));
+  update((s) => clearUnread({ ...s, activeSessionId: sessionId, route: 'chat' }, sessionId));
   if (appStore.getState().messages[sessionId]) return;
   try {
     const messages = await api().sessions.messages(sessionId);
@@ -213,11 +233,39 @@ export async function sendMessage(sessionId: SessionId, text: string): Promise<v
   }
 }
 
+/** Throw away the character's last reply and ask for another one from the same history. */
+export async function retryTurn(sessionId: SessionId): Promise<void> {
+  try {
+    await api().chat.retry(sessionId);
+  } catch (err) {
+    reportError('Retry failed', err);
+  }
+}
+
 export async function abortTurn(sessionId: SessionId): Promise<void> {
   try {
     await api().chat.abort(sessionId);
   } catch (err) {
     reportError('Abort failed', err);
+  }
+}
+
+/**
+ * Change the chat text scale and remember it. The store is updated first so the transcript
+ * resizes on the keypress rather than a settings round-trip later; a write that fails puts the
+ * old scale back, so what is on screen is always what is stored.
+ */
+export async function setChatZoom(zoom: number): Promise<void> {
+  const chatZoom = clampChatZoom(zoom);
+  const before = appStore.getState().settings;
+  if (!before || before.chatZoom === chatZoom) return;
+  update((s) => (s.settings ? { ...s, settings: { ...s.settings, chatZoom } } : s));
+  try {
+    const next = await api().settings.update({ chatZoom });
+    update((s) => ({ ...s, settings: next }));
+  } catch (err) {
+    update((s) => (s.settings ? { ...s, settings: { ...s.settings, chatZoom: before.chatZoom } } : s));
+    reportError('Could not save the chat text size', err);
   }
 }
 

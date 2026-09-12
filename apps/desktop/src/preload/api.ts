@@ -17,25 +17,26 @@ type Namespaces = keyof IpcApi;
 
 /** Every request/response method, per namespace (event subscriptions are listed in `EVENT_METHODS`). */
 export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] & string> } = {
-  app: ['version', 'windowKind', 'openPath'],
+  app: ['version', 'windowKind', 'openPath', 'setVisibleSession'],
   packs: ['list', 'pickInstallSource', 'inspect', 'install', 'uninstall', 'setGrant', 'exportPack'],
   capabilities: ['list', 'typings'],
   characters: ['list', 'status'],
   events: ['list', 'remove'],
   senses: ['snapshot'],
   sessions: ['list', 'create', 'get', 'update', 'remove', 'messages', 'removeMessage', 'clearMessages', 'resetState'],
-  chat: ['send', 'abort'],
+  chat: ['send', 'retry', 'abort'],
   permissions: ['respond'],
   settings: ['get', 'managed', 'update', 'testProvider', 'listModels', 'testCommand', 'defaultCommands'],
   audit: ['list'],
   memories: ['list', 'add', 'update', 'remove', 'consolidate'],
+  prompts: ['pending'],
   ui: ['respondPrompt'],
   system: ['status', 'install', 'setAutostart', 'installerPath', 'createPolicy', 'policyTemplate'],
   updates: ['status', 'check', 'download', 'install', 'setToken'],
   plugins: ['pluginsDir', 'list', 'install', 'remove', 'setEnabled', 'reload', 'openFolder'],
   editor: [
     'workspaceDir', 'listProjects', 'create', 'open', 'importInstalled', 'forget', 'read', 'saveManifest', 'addCharacter', 'saveCharacter', 'removeCharacter',
-    'pickAvatar', 'pickExpression', 'addMedia', 'addMediaFiles', 'removeMedia', 'saveMediaManifest', 'saveReadme', 'validate', 'exportPack', 'installToApp',
+    'pickAvatar', 'pickExpression', 'addMedia', 'addMediaFiles', 'removeMedia', 'saveMediaManifest', 'suggestMediaTags', 'saveReadme', 'validate', 'checkScript', 'exportPack', 'installToApp',
     'revealInFolder', 'behaviourTemplates',
   ],
   media: ['report', 'closeAll'],
@@ -44,6 +45,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
 
 /** `namespace.method` → push channel. */
 export const EVENT_METHODS: { [K in Namespaces]?: Partial<Record<keyof IpcApi[K] & string, string>> } = {
+  app: { onShowSession: IPC_EVENT_CHANNELS.showSession },
   chat: { onEvent: IPC_EVENT_CHANNELS.chatEvent },
   permissions: { onRequest: IPC_EVENT_CHANNELS.permissionRequest },
   ui: { onPrompt: IPC_EVENT_CHANNELS.uiPrompt },

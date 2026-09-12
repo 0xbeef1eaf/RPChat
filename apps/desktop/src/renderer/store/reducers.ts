@@ -50,6 +50,28 @@ function upsertAction(actions: ActionRecord[] | undefined, action: ActionRecord)
   return upsertById(actions ?? [], action);
 }
 
+/** True while the user is looking at this session's chat, so its messages need no unread mark. */
+export function isWatching(state: AppState, sessionId: SessionId): boolean {
+  return state.route === 'chat' && state.activeSessionId === sessionId;
+}
+
+/**
+ * Count a message the user has not seen. Only what the character says counts: the user's own
+ * messages are theirs, and system notes (self-wake prompts) are not shown at all.
+ */
+export function markUnread(state: AppState, sessionId: SessionId, message: ChatMessage): AppState {
+  if (message.role !== 'assistant' || isWatching(state, sessionId)) return state;
+  return { ...state, unread: { ...state.unread, [sessionId]: (state.unread[sessionId] ?? 0) + 1 } };
+}
+
+/** Everything in this session has been seen. */
+export function clearUnread(state: AppState, sessionId: SessionId): AppState {
+  if (!(sessionId in state.unread)) return state;
+  const unread = { ...state.unread };
+  delete unread[sessionId];
+  return { ...state, unread };
+}
+
 /**
  * Apply one streaming chat event. Events for sessions whose messages have not
  * been loaded are ignored (the full list is fetched when the session opens);
@@ -69,9 +91,12 @@ export function applyChatEvent(state: AppState, event: ChatEvent): AppState {
     case 'error':
       return patchRuntime(state, event.sessionId, { error: event.error, turnId: null });
     case 'message-added': {
-      const list = state.messages[event.sessionId];
-      if (!list) return state;
-      return { ...state, messages: { ...state.messages, [event.sessionId]: upsertById(list, event.message) } };
+      // Counted whether or not the transcript is loaded: an unprompted message in a session the
+      // user is not watching is exactly the one they need to be told about.
+      const next = markUnread(state, event.sessionId, event.message);
+      const list = next.messages[event.sessionId];
+      if (!list) return next;
+      return { ...next, messages: { ...next.messages, [event.sessionId]: upsertById(list, event.message) } };
     }
     case 'message-updated': {
       const list = state.messages[event.sessionId];
@@ -92,7 +117,8 @@ export function applyChatEvent(state: AppState, event: ChatEvent): AppState {
     }
     case 'messages-cleared': {
       const runtime = state.runtime[event.sessionId];
-      const next = { ...state, messages: { ...state.messages, [event.sessionId]: [] } };
+      const cleared = clearUnread(state, event.sessionId);
+      const next = { ...cleared, messages: { ...cleared.messages, [event.sessionId]: [] } };
       return runtime ? patchRuntime(next, event.sessionId, { turnId: null, error: null, eventMarkers: [], exchanges: [] }) : next;
     }
     case 'memory-added':
@@ -154,11 +180,13 @@ export function upsertSession(state: AppState, session: Session): AppState {
 export function removeSession(state: AppState, sessionId: SessionId): AppState {
   const { [sessionId]: _dropped, ...messages } = state.messages;
   const { [sessionId]: _rt, ...runtime } = state.runtime;
+  const { [sessionId]: _unread, ...unread } = state.unread;
   return {
     ...state,
     sessions: state.sessions.filter((s) => s.id !== sessionId),
     messages,
     runtime,
+    unread,
     activeSessionId: state.activeSessionId === sessionId ? null : state.activeSessionId,
   };
 }

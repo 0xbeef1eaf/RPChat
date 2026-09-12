@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
-import { effectiveOpacity, effectiveVolume, type MediaEntry, type MediaLocalEvent } from './mediaState';
+import { closesOnClick, effectiveOpacity, effectiveVolume, type MediaEntry, type MediaLocalEvent } from './mediaState';
 
 interface MediaItemViewProps {
   entry: MediaEntry;
@@ -22,7 +22,10 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
     setLeaving(true);
     window.setTimeout(() => onEvent({ type: 'dismiss', id: entry.id }), LEAVE_MS);
   };
-  const onClick = clickThrough ? undefined : dismiss;
+  // A timed image closes itself; clicking it should not cut that short (`closesOnClick`).
+  const clickCloses = closesOnClick(entry);
+  const onClick = clickCloses ? dismiss : undefined;
+  const clickTitle = clickCloses ? 'Click to close' : undefined;
 
   // Image auto-close.
   const durationMs = entry.kind === 'image' ? entry.options.durationMs : undefined;
@@ -62,7 +65,7 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contentReady, entry.id, width, height]);
 
-  const cls = `media-item ${entry.kind}${leaving ? ' leaving' : ''}${clickThrough ? ' click-through' : ''}`;
+  const cls = `media-item ${entry.kind}${leaving ? ' leaving' : ''}${clickThrough ? ' click-through' : ''}${clickCloses ? ' click-closes' : ''}`;
   const style: CSSProperties = {
     width,
     maxHeight: height,
@@ -73,7 +76,7 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
 
   if (entry.kind === 'image') {
     return (
-      <figure ref={containerRef as RefObject<HTMLElement>} className={cls} style={style} onClick={onClick} title={clickThrough ? undefined : 'Click to close'}>
+      <figure ref={containerRef as RefObject<HTMLElement>} className={cls} style={style} onClick={onClick} title={clickTitle}>
         <img
           src={entry.url}
           alt={entry.options.caption ?? ''}
@@ -103,7 +106,7 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
           onEnded={() => onEvent({ type: 'ended', id: entry.id })}
           onError={() => onEvent({ type: 'error', id: entry.id, message: 'Video failed to load or decode' })}
           onClick={onClick}
-          title={clickThrough ? undefined : 'Click to close'}
+          title={clickTitle}
         />
       </div>
     );

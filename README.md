@@ -48,6 +48,25 @@ Characters, their behaviours and their media are distributed as shareable
 - **External commands**: wallpaper, browser, desktop and voice actions run through
   command templates you edit in Settings. Input locking and injection are
   daemon-only (see *System integration* below).
+- **Questions come to you**: when a character asks something (`sdk.ui.confirm`,
+  `choose`, `ask`) or a call needs your permission, it opens its own small window
+  in front of whatever you are doing, focused and ready to answer — not a modal
+  waiting in a chat window you may not have open. Closing it is a "no".
+  Notifications carry the urgency the character chose: quiet, normal, or one that
+  stays on screen until you dismiss it.
+- **It keeps living while you look away**: timers, events and self-wakes run in the
+  app's engine, not in the chat view — a character wakes up whether you are on
+  that conversation, in Settings or in the tray. When it speaks while you are
+  somewhere else you get a desktop notification (click it to jump straight to
+  that chat) and an unread count in the sidebar.
+- **Retry a reply**: not the answer you hoped for? `↻` on the newest reply (or
+  **Try again** when a turn failed) throws it away and asks the character again
+  from the same history — your message is not re-sent, and whatever the discarded
+  reply already did (a picture, a memory, a timer) stays done.
+- **Readable at your size**: zoom the chat text with the `A− 100% A+` buttons in
+  the chat header, <kbd>Ctrl</kbd> `+` / `-` / `0`, or Settings → Appearance. The
+  reading column widens with the text, so bigger type takes from the side gutters
+  rather than from the line length.
 - **See what the model sees**: Settings → General → Debug → "Show model traffic"
   adds a *Model traffic* button to the chat that lists every request sent to the
   model for the session (full system prompt, messages, tools) and its response.
@@ -73,7 +92,9 @@ Characters, their behaviours and their media are distributed as shareable
 - **Built-in pack editor**: create or import a pack, edit the manifest,
   characters (persona, greeting, behaviours, avatar and expressions), media with
   tags and descriptions, and the README, with live validation, then install it
-  into the app or export an `.rppack` to share.
+  into the app or export an `.rppack` to share. Media can be tagged and described
+  by a vision model (qwen3-vl on a local Ollama, Claude, …): the editor sends each
+  asset to the model, shows what it suggests, and only writes what you accept.
 
 ## Repository
 
@@ -110,12 +131,13 @@ Try it without an API key: `RP_MOCK_LLM=1 pnpm dev` uses a scripted mock
 provider that shows an image from the sample pack and replies.
 
 `pnpm test:headful` runs the built app headful on an Xvfb display with a
-file-backed framebuffer, drives one mock-LLM turn, screenshots every window
-(chat with the action card, Packs, Settings, SDK reference, the overlays and the
-whole framebuffer) into `/tmp/rp-headful-shots`, verifies from pixel data that
-the image overlay shows the pack image and the video overlay is playing (colour
-spread and frame advance), checks audio playback was accepted, and fails if the
-main process raised an uncaught exception. Needs `Xvfb`, `xwd`, `xdotool` and ImageMagick.
+file-backed framebuffer, drives two mock-LLM turns, screenshots every window
+(chat with the action card, Packs, Settings, SDK reference, the prompt window,
+the overlays and the whole framebuffer) into `/tmp/rp-headful-shots`, verifies
+from pixel data that the image overlay shows the pack image and the video overlay
+is playing (colour spread and frame advance), checks audio playback was accepted,
+checks a character's question opened a prompt window and that answering it there
+reached the action, and fails if the main process raised an uncaught exception. Needs `Xvfb`, `xwd`, `xdotool` and ImageMagick.
 
 `pnpm test:wlr` does the same for the Hyprland path: it runs the native
 layer-shell helper against a nested headless Sway compositor (real
@@ -212,6 +234,30 @@ the nested-Sway layer-shell smoke and a smoke run of the packaged app
 The quickest way is the **Pack editor** inside the app (sidebar → Pack editor →
 New pack): it scaffolds the folder, lets you fill in everything through forms,
 validates as you go, and installs or exports with one click.
+
+Under **Media**, "✨ Auto-tag…" hands your images, video frames and audio to a
+vision model and proposes tags and one-line descriptions for `media.json`, reusing
+the tag vocabulary you already have; you tick what to keep before it touches the
+draft. It uses the providers from **Settings → Providers** — for a local model, an
+OpenAI-compatible provider on `http://localhost:11434/v1` with model `qwen3-vl:8b`
+and "Model accepts images" ticked.
+
+The same tagging runs from the command line, writing `media.json` directly:
+
+```bash
+node --experimental-transform-types apps/desktop/scripts/tag-media.ts examples/packs/luna --dry-run
+node --experimental-transform-types apps/desktop/scripts/tag-media.ts examples/packs/luna \
+  --model qwen3-vl:8b media/images/luna-smile.png
+```
+
+With no assets named it tags the untagged ones (`--scope all` for every asset); `--debug`
+prints each request and streams the answer, and `--help` lists every option. It needs ImageMagick for images and ffmpeg
+for video frames.
+
+For a local *thinking* model, it asks for `reasoning_effort: none` and constrains the answer
+with `response_format` by default — without those a reasoning model spends its whole token
+budget deliberating and never answers. Models whose template has no thinking switch (qwen3-vl)
+ignore the effort setting; use an instruct build of those.
 
 For the on-disk format, see [examples/packs/README.md](examples/packs/README.md), the
 behaviour hooks and a tour of the SDK. The SDK reference the characters see is

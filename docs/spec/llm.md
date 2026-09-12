@@ -24,6 +24,13 @@ export const RUN_ACTION_TOOL: ToolDefinition;   // name RUN_ACTION_TOOL_NAME, sc
 - Streaming: use SDK streaming; call `onTextDelta` as text arrives; call `onToolUseStart` when a tool call begins and `onToolUse` with parsed input once complete. Always resolve with the full `LlmChatResponse`.
 - `signal` aborts the request → reject with `RpError('LLM_ABORTED')`. Other errors → `RpError('LLM_PROVIDER', message, { status, body })`.
 - `supportsTools === false` in config → do not send tools; core will use fenced fallback.
+- `request.responseFormat` → OpenAI-compatible `response_format` (`json_object`, or `json_schema` sent
+  `strict` so the server constrains the tokens). Anthropic and the mock provider ignore it. This is what
+  keeps a local reasoning model from thinking past `maxTokens` without ever answering.
+- `request.reasoningEffort` → `reasoning_effort` (`none`/`low`/`medium`/`high`/`max`; `none` and `max`
+  are Ollama's own levels). `none` is the cheapest fix for a thinking model — measured on
+  qwen3.5-9b: 87 completion tokens instead of ~2500 — but a model whose template has no thinking
+  switch (qwen3-vl) accepts the field and thinks anyway.
 - `listModels`: Anthropic → `client.models.list()`; OpenAI-compatible → `client.models.list()`; catch and return [] on failure.
 - `test()`: try a 1-token chat completion ("ping"), return ok/message.
 - `extraHeaders` forwarded; `baseUrl` forwarded; API key optional for local servers (send "ollama" placeholder when empty for OpenAI-compatible).

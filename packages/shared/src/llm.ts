@@ -51,8 +51,27 @@ export interface LlmChatRequest {
   tools?: ToolDefinition[];
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Constrain the answer to JSON (OpenAI-compatible servers only; Anthropic and the mock
+   * provider ignore it). A schema makes a local reasoning model commit to an answer instead
+   * of thinking until it runs out of tokens.
+   */
+  responseFormat?: LlmResponseFormat;
+  /**
+   * How much the model may think before answering (OpenAI-compatible servers only). `none` is
+   * worth a lot on a local thinking model — it answers in tens of tokens instead of thousands —
+   * but a model whose template has no thinking switch ignores it and thinks anyway.
+   */
+  reasoningEffort?: LlmReasoningEffort;
   signal?: AbortSignal;
 }
+
+export type LlmResponseFormat =
+  | { type: 'json_object' }
+  | { type: 'json_schema'; name: string; schema: Record<string, unknown> };
+
+/** `none` and `max` are Ollama extensions; the rest are OpenAI's own values. */
+export type LlmReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'max';
 
 export type StopReason = 'end' | 'tool_use' | 'max_tokens' | 'aborted';
 

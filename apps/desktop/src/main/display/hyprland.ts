@@ -287,8 +287,10 @@ const CHROME_PROPS: ReadonlyArray<[string, string]> = [
   ['noanim', '1'],
 ];
 
+const LOCKED_PROPS = new Set(['alpha', 'alphainactive']);
+
 export function propCommand(address: string, prop: string, value: string, legacy = false): string {
-  if (legacy) return `setprop address:${address} ${prop} ${value}${prop === 'alpha' ? ' lock' : ''}`;
+  if (legacy) return `setprop address:${address} ${prop} ${value}${LOCKED_PROPS.has(prop) ? ' lock' : ''}`;
   return `dispatch setprop address:${address} ${prop} ${value}`;
 }
 
@@ -333,11 +335,22 @@ export function layerCommands(layer: OverlayLayer, address: string, currentlyPin
   return out;
 }
 
+/**
+ * An overlay is never focused (it is shown `nofocus`), so setting `alpha` alone leaves it at the
+ * compositor's *inactive* opacity — with `decoration:inactive_opacity 0.5`, or an `opacity <active>
+ * <inactive>` window rule, a fully opaque image came out at half. Both alphas are set to the value
+ * the pack asked for, each marked override so the user's rules do not apply on top.
+ */
 export function opacityCommands(opacity: number, address: string, legacy = false): string[] {
   const a = normalizeAddress(address);
   const v = clampOpacity(opacity).toFixed(3).replace(/\.?0+$/, '') || '0';
-  if (legacy) return [propCommand(a, 'alpha', v, true)];
-  return [propCommand(a, 'alpha', v), propCommand(a, 'alphaoverride', '1')];
+  if (legacy) return [propCommand(a, 'alpha', v, true), propCommand(a, 'alphainactive', v, true)];
+  return [
+    propCommand(a, 'alpha', v),
+    propCommand(a, 'alphaoverride', '1'),
+    propCommand(a, 'alphainactive', v),
+    propCommand(a, 'alphainactiveoverride', '1'),
+  ];
 }
 
 /** Commands for a live `update` (no placement; that goes through `buildCommands`). */
@@ -617,8 +630,8 @@ export class HyprlandIpcBackend extends ElectronBackend {
   /** Send commands one by one; when the `dispatch setprop …` form is rejected, switch to the legacy syntax for good. */
   private async run(commands: string[], address: string, opacity: number | undefined): Promise<void> {
     for (const raw of commands) {
-      // The legacy syntax has no alphaoverride; `alpha … lock` already pins the value.
-      if (this.legacyProps && / alphaoverride /.test(raw)) continue;
+      // The legacy syntax has no override props; `alpha … lock` already pins the value.
+      if (this.legacyProps && / alpha(?:inactive)?override /.test(raw)) continue;
       const cmd = this.legacyProps ? toLegacy(raw) : raw;
       let res: string;
       try {

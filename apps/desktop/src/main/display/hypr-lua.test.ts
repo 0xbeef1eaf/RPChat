@@ -68,6 +68,8 @@ describe('luaPlacementCommand', () => {
     expect(cmd).toContain('move({ x = 3940, y = 134, monitor = "DP-2", window = w })');
     expect(cmd).toContain('set_prop({ window = w, prop = "opacity", value = 0.6 })');
     expect(cmd).toContain('set_prop({ window = w, prop = "opacity_override", value = 1 })');
+    expect(cmd).toContain('set_prop({ window = w, prop = "opacity_inactive", value = 0.6 })');
+    expect(cmd).toContain('set_prop({ window = w, prop = "opacity_inactive_override", value = 1 })');
     // Lua rejects booleans for `value`; click-through is 1/0.
     expect(cmd).toContain('set_prop({ window = w, prop = "no_focus", value = 1 })');
     expect(cmd).toContain('bring_to_top({ window = w })');

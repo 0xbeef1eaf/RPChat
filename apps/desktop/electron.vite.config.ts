@@ -53,6 +53,7 @@ export default defineConfig(async () => ({
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
           media: resolve(__dirname, 'src/renderer/media.html'),
+          prompt: resolve(__dirname, 'src/renderer/prompt.html'),
         },
       },
     },

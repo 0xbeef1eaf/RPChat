@@ -6,7 +6,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BrowserWindow, Menu, Notification, Tray, app, dialog, nativeImage, protocol, session } from 'electron';
-import { ASSET_PROTOCOL } from '@rp/shared';
+import { ASSET_PROTOCOL, IPC_EVENT_CHANNELS } from '@rp/shared';
 import type { ChatMessage, UpdateStatus } from '@rp/shared';
 import { handleAssetRequest } from './asset-protocol.js';
 import { isHyprland } from './display/layers.js';
@@ -83,8 +83,16 @@ async function main(): Promise<void> {
     ...(env.ELECTRON_RENDERER_URL ? { rendererUrl: env.ELECTRON_RENDERER_URL } : {}),
     logger,
     onMainClosed: () => {
-      services?.permissionPrompts.rejectAll();
-      services?.uiPrompts.rejectAll();
+      // Questions asked in windows of their own outlive the chat window; only those that fell
+      // back to its in-app modal go away with it.
+      const inMainWindow = (id: string): boolean => !windows.hasPromptWindow(id);
+      services?.permissionPrompts.rejectAll(inMainWindow);
+      services?.uiPrompts.rejectAll(inMainWindow);
+    },
+    onPromptDismissed: (id) => {
+      // Closing the window is a dismissal: deny the permission, cancel the question.
+      services?.permissionPrompts.respond(id, 'deny');
+      services?.uiPrompts.respond(id, null);
     },
   });
 
@@ -131,7 +139,10 @@ async function main(): Promise<void> {
   const active = services;
   protocol.handle(ASSET_PROTOCOL, (request) => handleAssetRequest(request, { packRootFor: (packId) => active.packRootFor(packId), logger }));
 
-  registerIpc({ services, windows, logger, version });
+  // Which conversation the user is actually looking at: the UI reports it, and an unprompted
+  // message is announced unless it lands in that one.
+  let visibleSession: string | null = null;
+  registerIpc({ services, windows, logger, version, setVisibleSession: (id) => (visibleSession = id) });
   if (isSmokeRun(env)) await smokeEnableModelTraffic(engine);
   if (START_HIDDEN) tray = createTray(windows, active, () => void shutdown().finally(() => app.quit()));
   const win = windows.createMainWindow({ hidden: START_HIDDEN });
@@ -140,7 +151,7 @@ async function main(): Promise<void> {
     active.updates.start();
   });
   watchUpdateReady(active, windows);
-  watchUnpromptedMessages(active, windows);
+  watchUnpromptedMessages(active, windows, () => visibleSession);
   logger.info(`[main] rp-code ${version} ready; ${engine.packs.characters().length} character(s) available`);
   if (isSmokeRun(env)) {
     await smokeLoadPlugin(active.plugins, APP_ROOT, logger, env);
@@ -198,19 +209,21 @@ function watchUpdateReady(services: AppServices, windows: WindowManager): void {
 }
 
 /**
- * A character speaking on its own initiative (sdk.llm.wake, timers, behaviours) while the window
- * is hidden or unfocused gets a desktop notification, so the message reaches the user like a text
- * from a friend rather than sitting unseen in the tray.
+ * A character speaking on its own initiative (sdk.llm.wake, timers, behaviours) gets a desktop
+ * notification unless the user is looking at that very conversation, so the message reaches them
+ * like a text from a friend rather than sitting unseen in the tray — or, just as easily missed,
+ * in a chat view behind Settings. `visibleSession` is what the UI last reported.
  */
-function watchUnpromptedMessages(services: AppServices, windows: WindowManager): void {
+function watchUnpromptedMessages(services: AppServices, windows: WindowManager, visibleSession: () => string | null): void {
   const pending = new Map<string, ChatMessage>(); // sessionId → latest unprompted turn reply, announced when the turn ends
-  const shouldNotify = (): boolean => {
+  const shouldNotify = (sessionId: string): boolean => {
     const win = windows.getMainWindow();
-    return !(win && win.isVisible() && win.isFocused()) && Notification.isSupported();
+    const watching = Boolean(win && win.isVisible() && win.isFocused()) && visibleSession() === sessionId;
+    return !watching && Notification.isSupported();
   };
   const announce = (m: ChatMessage): void => {
     const text = m.content.trim();
-    if (text.length === 0 || !shouldNotify()) return;
+    if (text.length === 0 || !shouldNotify(m.sessionId)) return;
     void services.engine.sessions
       .get(m.sessionId)
       .then((session) => {
@@ -220,6 +233,8 @@ function watchUnpromptedMessages(services: AppServices, windows: WindowManager):
           const w = windows.getMainWindow() ?? windows.createMainWindow();
           w.show();
           w.focus();
+          // Bring the user to the conversation the notification is about, not just to the app.
+          windows.sendToMain(IPC_EVENT_CHANNELS.showSession, m.sessionId);
         });
         note.show();
       })

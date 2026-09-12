@@ -48,6 +48,8 @@ export interface RegisterIpcOptions {
   windows: WindowManager;
   logger: Logger;
   version: string;
+  /** The UI reports which session's chat is on screen (null on any other view). */
+  setVisibleSession?: (sessionId: string | null) => void;
 }
 
 const COMMAND_NAMES: ReadonlySet<string> = new Set<keyof CommandTemplates>([
@@ -70,6 +72,9 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       openPath: async (_e, target) => {
         const error = await shell.openPath(requireString(target, 'path'));
         if (error) throw new RpError('CAPABILITY_FAILED', error);
+      },
+      setVisibleSession: async (_e, sessionId) => {
+        opts.setVisibleSession?.(typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null);
       },
     },
     packs: {
@@ -136,6 +141,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
     },
     chat: {
       send: (_e, sessionId, text) => engine.chat.send(requireString(sessionId, 'sessionId'), text),
+      retry: (_e, sessionId) => engine.chat.retry(requireString(sessionId, 'sessionId')),
       abort: (_e, sessionId) => engine.chat.abort(requireString(sessionId, 'sessionId')),
     },
     permissions: {
@@ -237,8 +243,10 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       addMediaFiles: (_e, key, files, options) => services.editor.addMediaFiles(requireString(key, 'key'), files, options ?? {}),
       removeMedia: (_e, key, assetPath) => services.editor.removeMedia(requireString(key, 'key'), requireString(assetPath, 'assetPath')),
       saveMediaManifest: (_e, key, manifest) => services.editor.saveMediaManifest(requireString(key, 'key'), manifest),
+      suggestMediaTags: (_e, key, paths, options) => services.editor.suggestMediaTags(requireString(key, 'key'), paths, options ?? {}),
       saveReadme: (_e, key, text) => services.editor.saveReadme(requireString(key, 'key'), text),
       validate: (_e, key) => services.editor.validate(requireString(key, 'key')),
+      checkScript: (_e, source) => services.editor.checkScript(requireString(source, 'source')),
       exportPack: (_e, key) => services.editor.exportPack(requireString(key, 'key')),
       installToApp: (_e, key) => services.editor.installToApp(requireString(key, 'key')),
       revealInFolder: (_e, key) => services.editor.revealInFolder(requireString(key, 'key')),
@@ -270,6 +278,9 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       setEnabled: (_e, id, enabled) => services.plugins.setEnabled(requireString(id, 'id'), Boolean(enabled)),
       reload: (_e, id) => services.plugins.reload(requireString(id, 'id')),
       openFolder: () => services.plugins.openFolder(),
+    },
+    prompts: {
+      pending: async (event) => windows.promptPayloadFor(event.sender),
     },
     ui: {
       respondPrompt: async (_e, promptId, answer: UiPromptAnswer) => {

@@ -1,0 +1,54 @@
+name: Auto-merge
+
+# GitHub's own auto-merge needs a protected branch with required checks, and branch protection
+# is not available on this repository (private, free plan) — enabling `allow_auto_merge` is
+# refused, and `gh pr merge --auto` then quietly merges straight away instead of waiting. This
+# does the waiting properly: when CI succeeds for a pull request labelled `automerge`, squash it.
+#
+# `workflow_run` runs the copy of this file on the default branch, with a token of its own, so a
+# pull request cannot change the merge rules by editing this file in the same pull request.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    name: Squash a labelled pull request whose CI passed
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          pr=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq 'map(select(.state == "open")) | .[0].number // empty')
+          if [ -z "$pr" ]; then
+            echo "No open pull request for $HEAD_SHA."
+            exit 0
+          fi
+
+          read -r head labels <<<"$(gh pr view "$pr" --repo "$REPO" --json headRefOid,labels \
+            --jq '"\(.headRefOid) \([.labels[].name] | join(","))"')"
+
+          case ",$labels," in
+            *,automerge,*) ;;
+            *) echo "PR #$pr is not labelled automerge — leaving it alone."; exit 0 ;;
+          esac
+
+          # The run that just passed may be for an older commit; never merge code CI has not seen.
+          if [ "$head" != "$HEAD_SHA" ]; then
+            echo "PR #$pr has moved on ($head) since this run ($HEAD_SHA) — waiting for its own CI."
+            exit 0
+          fi
+
+          echo "Merging PR #$pr."
+          gh pr merge "$pr" --repo "$REPO" --squash --delete-branch

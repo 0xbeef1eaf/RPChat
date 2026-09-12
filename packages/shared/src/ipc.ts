@@ -6,14 +6,14 @@ import type { CharacterSummary, InstalledPackRecord, MediaManifest, PackManifest
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
-import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, SaveCharacterInput } from './editor.js';
+import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
 import type { ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
 import type { UpdateStatus } from './updates.js';
 
 export type Unsubscribe = () => void;
 
-/** A question raised by `sdk.ui.confirm` / `sdk.ui.choose`, answered by the user in the main window. */
+/** A question raised by `sdk.ui.confirm` / `sdk.ui.choose`, answered by the user in its own window. */
 export interface UiPromptRequest {
   promptId: string;
   sessionId: string;
@@ -28,6 +28,23 @@ export interface UiPromptRequest {
 }
 
 export type UiPromptAnswer = boolean | string | null;
+
+/**
+ * What one prompt window shows. Every pending question — a `prompt`-level capability request or
+ * an `sdk.ui` question — gets a window of its own; the page asks `prompts.pending()` for the
+ * question it was opened for and answers on the usual `permissions.respond` / `ui.respondPrompt`
+ * channel. The names are resolved by main so the window needs no other data loaded.
+ */
+export type PromptWindowPayload =
+  | {
+      kind: 'permission';
+      request: PermissionRequest;
+      /** Display name of the character making the call, falling back to its id. */
+      characterName: string;
+      /** Display name of its pack, falling back to the pack id. */
+      packName: string;
+    }
+  | { kind: 'ui'; prompt: UiPromptRequest };
 
 /** Options for adding media through the editor. */
 export interface AddMediaOptions {
@@ -84,9 +101,17 @@ export interface PackInspection {
 export interface IpcApi {
   app: {
     version(): Promise<string>;
-    /** Which window this renderer is: main UI or a media overlay. */
-    windowKind(): Promise<'main' | 'media'>;
+    /** Which window this renderer is: main UI, a media overlay or a prompt. */
+    windowKind(): Promise<'main' | 'media' | 'prompt'>;
     openPath(path: string): Promise<void>;
+    /**
+     * Which session's chat the user is actually looking at (null on any other view). A character
+     * that speaks on its own initiative is announced with a notification unless its session is
+     * the one on screen — being in the app is not the same as watching that conversation.
+     */
+    setVisibleSession(sessionId: string | null): Promise<void>;
+    /** Clicking such a notification asks the UI to open that session. */
+    onShowSession(listener: (sessionId: string) => void): Unsubscribe;
   };
   packs: {
     list(): Promise<InstalledPackView[]>;
@@ -138,11 +163,17 @@ export interface IpcApi {
   };
   chat: {
     send(sessionId: string, text: string): Promise<void>;
+    /**
+     * Throw away the character's last reply and generate another one from the same history.
+     * What that reply already did (media, memories, timers) is not undone.
+     */
+    retry(sessionId: string): Promise<void>;
     abort(sessionId: string): Promise<void>;
     onEvent(listener: (event: ChatEvent) => void): Unsubscribe;
   };
   permissions: {
     respond(requestId: string, decision: PermissionDecision): Promise<void>;
+    /** Fallback only: a request is delivered here when no prompt window could be opened. */
     onRequest(listener: (request: PermissionRequest) => void): Unsubscribe;
   };
   settings: {
@@ -168,7 +199,13 @@ export interface IpcApi {
     /** Force a consolidation pass for a session now. */
     consolidate(sessionId: string): Promise<MemoryEntry[]>;
   };
+  /** Prompt windows: one question per window (see `PromptWindowPayload`). */
+  prompts: {
+    /** The question this window was opened for, or null when it is not a prompt window. */
+    pending(): Promise<PromptWindowPayload | null>;
+  };
   ui: {
+    /** Fallback only: a question is delivered here when no prompt window could be opened. */
     onPrompt(listener: (request: UiPromptRequest) => void): Unsubscribe;
     respondPrompt(promptId: string, answer: UiPromptAnswer): Promise<void>;
   };
@@ -251,8 +288,19 @@ export interface IpcApi {
     addMediaFiles(key: string, files: string[], options?: AddMediaOptions): Promise<EditorProject>;
     removeMedia(key: string, assetPath: string): Promise<EditorProject>;
     saveMediaManifest(key: string, manifest: MediaManifest): Promise<EditorProject>;
+    /**
+     * Ask a vision model (e.g. qwen3-vl on a local OpenAI-compatible server) for tags and a
+     * description for each asset. Nothing is written: the editor applies the suggestions to its
+     * media.json draft. One entry per requested path, in order; failures carry `error`.
+     */
+    suggestMediaTags(key: string, paths: string[], options?: TagMediaOptions): Promise<MediaTagSuggestion[]>;
     saveReadme(key: string, text: string): Promise<EditorProject>;
     validate(key: string): Promise<EditorValidation>;
+    /**
+     * Compile a behaviour script without saving it: what the editor calls while the author types,
+     * so a syntax error shows up under the box instead of at the next session start.
+     */
+    checkScript(source: string): Promise<ScriptProblem[]>;
     /** Save dialog → writes the .rppack; returns the file path or null when cancelled. */
     exportPack(key: string): Promise<string | null>;
     /** Install (or replace) the pack in the app from the project folder. */
@@ -268,6 +316,7 @@ export const IPC_EVENT_CHANNELS = {
   permissionRequest: 'permissions:request',
   mediaCommand: 'media:command',
   uiPrompt: 'ui:prompt',
+  showSession: 'app:showSession',
   updateStatus: 'updates:status',
 } as const;
 

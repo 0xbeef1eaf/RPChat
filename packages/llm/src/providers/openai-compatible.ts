@@ -5,6 +5,7 @@ import type {
   LlmChatResponse,
   LlmMessage,
   LlmProvider,
+  LlmResponseFormat,
   LlmStreamHandlers,
   ModelInfo,
   ProviderConfig,
@@ -206,6 +207,15 @@ export function fromOpenAiFinishReason(reason: FinishReason | undefined, hasTool
 }
 
 /**
+ * `LlmResponseFormat` → OpenAI's `response_format`. A schema is sent `strict`, which is what makes
+ * a server (Ollama, LM Studio, vLLM) constrain the tokens rather than merely ask for JSON.
+ */
+export function toOpenAiResponseFormat(format: LlmResponseFormat): StreamParams['response_format'] {
+  if (format.type === 'json_object') return { type: 'json_object' };
+  return { type: 'json_schema', json_schema: { name: format.name, strict: true, schema: format.schema } };
+}
+
+/**
  * Build the streaming request body.
  * Images are replaced by `[image omitted: model has no vision]` when `supportsVision` is false.
  */
@@ -218,6 +228,9 @@ export function toOpenAiParams(request: LlmChatRequest, supportsTools: boolean, 
   };
   if (request.temperature !== undefined) params.temperature = request.temperature;
   if (request.maxTokens !== undefined) params.max_tokens = request.maxTokens;
+  if (request.responseFormat) params.response_format = toOpenAiResponseFormat(request.responseFormat);
+  // "none" and "max" are Ollama's own levels, outside the SDK's union but accepted on the wire.
+  if (request.reasoningEffort) params.reasoning_effort = request.reasoningEffort as StreamParams['reasoning_effort'];
   if (supportsTools && request.tools && request.tools.length > 0) params.tools = toOpenAiTools(request.tools);
   return params;
 }

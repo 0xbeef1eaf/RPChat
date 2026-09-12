@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Headful smoke test: runs the desktop app on an Xvfb display with a file-backed framebuffer,
-# drives one mock-LLM turn (RP_MOCK_LLM=1 RP_SMOKE=1), captures every Electron window via
+# drives two mock-LLM turns (RP_MOCK_LLM=1 RP_SMOKE=1) — one showing media, one asking a
+# question in a prompt window — captures every Electron window via
 # capturePage and the whole framebuffer via xwd, and fails if the main process raised an
 # uncaught exception (Electron shows those as an "Error" dialog window).
 #
@@ -30,16 +31,22 @@ else
   APP_CMD=(./node_modules/.bin/electron --no-sandbox out/main/index.js)
 fi
 DISPLAY="$DISPLAY_NUM" RP_MOCK_LLM=1 RP_SMOKE=1 RP_USER_DATA="$USERDATA" RP_SCREENSHOT_DIR="$OUT" \
-  timeout "${RP_SMOKE_SECONDS:-45}" "${APP_CMD[@]}" >"$OUT/app.log" 2>&1 &
+  timeout "${RP_SMOKE_SECONDS:-90}" "${APP_CMD[@]}" >"$OUT/app.log" 2>&1 &
 APP_PID=$!
 
-# Wait for the smoke turn to finish (screenshots are its last step), max ~40 s.
-for _ in $(seq 1 80); do
+# Wait for the window captures, max ~65 s. The mock turn's image closes itself 20 s after it is
+# shown, so the framebuffer grab has to happen here rather than after the checks that follow.
+for _ in $(seq 1 130); do
   grep -q "\[smoke\] screenshots done" "$OUT/app.log" 2>/dev/null && break
   sleep 0.5
 done
 sleep 1
 DISPLAY="$DISPLAY_NUM" xwd -root -silent -out "$OUT/desktop.xwd" && convert "$OUT/desktop.xwd" "$OUT/00-desktop.png" && rm -f "$OUT/desktop.xwd"
+# Then let the prompt-window check (a second turn, answered in its own window) finish, max ~20 s.
+for _ in $(seq 1 40); do
+  grep -q "\[smoke\] smoke done" "$OUT/app.log" 2>/dev/null && break
+  sleep 0.5
+done
 WINDOWS="$(DISPLAY="$DISPLAY_NUM" xdotool search --onlyvisible --name "" 2>/dev/null | while read -r w; do DISPLAY="$DISPLAY_NUM" xdotool getwindowname "$w"; done | sed '/^$/d' | sort | uniq)"
 kill "$APP_PID" 2>/dev/null
 
@@ -52,5 +59,7 @@ if ! ls "$OUT"/*-main-chat-session.png >/dev/null 2>&1; then echo "FAIL: no main
 if grep -qiE "typeerror|unhandled" "$OUT/app.log"; then echo "FAIL: TypeError/unhandled in app log"; STATUS=1; fi
 if grep -qE "\[smoke\] verify [a-z]+: FAIL" "$OUT/app.log"; then echo "FAIL: media verification failed (see verify lines above)"; STATUS=1; fi
 for kind in image video audio; do grep -qE "\[smoke\] verify $kind: PASS" "$OUT/app.log" || { echo "FAIL: no PASS line for $kind"; STATUS=1; }; done
+# A character's question must open a window of its own and its answer must reach the action.
+if ! grep -q "\[smoke\] verify prompt: PASS" "$OUT/app.log"; then echo "FAIL: the prompt window did not open or its answer did not come back"; STATUS=1; fi
 echo "--- screenshots in $OUT"; ls -1 "$OUT"/*.png
 exit $STATUS
