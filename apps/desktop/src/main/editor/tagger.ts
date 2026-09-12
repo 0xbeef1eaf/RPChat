@@ -34,6 +34,24 @@ export const TAG_DEFAULT_MAX_TAGS = 6;
  */
 export const TAG_MAX_TOKENS = 3_000;
 
+/**
+ * The answer shape, for providers that can constrain it (`TagMediaOptions.jsonSchema`). It says
+ * the same thing as the prompt's example object; a reasoning model that is held to it stops
+ * thinking and commits, instead of spending {@link TAG_MAX_TOKENS} on deliberation.
+ */
+export const TAG_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    tags: { type: 'array', items: { type: 'string' } },
+    description: { type: 'string' },
+    meanings: { type: 'object', additionalProperties: { type: 'string' } },
+  },
+  // Every property is required and `additionalProperties` is false because OpenAI's `strict` mode
+  // rejects anything else; a model with nothing to say answers with an empty `meanings` object.
+  required: ['tags', 'description', 'meanings'],
+  additionalProperties: false,
+};
+
 export type TagImageMime = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
 
 export interface TagImage {
@@ -305,11 +323,20 @@ export class MediaTagger {
     return { config, model, provider: this.deps.providerFactory(config), vision: config.kind === 'mock' || resolveSupportsVision(config) };
   }
 
-  /** Tag every asset in order, one call each. A failing asset yields an `error` suggestion, not a throw. */
+  /**
+   * Tag every asset in order, one call each. A failing asset yields an `error` suggestion, not a
+   * throw. Each answer is folded back into the pack context, so the tenth asset is offered the
+   * vocabulary the first nine invented instead of coining its own word for the same thing.
+   */
   async suggest(pack: TagPackContext, assets: TagAsset[], options: TagMediaOptions = {}): Promise<MediaTagSuggestion[]> {
     const run = await this.start(options);
     const out: MediaTagSuggestion[] = [];
-    for (const asset of assets) out.push(await this.suggestOne(run, pack, asset, options));
+    let context = pack;
+    for (const asset of assets) {
+      const suggestion = await this.suggestOne(run, context, asset, options);
+      out.push(suggestion);
+      context = absorbSuggestion(context, suggestion);
+    }
     return out;
   }
 
@@ -374,6 +401,8 @@ export class MediaTagger {
         messages: [{ role: 'user', content: [...(image ? [{ type: 'image' as const, mime: image.mime, data: image.data }] : []), { type: 'text' as const, text }] }],
         temperature: 0.2,
         maxTokens: TAG_MAX_TOKENS,
+        ...(options.jsonSchema ? { responseFormat: { type: 'json_schema' as const, name: 'media_tags', schema: TAG_RESPONSE_SCHEMA } } : {}),
+        ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
         signal: controller.signal,
       };
       const response = await run.provider.chat(request);
@@ -384,7 +413,7 @@ export class MediaTagger {
       if (answer.trim().length === 0) {
         return fail(
           response.stopReason === 'max_tokens'
-            ? `${run.model} spent all ${TAG_MAX_TOKENS} tokens reasoning and never reached an answer. Turn the model's thinking mode off, or use an instruct build of it (e.g. qwen3-vl:4b-instruct).`
+            ? `${run.model} spent all ${TAG_MAX_TOKENS} tokens reasoning and never reached an answer.${options.reasoningEffort === 'none' ? ' It ignores "reasoning_effort": "none", so use an instruct build of it (e.g. qwen3-vl:4b-instruct).' : ' Ask for reasoningEffort "none", or use an instruct build of it (e.g. qwen3-vl:4b-instruct).'}`
             : `${run.model} returned nothing to tag with.`,
           basis,
         );
@@ -398,6 +427,30 @@ export class MediaTagger {
       clearTimeout(timeout);
     }
   }
+}
+
+/**
+ * The pack context a later asset in the same run should see: tags this answer introduced count as
+ * "already in use" from here on, and meanings it gave join the vocabulary. Without this every asset
+ * is tagged against the manifest as it was on disk when the run started, so a run over a whole pack
+ * invents `cosy`, `cozy` and `snug` for the same idea. A failed or repetitive answer changes
+ * nothing, and a meaning never overwrites one the author wrote.
+ */
+export function absorbSuggestion(
+  pack: TagPackContext,
+  suggestion: Pick<MediaTagSuggestion, 'tags' | 'vocabulary' | 'error'>,
+): TagPackContext {
+  if (suggestion.error) return pack;
+  const known = new Set([...pack.knownTags, ...Object.keys(pack.vocabulary)]);
+  const fresh = suggestion.tags.filter((tag) => !known.has(tag));
+  const meanings = Object.entries(suggestion.vocabulary).filter(([tag]) => !(tag in pack.vocabulary));
+  if (fresh.length === 0 && meanings.length === 0) return pack;
+  return {
+    ...pack,
+    // Newly coined tags go last: `knownTags` is most-used first and these have one use so far.
+    knownTags: [...pack.knownTags, ...fresh],
+    vocabulary: meanings.length > 0 ? { ...pack.vocabulary, ...Object.fromEntries(meanings) } : pack.vocabulary,
+  };
 }
 
 export function clampTags(value: unknown): number {

@@ -222,6 +222,23 @@ draft. It uses the providers from **Settings → Providers** — for a local mod
 OpenAI-compatible provider on `http://localhost:11434/v1` with model `qwen3-vl:8b`
 and "Model accepts images" ticked.
 
+The same tagging runs from the command line, writing `media.json` directly:
+
+```bash
+node --experimental-transform-types apps/desktop/scripts/tag-media.ts examples/packs/luna --dry-run
+node --experimental-transform-types apps/desktop/scripts/tag-media.ts examples/packs/luna \
+  --model qwen3-vl:8b media/images/luna-smile.png
+```
+
+With no assets named it tags the untagged ones (`--scope all` for every asset); `--debug`
+prints each request and streams the answer, and `--help` lists every option. It needs ImageMagick for images and ffmpeg
+for video frames.
+
+For a local *thinking* model, it asks for `reasoning_effort: none` and constrains the answer
+with `response_format` by default — without those a reasoning model spends its whole token
+budget deliberating and never answers. Models whose template has no thinking switch (qwen3-vl)
+ignore the effort setting; use an instruct build of those.
+
 For the on-disk format, see [examples/packs/README.md](examples/packs/README.md), the
 behaviour hooks and a tour of the SDK. The SDK reference the characters see is
 also available inside the app under **SDK Reference**.

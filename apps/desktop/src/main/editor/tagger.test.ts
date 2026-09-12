@@ -7,6 +7,8 @@ import { RpError } from '@rp/shared';
 import {
   MediaTagger,
   TAG_DEFAULT_MAX_TAGS,
+  TAG_RESPONSE_SCHEMA,
+  absorbSuggestion,
   buildTagPrompt,
   cleanDescription,
   clampTags,
@@ -146,6 +148,23 @@ describe('parseTagResponse', () => {
   });
 });
 
+describe('absorbSuggestion', () => {
+  const base: TagPackContext = { ...pack, vocabulary: { smile: 'Luna smiling' }, knownTags: ['smile', 'wave'] };
+  const suggestion = { tags: ['smile', 'cosy'], vocabulary: { cosy: 'Warm and relaxed' } };
+
+  it('adds the tags and meanings a run has coined so far', () => {
+    const next = absorbSuggestion(base, suggestion);
+    expect(next.knownTags).toEqual(['smile', 'wave', 'cosy']);
+    expect(next.vocabulary).toEqual({ smile: 'Luna smiling', cosy: 'Warm and relaxed' });
+  });
+
+  it('never overwrites a meaning the author wrote, and ignores a failed answer', () => {
+    expect(absorbSuggestion(base, { tags: ['smile'], vocabulary: { smile: 'model wording' } }).vocabulary).toEqual({ smile: 'Luna smiling' });
+    expect(absorbSuggestion(base, { ...suggestion, error: 'timed out' })).toBe(base);
+    expect(absorbSuggestion(base, { tags: ['smile', 'wave'], vocabulary: {} })).toBe(base); // nothing new
+  });
+});
+
 describe('clampTags', () => {
   it('defaults and clamps to the media.json limit', () => {
     expect(clampTags(undefined)).toBe(TAG_DEFAULT_MAX_TAGS);
@@ -171,6 +190,30 @@ describe('MediaTagger.suggest', () => {
     const [request] = provider.requests;
     expect(request?.model).toBe('qwen3-vl:8b');
     expect(request?.messages[0]?.content[0]).toEqual({ type: 'image', mime: 'image/jpeg', data: 'AAAA' });
+    expect(request?.responseFormat).toBeUndefined(); // opt-in: not every server accepts a schema
+  });
+
+  it('constrains the answer to the tag schema when asked to', async () => {
+    const { tagger: t, provider } = tagger(['{"tags":["smile"],"description":"Luna smiling."}']);
+    await t.suggest(pack, [asset()], { jsonSchema: true });
+    expect(provider.requests[0]?.responseFormat).toEqual({ type: 'json_schema', name: 'media_tags', schema: TAG_RESPONSE_SCHEMA });
+  });
+
+  it('offers a later asset the vocabulary an earlier one invented', async () => {
+    const { tagger: t, provider } = tagger([
+      '{"tags":["cosy"],"description":"Luna in warm light.","meanings":{"cosy":"Warm and relaxed"}}',
+      '{"tags":["cosy"],"description":"Luna reading."}',
+    ]);
+    const out = await t.suggest(pack, [asset(), asset({ path: 'media/images/luna-read.png' })]);
+    expect(out[0]?.newTags).toEqual(['cosy']); // coined here …
+    expect(out[1]?.newTags).toEqual([]); //       … and known by the time the second asset is tagged
+    expect(provider.requests[1]?.messages[0]?.content.at(-1)).toMatchObject({ text: expect.stringContaining('cosy: Warm and relaxed') });
+  });
+
+  it('passes the reasoning effort on to the provider', async () => {
+    const { tagger: t, provider } = tagger(['{"tags":["smile"],"description":"Luna smiling."}']);
+    await t.suggest(pack, [asset()], { reasoningEffort: 'none' });
+    expect(provider.requests[0]?.reasoningEffort).toBe('none');
   });
 
   it('treats a renderer-decoded still as the image itself, not a video frame', async () => {

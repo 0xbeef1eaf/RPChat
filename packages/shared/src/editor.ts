@@ -1,4 +1,5 @@
 import type { BehaviourHook } from './capability.js';
+import type { LlmReasoningEffort } from './llm.js';
 import type { AssetEntry, CharacterDefinition, MediaManifest, PackManifest, TagSummary } from './pack.js';
 
 /** A pack folder open for editing (lives in the workspace dir or anywhere the user chose). */
@@ -97,6 +98,19 @@ export interface TagMediaOptions {
   vocabularyOnly?: boolean;
   /** Extra guidance from the author ("a noir detective pack; tag by mood"). */
   guidance?: string;
+  /**
+   * Ask the provider to constrain the answer to the tag schema (`response_format`) instead of
+   * only describing it in the prompt. Off by default: OpenAI-compatible servers support it, but
+   * not all of them. Worth turning on for a reasoning model, which otherwise thinks past its
+   * token budget without ever answering.
+   */
+  jsonSchema?: boolean;
+  /**
+   * How much the model may think first. `none` turns a local reasoning model from unusable
+   * (thousands of tokens of deliberation, no answer) into a fast one — when its template
+   * supports the switch; Qwen3.5 does, Qwen3-VL does not.
+   */
+  reasoningEffort?: LlmReasoningEffort;
   /**
    * Base64 PNG frames (no `data:` prefix) for assets main cannot decode itself, by asset path.
    * The renderer grabs these from `<video>` elements.

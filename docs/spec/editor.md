@@ -41,6 +41,21 @@ Tests: scaffold → loadPack ok; write/read round trips; addAssetFile naming; re
   tolerantly, normalised with `normalizeTag`, capped at `options.maxTags` and — with `vocabularyOnly` —
   restricted to known tags. A provider that is not vision-capable, a missing provider, a timeout or a
   provider error becomes a per-asset `error` (the run itself only throws when no provider resolves).
+  `options.jsonSchema` additionally constrains the answer with `response_format`
+  (`TAG_RESPONSE_SCHEMA`); off by default because not every OpenAI-compatible server accepts a schema,
+  but it is what makes a reasoning model answer at all instead of spending `TAG_MAX_TOKENS` thinking.
+  `options.reasoningEffort` (`none` …) is the other half of that: on a model that honours it the
+  answer costs tens of tokens instead of thousands. Within one run each answer is folded back into
+  the pack context (`absorbSuggestion`): tags it coined count as in use and meanings it gave join
+  the vocabulary for the assets still to come, so a run over a whole pack converges on one word per
+  idea instead of `cosy`/`cozy`/`snug`. A meaning the author wrote is never overwritten.
+- `apps/desktop/scripts/tag-media.ts` runs the same tagging from the command line and *writes*
+  `media.json` (`node --experimental-transform-types apps/desktop/scripts/tag-media.ts <pack> [asset …]`).
+  It imports `MediaTagger`, the renderer's `applySuggestions`/`fromEditModel` and `writeMediaManifest` so
+  the two paths cannot drift; only the decoding differs — ImageMagick instead of `nativeImage`, ffmpeg
+  instead of a `<video>` element — and it defaults to `--reasoning-effort none` with the schema on,
+  because a local thinking model is otherwise unusable for tagging. `--debug` wraps the provider to
+  print each request and stream the answer, `--dry-run` prints the manifest instead of writing it.
 - Pickers via `dialog.showOpenDialog`; `addMediaFiles` accepts absolute paths from renderer drag and drop (`File.path` via `webUtils.getPathForFile` in preload — expose `editor.pathsForFiles` if needed; simpler: renderer passes `webUtils.getPathForFile(file)` obtained in preload through a small `app.pathForFile(file)` helper added to the preload API only, not to IpcApi).
 - `installToApp` → `engine.packs.install(dir)` (replaces an installed pack with the same id, keeping grants). `exportPack` → `dialog.showSaveDialog` + `packDirectory`. `importInstalled` → copies the installed root into the workspace (refuses if a project with the same dir exists).
 - `revealInFolder` → `shell.showItemInFolder`.
