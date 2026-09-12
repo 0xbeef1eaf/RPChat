@@ -720,7 +720,8 @@ textarea:disabled {
   font-size: 0.86em;
   color: var(--fg-muted);
 }
-.msg-delete {
+.msg-delete,
+.msg-action {
   border: 0;
   background: transparent;
   color: var(--fg-muted);
@@ -733,11 +734,17 @@ textarea:disabled {
   transition: opacity 120ms;
 }
 .msg:hover .msg-delete,
-.msg-delete:focus-visible {
+.msg:hover .msg-action,
+.msg-delete:focus-visible,
+.msg-action:focus-visible {
   opacity: 1;
 }
 .msg-delete:hover {
   color: var(--danger, #d33);
+  background: var(--bg-elev);
+}
+.msg-action:hover {
+  color: var(--accent);
   background: var(--bg-elev);
 }
 .bubble {

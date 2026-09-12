@@ -15,6 +15,8 @@ interface MessageListProps {
   /** `event-fired` markers, rendered inline at their time. */
   markers?: EventMarker[];
   onDeleteMessage?: (messageId: string) => void;
+  /** Discard the last reply and generate another; offered on that reply and on a failed turn. */
+  onRetry?: () => void;
 }
 
 type Row = { kind: 'message'; at: string; message: ChatMessage } | { kind: 'marker'; at: string; marker: EventMarker };
@@ -34,7 +36,16 @@ export function mergeRows(messages: ChatMessage[], markers: EventMarker[]): Row[
 }
 
 /** Scrollable transcript that sticks to the bottom while the user has not scrolled up. */
-export function MessageList({ messages, characterName, avatarUrl, userName, turnRunning, error, markers = [], onDeleteMessage }: MessageListProps) {
+/**
+ * Whether "generate another reply" makes sense: the turn's input has to still be there. A
+ * transcript of nothing but assistant messages (a fresh session showing only its greeting) has
+ * nothing for the character to answer.
+ */
+export function canRetry(messages: ChatMessage[] | undefined): boolean {
+  return Boolean(messages?.some((m) => m.role !== 'assistant'));
+}
+
+export function MessageList({ messages, characterName, avatarUrl, userName, turnRunning, error, markers = [], onDeleteMessage, onRetry }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
 
@@ -60,6 +71,11 @@ export function MessageList({ messages, characterName, avatarUrl, userName, turn
 
   const streamingId = turnRunning && messages ? messages.at(-1)?.id : undefined;
   const rows = useMemo(() => (messages ? mergeRows(messages, markers) : []), [messages, markers]);
+  // One retry, on the newest reply: the engine regenerates the whole run of messages the last
+  // turn added, so a button per assistant message would promise something finer than it does.
+  const retryable = onRetry && !turnRunning && canRetry(messages);
+  const lastVisible = rows.at(-1);
+  const retryMessageId = retryable && lastVisible?.kind === 'message' && lastVisible.message.role === 'assistant' ? lastVisible.message.id : undefined;
 
   return (
     <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
@@ -83,6 +99,7 @@ export function MessageList({ messages, characterName, avatarUrl, userName, turn
                 userName={userName}
                 streaming={row.message.id === streamingId && row.message.role === 'assistant'}
                 onDelete={onDeleteMessage}
+                {...(row.message.id === retryMessageId ? { onRetry } : {})}
               />
             ) : (
               <div key={`marker-${row.marker.id}`} className="event-marker" title={`subscription ${row.marker.subscriptionId}`}>
@@ -98,6 +115,14 @@ export function MessageList({ messages, characterName, avatarUrl, userName, turn
         {error ? (
           <div className="callout callout-danger small">
             <strong>{error.code}</strong>: {error.message}
+            {retryable ? (
+              <div className="form-actions">
+                <span className="grow" />
+                <button type="button" className="btn btn-sm" onClick={onRetry}>
+                  Try again
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

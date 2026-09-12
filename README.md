@@ -54,6 +54,10 @@ Characters, their behaviours and their media are distributed as shareable
   waiting in a chat window you may not have open. Closing it is a "no".
   Notifications carry the urgency the character chose: quiet, normal, or one that
   stays on screen until you dismiss it.
+- **Retry a reply**: not the answer you hoped for? `↻` on the newest reply (or
+  **Try again** when a turn failed) throws it away and asks the character again
+  from the same history — your message is not re-sent, and whatever the discarded
+  reply already did (a picture, a memory, a timer) stays done.
 - **Readable at your size**: zoom the chat text with the `A− 100% A+` buttons in
   the chat header, <kbd>Ctrl</kbd> `+` / `-` / `0`, or Settings → Appearance. The
   reading column widens with the text, so bigger type takes from the side gutters

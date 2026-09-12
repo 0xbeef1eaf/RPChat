@@ -136,6 +136,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
     },
     chat: {
       send: (_e, sessionId, text) => engine.chat.send(requireString(sessionId, 'sessionId'), text),
+      retry: (_e, sessionId) => engine.chat.retry(requireString(sessionId, 'sessionId')),
       abort: (_e, sessionId) => engine.chat.abort(requireString(sessionId, 'sessionId')),
     },
     permissions: {

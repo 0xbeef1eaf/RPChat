@@ -14,6 +14,8 @@ interface MessageItemProps {
   streaming: boolean;
   /** Delete this message from the history (hidden while streaming). */
   onDelete?: (messageId: string) => void;
+  /** Generate this reply again (only given for the last one, and never while streaming). */
+  onRetry?: () => void;
 }
 
 function originLabel(origin: ChatMessage['origin']): string | null {
@@ -29,11 +31,23 @@ function originLabel(origin: ChatMessage['origin']): string | null {
   }
 }
 
-export const MessageItem = memo(function MessageItem({ message, characterName, avatarUrl, userName, streaming, onDelete }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, characterName, avatarUrl, userName, streaming, onDelete, onRetry }: MessageItemProps) {
   const deleteButton =
     onDelete && !streaming ? (
       <button type="button" className="msg-delete" title="Delete this message from the history" aria-label="Delete message" onClick={() => onDelete(message.id)}>
         ×
+      </button>
+    ) : null;
+  const retryButton =
+    onRetry && !streaming ? (
+      <button
+        type="button"
+        className="msg-action"
+        title={`Discard this reply and let ${characterName} answer again. Anything it already did — pictures, memories, timers — stays.`}
+        aria-label="Regenerate this reply"
+        onClick={onRetry}
+      >
+        ↻
       </button>
     ) : null;
   if (message.kind === 'emote') {
@@ -42,6 +56,7 @@ export const MessageItem = memo(function MessageItem({ message, characterName, a
         <div className="msg-body">
           <div className="emote">
             {characterName} {message.content}
+            {retryButton}
             {deleteButton}
           </div>
         </div>
@@ -68,6 +83,7 @@ export const MessageItem = memo(function MessageItem({ message, characterName, a
               {message.usage.inputTokens}↑ {message.usage.outputTokens}↓
             </span>
           ) : null}
+          {retryButton}
           {deleteButton}
         </div>
         {actions.length > 0 ? (

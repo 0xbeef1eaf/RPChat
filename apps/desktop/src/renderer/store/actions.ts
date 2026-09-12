@@ -209,6 +209,15 @@ export async function sendMessage(sessionId: SessionId, text: string): Promise<v
   }
 }
 
+/** Throw away the character's last reply and ask for another one from the same history. */
+export async function retryTurn(sessionId: SessionId): Promise<void> {
+  try {
+    await api().chat.retry(sessionId);
+  } catch (err) {
+    reportError('Retry failed', err);
+  }
+}
+
 export async function abortTurn(sessionId: SessionId): Promise<void> {
   try {
     await api().chat.abort(sessionId);

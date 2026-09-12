@@ -10,7 +10,7 @@ import { ModelTrafficDrawer } from '../components/chat/ModelTrafficDrawer';
 import { SessionPanel } from '../components/chat/SessionPanel';
 import { Avatar } from '../components/common/Avatar';
 import { ZoomControl } from '../components/chat/ZoomControl';
-import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, resetSessionState, saveSession, sendMessage, setChatZoom } from '../store/actions';
+import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, resetSessionState, retryTurn, saveSession, sendMessage, setChatZoom } from '../store/actions';
 import { runtimeFor } from '../store/state';
 import { useAppState } from '../store/store';
 
@@ -49,6 +49,10 @@ export function ChatView() {
   const providersConfigured = (settings?.providers.length ?? 0) > 0;
   const onSend = useCallback((text: string) => session && sendMessage(session.id, text), [session]);
   const onAbort = useCallback(() => session && abortTurn(session.id), [session]);
+  // Returns void and keeps its identity, so the memoised message it is handed does not re-render.
+  const onRetry = useCallback(() => {
+    if (session) void retryTurn(session.id);
+  }, [session]);
 
   if (!session) {
     const hasCharacters = characters.length > 0;
@@ -161,6 +165,7 @@ export function ChatView() {
         error={runtime.error}
         markers={runtime.eventMarkers}
         onDeleteMessage={(messageId) => void deleteMessage(session.id, messageId)}
+        onRetry={onRetry}
       />
       <div className="status-line" aria-live="polite">
         {running ? <span className="spinner" /> : null}

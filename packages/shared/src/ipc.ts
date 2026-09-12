@@ -155,6 +155,11 @@ export interface IpcApi {
   };
   chat: {
     send(sessionId: string, text: string): Promise<void>;
+    /**
+     * Throw away the character's last reply and generate another one from the same history.
+     * What that reply already did (media, memories, timers) is not undone.
+     */
+    retry(sessionId: string): Promise<void>;
     abort(sessionId: string): Promise<void>;
     onEvent(listener: (event: ChatEvent) => void): Unsubscribe;
   };

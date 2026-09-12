@@ -83,6 +83,33 @@ export class ChatService {
     });
   }
 
+  /**
+   * Re-generate the character's last reply: drop the assistant messages the last turn produced
+   * and run the turn again over the history that produced them. Nothing the user typed is
+   * re-sent and nothing before the reply is touched, so a retried timer or event turn is still
+   * answering the same `[self-wake]` note. With no reply to drop (the turn errored, or was
+   * aborted before it said anything) it simply runs the turn again.
+   *
+   * What the discarded reply already did — media it opened, memories it wrote, timers it set —
+   * is not undone: a retry is about the words, not about rewinding the machine.
+   */
+  async retry(sessionId: string): Promise<void> {
+    const session = await this.o.sessions.require(sessionId);
+    this.requireCharacter(session); // fail fast (NOT_FOUND) before queueing
+    await this.abort(sessionId);
+    await this.enqueue(sessionId, async () => {
+      const transcript = await this.o.sessions.messages(sessionId);
+      const discard = trailingReply(transcript);
+      if (discard.length === transcript.length) {
+        throw new RpError('INVALID_ARGUMENT', 'There is nothing to reply to yet', { sessionId });
+      }
+      for (const message of discard) await this.o.sessions.removeMessage(sessionId, message.id);
+      const fresh = await this.o.sessions.require(sessionId);
+      await this.runLlmTurn(fresh, 'llm');
+      await this.afterTurn(sessionId);
+    });
+  }
+
   /** Abort the running turn of a session (provider request and sandbox run). */
   async abort(sessionId: string): Promise<void> {
     this.controllers.get(sessionId)?.abort();
@@ -462,6 +489,17 @@ export class ChatService {
       if (this.controllers.get(session.id) === controller) this.controllers.delete(session.id);
     }
   }
+}
+
+/**
+ * The messages the last turn produced: the run of assistant messages at the end of the
+ * transcript (a turn can add several — `sdk.chat.say`, an emote, then the reply). Everything
+ * before them is the turn's input and stays.
+ */
+export function trailingReply(transcript: ChatMessage[]): ChatMessage[] {
+  let start = transcript.length;
+  while (start > 0 && transcript[start - 1]?.role === 'assistant') start--;
+  return transcript.slice(start);
 }
 
 export function dayPartOf(hour: number): import('@rp/shared').PresenceSnapshot['dayPart'] {

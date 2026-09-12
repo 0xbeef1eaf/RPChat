@@ -252,6 +252,21 @@ describe('queues', () => {
   });
 });
 
+describe('canRetry', () => {
+  it('needs something for the character to answer', async () => {
+    const { canRetry } = await import('../components/chat/MessageList');
+    const greeting = { ...msg('g', 'Hey there.'), role: 'assistant' as const, origin: 'greeting' as const };
+    const user = { ...msg('u', 'hello'), role: 'user' as const };
+    const reply = { ...msg('r', 'Hi!'), role: 'assistant' as const };
+    expect(canRetry(undefined)).toBe(false);
+    expect(canRetry([])).toBe(false);
+    // A fresh session showing only its greeting: nothing to regenerate a reply to.
+    expect(canRetry([greeting])).toBe(false);
+    expect(canRetry([greeting, user])).toBe(true);
+    expect(canRetry([greeting, user, reply])).toBe(true);
+  });
+});
+
 describe('mergeRows', () => {
   it('hides self-wake notes and keeps other system messages', async () => {
     const { mergeRows, isWakeNote } = await import('../components/chat/MessageList');

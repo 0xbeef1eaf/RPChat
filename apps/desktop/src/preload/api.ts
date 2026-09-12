@@ -24,7 +24,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   events: ['list', 'remove'],
   senses: ['snapshot'],
   sessions: ['list', 'create', 'get', 'update', 'remove', 'messages', 'removeMessage', 'clearMessages', 'resetState'],
-  chat: ['send', 'abort'],
+  chat: ['send', 'retry', 'abort'],
   permissions: ['respond'],
   settings: ['get', 'managed', 'update', 'testProvider', 'listModels', 'testCommand', 'defaultCommands'],
   audit: ['list'],

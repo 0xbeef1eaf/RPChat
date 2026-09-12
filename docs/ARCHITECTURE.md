@@ -375,7 +375,8 @@ JSONL, size-capped).
 ## 10. Renderer UI (v1 scope)
 
 - **Chat view**: session list sidebar, message stream with streaming text,
-  collapsible action cards (purpose, code, result/logs), abort button,
+  collapsible action cards (purpose, code, result/logs), abort button, retry
+  (discard the newest reply and generate another from the same history),
   character status line, and a text size the user can zoom (`settings.chatZoom`;
   the reading column widens with the text).
 - **Packs view**: installed packs, install from `.rppack`/folder, capability

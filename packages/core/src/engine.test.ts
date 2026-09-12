@@ -740,3 +740,64 @@ describe('history editing', () => {
     await expect(t.engine.chat.resetState('nope')).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 });
+
+describe('ChatService.retry', () => {
+  it('drops the last reply and answers the same message again', async () => {
+    t = await createTestEngine({ script: [{ text: 'First answer.' }, { text: 'Second answer.' }] });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    await t.engine.chat.send(session.id, 'say something');
+    expect((await t.engine.sessions.messages(session.id)).at(-1)?.content).toBe('First answer.');
+
+    t.events.length = 0;
+    await t.engine.chat.retry(session.id);
+
+    const after = await t.engine.sessions.messages(session.id);
+    expect(after.at(-1)?.content).toBe('Second answer.');
+    // The discarded reply is gone and the user's message was not re-sent.
+    expect(after.some((m) => m.content === 'First answer.')).toBe(false);
+    expect(after.filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['say something']);
+    expect(t.events.some((e) => e.type === 'message-removed')).toBe(true);
+  });
+
+  it('runs the turn again when the last one left no reply', async () => {
+    let calls = 0;
+    t = await createTestEngine({
+      respond: () => {
+        calls += 1;
+        if (calls === 1) throw new Error('provider exploded');
+        return { text: 'Sorry, here I am.' };
+      },
+    });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    await t.engine.chat.send(session.id, 'hello?').catch(() => undefined);
+
+    await t.engine.chat.retry(session.id);
+
+    const after = await t.engine.sessions.messages(session.id);
+    expect(after.at(-1)?.content).toBe('Sorry, here I am.');
+    expect(after.filter((m) => m.role === 'user')).toHaveLength(1);
+  });
+
+  it('refuses when the character has said everything there is', async () => {
+    t = await createTestEngine({ script: [{ text: 'unused' }] });
+    await t.engine.packs.install(LUNA_DIR);
+    const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
+    // Only the pack's greeting so far: there is no message for the character to answer.
+    expect((await t.engine.sessions.messages(session.id)).every((m) => m.role === 'assistant')).toBe(true);
+    await expect(t.engine.chat.retry(session.id)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+  });
+});
+
+describe('trailingReply', () => {
+  it('is the run of assistant messages at the end, and nothing before it', async () => {
+    const { trailingReply } = await import('./services/chat.js');
+    const m = (id: string, role: ChatMessage['role']): ChatMessage => ({ id, sessionId: 's', role, content: id, createdAt: '2026-01-01T00:00:00.000Z' });
+    expect(trailingReply([m('greeting', 'assistant'), m('u1', 'user'), m('say', 'assistant'), m('reply', 'assistant')]).map((x) => x.id)).toEqual(['say', 'reply']);
+    expect(trailingReply([m('u1', 'user')])).toEqual([]);
+    expect(trailingReply([])).toEqual([]);
+    // A whole transcript of assistant messages has no input left to answer.
+    expect(trailingReply([m('greeting', 'assistant')]).map((x) => x.id)).toEqual(['greeting']);
+  });
+});
