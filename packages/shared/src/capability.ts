@@ -70,7 +70,9 @@ export type ActionTrigger =
   | { kind: 'llm'; actionId: string; messageId: string }
   | { kind: 'behaviour'; hook: BehaviourHook }
   | { kind: 'timer'; timerId: string }
-  | { kind: 'event'; subscriptionId: string; event: string };
+  | { kind: 'event'; subscriptionId: string; event: string }
+  /** An ad-hoc script the user typed in the app's Sandbox tab (`IpcApi.sandbox.run`). */
+  | { kind: 'sandbox'; runId: string };
 
 export type BehaviourHook = 'onInstall' | 'onSessionStart' | 'onUserMessage' | 'onTimer' | 'onEvent' | 'onSessionEnd';
 

@@ -610,6 +610,7 @@ export async function captureWindows(logger: Logger, mediaList: () => unknown[] 
     ['editor-projects', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Pack editor'))?.click()"],
     ['editor-pack', "document.querySelector('.project-card .btn-primary')?.click()"],
     ['editor-character', "[...document.querySelectorAll('.editor-rail button')].find(b => /luna/i.test(b.textContent))?.click()"],
+    ['editor-scripts', "[...document.querySelectorAll('.editor-rail button')].find(b => b.textContent.trim().startsWith('Scripts'))?.click()"],
     ['editor-media', "[...document.querySelectorAll('.editor-rail button')].find(b => b.textContent.trim().startsWith('Media'))?.click()"],
     ['editor-publish', "[...document.querySelectorAll('.editor-rail button')].find(b => /Check/.test(b.textContent))?.click()"],
   ];

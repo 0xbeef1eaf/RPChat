@@ -91,7 +91,7 @@ export function ProjectList() {
         </div>
       ) : projects.length === 0 ? (
         <EmptyState title="No projects yet" actions={actions}>
-          A project is a pack folder on disk. Start a new one, open an existing pack folder, or copy an installed pack into the
+          A project is a pack folder on disk (one character per pack). Start a new one, open an existing pack folder, or copy an installed pack into the
           workspace to tweak it. Every edit is written straight to the folder, so the project is always a real pack.
         </EmptyState>
       ) : (
@@ -188,7 +188,7 @@ function NewPackDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
         </span>
       </div>
       <div className="field">
-        <label htmlFor="np-char">First character name</label>
+        <label htmlFor="np-char">Character name</label>
         <input id="np-char" type="text" value={characterName} onChange={(e) => setCharacterName(e.target.value)} placeholder="Luna" />
         <span className="field-hint">
           Character id: <code>{characterId}</code>

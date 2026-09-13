@@ -4,7 +4,7 @@ import { strToU8, zipSync } from 'fflate';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RpError } from '@rp/shared';
 import { extractPack, packDirectory, readManifestFromArchive } from './index.js';
-import { LUNA_DIR, MINIMAL_DIR, listFiles, makeTempDir, minimalPackFiles, writeTree } from './test/helpers.js';
+import { LUNA_DIR, MAKIMA_DIR, MINIMAL_DIR, listFiles, makeTempDir, minimalPackFiles, writeTree } from './test/helpers.js';
 
 const temps: string[] = [];
 afterEach(async () => {
@@ -53,6 +53,17 @@ describe('packDirectory → extractPack', () => {
       const b = await fs.readFile(path.join(dest, rel));
       expect(b.equals(a), rel).toBe(true);
     }
+  });
+
+  it('carries the character library files (makima ships lib/glance.ts)', async () => {
+    const tmp = await temp();
+    const archive = path.join(tmp, 'makima.rppack');
+    await packDirectory(MAKIMA_DIR, archive);
+    const dest = path.join(tmp, 'extracted');
+    const pack = await extractPack(archive, dest);
+    expect(await listFiles(dest)).toContain('characters/makima/lib/glance.ts');
+    expect(Object.keys(pack.character.library)).toEqual(['glance']);
+    expect(pack.character.library['glance']!.description).toContain('portrait');
   });
 
   it('is deterministic and skips dotfiles, node_modules and the destination file', async () => {

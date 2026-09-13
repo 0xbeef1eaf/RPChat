@@ -1,8 +1,7 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EditorProject } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { Modal } from '../../components/common/Modal';
-import { suggestCharacterId as suggestId } from '../../lib/editor';
 import { createSession, refreshCharacters, refreshPacks, reportError, setEditorLocation, toast } from '../../store/actions';
 import type { EditorSection } from '../../store/state';
 import { useAppState } from '../../store/store';
@@ -12,6 +11,7 @@ import { MediaSection } from './MediaSection';
 import { PackSection } from './PackSection';
 import { PublishSection } from './PublishSection';
 import { ReadmeSection } from './ReadmeSection';
+import { ScriptsSection } from './ScriptsSection';
 
 interface EditorShellProps {
   projectKey: string;
@@ -127,6 +127,8 @@ export function EditorShell({ projectKey, active }: EditorShellProps) {
   }
 
   const v = project.validation;
+  // A pack has exactly one character; the rail shows it by name.
+  const character = project.characters[0];
   const pill = !v.ok ? (
     <span className="badge badge-danger">{v.problems.length} problem{v.problems.length === 1 ? '' : 's'}</span>
   ) : v.warnings.length > 0 ? (
@@ -171,13 +173,10 @@ export function EditorShell({ projectKey, active }: EditorShellProps) {
         <div className="editor-body">
           <nav className="editor-rail" aria-label="Editor sections">
             {railItem('Pack', { section: 'pack', characterDir: null }, section === 'pack')}
-            <div className="sidebar-section-title" style={{ padding: '10px 10px 2px' }}>
-              Characters
-            </div>
-            {project.characters.map((c) =>
-              railItem(c.definition.name || c.definition.id, { section: 'character', characterDir: c.dir }, section === 'character' && characterDir === c.dir),
-            )}
-            <AddCharacter />
+            {character
+              ? railItem(character.definition.name || character.definition.id, { section: 'character', characterDir: character.dir }, section === 'character' && characterDir === character.dir, 'character')
+              : null}
+            {railItem('Scripts', { section: 'scripts', characterDir: null }, section === 'scripts', String(character?.library.length ?? 0))}
             {railItem('Media', { section: 'media', characterDir: null }, section === 'media', String(project.assets.length))}
             {railItem('README', { section: 'readme', characterDir: null }, section === 'readme')}
             {railItem('Check & publish', { section: 'publish', characterDir: null }, section === 'publish')}
@@ -191,6 +190,7 @@ export function EditorShell({ projectKey, active }: EditorShellProps) {
                 <p className="muted">This character no longer exists.</p>
               )
             ) : null}
+            {section === 'scripts' ? <ScriptsSection key="scripts" /> : null}
             {section === 'media' ? <MediaSection key="media" /> : null}
             {section === 'readme' ? <ReadmeSection key="readme" /> : null}
             {section === 'publish' ? <PublishSection key="publish" onInstall={() => run('install')} installing={busy === 'install'} /> : null}
@@ -241,69 +241,4 @@ export function EditorShell({ projectKey, active }: EditorShellProps) {
       ) : null}
     </EditorContext.Provider>
   );
-}
-
-function AddCharacter() {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <button type="button" className="nav-item muted" onClick={() => setOpen(true)}>
-        + Add character
-      </button>
-      {open ? <AddCharacterDialog onClose={() => setOpen(false)} /> : null}
-    </>
-  );
-}
-
-function AddCharacterDialog({ onClose }: { onClose: () => void }) {
-  const { project, setProject } = useEditorSafe();
-  const [name, setName] = useState('');
-  const [id, setId] = useState('');
-  const [touched, setTouched] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const effectiveId = touched ? id : suggestId(name);
-  const exists = project?.characters.some((c) => c.definition.id === effectiveId);
-  const valid = name.trim().length > 0 && /^[a-z0-9][a-z0-9-_]*$/.test(effectiveId) && !exists;
-
-  const add = async () => {
-    if (!project) return;
-    setBusy(true);
-    try {
-      const p = await api().editor.addCharacter(project.summary.key, effectiveId, name.trim());
-      setProject(p);
-      const dir = p.characters.find((c) => c.definition.id === effectiveId)?.dir ?? null;
-      setEditorLocation({ section: dir ? 'character' : 'pack', characterDir: dir });
-      onClose();
-    } catch (err) {
-      reportError('Could not add character', err);
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal title="Add character" onClose={busy ? undefined : onClose}>
-      <div className="field">
-        <label htmlFor="ac-name">Name</label>
-        <input id="ac-name" type="text" value={name} autoFocus onChange={(e) => setName(e.target.value)} />
-      </div>
-      <div className="field">
-        <label htmlFor="ac-id">Id</label>
-        <input id="ac-id" type="text" className="mono" value={effectiveId} onChange={(e) => (setTouched(true), setId(e.target.value.toLowerCase()))} />
-        {exists ? <span className="field-hint msg-error">A character with this id exists.</span> : null}
-      </div>
-      <div className="form-actions">
-        <button type="button" className="btn" onClick={onClose} disabled={busy}>
-          Cancel
-        </button>
-        <button type="button" className="btn btn-primary" onClick={add} disabled={!valid || busy}>
-          Add
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-function useEditorSafe() {
-  const ctx = useContext(EditorContext);
-  return { project: ctx?.project ?? null, setProject: ctx?.setProject ?? (() => undefined) };
 }

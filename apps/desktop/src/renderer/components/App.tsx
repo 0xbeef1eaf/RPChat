@@ -5,6 +5,7 @@ import { ActionLogView } from '../views/ActionLogView';
 import { ChatView } from '../views/ChatView';
 import { EditorView } from '../views/editor/EditorView';
 import { PacksView } from '../views/PacksView';
+import { SandboxView } from '../views/SandboxView';
 import { SdkReferenceView } from '../views/SdkReferenceView';
 import { SettingsView } from '../views/SettingsView';
 import { MemoriesPanel } from './memory/MemoriesPanel';
@@ -13,7 +14,7 @@ import { UiPromptModal } from './modals/UiPromptModal';
 import { Sidebar } from './Sidebar';
 import { Toasts } from './common/Toasts';
 
-const SHORTCUTS: Record<string, Parameters<typeof navigate>[0]> = { '1': 'chat', '2': 'packs', '3': 'editor', '4': 'settings', '5': 'log', '6': 'sdk' };
+const SHORTCUTS: Record<string, Parameters<typeof navigate>[0]> = { '1': 'chat', '2': 'packs', '3': 'editor', '4': 'settings', '5': 'log', '6': 'sdk', '7': 'sandbox' };
 
 export function App() {
   const route = useAppState((s) => s.route);
@@ -25,7 +26,7 @@ export function App() {
     void bootstrap();
   }, []);
 
-  // Ctrl/Cmd + 1..5 switches views.
+  // Ctrl/Cmd + 1..7 switches views.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
@@ -62,6 +63,7 @@ export function App() {
         {route === 'settings' ? <SettingsView /> : null}
         {route === 'log' ? <ActionLogView /> : null}
         {route === 'sdk' ? <SdkReferenceView /> : null}
+        {route === 'sandbox' ? <SandboxView /> : null}
       </main>
       <MemoriesPanel />
       <PermissionModal />

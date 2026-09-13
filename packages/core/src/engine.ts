@@ -37,6 +37,7 @@ import { ChatService } from './services/chat.js';
 import { EventService } from './services/events.js';
 import { MoodService } from './services/mood.js';
 import { RoutineService } from './services/routine.js';
+import { SandboxService } from './services/sandbox.js';
 import { HistoryService } from './services/history.js';
 import { LibraryService } from './services/library.js';
 import { MemoryService } from './services/memory.js';
@@ -106,6 +107,8 @@ export class Engine {
   readonly behaviours: BehaviourRunner;
   readonly actionLoop: ActionLoop;
   readonly chat: ChatService;
+  /** Ad-hoc scripts run by hand from the Sandbox tab (`IpcApi.sandbox`), as the character's own code would run. */
+  readonly sandbox: SandboxService;
   /**
    * The live capability surface. `list()`/`typings()` read the registry at call time;
    * `register`/`unregister` add or remove a plugin-provided module (spec + host handler) at runtime —
@@ -163,7 +166,7 @@ export class Engine {
     this.sessions.setBeforeRemove(async (session) => {
       await this.memories.consolidate(session.id, { auto: true });
     });
-    this.library = new LibraryService(opts.storage.state, now);
+    this.library = new LibraryService(this.packs);
 
     this.routine = new RoutineService({
       storage: opts.storage,
@@ -270,6 +273,15 @@ export class Engine {
     if (opts.senses) chatOptions.senses = opts.senses;
     this.chat = new ChatService(chatOptions);
     this.timers.setFireHandler((timer) => this.chat.handleTimer(timer));
+    this.sandbox = new SandboxService({
+      packs: this.packs,
+      sessions: this.sessions,
+      behaviours: this.behaviours,
+      audit: this.audit,
+      runExclusive: (sessionId, task) => this.chat.runExclusive(sessionId, task),
+      now,
+      logger,
+    });
 
     const eventOptions: ConstructorParameters<typeof EventService>[0] = {
       storage: opts.storage,
@@ -383,6 +395,7 @@ export class Engine {
     this.unsubscribeSenses?.();
     this.unsubscribeSenses = undefined;
     await this.timers.stop();
+    this.sandbox.cancelAll();
     await this.eventService.idle();
     await this.chat.idle();
     await this.memories.idle();

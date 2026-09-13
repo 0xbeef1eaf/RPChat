@@ -12,9 +12,9 @@ import type {
   UiPromptRequest,
 } from '@rp/shared';
 
-export type RouteName = 'chat' | 'packs' | 'settings' | 'log' | 'sdk' | 'editor';
+export type RouteName = 'chat' | 'packs' | 'settings' | 'log' | 'sdk' | 'editor' | 'sandbox';
 
-export type EditorSection = 'pack' | 'character' | 'media' | 'readme' | 'publish';
+export type EditorSection = 'pack' | 'character' | 'scripts' | 'media' | 'readme' | 'publish';
 
 export interface Toast {
   id: string;

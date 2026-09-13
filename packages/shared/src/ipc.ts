@@ -6,11 +6,12 @@ import type { CharacterSummary, InstalledPackRecord, MediaManifest, PackManifest
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
-import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, ScriptProblem, TagMediaOptions } from './editor.js';
+import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, SaveScriptInput, ScriptKind, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
 import type { ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
 import type { BrowserBlock, BrowserBridgeStatus } from './browser.js';
 import type { UpdateStatus } from './updates.js';
+import type { SandboxRunRequest, SandboxRunResult } from './sandbox.js';
 
 export type Unsubscribe = () => void;
 
@@ -192,6 +193,13 @@ export interface IpcApi {
   audit: {
     list(options?: { sessionId?: string; limit?: number }): Promise<AuditEntry[]>;
   };
+  /** Sandbox tab: run a script by hand as one of the installed characters (`engine.sandbox`). */
+  sandbox: {
+    /** Resolves when the script finished (ok or not); only a missing pack/character or a bad request rejects. */
+    run(request: SandboxRunRequest): Promise<SandboxRunResult>;
+    /** Abort a running script by the `runId` given to `run`; true when a run with that id was still going. */
+    cancel(runId: string): Promise<boolean>;
+  };
   memories: {
     list(characterRef: string): Promise<MemoryEntry[]>;
     add(characterRef: string, text: string, options?: { tags?: string[]; importance?: MemoryImportance }): Promise<MemoryEntry>;
@@ -299,9 +307,14 @@ export interface IpcApi {
     forget(key: string): Promise<void>;
     read(key: string): Promise<EditorProject>;
     saveManifest(key: string, manifest: PackManifest): Promise<EditorProject>;
-    addCharacter(key: string, characterId: string, name: string): Promise<EditorProject>;
+    /** Save the pack's one character (a pack has exactly one; there is no add or remove). */
     saveCharacter(key: string, input: SaveCharacterInput): Promise<EditorProject>;
-    removeCharacter(key: string, dir: string): Promise<EditorProject>;
+    /** Write (or rename) one `lib/<name>.ts` function file of the character. */
+    saveScript(key: string, input: SaveScriptInput): Promise<EditorProject>;
+    /** Delete `lib/<name>.ts`. */
+    removeScript(key: string, dir: string, name: string): Promise<EditorProject>;
+    /** Starter source for a new library function (description comment + function). */
+    scriptTemplate(): Promise<string>;
     /** Native picker → copies the image into the character dir and sets `avatar`. */
     pickAvatar(key: string, dir: string): Promise<EditorProject>;
     /** Native picker → copies the image/video into the character dir and adds an `avatarSet` expression. */
@@ -321,10 +334,12 @@ export interface IpcApi {
     saveReadme(key: string, text: string): Promise<EditorProject>;
     validate(key: string): Promise<EditorValidation>;
     /**
-     * Compile a behaviour script without saving it: what the editor calls while the author types,
-     * so a syntax error shows up under the box instead of at the next session start.
+     * Compile a script without saving it: what the editor calls while the author types, so a
+     * syntax error shows up under the box instead of at the next session start. `kind`
+     * `behaviour` (default) compiles a hook script; `function` checks a library function the way
+     * the pack loader does (exactly one function expression).
      */
-    checkScript(source: string): Promise<ScriptProblem[]>;
+    checkScript(source: string, kind?: ScriptKind): Promise<ScriptProblem[]>;
     /** Save dialog → writes the .rppack; returns the file path or null when cancelled. */
     exportPack(key: string): Promise<string | null>;
     /** Install (or replace) the pack in the app from the project folder. */

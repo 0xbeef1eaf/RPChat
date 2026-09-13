@@ -7,14 +7,22 @@ import {
   addAssetFile,
   behaviourScriptPath,
   behaviourTemplates,
+  formatLibraryFile,
   hookFileStem,
+  libraryFunctionTemplate,
+  libraryNameProblem,
+  libraryReadme,
   loadPack,
+  parseLibraryFile,
   personaTemplate,
+  readCharacterLibrary,
   removeAsset,
+  removeLibraryFunction,
   scaffoldPack,
   slugify,
   validatePack,
   writeCharacter,
+  writeLibraryFunction,
   writeManifest,
   writeMediaManifest,
   writeReadme,
@@ -53,10 +61,13 @@ describe('scaffoldPack', () => {
     expect(await listFiles(dir)).toEqual([
       'README.md',
       'characters/nova/character.json',
+      'characters/nova/lib/README.md',
       'characters/nova/persona.md',
       'media.json',
       'pack.json',
     ]);
+    expect(await fs.readFile(path.join(dir, 'characters/nova/lib/README.md'), 'utf8')).toBe(libraryReadme('Nova'));
+    expect(libraryReadme('Nova')).toContain('`lib/cheer.ts`');
     for (const sub of ['media/images', 'media/video', 'media/audio', 'characters/nova/scripts']) {
       expect((await fs.stat(path.join(dir, sub))).isDirectory()).toBe(true);
     }
@@ -66,6 +77,7 @@ describe('scaffoldPack', () => {
     expect(pack.characters[0]!.personaText).toContain('# Nova');
     expect(pack.characters[0]!.personaText).toContain('## Using your abilities');
     expect(pack.characters[0]!.behaviourSources).toEqual({});
+    expect(pack.character.library).toEqual({}); // the README in lib/ is not a function
     expect(pack.readme).toContain('# Scaffold');
     expect(pack.tagDescriptions).toEqual({});
     expect(await validatePack(dir)).toEqual({ ok: true, problems: [], warnings: [] });
@@ -152,7 +164,7 @@ describe('writeCharacter', () => {
     expect(nova.definition.behaviours).toEqual({ onTimer: 'scripts/on-timer.ts' });
     expect(nova.behaviourSources).toEqual({ onTimer: '// timer 2' });
     expect(await listFiles(charAbs)).toEqual([
-      'avatar.png', 'character.json', 'faces/neutral.png', 'persona.md', 'scripts/helper.ts', 'scripts/on-timer.ts',
+      'avatar.png', 'character.json', 'faces/neutral.png', 'lib/README.md', 'persona.md', 'scripts/helper.ts', 'scripts/on-timer.ts',
     ]);
 
     await writeCharacter(dir, charDir, nova.definition, nova.personaText, {});
@@ -300,5 +312,59 @@ describe('templates and slugify', () => {
     expect(slugify('---')).toBe('character');
     expect(slugify('')).toBe('character');
     expect(slugify('42 Dogs')).toBe('42-dogs');
+  });
+});
+
+describe('library files', () => {
+  it('parses and formats the description comment + function source', () => {
+    expect(parseLibraryFile('// show a picture\nasync (mood: string) => 1\n')).toEqual({ description: 'show a picture', source: 'async (mood: string) => 1' });
+    expect(parseLibraryFile('async (mood: string) => 1')).toEqual({ source: 'async (mood: string) => 1' });
+    expect(parseLibraryFile('//\n() => 1')).toEqual({ source: '() => 1' });
+    expect(parseLibraryFile('\r\n// x\r\n() => 1\r\n')).toEqual({ source: '// x\n() => 1' }); // a blank first line means no description
+    expect(formatLibraryFile('() => 1', 'tick')).toBe('// tick\n() => 1\n');
+    expect(formatLibraryFile('  () => 1\n', '  two\n  lines ')).toBe('// two lines\n() => 1\n');
+    expect(formatLibraryFile('() => 1')).toBe('() => 1\n');
+    expect(formatLibraryFile('() => 1', '   ')).toBe('() => 1\n');
+    expect(parseLibraryFile(formatLibraryFile('x => x', 'id'))).toEqual({ description: 'id', source: 'x => x' });
+    expect(parseLibraryFile(libraryFunctionTemplate())).toMatchObject({ description: expect.stringContaining('description'), source: expect.stringMatching(/^async \(mood: string\) => \{/) });
+  });
+
+  it('validates names', () => {
+    expect(libraryNameProblem('cheer')).toBeUndefined();
+    expect(libraryNameProblem('_$ok9')).toBeUndefined();
+    for (const bad of ['', '1abc', 'a-b', 'class', 'await', '__proto__', 'x'.repeat(65), 'has space', 42]) {
+      expect(libraryNameProblem(bad), String(bad)).toMatch(/name|reserved/);
+    }
+  });
+
+  it('writes, reads back, replaces and removes lib/<name>.ts', async () => {
+    const dir = await scaffolded();
+    const rel = await writeLibraryFunction(dir, 'characters/nova', 'cheer', 'async (mood: string) => {\n  return mood;\n}', 'show a picture for a mood');
+    expect(rel).toBe('characters/nova/lib/cheer.ts');
+    expect(await fs.readFile(path.join(dir, rel), 'utf8')).toBe('// show a picture for a mood\nasync (mood: string) => {\n  return mood;\n}\n');
+    await writeLibraryFunction(dir, 'characters/nova', 'tick', '() => 1');
+    const scan = await readCharacterLibrary(dir, 'characters/nova');
+    expect(scan.problems).toEqual([]);
+    expect(scan.skipped).toEqual([]);
+    expect(Object.keys(scan.library)).toEqual(['cheer', 'tick']);
+    expect(scan.library['cheer']).toMatchObject({ description: 'show a picture for a mood', source: 'async (mood: string) => {\n  return mood;\n}', file: rel });
+    expect(scan.library['tick']!.description).toBeUndefined();
+    // the loader sees the same
+    expect(Object.keys((await loadPack(dir)).character.library)).toEqual(['cheer', 'tick']);
+    // replacing keeps one file; no temp files are left behind
+    await writeLibraryFunction(dir, 'characters/nova', 'tick', '() => 2', 'ticks');
+    expect((await readCharacterLibrary(dir, 'characters/nova')).library['tick']).toMatchObject({ source: '() => 2', description: 'ticks' });
+    expect((await fs.readdir(path.join(dir, 'characters/nova/lib'))).sort()).toEqual(['README.md', 'cheer.ts', 'tick.ts']);
+    expect(await removeLibraryFunction(dir, 'characters/nova', 'tick')).toBe(true);
+    expect(await removeLibraryFunction(dir, 'characters/nova', 'tick')).toBe(false);
+    expect(Object.keys((await readCharacterLibrary(dir, 'characters/nova')).library)).toEqual(['cheer']);
+    await expectRpError(writeLibraryFunction(dir, 'characters/nova', 'a-b', '() => 1'), 'INVALID_ARGUMENT');
+    await expectRpError(writeLibraryFunction(dir, '../nova', 'ok', '() => 1'), 'PATH_ESCAPE');
+    await expectRpError(removeLibraryFunction(dir, 'characters/nova', 'class'), 'INVALID_ARGUMENT');
+    // a broken file is reported by the scan with its content, so an editor can show it
+    await fs.writeFile(path.join(dir, 'characters/nova/lib/bad.ts'), '// oops\nasync ( => 1\n');
+    const withBad = await readCharacterLibrary(dir, 'characters/nova');
+    expect(withBad.skipped).toEqual([{ file: 'characters/nova/lib/bad.ts', name: 'bad', message: expect.stringMatching(/^not a single function expression: fn does not parse/), source: 'async ( => 1', description: 'oops' }]);
+    expect((await readCharacterLibrary(dir, 'characters/none')).library).toEqual({});
   });
 });

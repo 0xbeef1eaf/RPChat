@@ -160,6 +160,47 @@ return { ended: ended + 1 };
   },
 };
 
+/** Starter `lib/README.md` for a new character: the function-file format in a few lines. */
+export function libraryReadme(name: string): string {
+  const n = name.trim() || 'the character';
+  return `# Function library
+
+Every \`<name>.ts\` file in this folder is one function of ${n}'s \`sdk.lib\`
+library, available in every action, timer handler and event handler as
+\`lib.<name>(...)\`. The app writes files here too when the character calls
+\`sdk.lib.define\`, so ship the functions you want it to start with.
+
+Format: an optional first line \`// <description>\` (shown in the prompt), then
+exactly one function expression (an arrow function or \`async function\`), for
+example \`lib/cheer.ts\`:
+
+\`\`\`ts
+// show a picture for a mood
+async (mood: string) => {
+  const pic = (await sdk.pack.findAssets({ anyTags: [mood], kind: "image" }))[0];
+  if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
+  return Boolean(pic);
+}
+\`\`\`
+
+The file name is the function name: a JavaScript identifier of at most 64
+characters. A function may use \`sdk\` and its sibling \`lib\` functions but
+closes over nothing else. Limits: 50 files, 16 KiB per file, 128 KiB in total.
+This README and anything that is not a \`.ts\` file are ignored.
+`;
+}
+
+/** Starter source for a new library function in the editor. */
+export function libraryFunctionTemplate(): string {
+  return `// say what this function is for (this first line is its description)
+async (mood: string) => {
+  const pic = (await sdk.pack.findAssets({ anyTags: [mood], kind: "image" }))[0];
+  if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
+  return Boolean(pic);
+}
+`;
+}
+
 /** One starter script per behaviour hook, in hook order, with comments explaining `input`. */
 export function behaviourTemplates(): BehaviourTemplate[] {
   return BEHAVIOUR_HOOKS.map((hook) => ({ hook, ...TEMPLATES[hook] }));

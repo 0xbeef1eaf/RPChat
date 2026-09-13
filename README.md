@@ -32,8 +32,9 @@ Characters, their behaviours and their media are distributed as shareable
 - **Sandboxed by construction**: character code runs in QuickJS (wasm) with
   CPU, memory, wall-clock and host-call budgets. It has no ambient access to
   the machine; every host effect is a permission-checked, audited SDK call.
-- **Shareable packs**: manifest + characters + persona + media + optional
-  behaviour scripts (`onSessionStart`, `onTimer`, ...).
+- **Shareable packs**: manifest + one character + persona + media + optional
+  behaviour scripts (`onSessionStart`, `onTimer`, ...) + the character's
+  function library (`lib/*.ts`).
 - **Provider-agnostic**: Anthropic, OpenAI-compatible servers (OpenAI, Ollama,
   LM Studio, OpenRouter, ...).
 - **Real overlays on Hyprland**: a native wlr-layer-shell helper renders media
@@ -47,7 +48,10 @@ Characters, their behaviours and their media are distributed as shareable
   within rate limits you control.
 - **A function library of their own**: a character can save reusable functions with
   `sdk.lib.define` and call them as `lib.<name>(...)` from any later action, timer
-  or event handler; the library persists per character and is listed in its prompt.
+  or event handler. Each function is a file in the pack
+  (`characters/<id>/lib/<name>.ts`), so pack authors can ship functions, the
+  character's own definitions persist with the installed pack, and the library
+  is listed in its prompt.
 - **External commands**: wallpaper, browser, desktop and voice actions run through
   command templates you edit in Settings. Input locking and injection are
   daemon-only (see *System integration* below).
@@ -102,9 +106,10 @@ Characters, their behaviours and their media are distributed as shareable
   the module to the SDK: it shows up in the reference, the prompt, the
   permission policy and pack capability requests like any built-in. See
   [docs/plugins.md](docs/plugins.md) and `examples/plugins/clock`.
-- **Built-in pack editor**: create or import a pack, edit the manifest,
-  characters (persona, greeting, behaviours, avatar and expressions), media with
-  tags and descriptions, and the README, with live validation, then install it
+- **Built-in pack editor**: create or import a pack, edit the manifest, the
+  character (persona, greeting, behaviours, avatar and expressions), its function
+  library (Scripts), media with tags and descriptions, and the README, with live
+  validation, then install it
   into the app or export an `.rppack` to share. Media can be tagged and described
   by a vision model (qwen3-vl on a local Ollama, Claude, …): the editor sends each
   asset to the model, shows what it suggests, and only writes what you accept.
@@ -295,6 +300,13 @@ ignore the effort setting; use an instruct build of those.
 For the on-disk format, see [examples/packs/README.md](examples/packs/README.md), the
 behaviour hooks and a tour of the SDK. The SDK reference the characters see is
 also available inside the app under **SDK Reference**.
+
+To try an SDK call before putting it in a behaviour or a persona, open **Sandbox**
+(<kbd>Ctrl</kbd>+<kbd>7</kbd>): pick a character, type the body of an action —
+`sdk`, `lib` and an optional JSON `input` are in scope, `return` gives the
+value — and press <kbd>Ctrl</kbd>+<kbd>Enter</kbd>. It runs in the same sandbox
+with the character's permissions and session, and shows the value, the error
+with a code frame, the console output and every SDK call it made.
 
 ## Security
 

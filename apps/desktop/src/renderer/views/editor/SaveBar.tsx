@@ -5,9 +5,11 @@ interface SaveBarProps {
   onSave: () => Promise<boolean>;
   onDiscard?: () => void;
   label?: string;
+  /** False while the draft cannot be saved yet (a missing name, say): the button waits, the label still says unsaved. */
+  canSave?: boolean;
 }
 
-export function SaveBar({ dirty, onSave, onDiscard, label = 'Save' }: SaveBarProps) {
+export function SaveBar({ dirty, onSave, onDiscard, label = 'Save', canSave = true }: SaveBarProps) {
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);
@@ -23,7 +25,7 @@ export function SaveBar({ dirty, onSave, onDiscard, label = 'Save' }: SaveBarPro
           Discard
         </button>
       ) : null}
-      <button type="button" className="btn btn-sm btn-primary" onClick={save} disabled={!dirty || busy} title="Ctrl/Cmd+S">
+      <button type="button" className="btn btn-sm btn-primary" onClick={save} disabled={!dirty || busy || !canSave} title="Ctrl/Cmd+S">
         {busy ? 'Saving…' : label}
       </button>
     </div>

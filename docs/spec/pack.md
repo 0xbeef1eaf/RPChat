@@ -9,7 +9,7 @@ export const packManifestSchema: z.ZodType<PackManifest>;
 export const characterDefinitionSchema: z.ZodType<CharacterDefinition>;
 export function validateManifest(json: unknown): PackManifest;       // throws RpError('PACK_INVALID', msg, { issues })
 export function validateCharacter(json: unknown): CharacterDefinition;
-export function loadPack(root: string): Promise<LoadedPack>;          // reads pack.json, every character dir, persona.md, behaviour scripts, README.md, indexes assets
+export function loadPack(root: string): Promise<LoadedPack>;          // reads pack.json, the one character dir (persona.md, behaviour scripts, lib/*.ts), README.md, indexes assets; `pack.character` is `pack.characters[0]`
 export function validatePack(root: string): Promise<{ ok: boolean; problems: string[] }>;  // never throws for content errors
 export function indexAssets(root: string, mediaRoot?: string): Promise<AssetEntry[]>;      // recursive; includes character avatars; kind by extension; mime by extension table
 export function resolveAssetPath(root: string, relative: string): string;  // normalises, rejects absolute/`..`/backslash tricks, returns absolute path; throws RpError('PATH_ESCAPE'); must also realpath-check that the resolved file stays under root (symlink escape)
@@ -18,15 +18,41 @@ export function extractPack(file: string, destinationDir: string): Promise<Loade
 export function readManifestFromArchive(file: string): Promise<PackManifest>;             // peek without extracting
 export function requestedCapabilities(pack: LoadedPack): string[];                           // pack + character level, deduped, sorted
 export function assetKindFor(path: string): AssetKind; export function mimeFor(path: string): string;
+// function library files (see "Function library" below)
+export function readCharacterLibrary(rootAbs, charDir, { previous? }): Promise<{ library: Record<name, CharacterLibraryEntry>; skipped: LibraryFileProblem[]; problems: string[] }>;
+export function writeLibraryFunction(root, charDir, name, source, description?): Promise<string>;   // atomic (temp + rename); returns the pack-relative path
+export function removeLibraryFunction(root, charDir, name): Promise<boolean>;
+export function functionSourceProblem(source): string | undefined; export function unwrapFunctionSource(raw): string; export function libraryNameProblem(name): string | undefined;
+export function parseLibraryFile(text): { source; description? }; export function formatLibraryFile(source, description?): string; export function libraryFilePath(name): string;
+export function libraryReadme(name): string; export function libraryFunctionTemplate(): string;      // scaffold text for lib/README.md and the editor's starter function
 ```
 
 ## Validation rules
 
 - `id`: /^[a-z0-9]+(\.[a-z0-9-]+)+$/ ; `version`: semver (simple regex `^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`); `formatVersion === 1`
-- `characters` non-empty; each entry a relative dir containing `character.json`; character ids unique in pack; `persona` file must exist; `behaviours` files must exist and end with `.ts` or `.js`; `avatar` must exist and be an image.
+- **A pack has exactly one character.** `characters` holds exactly one relative dir containing `character.json` (the schema rejects zero or two entries); the loader also reports a problem when `characters/` holds a second directory with a `character.json` that the manifest does not list (`characters/<x>/character.json: a pack has exactly one character …`). The on-disk layout `characters/<id>/…`, the array in `pack.json` and the `packId/characterId` character ref are unchanged; `LoadedPack.character` is the convenience accessor and `LoadedPack.characters` stays a one-entry array for compatibility. `persona` file must exist; `behaviours` files must exist and end with `.ts` or `.js`; `avatar` must exist and be an image.
+- `characters/<id>/lib/*.ts`: see "Function library". A file that is not one function expression (or whose stem is not a valid name) is a `warning:` and skipped; the caps are problems.
 - `capabilities` entries: /^[a-z][a-zA-Z0-9]*$/ (existence against the registry is checked by core, not here).
 - `mediaRoot` default `media`; may not exist (a pack can have no media).
 - File names inside the pack must not contain `..` segments or be absolute.
+
+## Function library (`characters/<id>/lib/`)
+
+The character's `sdk.lib` functions live in the pack, one file per function: `characters/<id>/lib/<name>.ts`. The file is an optional first line `// <description>` followed by the function expression exactly as `sdk.lib.define` received it (arrow or `async function`):
+
+```ts
+// show a picture for a mood
+async (mood: string) => {
+  const pic = (await sdk.pack.findAssets({ anyTags: [mood], kind: "image" }))[0];
+  if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
+  return Boolean(pic);
+}
+```
+
+- `<name>` is the function name: `^[a-zA-Z_$][\w$]*$`, at most 64 characters, no JavaScript reserved words, not `__proto__` (`LIB_NAME_PATTERN` / `LIB_NAME_MAX_CHARS` in `@rp/shared`). Only regular `.ts` files count; a `README.md`, sub-folders and dotfiles in `lib/` are ignored.
+- The loader reads the folder into `LoadedCharacter.library: Record<name, { source; description?; bytes; file; updatedAt }>` (sorted by name; `updatedAt` is the file's mtime) and checks each source with `functionSourceProblem` — the same esbuild "exactly one function expression" check `LibraryService` applies to `sdk.lib.define`, so both cannot drift. A file that fails is reported as `warning: characters/<id>/lib/<name>.ts: not a single function expression: …` and left out; the pack still loads.
+- Caps, reported as problems: 50 files (`LIB_MAX_FUNCTIONS`), 16 KiB per source (`LIB_MAX_SOURCE_BYTES`), 128 KiB in total (`LIB_MAX_TOTAL_BYTES`).
+- `readCharacterLibrary(rootAbs, charDir, { previous })` reuses entries whose source text is unchanged, so core's rescan after every `define` stays cheap. `writeLibraryFunction` writes atomically (temp file + rename) and `removeLibraryFunction` deletes; core calls both against the installed copy, so what a character defines lands next to what the author shipped. `scaffoldPack` creates `lib/README.md` (`libraryReadme`) explaining the format. `packDirectory` zips the folder like any other pack file.
 
 ## Asset kinds
 
@@ -42,6 +68,8 @@ Also add `examples/packs/README.md` documenting the format for pack authors (cop
 ## Tests
 
 - schema accepts the examples and rejects: bad id, missing characters, `..` in paths, absolute paths
-- loadPack on `examples/packs/luna` yields 1 character, persona text, behaviour sources, asset index with correct kinds
+- loadPack on `examples/packs/luna` yields 1 character, persona text, behaviour sources, asset index with correct kinds; on `examples/packs/makima` the shipped `lib/glance.ts` loads with its description
+- a second character (listed in `pack.json`, or only present on disk) is a problem; a directory under `characters/` without a `character.json` is not a character
+- library files: read sorted with descriptions; bad ones skipped with a warning; caps are problems; `writeLibraryFunction`/`removeLibraryFunction` round-trip and leave no temp files; `packDirectory` → `extractPack` carries `lib/*.ts`
 - resolveAssetPath rejects `../x`, `/etc/passwd`, `media\\..\\x`, and a symlink pointing outside root (create in a temp dir)
 - packDirectory → extractPack round-trips byte-for-byte; extractPack rejects a hand-built zip containing `../evil.txt`

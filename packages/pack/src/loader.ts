@@ -13,8 +13,12 @@ import { DEFAULT_MEDIA_ROOT, assetKindFor, indexAssets } from './assets.js';
 import { globToRegExp } from './glob.js';
 import { validateMediaManifest } from './media-manifest.js';
 import { joinRelative, normalizeRelativePath, resolveAssetPath } from './paths.js';
+import { readCharacterLibrary } from './library.js';
 import { BEHAVIOUR_HOOKS, validateCharacter, validateManifest } from './schema.js';
 import { MAX_TAGS_PER_ASSET } from './tags.js';
+
+/** Directory that holds the pack's character directory (`characters/<id>/`). */
+export const CHARACTERS_DIR_NAME = 'characters';
 
 export const PACK_README_FILENAME = 'README.md';
 
@@ -75,6 +79,7 @@ async function loadCharacter(
   rootAbs: string,
   dirInput: string,
   problems: string[],
+  warnings: string[],
 ): Promise<LoadedCharacter | undefined> {
   const n = normalizeRelativePath(dirInput);
   if (!n.ok) {
@@ -159,10 +164,41 @@ async function loadCharacter(
     behaviourSources[hook] = await fs.readFile(scriptAbs, 'utf8');
   }
 
+  // function library: lib/<name>.ts (optional). A broken file is skipped with a warning; the caps are problems.
+  const scan = await readCharacterLibrary(rootAbs, dir);
+  problems.push(...scan.problems);
+  for (const skipped of scan.skipped) warnings.push(`warning: ${skipped.file}: ${skipped.message}`);
+
   if (problems.length > before) return undefined;
-  const loaded: LoadedCharacter = { dir, definition, personaText, behaviourSources };
+  const loaded: LoadedCharacter = { dir, definition, personaText, behaviourSources, library: scan.library };
   if (avatarPath !== undefined) loaded.avatarPath = avatarPath;
   return loaded;
+}
+
+/**
+ * A pack has exactly one character. The manifest schema already allows one
+ * entry only; this also catches a second `characters/<x>/character.json` on
+ * disk that the manifest does not list (a leftover, or a pack that was meant to
+ * be split), so the folder and the manifest cannot disagree silently.
+ */
+async function checkSingleCharacterDir(rootAbs: string, listedDir: string | undefined, problems: string[]): Promise<void> {
+  const charactersAbs = path.join(rootAbs, CHARACTERS_DIR_NAME);
+  if ((await kindOf(charactersAbs)) !== 'dir') return;
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(charactersAbs, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    const rel = `${CHARACTERS_DIR_NAME}/${entry.name}`;
+    if (rel === listedDir) continue;
+    if ((await kindOf(path.join(charactersAbs, entry.name, CHARACTER_MANIFEST_FILENAME))) !== 'file') continue;
+    problems.push(
+      `${rel}/${CHARACTER_MANIFEST_FILENAME}: a pack has exactly one character${listedDir ? ` ("${listedDir}")` : ''}; move "${rel}" into a pack of its own or delete it`,
+    );
+  }
 }
 
 /**
@@ -193,19 +229,12 @@ export async function inspectPack(root: string): Promise<PackInspection> {
   }
 
   const characters: LoadedCharacter[] = [];
-  const seenIds = new Map<string, string>();
   for (const dirInput of manifest.characters) {
-    const character = await loadCharacter(rootAbs, dirInput, problems);
-    if (!character) continue;
-    const id = character.definition.id;
-    const other = seenIds.get(id);
-    if (other !== undefined) {
-      problems.push(`${character.dir}/${CHARACTER_MANIFEST_FILENAME}: duplicate character id "${id}" (also in ${other})`);
-      continue;
-    }
-    seenIds.set(id, character.dir);
-    characters.push(character);
+    const character = await loadCharacter(rootAbs, dirInput, problems, warnings);
+    if (character) characters.push(character);
   }
+  const listedDir = manifest.characters[0] !== undefined ? normalizeRelativePath(manifest.characters[0]) : undefined;
+  await checkSingleCharacterDir(rootAbs, listedDir?.ok ? listedDir.path : undefined, problems);
 
   const mediaRoot = manifest.mediaRoot ?? DEFAULT_MEDIA_ROOT;
   const mediaAbs = safeResolve(rootAbs, mediaRoot, problems, PACK_MANIFEST_FILENAME);
@@ -259,16 +288,19 @@ export async function inspectPack(root: string): Promise<PackInspection> {
   }
   if (problems.length > 0) return { problems, warnings };
 
-  const pack: LoadedPack = { root: rootAbs, manifest, characters, assets };
+  const character = characters[0];
+  if (!character) return { problems: [`${PACK_MANIFEST_FILENAME}: the pack's character could not be loaded`], warnings };
+  const pack: LoadedPack = { root: rootAbs, manifest, character, characters, assets };
   if (mediaManifest?.tags !== undefined) pack.tagDescriptions = mediaManifest.tags;
   if (readme !== undefined) pack.readme = readme;
   return { pack, problems, warnings };
 }
 
 /**
- * Loads a pack directory: `pack.json`, every character (definition, persona
- * text, behaviour script sources), the optional `README.md`, and the asset index.
- * Throws `RpError('PACK_INVALID', msg, { problems })` when anything is wrong.
+ * Loads a pack directory: `pack.json`, its one character (definition, persona
+ * text, behaviour script sources, function library), the optional `README.md`,
+ * and the asset index. Throws `RpError('PACK_INVALID', msg, { problems })` when
+ * anything is wrong.
  */
 export async function loadPack(root: string): Promise<LoadedPack> {
   const { pack, problems } = await inspectPack(root);

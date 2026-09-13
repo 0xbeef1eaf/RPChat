@@ -28,6 +28,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   permissions: ['respond'],
   settings: ['get', 'managed', 'update', 'testProvider', 'listModels', 'testCommand', 'defaultCommands'],
   audit: ['list'],
+  sandbox: ['run', 'cancel'],
   memories: ['list', 'add', 'update', 'remove', 'consolidate'],
   prompts: ['pending'],
   ui: ['respondPrompt'],
@@ -36,7 +37,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   updates: ['status', 'check', 'download', 'install', 'setToken'],
   plugins: ['pluginsDir', 'list', 'install', 'remove', 'setEnabled', 'reload', 'openFolder'],
   editor: [
-    'workspaceDir', 'listProjects', 'create', 'open', 'importInstalled', 'forget', 'read', 'saveManifest', 'addCharacter', 'saveCharacter', 'removeCharacter',
+    'workspaceDir', 'listProjects', 'create', 'open', 'importInstalled', 'forget', 'read', 'saveManifest', 'saveCharacter', 'saveScript', 'removeScript', 'scriptTemplate',
     'pickAvatar', 'pickExpression', 'addMedia', 'addMediaFiles', 'removeMedia', 'saveMediaManifest', 'suggestMediaTags', 'saveReadme', 'validate', 'checkScript', 'exportPack', 'installToApp',
     'revealInFolder', 'behaviourTemplates',
   ],

@@ -16,6 +16,21 @@ export interface EditorProjectSummary {
   installed: boolean;
 }
 
+/** One `lib/<name>.ts` function file of the character, as the editor shows it. */
+export interface EditorScript {
+  /** Function name = file stem (`lib.<name>(...)`). */
+  name: string;
+  /** From the file's first-line `// …` comment. */
+  description?: string;
+  /** The function expression (without the description comment). */
+  source: string;
+  bytes: number;
+  /** Path relative to the pack root, e.g. `characters/luna/lib/cheer.ts`. */
+  file: string;
+  /** Why the loader skips this file (not a single function expression, bad name); absent when it loads. */
+  problem?: string;
+}
+
 export interface EditorCharacter {
   /** Directory relative to the pack root, e.g. `characters/luna`. */
   dir: string;
@@ -23,6 +38,8 @@ export interface EditorCharacter {
   personaText: string;
   /** Hook → script source. */
   behaviours: Partial<Record<BehaviourHook, string>>;
+  /** The function library (`lib/*.ts`), sorted by name; files the loader skips are included with `problem`. */
+  library: EditorScript[];
   /** `rp-asset://` URL of the avatar, when present. */
   avatarUrl?: string;
   /** Expression name → `rp-asset://` URL (from `avatarSet`). */
@@ -72,6 +89,21 @@ export interface SaveCharacterInput {
   personaText: string;
   behaviours: Partial<Record<BehaviourHook, string>>;
 }
+
+/** Write (or rename) one library function file: `<dir>/lib/<name>.ts`. */
+export interface SaveScriptInput {
+  /** Character directory relative to the pack root. */
+  dir: string;
+  name: string;
+  /** The function expression (arrow or `async function`); saved as is, so a broken one is reported rather than refused. */
+  source: string;
+  description?: string;
+  /** When renaming: the file `<previousName>.ts` is removed after the new one is written. */
+  previousName?: string;
+}
+
+/** Which compiler check `editor.checkScript` runs: a hook script (an async function body) or a library function (one function expression). */
+export type ScriptKind = 'behaviour' | 'function';
 
 /**
  * One problem in a behaviour script, from compiling it exactly as the sandbox will. `line`/`column`

@@ -117,7 +117,7 @@ const packManifestObject = z.object({
   license: z.string().optional(),
   homepage: z.string().optional(),
   tags: z.array(z.string().min(1)).optional(),
-  characters: z.array(relativePathSchema).min(1, 'a pack needs at least one character').check(uniqueCheck('character directory')),
+  characters: z.array(relativePathSchema).min(1, 'a pack has exactly one character; list its directory').max(1, 'a pack has exactly one character; put a second character in a pack of its own').check(uniqueCheck('character directory')),
   capabilities: z.array(capabilityIdSchema).optional(),
   mediaRoot: relativePathSchema.optional(),
   minAppVersion: semverSchema.optional(),

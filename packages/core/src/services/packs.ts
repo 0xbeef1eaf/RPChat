@@ -3,8 +3,9 @@ import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { CapabilityRegistry } from '@rp/sdk';
 import * as os from 'node:os';
-import { extractPack, loadPack, packDirectory, readManifestFromArchive, requestedCapabilities } from '@rp/pack';
+import { extractPack, loadPack, packDirectory, readCharacterLibrary, readManifestFromArchive, requestedCapabilities, writeLibraryFunction } from '@rp/pack';
 import type {
+  CharacterLibraryEntry,
   CharacterSummary,
   InstalledPackRecord,
   InstalledPackView,
@@ -14,8 +15,10 @@ import type {
   PackManifest,
   Storage,
 } from '@rp/shared';
-import { PACK_FILE_EXTENSION, RpError, assetUrl, characterRef, parseCharacterRef } from '@rp/shared';
+import { LIB_NAME_PATTERN, PACK_FILE_EXTENSION, RpError, assetUrl, characterRef, parseCharacterRef } from '@rp/shared';
 import { summariseTags } from '../assets.js';
+import { characterScope } from '../handlers/state.js';
+import { LIB_STATE_KEY } from './library.js';
 import type { PermissionService } from './permissions.js';
 import { policyAllows } from './permissions.js';
 import type { TimerService } from './timers.js';
@@ -115,8 +118,68 @@ export class PackService {
         const pack = await loadPack(record.root);
         this.loaded.set(record.packId, pack);
         await this.syncRequestedCapabilities(record, pack);
+        await this.migrateLibraryState(pack);
       } catch (err) {
         this.logger.error(`[packs] cannot load installed pack ${record.packId} at ${record.root}`, err);
+      }
+    }
+  }
+
+  /**
+   * Rescan `characters/<id>/lib/*.ts` of an installed pack and swap the result
+   * into the loaded character (`LibraryService` calls this after writing or
+   * deleting a function file). Files the scan skips are logged; cap violations
+   * throw `PACK_INVALID` and leave the previous library in place.
+   */
+  async reloadCharacterLibrary(packId: string): Promise<Record<string, CharacterLibraryEntry>> {
+    const pack = this.getLoaded(packId);
+    const character = pack.character;
+    const scan = await readCharacterLibrary(pack.root, character.dir, { previous: character.library });
+    for (const skipped of scan.skipped) this.logger.warn(`[packs] ${packId}: ${skipped.file}: ${skipped.message}`);
+    if (scan.problems.length > 0) {
+      throw new RpError('PACK_INVALID', `The function library of ${packId} is over its limits:\n${scan.problems.join('\n')}`, { packId, problems: scan.problems });
+    }
+    character.library = scan.library;
+    return scan.library;
+  }
+
+  /**
+   * Older versions kept `sdk.lib` functions in the character state under
+   * `lib.functions`; they now live in the pack as `characters/<id>/lib/<name>.ts`.
+   * Write every stored function to a file (a name that already has a file is
+   * left alone: the file wins), drop the state key, and rescan.
+   */
+  private async migrateLibraryState(pack: LoadedPack): Promise<void> {
+    for (const character of pack.characters) {
+      const scope = characterScope({ packId: pack.manifest.id, characterId: character.definition.id });
+      const raw = await this.storage.state.get(scope, LIB_STATE_KEY);
+      if (raw === undefined) continue;
+      const entries = raw && typeof raw === 'object' && !Array.isArray(raw) ? Object.entries(raw as Record<string, unknown>) : [];
+      let written = 0;
+      let kept = 0;
+      for (const [name, value] of entries) {
+        const fn = value as { source?: unknown; description?: unknown } | null;
+        if (!fn || typeof fn !== 'object' || typeof fn.source !== 'string' || !LIB_NAME_PATTERN.test(name)) continue;
+        const target = path.join(pack.root, ...character.dir.split('/'), 'lib', `${name}.ts`);
+        if (await pathKind(target) !== 'missing') {
+          kept += 1;
+          continue;
+        }
+        try {
+          await writeLibraryFunction(pack.root, character.dir, name, fn.source, typeof fn.description === 'string' ? fn.description : undefined);
+          written += 1;
+        } catch (err) {
+          this.logger.warn(`[packs] ${pack.manifest.id}: could not migrate lib.${name} to a file`, err);
+        }
+      }
+      await this.storage.state.delete(scope, LIB_STATE_KEY);
+      this.logger.info(`[packs] ${pack.manifest.id}/${character.definition.id}: moved ${written} library function(s) from state into ${character.dir}/lib/${kept > 0 ? ` (${kept} already had a file)` : ''}`);
+      if (written > 0) {
+        try {
+          await this.reloadCharacterLibrary(pack.manifest.id);
+        } catch (err) {
+          this.logger.warn(`[packs] ${pack.manifest.id}: library rescan after migration failed`, err);
+        }
       }
     }
   }
@@ -288,6 +351,7 @@ export class PackService {
     };
     await this.storage.packs.upsert(record);
     this.loaded.set(manifest.id, pack);
+    await this.migrateLibraryState(pack);
 
     // 4. onInstall hooks run now (everything granted) or once grants change; mark them pending first
     //    so a grant listener can never run them before the record exists.

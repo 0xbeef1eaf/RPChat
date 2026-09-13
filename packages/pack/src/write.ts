@@ -8,22 +8,13 @@ import { PACK_README_FILENAME } from './loader.js';
 import { validateMediaManifest } from './media-manifest.js';
 import { joinRelative, normalizeRelativePath, resolveAssetPath } from './paths.js';
 import { BEHAVIOUR_HOOKS, CHARACTER_ID_PATTERN, validateCharacter, validateManifest } from './schema.js';
-import { behaviourScriptPath, personaTemplate } from './templates.js';
+import { behaviourScriptPath, libraryReadme, personaTemplate } from './templates.js';
+import { writeFileAtomic } from './write-file.js';
+import { LIB_DIR_NAME } from '@rp/shared';
 
 /* ---------------------------------------------------------------- helpers */
 
-/** Writes `data` to `abs` atomically (temp file in the same directory, then rename). */
-export async function writeFileAtomic(abs: string, data: string | Uint8Array): Promise<void> {
-  await fs.mkdir(path.dirname(abs), { recursive: true });
-  const tmp = `${abs}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-  try {
-    await fs.writeFile(tmp, data);
-    await fs.rename(tmp, abs);
-  } catch (err) {
-    await fs.rm(tmp, { force: true });
-    throw err;
-  }
-}
+export { writeFileAtomic } from './write-file.js';
 
 /** Reorders keys: `order` first (in that order), then the rest sorted. Nested values are left as-is. */
 function orderKeys<T extends object>(obj: T, order: readonly (keyof T & string)[]): T {
@@ -178,9 +169,10 @@ export interface ScaffoldOptions {
 
 /**
  * Creates a new, valid pack skeleton in `dir`: `pack.json`, `README.md`,
- * `media.json`, `media/{images,video,audio}/`, and one character with a
- * persona template and an empty `scripts/` directory. Refuses to overwrite an
- * existing pack (`PACK_CONFLICT`).
+ * `media.json`, `media/{images,video,audio}/`, and the pack's one character
+ * with a persona template, an empty `scripts/` directory and a `lib/` folder
+ * holding only a README that explains the function-file format. Refuses to
+ * overwrite an existing pack (`PACK_CONFLICT`).
  */
 export async function scaffoldPack(dir: string, options: ScaffoldOptions): Promise<void> {
   const rootAbs = path.resolve(dir);
@@ -218,10 +210,11 @@ export async function scaffoldPack(dir: string, options: ScaffoldOptions): Promi
   await writeMediaManifest(rootAbs, { entries: [], tags: {} });
   await writeReadme(
     rootAbs,
-    `# ${options.name}\n\n${manifest.description}\n\nCharacters: ${options.characterName} (\`${characterId}\`).\n`,
+    `# ${options.name}\n\n${manifest.description}\n\nCharacter: ${options.characterName} (\`${characterId}\`).\n`,
   );
   await writeCharacter(rootAbs, charDir, definition, personaTemplate(options.characterName), {});
   await fs.mkdir(path.join(rootAbs, ...charDir.split('/'), 'scripts'), { recursive: true });
+  await writeFileAtomic(path.join(rootAbs, ...charDir.split('/'), LIB_DIR_NAME, 'README.md'), libraryReadme(options.characterName));
 }
 
 /* ----------------------------------------------------------------- assets */

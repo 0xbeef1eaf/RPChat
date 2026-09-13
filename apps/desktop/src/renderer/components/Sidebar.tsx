@@ -12,6 +12,7 @@ const NAV: Array<{ route: RouteName; label: string }> = [
   { route: 'settings', label: 'Settings' },
   { route: 'log', label: 'Action log' },
   { route: 'sdk', label: 'SDK reference' },
+  { route: 'sandbox', label: 'Sandbox' },
 ];
 
 export function Sidebar() {

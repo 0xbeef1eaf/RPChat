@@ -1685,6 +1685,46 @@ textarea.code.invalid {
   gap: 8px;
   align-items: start;
 }
+.scripts-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.scripts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  padding: 6px;
+  position: sticky;
+  top: 0;
+}
+.scripts-list .nav-item {
+  align-items: center;
+  gap: 8px;
+}
+.scripts-list .item-text {
+  min-width: 0;
+}
+.scripts-list .item-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scripts-editor {
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .scripts-layout {
+    grid-template-columns: 1fr;
+  }
+  .scripts-list {
+    position: static;
+  }
+}
 .hook {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1828,4 +1868,103 @@ textarea.code.invalid {
 }
 .suggestion.failed {
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
+/* Sandbox tab: a script editor with a line-number gutter next to what the run returned. */
+.sandbox-hint {
+  margin-bottom: 14px;
+  max-width: 1100px;
+  line-height: 1.5;
+}
+.sandbox-hint code,
+.sandbox-hint kbd {
+  font-size: 12px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+}
+.sandbox-body {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .sandbox-body {
+    grid-template-columns: 1fr;
+  }
+}
+.sandbox-editor-column {
+  min-width: 0;
+}
+.sandbox-editor {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+.sandbox-editor:focus-within {
+  border-color: var(--accent);
+}
+.sandbox-gutter {
+  flex: none;
+  margin: 0;
+  padding: 8px 8px 8px 12px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--code-bg);
+  color: var(--fg-muted);
+  text-align: right;
+  user-select: none;
+  overflow: hidden;
+  line-height: 1.5;
+  font-size: 12.5px;
+  min-width: 2.5em;
+}
+.sandbox-editor textarea.code {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  min-height: 320px;
+  height: 56vh;
+  padding: 8px 12px;
+  resize: vertical;
+}
+.sandbox-editor textarea.code:focus-visible {
+  outline: none;
+}
+textarea.code.sandbox-input {
+  min-height: 64px;
+  height: 64px;
+}
+.sandbox-invalid {
+  color: var(--danger);
+}
+.sandbox-output {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  padding: 12px 14px;
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+}
+.sandbox-h4 {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-muted);
+  margin: 0 0 6px;
+}
+.sandbox-result pre {
+  max-height: 320px;
+  font-size: 12px;
+}
+.sandbox-result details > pre {
+  margin-top: 6px;
 }

@@ -2,10 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BehaviourHook, BehaviourTemplate, CharacterDefinition, EditorCharacter, ExampleDialogueTurn, ScriptProblem } from '@rp/shared';
 import { api } from '../../api';
 import { Markdown } from '../../components/common/Markdown';
-import { ConfirmDialog } from '../../components/common/Modal';
 import { CapabilityChecklist } from '../../components/editor/CapabilityChecklist';
 import { isValidCharacterId, wordCount } from '../../lib/editor';
-import { reportError, setEditorLocation, toast } from '../../store/actions';
+import { reportError, toast } from '../../store/actions';
 import { useDraft, useEditor } from './context';
 import { SaveBar } from './SaveBar';
 
@@ -41,7 +40,6 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
   const [templates, setTemplates] = useState<BehaviourTemplate[]>([]);
   const [preview, setPreview] = useState(false);
   const [idUnlocked, setIdUnlocked] = useState(false);
-  const [removing, setRemoving] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
   const [scriptProblems, setScriptProblems] = useState<Partial<Record<BehaviourHook, ScriptProblem>>>({});
@@ -141,18 +139,6 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
     }
   };
 
-  const remove = async () => {
-    setRemoving(false);
-    try {
-      const p = await api().editor.removeCharacter(project.summary.key, dir);
-      setProject(p);
-      setEditorLocation({ section: 'pack', characterDir: null });
-      toast('info', 'Character removed');
-    } catch (err) {
-      reportError('Could not remove character', err);
-    }
-  };
-
   const insertTemplate = (hook: BehaviourHook) => {
     const t = templates.find((x) => x.hook === hook);
     if (!t) return;
@@ -177,9 +163,9 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
     <div>
       <div className="section-head">
         <h1>{def.name || def.id}</h1>
-        <button type="button" className="btn btn-sm btn-danger" onClick={() => setRemoving(true)}>
-          Remove character
-        </button>
+        <span className="muted small">
+          The pack's character · <code className="mono">{dir}</code>
+        </span>
       </div>
 
       <div className="field-grid">
@@ -413,16 +399,6 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
       </div>
 
       <SaveBar dirty={d.dirty} onSave={d.save} onDiscard={() => d.reset(toDraft(character))} />
-      {removing ? (
-        <ConfirmDialog
-          title={`Remove ${def.name}?`}
-          message="Deletes the character folder (persona, scripts, avatar) from the project."
-          confirmLabel="Remove"
-          danger
-          onCancel={() => setRemoving(false)}
-          onConfirm={remove}
-        />
-      ) : null}
     </div>
   );
 }

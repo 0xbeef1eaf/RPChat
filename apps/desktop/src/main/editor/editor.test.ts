@@ -165,6 +165,84 @@ describe('EditorService media options', () => {
   });
 });
 
+describe('EditorService scripts (lib/<name>.ts)', () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-editor-scripts-'));
+  });
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  function svc(): EditorService {
+    return new EditorService({
+      userData: tmp,
+      registry: new ProjectRegistry(path.join(tmp, 'data', 'editor-projects.json')),
+      packs: { install: async () => { throw new Error('not in test'); }, tryGetLoaded: () => undefined, installedIds: async () => [] },
+      dialogs: { openDirectory: async () => undefined, openFiles: async () => [], saveFile: async () => undefined },
+      reveal: () => undefined,
+      logger: { warn: () => undefined, debug: () => undefined },
+    });
+  }
+
+  it('creates, lists, renames, reports and deletes function files', async () => {
+    const s = svc();
+    const project = await s.create({ packId: 'com.test.scripts', name: 'Scripts', characterId: 'mia', characterName: 'Mia' });
+    const key = project.summary.key;
+    const dir = project.summary.dir;
+    const mia = project.characters[0]!;
+    expect(mia.library).toEqual([]);
+    expect(fs.existsSync(path.join(dir, 'characters', 'mia', 'lib', 'README.md'))).toBe(true);
+    expect(s.scriptTemplate()).toMatch(/^\/\/ .*\nasync \(mood: string\) => \{/);
+
+    // add
+    let p = await s.saveScript(key, { dir: mia.dir, name: 'cheer', source: 'async (mood: string) => {\n  return mood;\n}\n', description: ' show a picture for a mood ' });
+    expect(p.characters[0]!.library).toEqual([{ name: 'cheer', description: 'show a picture for a mood', source: 'async (mood: string) => {\n  return mood;\n}', bytes: expect.any(Number), file: 'characters/mia/lib/cheer.ts' }]);
+    expect(fs.readFileSync(path.join(dir, 'characters', 'mia', 'lib', 'cheer.ts'), 'utf8')).toBe('// show a picture for a mood\nasync (mood: string) => {\n  return mood;\n}\n');
+    expect(p.validation.ok).toBe(true);
+    // a second one without a description; sorted by name
+    p = await s.saveScript(key, { dir: mia.dir, name: 'tick', source: '() => 1' });
+    expect(p.characters[0]!.library.map((f) => [f.name, f.description])).toEqual([['cheer', 'show a picture for a mood'], ['tick', undefined]]);
+    // rename: the old file goes once the new one is written
+    p = await s.saveScript(key, { dir: mia.dir, name: 'tock', source: '() => 2', previousName: 'tick' });
+    expect(p.characters[0]!.library.map((f) => f.name)).toEqual(['cheer', 'tock']);
+    expect(fs.readdirSync(path.join(dir, 'characters', 'mia', 'lib')).sort()).toEqual(['README.md', 'cheer.ts', 'tock.ts']);
+    // a broken function is saved (the author is mid-edit) but reported the way the loader reports it
+    p = await s.saveScript(key, { dir: mia.dir, name: 'half', source: 'async ( => 1' });
+    const half = p.characters[0]!.library.find((f) => f.name === 'half')!;
+    expect(half.problem).toMatch(/^not a single function expression: fn does not parse/);
+    expect(half.source).toBe('async ( => 1');
+    expect(p.validation.ok).toBe(true);
+    expect(p.validation.warnings).toEqual([expect.stringMatching(/^warning: characters\/mia\/lib\/half\.ts: not a single function expression/)]);
+    // rejections
+    await expect(s.saveScript(key, { dir: mia.dir, name: 'a-b', source: '() => 1' })).rejects.toThrow(/identifier/);
+    await expect(s.saveScript(key, { dir: mia.dir, name: 'class', source: '() => 1' })).rejects.toThrow(/reserved/);
+    await expect(s.saveScript(key, { dir: mia.dir, name: 'cheer', source: '() => 1', previousName: 'tock' })).rejects.toThrow(/already exists/);
+    await expect(s.saveScript(key, { dir: mia.dir, name: 'empty', source: '   ' })).rejects.toThrow(/source is required/);
+    await expect(s.saveScript(key, { dir: mia.dir, name: 'big', source: `() => "${'x'.repeat(16 * 1024)}"` })).rejects.toThrow(/16384 bytes/);
+    await expect(s.saveScript(key, { dir: '../mia', name: 'x', source: '() => 1' })).rejects.toThrow(/Unsafe/);
+    // delete
+    p = await s.removeScript(key, mia.dir, 'half');
+    expect(p.characters[0]!.library.map((f) => f.name)).toEqual(['cheer', 'tock']);
+    await expect(s.removeScript(key, mia.dir, 'half')).rejects.toThrow(/No function file/);
+    // the read path (tolerant or not) carries the same list
+    expect((await s.read(key)).characters[0]!.library.map((f) => f.name)).toEqual(['cheer', 'tock']);
+  });
+
+  it('checkScript with kind "function" applies the loader check, with a position when esbuild gives one', async () => {
+    const s = svc();
+    expect(await s.checkScript('async (mood: string) => mood', 'function')).toEqual([]);
+    expect(await s.checkScript('  ', 'function')).toEqual([]);
+    const [call] = await s.checkScript('sdk.chat.say("hi")', 'function');
+    expect(call?.message).toMatch(/function expression/);
+    expect(call?.line).toBeUndefined();
+    const [broken] = await s.checkScript('async (a: string) => {\n  return a +;\n}', 'function');
+    expect(broken?.message).toMatch(/does not parse/);
+    expect(broken?.line).toBe(2);
+    expect(broken?.lineText).toContain('return a +;');
+    // the default kind still compiles a hook body
+    expect(await s.checkScript('return 1;')).toEqual([]);
+  });
+});
+
 describe('EditorService.checkScript', () => {
   let tmp: string;
   beforeAll(() => {

@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RpError } from '@rp/shared';
+import { LIB_MAX_FUNCTIONS, LIB_MAX_SOURCE_BYTES, LIB_MAX_TOTAL_BYTES } from '@rp/shared';
 import { loadPack, requestedCapabilities, summariseTags, validatePack } from './index.js';
 import { LUNA_DIR, MAKIMA_DIR, MINIMAL_DIR, makeTempDir, minimalPackFiles, writeTree } from './test/helpers.js';
 
@@ -15,6 +16,8 @@ describe('loadPack', () => {
 
     expect(pack.characters).toHaveLength(1);
     const luna = pack.characters[0]!;
+    expect(pack.character).toBe(luna);
+    expect(luna.library).toEqual({});
     expect(luna.dir).toBe('characters/luna');
     expect(luna.definition.id).toBe('luna');
     expect(luna.definition.name).toBe('Luna');
@@ -64,6 +67,16 @@ describe('loadPack', () => {
     expect(makima.behaviourSources.onEvent).toContain("'user-back'");
     expect(makima.behaviourSources.onEvent).toContain("'window-changed'");
     expect(makima.personaText).toMatch(/\*\*chainsaw\*\*/);
+    // the shipped function library: characters/makima/lib/glance.ts
+    expect(Object.keys(makima.library)).toEqual(['glance']);
+    expect(makima.library['glance']).toMatchObject({
+      file: 'characters/makima/lib/glance.ts',
+      description: 'show a random portrait of Makima for five seconds and return its path',
+      source: expect.stringMatching(/^async \(\) => \{[\s\S]*sdk\.media\.showImage\(pick, \{ durationMs: 5000[\s\S]*\}$/),
+    });
+    expect(makima.library['glance']!.source).not.toContain('//');
+    expect(makima.library['glance']!.bytes).toBe(Buffer.byteLength(makima.library['glance']!.source));
+    expect(makima.library['glance']!.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(makima.personaText).toContain('sdk.wallpaper');
     const words = makima.personaText.split(/\s+/).filter(Boolean).length;
     expect(words).toBeGreaterThan(550);
@@ -173,19 +186,99 @@ describe('validatePack / loadPack problems', () => {
     const manifest = JSON.parse(files['pack.json']!) as { characters: string[] };
     manifest.characters = ['characters/ghost'];
     const dir2 = await packWith({ ...minimalPackFiles(), 'pack.json': JSON.stringify(manifest) });
-    expect((await validatePack(dir2)).problems).toEqual(['pack.json: character directory "characters/ghost" does not exist']);
+    expect((await validatePack(dir2)).problems).toEqual([
+      'pack.json: character directory "characters/ghost" does not exist',
+      'characters/a/character.json: a pack has exactly one character ("characters/ghost"); move "characters/a" into a pack of its own or delete it',
+    ]);
   });
 
-  it('reports duplicate character ids across directories', async () => {
+  it('rejects a second character, whether the manifest lists it or it only sits on disk', async () => {
     const files = minimalPackFiles();
     const manifest = JSON.parse(files['pack.json']!) as { characters: string[] };
-    manifest.characters = ['characters/a', 'characters/b'];
-    files['pack.json'] = JSON.stringify(manifest);
-    files['characters/b/character.json'] = JSON.stringify({ id: 'a', name: 'B', persona: 'persona.md' });
+    files['characters/b/character.json'] = JSON.stringify({ id: 'b', name: 'B', persona: 'persona.md' });
     files['characters/b/persona.md'] = 'B';
-    const dir = await packWith(files);
-    const { problems } = await validatePack(dir);
-    expect(problems).toEqual(['characters/b/character.json: duplicate character id "a" (also in characters/a)']);
+    // listed: the manifest schema refuses two entries
+    const listed = await packWith({ ...files, 'pack.json': JSON.stringify({ ...manifest, characters: ['characters/a', 'characters/b'] }) });
+    const viaManifest = await validatePack(listed);
+    expect(viaManifest.ok).toBe(false);
+    expect(viaManifest.problems).toHaveLength(1);
+    expect(viaManifest.problems[0]).toMatch(/^pack\.json: .*a pack has exactly one character/);
+    // not listed: the extra directory is still a problem, so the folder and the manifest cannot disagree silently
+    const unlisted = await packWith(files);
+    const onDisk = await validatePack(unlisted);
+    expect(onDisk.ok).toBe(false);
+    expect(onDisk.problems).toEqual(['characters/b/character.json: a pack has exactly one character ("characters/a"); move "characters/b" into a pack of its own or delete it']);
+    await expect(loadPack(unlisted)).rejects.toMatchObject({ code: 'PACK_INVALID' });
+    // a folder under characters/ without a character.json (notes, shared media) is not a character
+    const notes = await packWith({ ...minimalPackFiles(), 'characters/notes/todo.md': 'x' });
+    expect((await validatePack(notes)).ok).toBe(true);
+  });
+
+  it('reads lib/<name>.ts into the character library, sorted by name, with the first-line description', async () => {
+    const dir = await packWith({
+      ...minimalPackFiles(),
+      'characters/a/lib/README.md': 'ignored',
+      'characters/a/lib/.hidden.ts': 'x => x',
+      'characters/a/lib/notes.txt': 'ignored',
+      'characters/a/lib/wave.ts': '// wave hello\nasync (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}\n',
+      'characters/a/lib/double.ts': '(n: number) => n * 2',
+      'characters/a/lib/named.ts': '  // has a description with trailing space   \r\n\r\nasync function named() { return 1; }\r\n',
+    });
+    expect(await validatePack(dir)).toEqual({ ok: true, problems: [], warnings: [] });
+    const pack = await loadPack(dir);
+    const lib = pack.character.library;
+    expect(Object.keys(lib)).toEqual(['double', 'named', 'wave']);
+    expect(lib['wave']).toMatchObject({
+      description: 'wave hello',
+      source: 'async (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}',
+      bytes: Buffer.byteLength('async (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}'),
+      file: 'characters/a/lib/wave.ts',
+    });
+    expect(lib['double']).toMatchObject({ source: '(n: number) => n * 2', file: 'characters/a/lib/double.ts' });
+    expect(lib['double']!.description).toBeUndefined();
+    expect(lib['named']).toMatchObject({ description: 'has a description with trailing space', source: 'async function named() { return 1; }' });
+  });
+
+  it('skips a library file that is not one function expression or not a valid name, with a warning, and still loads', async () => {
+    const dir = await packWith({
+      ...minimalPackFiles(),
+      'characters/a/lib/good.ts': '() => 1',
+      'characters/a/lib/broken.ts': '// half\nasync ( => 1',
+      'characters/a/lib/call.ts': 'sdk.chat.say("hi")',
+      'characters/a/lib/two.ts': 'x => 1); (y => 2',
+      'characters/a/lib/1bad.ts': '() => 1',
+      'characters/a/lib/class.ts': '() => 1',
+    });
+    const result = await validatePack(dir);
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([
+      expect.stringMatching(/^warning: characters\/a\/lib\/1bad\.ts: file name is not a valid function name: name must be a JavaScript identifier/),
+      expect.stringMatching(/^warning: characters\/a\/lib\/broken\.ts: not a single function expression: fn does not parse: /),
+      expect.stringMatching(/^warning: characters\/a\/lib\/call\.ts: not a single function expression: fn must be a function expression/),
+      'warning: characters/a/lib/class.ts: file name is not a valid function name: "class" is a reserved word and cannot be a function name',
+      'warning: characters/a/lib/two.ts: not a single function expression: fn must be a single function expression (arrow function or `async function`)',
+    ]);
+    const pack = await loadPack(dir);
+    expect(Object.keys(pack.character.library)).toEqual(['good']);
+  });
+
+  it('enforces the library caps as problems', async () => {
+    const big = `() => "${'b'.repeat(LIB_MAX_SOURCE_BYTES)}"`;
+    const tooBig = await packWith({ ...minimalPackFiles(), 'characters/a/lib/big.ts': big });
+    expect((await validatePack(tooBig)).problems).toEqual([`characters/a/lib/big.ts: ${Buffer.byteLength(big)} bytes (max ${LIB_MAX_SOURCE_BYTES} bytes per function)`]);
+
+    const many: Record<string, string> = {};
+    for (let i = 0; i <= LIB_MAX_FUNCTIONS; i++) many[`characters/a/lib/f${i}.ts`] = '() => 1';
+    const tooMany = await packWith({ ...minimalPackFiles(), ...many });
+    expect((await validatePack(tooMany)).problems).toEqual([`characters/a/lib: ${LIB_MAX_FUNCTIONS + 1} functions (max ${LIB_MAX_FUNCTIONS})`]);
+
+    const chunk = `() => "${'c'.repeat(LIB_MAX_SOURCE_BYTES - 100)}"`;
+    const files: Record<string, string> = {};
+    const count = Math.floor(LIB_MAX_TOTAL_BYTES / Buffer.byteLength(chunk)) + 1;
+    for (let i = 0; i < count; i++) files[`characters/a/lib/g${i}.ts`] = chunk;
+    const tooMuch = await packWith({ ...minimalPackFiles(), ...files });
+    expect((await validatePack(tooMuch)).problems).toEqual([`characters/a/lib: ${count * Buffer.byteLength(chunk)} bytes in total (max ${LIB_MAX_TOTAL_BYTES} bytes)`]);
+    await expect(loadPack(tooMuch)).rejects.toMatchObject({ code: 'PACK_INVALID' });
   });
 
   it('reports a mediaRoot that is a file, but tolerates a missing one', async () => {

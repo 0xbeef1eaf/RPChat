@@ -48,11 +48,14 @@ describe('packManifestSchema', () => {
     expect(packManifestSchema.safeParse({ ...goodManifest(), minAppVersion: 'latest' }).success).toBe(false);
   });
 
-  it('rejects missing or empty characters', () => {
+  it('requires exactly one character', () => {
     const { characters: _drop, ...noCharacters } = goodManifest();
     expect(packManifestSchema.safeParse(noCharacters).success).toBe(false);
     expect(packManifestSchema.safeParse({ ...goodManifest(), characters: [] }).success).toBe(false);
     expect(packManifestSchema.safeParse({ ...goodManifest(), characters: ['a', 'a'] }).success).toBe(false);
+    const two = packManifestSchema.safeParse({ ...goodManifest(), characters: ['characters/a', 'characters/b'] });
+    expect(two.success).toBe(false);
+    expect(JSON.stringify(two.error?.issues)).toContain('a pack has exactly one character');
   });
 
   it('rejects `..` segments and absolute paths', () => {

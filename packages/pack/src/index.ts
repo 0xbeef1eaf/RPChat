@@ -52,15 +52,31 @@ export {
   normalizeTags,
 } from './tags.js';
 
-export { PACK_README_FILENAME, inspectPack, loadPack, requestedCapabilities, validatePack } from './loader.js';
+export { CHARACTERS_DIR_NAME, PACK_README_FILENAME, inspectPack, loadPack, requestedCapabilities, validatePack } from './loader.js';
 export type { PackInspection } from './loader.js';
 
 export {
   behaviourScriptPath,
   behaviourTemplates,
   hookFileStem,
+  libraryFunctionTemplate,
+  libraryReadme,
   personaTemplate,
 } from './templates.js';
+
+export {
+  LIB_RESERVED_NAMES,
+  formatLibraryFile,
+  functionSourceProblem,
+  libraryFilePath,
+  libraryNameProblem,
+  parseLibraryFile,
+  readCharacterLibrary,
+  removeLibraryFunction,
+  unwrapFunctionSource,
+  writeLibraryFunction,
+} from './library.js';
+export type { CharacterLibraryScan, LibraryFileProblem, ReadLibraryOptions } from './library.js';
 
 export {
   addAssetFile,

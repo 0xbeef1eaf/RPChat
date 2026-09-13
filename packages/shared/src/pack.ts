@@ -23,7 +23,11 @@ export interface PackManifest {
   license?: string;
   homepage?: string;
   tags?: string[];
-  /** Directories (relative to pack root) containing a `character.json`. */
+  /**
+   * The directory (relative to the pack root) containing the pack's `character.json`.
+   * A pack has exactly one character, so this array always holds exactly one entry; it stays an
+   * array for format compatibility (`packId/characterId` refs, `characters/<id>/…` layout).
+   */
   characters: string[];
   /** Pack-level `pack`/`prompt` capability requests; `trusted` modules are implicit. */
   capabilities?: string[];
@@ -117,10 +121,13 @@ export interface TagSummary {
   description?: string;
 }
 
-/** A fully loaded, validated pack (manifest + characters + resolved persona text + asset index). */
+/** A fully loaded, validated pack (manifest + its character + resolved persona text + asset index). */
 export interface LoadedPack {
   root: string;
   manifest: PackManifest;
+  /** The pack's one character (the same object as `characters[0]`). */
+  character: LoadedCharacter;
+  /** Kept for compatibility: always exactly one entry, `character`. */
   characters: LoadedCharacter[];
   assets: AssetEntry[];
   /** Tag vocabulary from `media.json`, if present. */
@@ -135,8 +142,31 @@ export interface LoadedCharacter {
   personaText: string;
   /** Hook → script source text. */
   behaviourSources: Partial<Record<BehaviourHook, string>>;
+  /**
+   * The character's function library (`sdk.lib`), read from `characters/<id>/lib/<name>.ts`:
+   * name → entry, sorted by name. Files the loader had to skip are reported as warnings.
+   */
+  library: Record<string, CharacterLibraryEntry>;
   /** Avatar path relative to the pack root, if any. */
   avatarPath?: string;
+}
+
+/**
+ * One `sdk.lib` function as shipped in (or saved into) the pack. The file is
+ * `characters/<id>/lib/<name>.ts`: an optional first-line `// <description>`
+ * comment followed by exactly one function expression.
+ */
+export interface CharacterLibraryEntry {
+  /** The function expression (everything after the description comment). */
+  source: string;
+  /** From the file's leading `// …` comment, when present. */
+  description?: string;
+  /** UTF-8 size of `source`. */
+  bytes: number;
+  /** Path relative to the pack root, e.g. `characters/luna/lib/cheer.ts`. */
+  file: string;
+  /** ISO-8601 modification time of the file (what `sdk.lib.list()` reports as `updatedAt`). */
+  updatedAt: string;
 }
 
 /** Record kept by the app for an installed pack. */

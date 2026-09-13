@@ -208,6 +208,13 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
     audit: {
       list: (_e, options) => engine.audit.list(options ?? {}),
     },
+    sandbox: {
+      run: (_e, request) => {
+        if (!request || typeof request !== 'object') throw new RpError('INVALID_ARGUMENT', 'request must be an object');
+        return engine.sandbox.run(request);
+      },
+      cancel: (_e, runId) => engine.sandbox.cancel(requireString(runId, 'runId')),
+    },
     memories: {
       list: (_e, characterRef) => memoriesOf(engine).list(requireString(characterRef, 'characterRef')),
       add: (_e, characterRef, text, options) => {
@@ -235,9 +242,10 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       forget: (_e, key) => services.editor.forget(requireString(key, 'key')),
       read: (_e, key) => services.editor.read(requireString(key, 'key')),
       saveManifest: (_e, key, manifest) => services.editor.saveManifest(requireString(key, 'key'), manifest),
-      addCharacter: (_e, key, characterId, name) => services.editor.addCharacter(requireString(key, 'key'), characterId, name),
       saveCharacter: (_e, key, input) => services.editor.saveCharacter(requireString(key, 'key'), input),
-      removeCharacter: (_e, key, dir) => services.editor.removeCharacter(requireString(key, 'key'), requireString(dir, 'dir')),
+      saveScript: (_e, key, input) => services.editor.saveScript(requireString(key, 'key'), input),
+      removeScript: (_e, key, dir, name) => services.editor.removeScript(requireString(key, 'key'), requireString(dir, 'dir'), requireString(name, 'name')),
+      scriptTemplate: async () => services.editor.scriptTemplate(),
       pickAvatar: (_e, key, dir) => services.editor.pickAvatar(requireString(key, 'key'), requireString(dir, 'dir')),
       pickExpression: (_e, key, dir, expression) => services.editor.pickExpression(requireString(key, 'key'), requireString(dir, 'dir'), expression),
       addMedia: (_e, key, options) => services.editor.addMedia(requireString(key, 'key'), options ?? {}),
@@ -247,7 +255,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       suggestMediaTags: (_e, key, paths, options) => services.editor.suggestMediaTags(requireString(key, 'key'), paths, options ?? {}),
       saveReadme: (_e, key, text) => services.editor.saveReadme(requireString(key, 'key'), text),
       validate: (_e, key) => services.editor.validate(requireString(key, 'key')),
-      checkScript: (_e, source) => services.editor.checkScript(requireString(source, 'source')),
+      checkScript: (_e, source, kind) => services.editor.checkScript(requireString(source, 'source'), kind === 'function' ? 'function' : 'behaviour'),
       exportPack: (_e, key) => services.editor.exportPack(requireString(key, 'key')),
       installToApp: (_e, key) => services.editor.installToApp(requireString(key, 'key')),
       revealInFolder: (_e, key) => services.editor.revealInFolder(requireString(key, 'key')),

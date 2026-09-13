@@ -24,8 +24,9 @@ Goals
 - The SDK is **modular and extensible**: a capability module bundles its
   typings, its docs, its permission level and (on the host) its implementation.
   Adding a capability never touches the engine or the sandbox.
-- **Shareable packs**: a directory or `.rppack` zip with a manifest, one or
-  more characters, media assets and optional pre-written behaviour scripts.
+- **Shareable packs**: a directory or `.rppack` zip with a manifest, exactly
+  one character, media assets, optional pre-written behaviour scripts and the
+  character's function library (`lib/*.ts`).
 - **Safety by construction**: character code runs in a WebAssembly QuickJS
   isolate with no ambient authority. It can only reach the host through
   capability calls that are permission-checked, logged and resource-limited.
@@ -176,7 +177,7 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `state`  | trusted    | `get/set/delete/keys` (character-scoped, persistent), `session.get/set/delete/keys` |
 | `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `readText(path)`, `info()`                    |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `runLater(delayMs, code, opts?)` (setTimeout-style stored code, optionally repeating), `cancel(id)`, `list()` |
-| `lib`    | trusted    | `define(name, fn, opts?)`, `remove(name)`, `list()`, `source(name)` — the character's own persistent function library, available as `lib.<name>(...)` in every run (`CodeRunRequest.prelude`) |
+| `lib`    | trusted    | `define(name, fn, opts?)`, `remove(name)`, `list()`, `source(name)` — the character's own function library, one file per function in the pack (`characters/<id>/lib/<name>.ts`; authors can ship them), available as `lib.<name>(...)` in every run (`CodeRunRequest.prelude`) |
 | `llm`    | trusted    | `ask(prompt, opts?)` (private side completion), `wake(prompt, { delayMs? })` (self-triggered turn now or later; rate-limited by autonomy settings) |
 | `memory` | trusted    | `remember(text, opts?)`, `recall(query, limit?)`, `recent(limit?)`, `update(id, patch)`, `forget(id)` — long-term memory, also consolidated automatically (see `docs/spec/memory.md`) |
 | `display`| trusted    | `monitors()`, `backend()` — read-only screen/backend info for placement decisions   |
@@ -303,7 +304,8 @@ Threat model: pack authors and the LLM are **untrusted**. The user is trusted.
 
 ## 8. Packs
 
-Directory layout (also the layout inside an `.rppack`, which is a zip):
+A pack has **exactly one character**. Directory layout (also the layout inside
+an `.rppack`, which is a zip):
 
 ```
 my-pack/
@@ -314,6 +316,8 @@ my-pack/
 │       ├── character.json
 │       ├── persona.md
 │       ├── avatar.png
+│       ├── lib/                  (optional) the character's sdk.lib functions, one per file
+│       │   └── cheer.ts          `// <description>` + one function expression
 │       └── scripts/
 │           ├── on-session-start.ts
 │           └── on-timer.ts
@@ -333,7 +337,7 @@ my-pack/
   "author": { "name": "…", "url": "…" },
   "license": "CC-BY-4.0",
   "tags": ["companion"],
-  "characters": ["characters/luna"],  // directories containing character.json
+  "characters": ["characters/luna"],  // the one directory containing character.json (exactly one entry)
   "capabilities": ["media", "ui"],     // pack-level requests; trusted ones are implicit
   "mediaRoot": "media",
   "minAppVersion": "0.1.0"
@@ -359,7 +363,11 @@ my-pack/
 
 Installed packs live in `<userData>/packs/<packId>/<version>/`. The pack store
 (`InstalledPackRecord`) keeps id, version, root path, grant state and install
-time. `@rp/pack` exposes `loadPack(dir)`, `validatePack`, `packDirectory(dir)
+time. The app owns that folder: `sdk.lib.define` writes the character's own
+functions into `characters/<id>/lib/` of the installed copy (and `remove`
+deletes them), so they persist across sessions and restarts; reinstalling or
+upgrading the pack replaces the folder and therefore those definitions, unless
+the author shipped them. `@rp/pack` exposes `loadPack(dir)`, `validatePack`, `packDirectory(dir)
 → .rppack`, `extractPack(file, destDir)`, and `indexAssets(pack)` (kind by
 extension: image/video/audio/text/other).
 
@@ -394,9 +402,12 @@ JSONL, size-capped).
   have open. Closing the window dismisses the question (deny / no answer). The
   in-app modals remain as the fallback when no window can be opened.
 - **Action log** view (audit entries).
+- **Sandbox** view: type a script and run it as an installed character, exactly
+  as that character's own actions run (same sandbox, surface, permissions,
+  limits and session); shows the value, error, console and SDK calls.
 - **Pack editor**: projects are pack folders (workspace or any folder); forms for
-  manifest, characters, media tags and README with live validation, export and
-  install-to-app. See `docs/spec/editor.md`.
+  manifest, the pack's character, its function library (Scripts), media tags and
+  README with live validation, export and install-to-app. See `docs/spec/editor.md`.
 - **Media window**: separate frameless BrowserWindow that renders one or many
   media items (image, video, audio) driven by IPC commands.
 

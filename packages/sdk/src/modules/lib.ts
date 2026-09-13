@@ -20,8 +20,9 @@ interface LibFunctionInfo {
 
 /**
  * Your own function library. Define a function once; from then on every action, timer handler and
- * event handler of yours sees it as the global lib.<name>, across sessions and app restarts.
- * The library is listed in your prompt under <library>. Max 50 functions, 16 KiB each.
+ * event handler of yours sees it as the global lib.<name>, across sessions and app restarts. Each
+ * function is saved as a file in your pack (characters/<id>/lib/<name>.ts), where your author may
+ * also have shipped some. The library is listed in your prompt under <library>. Max 50 functions, 16 KiB each.
  */
 interface LibApi {
   /**
@@ -46,13 +47,14 @@ interface LibApi {
   remove(name: string): Promise<boolean>;
   /** Every function in the library (also listed in your prompt under <library>). */
   list(): Promise<LibFunctionInfo[]>;
-  /** The stored source of one function, e.g. to read it before changing it. Throws NOT_FOUND. */
+  /** The source of one function as it stands in its file, e.g. to read it before changing it. Throws NOT_FOUND. */
   source(name: string): Promise<string>;
 }`,
   docs: `Keep the steps you repeat as functions instead of rewriting them. Once defined, \`lib.<name>\` is a global in every later action, timer handler and event handler, for this character, forever (until you \`remove\` it). Redefining a name replaces it.
 
 - A library function may be async and may call \`sdk\` and other \`lib\` functions, but it closes over **nothing** from the action that defined it: pass what it needs as arguments.
 - Your prompt lists the library under \`<library>\` with each function's parameters; read \`sdk.lib.source(name)\` when you need the details before changing one.
+- Functions live in your pack as \`characters/<id>/lib/<name>.ts\` (a \`// description\` line, then the function); some may have been shipped by your author, the rest you saved. \`define\` writes the file, \`remove\` deletes it.
 - Prefer one clear function per repeated routine; the library is not a place for state (use \`sdk.state\` / \`sdk.memory\`).
 
 \`\`\`ts

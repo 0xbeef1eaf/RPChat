@@ -41,8 +41,8 @@ export type { ProviderFactory } from './services/settings.js';
 export { TimerService } from './services/timers.js';
 export { MemoryService, memoryLine, parseJsonArray, normalizeTags, normalizeImportance, normalizeText, MEMORY_TEXT_MAX } from './services/memory.js';
 export type { AddMemoryOptions, ConsolidateOptions, MemoryServiceOptions } from './services/memory.js';
-export { LibraryService, LIB_STATE_KEY, EMPTY_PRELUDE, buildPrelude, functionParams, functionSourceProblem, unwrapFunctionSource } from './services/library.js';
-export type { LibraryTarget } from './services/library.js';
+export { LibraryService, LIB_STATE_KEY, EMPTY_PRELUDE, buildPrelude, functionParams, functionSourceProblem, toLibFunction, unwrapFunctionSource } from './services/library.js';
+export type { LibraryPacks, LibraryTarget } from './services/library.js';
 export { LibHandler } from './handlers/lib.js';
 export { libraryLine } from './prompt.js';
 export { HistoryService, transcriptTokens, HISTORY_SUMMARY_KEY, HISTORY_STATE_SCOPE, COMPRESSION_MIN_MESSAGES } from './services/history.js';
@@ -75,5 +75,7 @@ export { dayPartOf } from './services/chat.js';
 export { recordExchange, snapshotRequest, providerLabel } from './services/exchanges.js';
 export type { ExchangeMeta } from './services/exchanges.js';
 export type { SelfWakeSource } from './services/chat.js';
+export { SandboxService } from './services/sandbox.js';
+export type { SandboxServiceOptions } from './services/sandbox.js';
 
 export { extractFencedActions } from '@rp/llm';

@@ -1,11 +1,15 @@
 # Writing packs for rp-code
 
-A **pack** is a directory (or an `.rppack` zip of that directory) that ships one
-or more characters, their media and optional pre-written behaviour scripts.
-This directory contains two reference packs:
+A **pack** is a directory (or an `.rppack` zip of that directory) that ships
+**exactly one character**, its media, optional pre-written behaviour scripts and
+the character's function library. Two characters means two packs. This
+directory contains three reference packs:
 
 - [`luna/`](./luna) — a complete companion character with an avatar, two images,
   a generated chime and two behaviour scripts. Requests `media` and `ui`.
+- [`makima/`](./makima) — uses every pack feature: avatar expressions, wallpapers,
+  four behaviour scripts, `media.json`, and a shipped function library
+  (`characters/makima/lib/glance.ts`).
 - [`minimal/`](./minimal) — the smallest valid pack: one character, no media,
   no behaviours. Used by the test-suite.
 
@@ -18,10 +22,12 @@ my-pack/
 ├── pack.json                     required
 ├── README.md                     optional, shown in the app's pack view
 ├── characters/
-│   └── luna/
-│       ├── character.json        required, one per character directory
+│   └── luna/                     exactly one character directory per pack
+│       ├── character.json        required
 │       ├── persona.md            the character's system prompt body
 │       ├── avatar.png            optional
+│       ├── lib/                  optional, the function library (see §8)
+│       │   └── cheer.ts          one function per file
 │       └── scripts/
 │           ├── on-session-start.ts
 │           └── on-timer.ts
@@ -48,7 +54,7 @@ including symlinks that point outside the pack.
   "license": "CC-BY-4.0",
   "homepage": "https://…",
   "tags": ["companion"],
-  "characters": ["characters/luna"],  // directories containing character.json (at least one)
+  "characters": ["characters/luna"],  // the one directory containing character.json (exactly one)
   "capabilities": ["media", "ui"],     // pack-level requests; trusted modules are implicit
   "mediaRoot": "media",               // optional, default "media"; the directory may be absent
   "minAppVersion": "0.1.0"
@@ -59,8 +65,9 @@ Rules enforced by `@rp/pack`:
 
 - `formatVersion` must be `1`.
 - `id` is reverse-DNS, lower-case; `version` and `minAppVersion` are semver.
-- `characters` is non-empty, each entry is a directory with a `character.json`,
-  and character ids are unique inside the pack.
+- `characters` lists exactly one directory with a `character.json`. A pack has
+  one character; a second `characters/<x>/character.json` on disk is reported
+  as a problem even when the manifest does not list it.
 - `capabilities` entries match `/^[a-z][a-zA-Z0-9]*$/`. Whether a capability
   actually exists is checked by the app when the pack is installed.
 
@@ -208,7 +215,37 @@ A script is the **body of an async function**: a global `sdk` object and
 `console` are in scope, top-level `await` and `return` are allowed, and there
 are no imports. The same is true of the code the model writes.
 
-## 8. SDK usage example
+## 8. Function library (`lib/`)
+
+A character can save functions with `sdk.lib.define` and call them as
+`lib.<name>(...)` in every later action, timer handler and event handler. Those
+functions are files in the pack, `characters/<id>/lib/<name>.ts`, so you can
+ship the ones you want the character to start with — and what the character
+defines itself is written to the same folder of the installed copy (a reinstall
+replaces the folder, so ship what must survive). Format: an optional first line
+`// <description>` (shown in the character's prompt), then exactly one function
+expression, as `sdk.lib.define` would receive it:
+
+```ts
+// characters/makima/lib/glance.ts
+// show a random portrait of Makima for five seconds and return its path
+async () => {
+  const portraits = await sdk.pack.findAssets({ tags: ["portrait"], kind: "image" });
+  if (portraits.length === 0) return null;
+  const pick = portraits[Math.floor(Math.random() * portraits.length)];
+  await sdk.media.showImage(pick, { durationMs: 5000, position: "bottom-right" });
+  return pick.path;
+}
+```
+
+The file name is the function name (a JavaScript identifier, at most 64
+characters, no reserved words). A function may use `sdk` and its sibling `lib`
+functions but closes over nothing else. A file that is not one function
+expression is skipped with a warning; the caps — 50 files, 16 KiB per file,
+128 KiB in total — are errors. Anything in `lib/` that is not a `.ts` file
+(a README, say) is ignored. The pack editor's **Scripts** tab edits this folder.
+
+## 9. SDK usage example
 
 ```ts
 // Show a picture, remember it, and set a reminder — the body of one action.
@@ -237,6 +274,7 @@ Standard modules (v1):
 | `state`  | trusted    | `get/set/delete/keys` (per character, persistent), `session.get/set/delete/keys`                 |
 | `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `tags()`, `readText(path)`, `info()`                       |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `cancel(id)`, `list()`                                      |
+| `lib`    | trusted    | `define(name, fn, opts?)`, `remove(name)`, `list()`, `source(name)` — the function library, files under `lib/` (§8) |
 | `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `close(id)`, `closeAll()`, `list()` |
 | `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`                       |
 | `system` | prompt     | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)` |
@@ -244,7 +282,7 @@ Standard modules (v1):
 Every run is limited (wall-clock timeout, CPU budget, memory, number of host
 calls, log and result size), so keep scripts short and never loop forever.
 
-## 9. Sharing a pack
+## 10. Sharing a pack
 
 Package a directory with `packDirectory(dir, "my-pack.rppack")` from `@rp/pack`
 (the app exposes this in its packs view). The archive is a plain zip with

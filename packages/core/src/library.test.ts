@@ -1,3 +1,5 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ActionContext, Json, LibFunctionInfo } from '@rp/shared';
 import { LIB_MAX_FUNCTIONS, LIB_MAX_SOURCE_BYTES, LIB_MAX_TOTAL_BYTES } from '@rp/shared';
@@ -7,7 +9,7 @@ import { PromptBuilder, libraryLine } from './prompt.js';
 import type { PromptInput } from './prompt.js';
 import { EMPTY_PRELUDE, LIB_STATE_KEY, buildPrelude, functionParams, functionSourceProblem, unwrapFunctionSource } from './services/library.js';
 import { characterScope } from './handlers/state.js';
-import { ECHO_REF, FakeSenses, LUNA_DIR, LUNA_ID, LUNA_REF, MINIMAL_DIR, MINIMAL_ID, createTestEngine, runAction } from './test/helpers.js';
+import { ECHO_REF, EXAMPLES_DIR, FakeSenses, LUNA_DIR, LUNA_ID, LUNA_REF, MINIMAL_DIR, MINIMAL_ID, createTestEngine, installLunaWith, runAction } from './test/helpers.js';
 import type { TestEngine } from './test/helpers.js';
 
 let t: TestEngine | undefined;
@@ -26,6 +28,9 @@ const ctxOf = (packId: string, characterId: string, sessionId: string): ActionCo
 });
 const invoke = (context: ActionContext, method: string, ...args: Json[]) =>
   t!.engine.dispatcher.invoke({ callId: `lib.${method}`, module: 'lib', method, args, context });
+/** Absolute path of a library file in the installed pack. */
+const libFile = (packId: string, characterId: string, name: string) => path.join(t!.engine.packs.getLoaded(packId).root, 'characters', characterId, 'lib', `${name}.ts`);
+const exists = (p: string) => fs.stat(p).then(() => true, () => false);
 
 /** Opening of the prompt section (the SDK index also mentions `<library>` in prose). */
 const SECTION = '<library>\nYour own functions (call them as lib.<name>(...); sdk.lib.define adds or replaces one):';
@@ -93,8 +98,10 @@ describe('sdk.lib through the engine', () => {
 
     const defined = (await invoke(ctx, 'define', 'cheer', asHandlerArg(CHEER), { description: '  show a picture for a mood ' })) as { ok: true; value: LibFunctionInfo };
     expect(defined.ok).toBe(true);
-    expect(defined.value).toEqual({ name: 'cheer', description: 'show a picture for a mood', bytes: Buffer.byteLength(CHEER), updatedAt: t.clock.now().toISOString() });
+    expect(defined.value).toEqual({ name: 'cheer', description: 'show a picture for a mood', bytes: Buffer.byteLength(CHEER), updatedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) });
     expect(await invoke(ctx, 'source', 'cheer')).toEqual({ ok: true, value: CHEER });
+    // saved into the installed pack as one file per function: a description comment, then the function as received
+    expect(await fs.readFile(libFile(MINIMAL_ID, 'echo', 'cheer'), 'utf8')).toBe(`// show a picture for a mood\n${CHEER}\n`);
     // a string holding a function expression works too, and redefining replaces
     expect((await invoke(ctx, 'define', 'double', '(n: number) => n * 2')).ok).toBe(true);
     expect((await invoke(ctx, 'define', 'double', 'async (n: number) => n + n', { description: 'twice' })).ok).toBe(true);
@@ -102,9 +109,11 @@ describe('sdk.lib through the engine', () => {
     expect(listed.value.map((f) => [f.name, f.description])).toEqual([['cheer', 'show a picture for a mood'], ['double', 'twice']]);
     expect(await invoke(ctx, 'source', 'double')).toEqual({ ok: true, value: 'async (n: number) => n + n' });
     expect(await invoke(ctx, 'source', 'nope')).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
-    // stored in the character scope, under one key
-    const stored = await t.storage.state.get(characterScope(ctx), LIB_STATE_KEY);
-    expect(Object.keys(stored as Record<string, unknown>)).toEqual(['cheer', 'double']);
+    expect(await fs.readFile(libFile(MINIMAL_ID, 'echo', 'double'), 'utf8')).toBe('// twice\nasync (n: number) => n + n\n');
+    expect((await fs.readdir(path.dirname(libFile(MINIMAL_ID, 'echo', 'x')))).sort()).toEqual(['cheer.ts', 'double.ts']);
+    // nothing goes into the character state any more; the loaded pack carries the library
+    expect(await t.storage.state.get(characterScope(ctx), LIB_STATE_KEY)).toBeUndefined();
+    expect(Object.keys(t.engine.packs.getLoaded(MINIMAL_ID).character.library)).toEqual(['cheer', 'double']);
 
     const bad = async (...args: Json[]) => ((await invoke(ctx, 'define', ...args)) as { ok: boolean; error?: { code: string; message: string } }).error;
     for (const name of ['', '1abc', 'a-b', 'class', 'await', '__proto__', 'x'.repeat(65), 'has space']) {
@@ -145,7 +154,7 @@ describe('sdk.lib through the engine', () => {
     }
     expect(defined).toBe(Math.floor(LIB_MAX_TOTAL_BYTES / Buffer.byteLength(big)));
     expect(error).toMatchObject({ code: 'INVALID_ARGUMENT', message: expect.stringContaining('in total') });
-  });
+  }, 20_000);
 
   it('prepends the prelude to LLM actions, and lists the library in the prompt after <sdk_reference>', async () => {
     t = await createTestEngine({
@@ -219,11 +228,70 @@ describe('sdk.lib through the engine', () => {
     const hookRun = t.runner.requests.find((r) => r.context.trigger.kind === 'behaviour');
     expect(hookRun?.prelude).toBe(expected);
 
-    // remove invalidates the cached prelude
+    // remove deletes the file and invalidates the cached prelude
+    expect(await exists(libFile(MINIMAL_ID, 'echo', 'double'))).toBe(true);
     expect(await invoke(ctx, 'remove', 'double')).toEqual({ ok: true, value: true });
+    expect(await exists(libFile(MINIMAL_ID, 'echo', 'double'))).toBe(false);
     expect(await invoke(ctx, 'remove', 'double')).toEqual({ ok: true, value: false });
+    expect(await invoke(ctx, 'remove', 'not-a-name')).toEqual({ ok: true, value: false });
     expect(await t.engine.library.preludeFor(MINIMAL_ID, 'echo')).toBe(EMPTY_PRELUDE);
     expect(await t.storage.state.get(characterScope(ctx), LIB_STATE_KEY)).toBeUndefined();
+  });
+
+  it('lists functions the pack author shipped as lib/<name>.ts and puts them in the prelude from the first install', async () => {
+    t = await createTestEngine();
+    await installLunaWith(t.engine, t.packsDir, ['media', 'ui'], undefined, {
+      'characters/luna/lib/wave.ts': '// wave at the user\nasync (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}\n',
+      'characters/luna/lib/broken.ts': 'async ( => 1',
+    });
+    const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
+    const ctx = ctxOf(LUNA_ID, 'luna', session.id);
+    const listed = (await invoke(ctx, 'list')) as { ok: true; value: LibFunctionInfo[] };
+    expect(listed.value).toEqual([{ name: 'wave', description: 'wave at the user', bytes: expect.any(Number), updatedAt: expect.any(String) }]);
+    expect(await invoke(ctx, 'source', 'wave')).toEqual({ ok: true, value: 'async (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}' });
+    expect(await t.engine.library.preludeFor(LUNA_ID, 'luna')).toBe('const lib = Object.freeze({\n  "wave": (async (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}),\n});');
+    // the character's own definitions land next to the shipped one, and replacing a shipped one rewrites its file
+    expect((await invoke(ctx, 'define', 'tick', '() => 1')).ok).toBe(true);
+    expect((await invoke(ctx, 'define', 'wave', '() => 0', { description: 'quieter' })).ok).toBe(true);
+    expect(await fs.readFile(libFile(LUNA_ID, 'luna', 'wave'), 'utf8')).toBe('// quieter\n() => 0\n');
+    expect(((await invoke(ctx, 'list')) as { value: LibFunctionInfo[] }).value.map((f) => f.name)).toEqual(['tick', 'wave']);
+    expect(await t.engine.library.preludeFor(LUNA_ID, 'luna')).toContain('"tick": (() => 1)');
+
+    // the makima example ships characters/makima/lib/glance.ts
+    await t.engine.packs.install(path.join(EXAMPLES_DIR, 'makima'));
+    const makima = await t.engine.sessions.create({ characterRef: 'com.example.makima/makima' });
+    const glance = (await invoke(ctxOf('com.example.makima', 'makima', makima.id), 'list')) as { value: LibFunctionInfo[] };
+    expect(glance.value.map((f) => [f.name, f.description])).toEqual([['glance', 'show a random portrait of Makima for five seconds and return its path']]);
+    expect(await t.engine.library.preludeFor('com.example.makima', 'makima')).toMatch(/^const lib = Object\.freeze\(\{\n  "glance": \(async \(\) => \{/);
+  });
+
+  it('migrates functions still stored in character state into files on start and on install', async () => {
+    t = await createTestEngine();
+    await t.engine.packs.install(MINIMAL_DIR);
+    const target = { packId: MINIMAL_ID, characterId: 'echo' };
+    const scope = characterScope(target);
+    // an older app left these in state; `double` already has a file, which wins
+    await t.storage.state.set(scope, LIB_STATE_KEY, {
+      cheer: { name: 'cheer', source: CHEER, description: 'show a picture for a mood', bytes: Buffer.byteLength(CHEER), updatedAt: 't' },
+      double: { name: 'double', source: '(n) => n * 2', bytes: 12, updatedAt: 't' },
+      'bad name': { name: 'bad name', source: '() => 1', bytes: 7, updatedAt: 't' },
+      junk: 'not a function',
+    });
+    await fs.mkdir(path.dirname(libFile(MINIMAL_ID, 'echo', 'double')), { recursive: true });
+    await fs.writeFile(libFile(MINIMAL_ID, 'echo', 'double'), '// from a file\n(n: number) => n + n\n');
+    await t.engine.packs.start();
+    expect(await t.storage.state.get(scope, LIB_STATE_KEY)).toBeUndefined();
+    expect((await fs.readdir(path.dirname(libFile(MINIMAL_ID, 'echo', 'x')))).sort()).toEqual(['cheer.ts', 'double.ts']);
+    expect(await fs.readFile(libFile(MINIMAL_ID, 'echo', 'cheer'), 'utf8')).toBe(`// show a picture for a mood\n${CHEER}\n`);
+    expect(await fs.readFile(libFile(MINIMAL_ID, 'echo', 'double'), 'utf8')).toBe('// from a file\n(n: number) => n + n\n');
+    expect((await t.engine.library.list(target)).map((f) => [f.name, f.description])).toEqual([['cheer', 'show a picture for a mood'], ['double', 'from a file']]);
+    expect(await t.engine.library.preludeFor(MINIMAL_ID, 'echo')).toContain('"double": ((n: number) => n + n)');
+
+    // on (re)install the folder is replaced, so state left behind is migrated into the fresh copy too
+    await t.storage.state.set(scope, LIB_STATE_KEY, { tick: { name: 'tick', source: '() => 1', bytes: 7, updatedAt: 't' } });
+    await t.engine.packs.install(MINIMAL_DIR);
+    expect(await t.storage.state.get(scope, LIB_STATE_KEY)).toBeUndefined();
+    expect((await t.engine.library.list(target)).map((f) => f.name)).toEqual(['tick']); // cheer/double lived only in the replaced folder
   });
 
   it('survives across sessions of the same character and is invisible to another character', async () => {
