@@ -120,11 +120,12 @@ interface BrowserApi {
   /**
    * Keep pages matching the patterns from opening for a while: "example.com" (the host and its subdomains),
    * "*.example.com", "example.com/path*". Blocked navigations land on a page that names you and the end time
-   * (or on redirect); tabs already there are moved. durationMs is capped by the user's setting (default 4 h).
+   * (or on redirect); tabs already there are moved. Without durationMs the block stays until unblock()/clearBlocks()
+   * or the user clears it in Settings → Browser; with it, expiresAt says when it lifts.
    * The app's own pages and browser pages can never be blocked. Fails when the user switched blocking off.
    * @example const b = await sdk.browser.block(["*.youtube.com"], { durationMs: 30 * 60_000, reason: "focus time, as you asked" });
    */
-  block(patterns: string[], options?: { durationMs?: number; redirect?: string; reason?: string }): Promise<{ id: string; expiresAt: string; patterns: string[] }>;
+  block(patterns: string[], options?: { durationMs?: number; redirect?: string; reason?: string }): Promise<{ id: string; expiresAt: string | null; patterns: string[] }>;
   /** Lift one block early. */
   unblock(id: string): Promise<{ removed: boolean }>;
   /** Blocks currently in place. */

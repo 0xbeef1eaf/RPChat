@@ -19,7 +19,6 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
   const [portText, setPortText] = useState<string | null>(null);
   const [trustText, setTrustText] = useState('');
   const [homeText, setHomeText] = useState<string | null>(null);
-  const [maxBlockText, setMaxBlockText] = useState<string | null>(null);
   const [extraDirsText, setExtraDirsText] = useState<string | null>(null);
   const [blocks, setBlocks] = useState<BrowserBlock[]>([]);
   const [busy, setBusy] = useState(false);
@@ -31,7 +30,6 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
   const blockingManaged = useManaged('browser.allowBlocking');
   const evalManaged = useManaged('browser.allowEval');
   const historyManaged = useManaged('browser.allowHistory');
-  const maxBlockManaged = useManaged('browser.maxBlockMs');
   const homeManaged = useManaged('browser.homePage');
 
   const loadBlocks = useCallback(async () => {
@@ -87,14 +85,6 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
     } finally {
       setBusy(false);
     }
-  };
-
-  const saveMaxBlock = async () => {
-    if (maxBlockText === null) return;
-    const minutes = Number(maxBlockText);
-    setMaxBlockText(null);
-    if (!Number.isFinite(minutes) || minutes < 1) return;
-    await patchBrowser({ maxBlockMs: Math.round(minutes) * 60_000 });
   };
 
   const saveExtraDirs = async () => {
@@ -341,24 +331,6 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
               Block pages for a while (<code>sdk.browser.block</code>)
               <ManagedBadge show={blockingManaged} />
             </label>
-            <div className="row" style={{ gap: 8, paddingLeft: 22 }}>
-              <label htmlFor="browser-max-block" className="small">
-                Longest block (minutes)
-                <ManagedBadge show={maxBlockManaged} />
-              </label>
-              <input
-                id="browser-max-block"
-                type="number"
-                min={1}
-                style={{ width: 90 }}
-                value={maxBlockText ?? String(Math.max(1, Math.round(browser.maxBlockMs / 60_000)))}
-                disabled={maxBlockManaged || busy || !browser.allowBlocking}
-                onChange={(e) => setMaxBlockText(e.target.value)}
-                onBlur={saveMaxBlock}
-                onKeyDown={(e) => e.key === 'Enter' && saveMaxBlock()}
-              />
-              <span className="field-hint">Longer requests are shortened to this (default 240).</span>
-            </div>
             <label className="check">
               <input type="checkbox" checked={browser.allowEval} disabled={evalManaged || busy} onChange={(e) => void patchBrowser({ allowEval: e.target.checked })} />
               Run JavaScript in pages (<code>sdk.browser.eval</code>)

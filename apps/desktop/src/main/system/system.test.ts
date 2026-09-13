@@ -148,18 +148,18 @@ describe('policy', () => {
   });
 
   it('parses and applies the browser block', () => {
-    const policy = parsePolicy({ version: 1, settings: { browser: { allowBlocking: false, maxBlockMs: 600_000, allowEval: false, allowHistory: true, homePage: 'https://home.test/' } } });
-    expect(policy.settings?.browser).toEqual({ allowBlocking: false, maxBlockMs: 600_000, allowEval: false, allowHistory: true, homePage: 'https://home.test/' });
-    expect(managedPaths(policy)).toEqual(['browser.allowBlocking', 'browser.allowEval', 'browser.allowHistory', 'browser.homePage', 'browser.maxBlockMs']);
+    const policy = parsePolicy({ version: 1, settings: { browser: { allowBlocking: false, allowEval: false, allowHistory: true, homePage: 'https://home.test/' } } });
+    expect(policy.settings?.browser).toEqual({ allowBlocking: false, allowEval: false, allowHistory: true, homePage: 'https://home.test/' });
+    expect(managedPaths(policy)).toEqual(['browser.allowBlocking', 'browser.allowEval', 'browser.allowHistory', 'browser.homePage']);
     expect(managedPaths(parsePolicy({ version: 1, settings: { browser: {} } }))).toEqual([]);
     expect(() => parsePolicy({ version: 1, settings: { browser: { allowEval: 'no' } } })).toThrow(/browser.allowEval must be a boolean/);
-    expect(() => parsePolicy({ version: 1, settings: { browser: { maxBlockMs: -1 } } })).toThrow(/browser.maxBlockMs/);
+    expect(() => parsePolicy({ version: 1, settings: { browser: { allowEval: 'yes' } } })).toThrow(/browser.allowEval/);
     expect(() => parsePolicy({ version: 1, settings: { browser: { homePage: 'ftp://x' } } })).toThrow(/browser.homePage/);
     // Unknown keys inside the block are ignored (the daemon rejects them; the app applies what it knows).
     expect(parsePolicy({ version: 1, settings: { browser: { bridgePort: 1 } } }).settings?.browser).toEqual({});
-    const applied = applyPolicy(base, parsePolicy({ version: 1, settings: { browser: { allowEval: false, maxBlockMs: 1000 } } }));
-    expect(applied.settings.browser).toEqual({ ...base.browser, allowEval: false, maxBlockMs: 1000 });
-    expect(applied.managed).toEqual(['browser.allowEval', 'browser.maxBlockMs']);
+    const applied = applyPolicy(base, parsePolicy({ version: 1, settings: { browser: { allowEval: false } } }));
+    expect(applied.settings.browser).toEqual({ ...base.browser, allowEval: false });
+    expect(applied.managed).toEqual(['browser.allowEval']);
     const { allowEval: _managed, ...rest } = base.browser;
     void _managed;
     expect(stripManagedPatch({ browser: { ...base.browser, allowEval: true, homePage: 'https://x.test/' } }, ['browser.allowEval'])).toEqual({ browser: { ...rest, homePage: 'https://x.test/' } });

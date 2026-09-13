@@ -157,15 +157,6 @@ impl PolicyFile {
                                 return Err(format!("settings.browser.{key} must be a boolean"));
                             }
                         }
-                        "maxBlockMs" => match value.as_f64() {
-                            Some(n) if n.is_finite() && n >= 0.0 => {}
-                            _ => {
-                                return Err(
-                                    "settings.browser.maxBlockMs must be a non-negative number"
-                                        .into(),
-                                )
-                            }
-                        },
                         "homePage" => match value.as_str() {
                             Some(s)
                                 if s.is_empty()
@@ -494,7 +485,7 @@ mod tests {
                 "senses": {"includeInPrompt": false},
                 "displayBackend": "electron",
                 "updates": {"automatic": false, "enabled": true},
-                "browser": {"allowBlocking": false, "maxBlockMs": 600000, "allowEval": true, "allowHistory": false, "homePage": "https://example.com/"}
+                "browser": {"allowBlocking": false, "allowEval": true, "allowHistory": false, "homePage": "https://example.com/"}
             },
             "inputLock": {"maxDurationMs": 60000, "emergencyKey": "f12", "emergencyHoldMs": 2000, "enabled": true}
         }))
@@ -512,7 +503,6 @@ mod tests {
         // Round trip keeps the settings block verbatim.
         let back = serde_json::to_value(&p).unwrap();
         assert_eq!(back["settings"]["web"]["allowlist"], json!(["example.com"]));
-        assert_eq!(back["settings"]["browser"]["maxBlockMs"], json!(600000));
         assert_eq!(back["inputLock"]["emergencyKey"], json!("f12"));
     }
 
@@ -532,7 +522,7 @@ mod tests {
             json!({"version": 1, "settings": {"updates": {"checkIntervalHours": 1}}}),
             json!({"version": 1, "settings": {"browser": "x"}}),
             json!({"version": 1, "settings": {"browser": {"allowEval": "no"}}}),
-            json!({"version": 1, "settings": {"browser": {"maxBlockMs": -1}}}),
+            json!({"version": 1, "settings": {"browser": {"allowEval": "yes"}}}),
             json!({"version": 1, "settings": {"browser": {"homePage": "ftp://x"}}}),
             json!({"version": 1, "settings": {"browser": {"bridgePort": 1}}}),
             json!({"version": 1, "inputLock": {"emergencyKey": "space"}}),

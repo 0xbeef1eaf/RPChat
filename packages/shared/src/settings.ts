@@ -175,7 +175,6 @@ export interface AppSettings {
     /** Let characters block pages (`sdk.browser.block`). Default true. */
     allowBlocking: boolean;
     /** Longest a single block may last, ms (`durationMs` is capped to this). Default 4 h. */
-    maxBlockMs: number;
     /** Let characters run JavaScript in pages (`sdk.browser.eval`). Default true. */
     allowEval: boolean;
     /** Let characters read the browser history (`sdk.browser.history` and friends). Default true. */
@@ -263,7 +262,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [], liveSnapshotAutoRefresh: false },
   web: { allowlist: [], maxBytes: 512 * 1024 },
   desktop: { launchAllowlist: [] },
-  browser: { bridgePort: 47821, trustedExtensionIds: [], allowBlocking: true, maxBlockMs: 4 * 60 * 60_000, allowEval: true, allowHistory: true, homePage: '', extraPolicyDirs: [] },
+  browser: { bridgePort: 47821, trustedExtensionIds: [], allowBlocking: true, allowEval: true, allowHistory: true, homePage: '', extraPolicyDirs: [] },
   messaging: { channels: [] },
   permissions: { moduleAllow: {} },
   maxInputLockMs: 5 * 60_000,

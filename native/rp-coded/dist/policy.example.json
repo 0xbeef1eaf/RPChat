@@ -33,7 +33,6 @@
     },
     "browser": {
       "allowBlocking": true,
-      "maxBlockMs": 14400000,
       "allowEval": true,
       "allowHistory": true,
       "homePage": ""

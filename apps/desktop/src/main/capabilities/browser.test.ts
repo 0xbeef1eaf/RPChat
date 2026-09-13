@@ -152,34 +152,31 @@ describe('BrowserHandler with the extension', () => {
 
 describe('BrowserHandler: blocking, effects, home page, bookmarks, eval, history', () => {
   const ctxNamed = { ...ctx, packId: 'com.x.p', characterId: 'mira' };
-  const settingsOf = (over: Partial<{ allowBlocking: boolean; maxBlockMs: number; allowEval: boolean; allowHistory: boolean; homePage: string }> = {}) => async () => ({
+  const settingsOf = (over: Partial<{ allowBlocking: boolean; allowEval: boolean; allowHistory: boolean; homePage: string }> = {}) => async () => ({
     allowBlocking: true,
-    maxBlockMs: 60 * 60_000,
     allowEval: true,
     allowHistory: true,
     homePage: '',
     ...over,
   });
 
-  it('block: validates patterns, protects the app and browser pages, caps the duration, names the character', async () => {
+  it('block: validates patterns, protects the app and browser pages, has no duration cap, names the character', async () => {
     const { commands } = fakeCommands();
     const { bridge, calls } = fakeBridge(true, { 'rules.block': (a) => ({ ...a, redirectedTabs: 1 }), 'rules.list': [{ id: 'blk-1', patterns: ['a.test'] }], 'rules.unblock': { removed: true }, 'rules.clear': { removed: 2 } });
     const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf(), characterName: () => 'Mira' });
     const before = Date.now();
     const r = (await h.invoke('block', [['*.social.test', 'news.test/feed*'], { durationMs: 5 * 60_000, reason: 'focus time' }], ctxNamed)) as Record<string, unknown>;
-    expect(r).toMatchObject({ patterns: ['*.social.test', 'news.test/feed*'], cappedToMs: null, redirectedTabs: 1 });
+    expect(r).toMatchObject({ patterns: ['*.social.test', 'news.test/feed*'], redirectedTabs: 1 });
     expect(typeof r['id']).toBe('string');
     const expires = Date.parse(r['expiresAt'] as string);
     expect(expires).toBeGreaterThanOrEqual(before + 5 * 60_000 - 5);
     expect(expires).toBeLessThan(before + 5 * 60_000 + 5_000);
     expect(calls[0]).toMatchObject({ op: 'rules.block', args: { patterns: ['*.social.test', 'news.test/feed*'], by: 'Mira', reason: 'focus time' } });
-    // Longer than the cap → shortened to the cap (and reported).
-    const capped = (await h.invoke('block', [['a.test'], { durationMs: 10 * 60 * 60_000 }], ctxNamed)) as Record<string, unknown>;
-    expect(capped['cappedToMs']).toBe(60 * 60_000);
-    expect(Date.parse(capped['expiresAt'] as string)).toBeLessThan(before + 60 * 60_000 + 5_000);
-    // No duration → the cap.
-    const dflt = (await h.invoke('block', [['a.test']], ctxNamed)) as Record<string, unknown>;
-    expect(Date.parse(dflt['expiresAt'] as string)).toBeGreaterThan(before + 59 * 60_000);
+    // No cap on the duration.
+    const long = (await h.invoke('block', [['a.test'], { durationMs: 10 * 60 * 60_000 }], ctxNamed)) as Record<string, unknown>;
+    expect(Date.parse(long['expiresAt'] as string)).toBeGreaterThanOrEqual(before + 10 * 60 * 60_000); // no cap
+    const forever = (await h.invoke('block', [['b.test']], ctxNamed)) as Record<string, unknown>;
+    expect(forever['expiresAt']).toBeNull(); // indefinite until unblock/clearBlocks
     // Redirect goes through the URL check and the allowlist.
     await h.invoke('block', [['a.test'], { redirect: 'https://calm.test/' }], ctxNamed);
     expect(calls.at(-1)!.args['redirect']).toBe('https://calm.test/');

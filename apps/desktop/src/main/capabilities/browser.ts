@@ -4,8 +4,8 @@
  * while no extension is connected. URLs opened, navigated to, bookmarked, redirected to or set as
  * home page must be http(s) and, when the user set `settings.web.allowlist`, on it. Page blocking,
  * JavaScript injection and history access are switchable in Settings → Browser
- * (`settings.browser.allowBlocking` / `allowEval` / `allowHistory`); block durations are capped by
- * `settings.browser.maxBlockMs`.
+ * (`settings.browser.allowBlocking` / `allowEval` / `allowHistory`). A block without durationMs lasts
+ * until it is lifted.
  */
 import { randomUUID } from 'node:crypto';
 import { shell } from 'electron';
@@ -25,7 +25,7 @@ export interface BrowserBridgeLike {
   onEvent?(listener: (event: BrowserBridgeEvent) => void): () => void;
 }
 
-export type BrowserSettingsSlice = Pick<AppSettings['browser'], 'allowBlocking' | 'maxBlockMs' | 'allowEval' | 'allowHistory' | 'homePage'>;
+export type BrowserSettingsSlice = Pick<AppSettings['browser'], 'allowBlocking' | 'allowEval' | 'allowHistory' | 'homePage'>;
 
 export interface BrowserHandlerDeps {
   commands: CommandRunner;
@@ -49,13 +49,12 @@ export const NOT_CONNECTED_MESSAGE = 'The browser extension is not connected (Se
 export const BLOCKING_DISABLED_MESSAGE = 'Blocking pages is disabled in Settings → Browser';
 export const EVAL_DISABLED_MESSAGE = 'JavaScript injection is disabled in Settings → Browser';
 export const HISTORY_DISABLED_MESSAGE = 'Browser history access is disabled in Settings → Browser';
-export const DEFAULT_MAX_BLOCK_MS = 4 * 60 * 60_000;
 export const MAX_BLOCK_PATTERNS = 50;
 /** Longest `eval` wait; the bridge request is stretched to fit it. */
 export const EVAL_TIMEOUT_MAX_MS = 60_000;
 export const EVAL_TIMEOUT_DEFAULT_MS = 10_000;
 export const HISTORY_LIMIT_MAX = 500;
-export const DEFAULT_BROWSER_SETTINGS: BrowserSettingsSlice = { allowBlocking: true, maxBlockMs: DEFAULT_MAX_BLOCK_MS, allowEval: true, allowHistory: true, homePage: '' };
+export const DEFAULT_BROWSER_SETTINGS: BrowserSettingsSlice = { allowBlocking: true, allowEval: true, allowHistory: true, homePage: '' };
 
 function record(v: Json | undefined): Record<string, Json> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, Json>) : {};
@@ -237,18 +236,17 @@ export class BrowserHandler implements CapabilityHandler {
     const patterns = (rawPatterns as string[]).map((p) => p.trim());
     const protectedOne = patterns.find(isProtectedBlockPattern);
     if (protectedOne) throw new RpError('PERMISSION_DENIED', `"${protectedOne}" cannot be blocked: the app's own pages (127.0.0.1, localhost) and browser pages are protected`);
-    const maxBlockMs = Number.isFinite(settings.maxBlockMs) && settings.maxBlockMs > 0 ? settings.maxBlockMs : DEFAULT_MAX_BLOCK_MS;
+    // No cap: a block without durationMs stays until unblock()/clearBlocks() or the user clears it in Settings → Browser.
     const wanted = optionalNumber(options['durationMs']);
     if (wanted !== undefined && wanted <= 0) throw new RpError('INVALID_ARGUMENT', 'durationMs must be a positive number of milliseconds');
-    const durationMs = Math.min(wanted ?? maxBlockMs, maxBlockMs);
-    const expiresAt = new Date(Date.now() + Math.max(1000, Math.round(durationMs))).toISOString();
+    const expiresAt = wanted !== undefined ? new Date(Date.now() + Math.max(1000, Math.round(wanted))).toISOString() : null;
     const redirect = options['redirect'] !== undefined && options['redirect'] !== null ? await this.allowed(httpUrlArg(options['redirect'])) : undefined;
     if (redirect && isProtectedBlockPattern(blockPatternHost(redirect))) throw new RpError('INVALID_ARGUMENT', 'redirect must be a public http(s) page');
     const reason = typeof options['reason'] === 'string' && options['reason'].trim().length > 0 ? options['reason'].trim().slice(0, 300) : undefined;
     const id = `blk-${randomUUID().slice(0, 8)}`;
     const by = this.deps.characterName ? this.deps.characterName(context) : context.characterId;
-    const result = record(await this.bridged('rules.block', { id, patterns, expiresAt, by, ...(redirect ? { redirect } : {}), ...(reason ? { reason } : {}) }));
-    return { id, expiresAt, patterns, cappedToMs: durationMs < (wanted ?? maxBlockMs) ? maxBlockMs : null, ...(redirect ? { redirect } : {}), redirectedTabs: result['redirectedTabs'] ?? 0 };
+    const result = record(await this.bridged('rules.block', { id, patterns, ...(expiresAt ? { expiresAt } : {}), by, ...(redirect ? { redirect } : {}), ...(reason ? { reason } : {}) }));
+    return { id, expiresAt, patterns, ...(redirect ? { redirect } : {}), redirectedTabs: result['redirectedTabs'] ?? 0 };
   }
 
   // ---- image effects -----------------------------------------------------------------------

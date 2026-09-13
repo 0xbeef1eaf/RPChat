@@ -77,7 +77,7 @@ export function policyTemplate(settings: AppSettings): string {
       senses: { includeInPrompt: settings.senses.includeInPrompt, watchDirs: [...settings.senses.watchDirs], calendarSources: [...settings.senses.calendarSources] },
       displayBackend: settings.displayBackend,
       updates: { enabled: true, automatic: settings.updates.automatic },
-      browser: { allowBlocking: settings.browser.allowBlocking, maxBlockMs: settings.browser.maxBlockMs, allowEval: settings.browser.allowEval, allowHistory: settings.browser.allowHistory, homePage: settings.browser.homePage },
+      browser: { allowBlocking: settings.browser.allowBlocking, allowEval: settings.browser.allowEval, allowHistory: settings.browser.allowHistory, homePage: settings.browser.homePage },
     },
     inputLock: { enabled: true, maxDurationMs: settings.maxInputLockMs, emergencyKey: 'esc', emergencyHoldMs: 5000 },
   };

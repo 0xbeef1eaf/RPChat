@@ -79,9 +79,9 @@ newly blocked page are moved the same way. The rule table lives in `chrome.stora
 (dynamic DNR rules persist on their own) and a `chrome.alarms` alarm removes expired rules; the
 list and the popup's counter are refreshed from it.
 
-- `durationMs` is capped by `settings.browser.maxBlockMs` (default 4 h, Settings → Browser
-  "Longest block", policy key `browser.maxBlockMs`); the result reports `cappedToMs` when it was
-  shortened. Omitting it means "the cap".
+- `durationMs` is optional and uncapped: with it the block expires at `expiresAt`; without it the
+  block stays until `unblock()`/`clearBlocks()` or the user presses **Clear all blocks** in
+  Settings → Browser (or switches blocking off).
 - `127.0.0.1`, `localhost`, `*.localhost`, `chrome://…` and every other browser scheme are
   protected (the app's own media pages, assets and the extension update URL) —
   `PERMISSION_DENIED` in the app, and refused again by the extension.
