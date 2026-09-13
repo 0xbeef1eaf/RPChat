@@ -140,6 +140,7 @@
       "depends": [
         "libgtk-3-0",
         "libnotify4",
+        "libayatana-appindicator3-1 | libappindicator3-1",
         "libnss3",
         "libxss1",
         "libxtst6",

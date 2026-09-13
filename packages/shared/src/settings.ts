@@ -126,6 +126,8 @@ export interface AppSettings {
   useToolCalling: boolean;
   userDisplayName: string;
   theme: 'system' | 'light' | 'dark';
+  /** Closing the main window hides it to the tray instead of quitting (the tray menu quits). Default true. */
+  closeToTray: boolean;
   /**
    * Text scale of the chat transcript and composer; 1 = 100%. Clamped to
    * [`CHAT_ZOOM_MIN`, `CHAT_ZOOM_MAX`] on save. Nothing else in the app scales with it.
@@ -241,6 +243,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   useToolCalling: true,
   userDisplayName: 'You',
   theme: 'system',
+  closeToTray: true,
   chatZoom: 1,
   mediaAlwaysOnTop: true,
   displayBackend: 'auto',

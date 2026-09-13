@@ -188,6 +188,15 @@ again when the app quits. Sessions configured in Lua (`hyprland.lua`, Hyprland
 `hl.window_rule` / `hl.dispatch` instead of the legacy `keyword` and `dispatch`
 commands.
 
+### Tray icon
+
+rp-code keeps a tray icon on every launch; closing the window hides it there (Settings →
+General → *Closing the window keeps rp-code running in the tray*) so timers, self-wakes and the
+browser bridge keep working, and **Quit** lives in the tray menu. On Linux the tray is a
+StatusNotifier item: install `libayatana-appindicator3-1` (Debian/Ubuntu; the `.deb` depends on
+it) or `libayatana-appindicator` (Arch) and make sure your bar has a tray module (Waybar:
+`"tray"`). Without both, no icon appears and closing the window quits.
+
 ### System integration (input locking, run on login, locked settings)
 
 Locking the keyboard or mouse needs access to `/dev/input`, which desktop users

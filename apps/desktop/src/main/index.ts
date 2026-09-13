@@ -25,6 +25,8 @@ const env = process.env;
 /** `rp-code --hidden` (autostart): start minimized to the tray, no window until Show. */
 const START_HIDDEN = process.argv.includes('--hidden');
 let tray: Tray | undefined;
+/** Set by the tray's Quit (and before-quit) so the close-to-tray handler lets the window close. */
+let quitting = false;
 
 /** `app.getVersion()` is Electron's own version when launched as `electron out/main/index.js`; prefer our package.json. */
 function resolveAppVersion(): string {
@@ -103,7 +105,7 @@ async function main(): Promise<void> {
   });
 
   app.on('window-all-closed', () => {
-    // With a tray icon the app keeps running in the background (autostart mode).
+    // With a tray icon the app keeps running in the background; without one (tray unavailable) closing quits.
     if (process.platform !== 'darwin' && !tray) app.quit();
   });
 
@@ -118,6 +120,7 @@ async function main(): Promise<void> {
     await services?.stop();
   };
   app.on('before-quit', (event) => {
+    quitting = true;
     if (stopping || !services) return;
     event.preventDefault();
     void shutdown().finally(() => app.quit());
@@ -144,8 +147,14 @@ async function main(): Promise<void> {
   let visibleSession: string | null = null;
   registerIpc({ services, windows, logger, version, setVisibleSession: (id) => (visibleSession = id) });
   if (isSmokeRun(env)) await smokeEnableModelTraffic(engine);
-  if (START_HIDDEN) tray = createTray(windows, active, () => void shutdown().finally(() => app.quit()));
+  // The tray is always there (not only for --hidden): it is how the app stays alive for timers,
+  // self-wakes and the browser bridge while the window is closed, and how you quit.
+  tray = createTray(windows, active, () => {
+    quitting = true;
+    void shutdown().finally(() => app.quit());
+  });
   const win = windows.createMainWindow({ hidden: START_HIDDEN });
+  installCloseToTray(win, active);
   win.once('ready-to-show', () => {
     logger.info(`[main] window ${START_HIDDEN ? 'ready (hidden, tray)' : 'opened'} (userData: ${app.getPath('userData')})`);
     active.updates.start();
@@ -264,7 +273,33 @@ function watchUnpromptedMessages(services: AppServices, windows: WindowManager, 
   });
 }
 
-/** Tray icon with Show / Check for updates / Quit (used by `--hidden`). */
+/** Cached `settings.closeToTray` (the close handler must decide synchronously); refreshed on every settings read. */
+let closeToTray = true;
+
+/**
+ * Closing the main window hides it to the tray when `settings.closeToTray` is on and a tray
+ * exists; the tray menu's Quit (or any app quit) really closes it. Applied to every main window.
+ */
+function installCloseToTray(win: BrowserWindow, services: AppServices): void {
+  const refresh = (): void => {
+    void services.engine.settings
+      .get()
+      .then((settings) => {
+        closeToTray = settings.closeToTray !== false;
+      })
+      .catch(() => undefined);
+  };
+  refresh();
+  win.on('close', (event) => {
+    if (quitting || !tray || !closeToTray) return;
+    event.preventDefault();
+    win.hide();
+    refresh();
+  });
+  win.on('show', refresh);
+}
+
+/** Tray icon with Show/Hide / Check for updates / Quit; present on every launch. */
 function createTray(windows: WindowManager, services: AppServices, quit: () => void): Tray | undefined {
   try {
     const iconFile = [path.join(APP_ROOT, 'resources', 'tray.png'), path.join(process.resourcesPath ?? '', 'tray.png')].find((f) => fs.existsSync(f));
@@ -272,9 +307,16 @@ function createTray(windows: WindowManager, services: AppServices, quit: () => v
     const t = new Tray(icon.isEmpty() ? icon : icon.resize({ width: 22, height: 22 }));
     t.setToolTip('rp-code');
     const show = (): void => {
-      const w = windows.getMainWindow() ?? windows.createMainWindow();
+      const existing = windows.getMainWindow();
+      const w = existing ?? windows.createMainWindow();
+      if (!existing) installCloseToTray(w, services);
       w.show();
       w.focus();
+    };
+    const toggle = (): void => {
+      const w = windows.getMainWindow();
+      if (w && w.isVisible() && w.isFocused()) w.hide();
+      else show();
     };
     const checkForUpdates = (): void => {
       void services.updates
@@ -293,12 +335,14 @@ function createTray(windows: WindowManager, services: AppServices, quit: () => v
     t.setContextMenu(
       Menu.buildFromTemplate([
         { label: 'Show rp-code', click: show },
+        { label: 'Hide window', click: () => windows.getMainWindow()?.hide() },
         { label: 'Check for updates…', click: checkForUpdates },
         { type: 'separator' },
         { label: 'Quit', click: quit },
       ]),
     );
-    t.on('click', show);
+    t.on('click', toggle);
+    logger.info(`[main] tray icon created (${iconFile ? path.basename(iconFile) : 'no icon file'})`);
     return t;
   } catch (err) {
     logger.warn('[main] tray icon unavailable', err);
