@@ -67,12 +67,12 @@ describe('PromptBuilder', () => {
     expect(system).not.toContain('<pack>'); // media is discovered through sdk.pack, not listed
     expect(system).not.toContain('characters/luna/avatar.png');
     expect(system).toContain('sdk.pack.findAssets');
-    expect(system).toContain('Granted modules: sdk.chat, sdk.log, sdk.state, sdk.pack, sdk.timers, sdk.media.');
+    expect(system).toContain('Available modules: sdk.chat, sdk.log, sdk.state, sdk.pack, sdk.timers, sdk.media.');
     expect(system).toContain('## sdk.media — Media playback (pack)');
     expect(system).toContain('- showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>');
     expect(system).not.toContain('interface MediaApi'); // abridged index, not the full d.ts
     expect(system).not.toContain('sdk.system —');
-    expect(system).not.toContain('Not available'); // ungranted modules are omitted entirely
+    expect(system).not.toContain('Not available'); // unavailable modules are omitted entirely
     expect(stats.sdkReferenceTokens).toBeLessThan(6000); // six modules with full TSDoc (params, examples)
     expect(stats.systemTokens).toBeLessThan(stats.budgetTokens / 2);
     expect(stats.droppedMessages).toBe(0);
@@ -83,20 +83,20 @@ describe('PromptBuilder', () => {
     expect(messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]);
   });
 
-  it('includes the new modules when granted and says nothing at all about the rest', async () => {
+  it('includes the new modules when available and says nothing at all about the rest', async () => {
     const denied = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display'] })).system;
     expect(denied).toContain('## sdk.display');
     for (const id of ['wallpaper', 'browser', 'input', 'media']) {
       expect(denied).not.toContain(`## sdk.${id} —`);
-      expect(denied).not.toMatch(new RegExp(`^Granted modules: .*\\bsdk\\.${id}\\b`, 'm'));
+      expect(denied).not.toMatch(new RegExp(`^Available modules: .*\\bsdk\\.${id}\\b`, 'm'));
     }
     expect(denied).not.toContain('Not available'); // no list of what the character cannot do
-    expect(denied).not.toContain('are not granted in this session');
+    expect(denied).not.toContain('are not available in this session');
 
-    const granted = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display', 'wallpaper', 'browser', 'input'] })).system;
-    for (const id of ['display', 'wallpaper', 'browser', 'input']) expect(granted).toContain(`## sdk.${id}`);
-    expect(granted).toContain('Granted modules: sdk.chat, sdk.log, sdk.state, sdk.pack, sdk.timers, sdk.display, sdk.wallpaper, sdk.browser, sdk.input.');
-    expect(granted).not.toContain('Not available');
+    const available = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'log', 'state', 'pack', 'timers', 'display', 'wallpaper', 'browser', 'input'] })).system;
+    for (const id of ['display', 'wallpaper', 'browser', 'input']) expect(available).toContain(`## sdk.${id}`);
+    expect(available).toContain('Available modules: sdk.chat, sdk.log, sdk.state, sdk.pack, sdk.timers, sdk.display, sdk.wallpaper, sdk.browser, sdk.input.');
+    expect(available).not.toContain('Not available');
   });
 
   it('replaces summarised messages with <history_summary> and ignores a summary whose last message is gone', async () => {

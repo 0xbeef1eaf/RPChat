@@ -6,16 +6,7 @@ import { ConfirmDialog } from '../../components/common/Modal';
 import { TagInput } from '../../components/editor/TagInput';
 import { fromEditModel, toEditModel, undocumentedTags, unusedVocabulary, type MediaEditModel } from '../../lib/editor';
 import { formatBytes } from '../../lib/format';
-import {
-  ensureWallpaperVocabulary,
-  isWallpaper,
-  needsWallpaperCapability,
-  setWallpaperTag,
-  WALLPAPER_TAG,
-  wallpaperSource,
-  wallpaperWarnings,
-  withWallpaperCapability,
-} from '../../lib/wallpaper';
+import { ensureWallpaperVocabulary, isWallpaper, setWallpaperTag, WALLPAPER_TAG, wallpaperSource, wallpaperWarnings } from '../../lib/wallpaper';
 import { frameFor } from '../../lib/frames';
 import { applySuggestions, DEFAULT_TAG_SETTINGS, summarise, tagOptions, type TagRunSettings } from '../../lib/tagging';
 import { reportError, toast } from '../../store/actions';
@@ -43,7 +34,6 @@ export function MediaSection() {
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<AssetFilter>('all');
   const [resolutions, setResolutions] = useState<Record<string, { w: number; h: number }>>({});
-  const [capPrompt, setCapPrompt] = useState(false);
   const [removing, setRemoving] = useState<EditorAsset | null>(null);
   const [view, setView] = useState<'assets' | 'rules' | 'vocabulary'>('assets');
   const [autoTag, setAutoTag] = useState(false);
@@ -163,31 +153,11 @@ export function MediaSection() {
 
   const wallpaperOf = (a: EditorAsset) => ({ kind: a.kind, folderTags: draft.folderTags ? a.folderTags : [], manifestTags: draft.perAsset[a.path]?.tags ?? [] });
   const wallpaperAssets = useMemo(() => project.assets.filter((a) => isWallpaper(wallpaperOf(a))), [project.assets, draft]); // eslint-disable-line react-hooks/exhaustive-deps
-  const missingCapability = needsWallpaperCapability(wallpaperAssets.length > 0, project.manifest.capabilities);
   const visibleAssets = project.assets.filter((a) => {
     if (filter === 'all') return true;
     if (filter === 'wallpaper') return wallpaperAssets.includes(a);
     return a.kind === filter;
   });
-
-  const requestCapability = async () => {
-    setCapPrompt(false);
-    try {
-      const p = await api().editor.saveManifest(key, { ...project.manifest, capabilities: withWallpaperCapability(project.manifest.capabilities) });
-      setProject(p);
-      toast('success', 'pack.json now requests the wallpaper capability');
-    } catch (err) {
-      reportError('Could not update pack.json', err);
-    }
-  };
-  const onRequestCapability = async () => {
-    // The Pack section cannot be left dirty (the shell guards it); this section's own media.json draft can be.
-    if (d.dirty) {
-      setCapPrompt(true);
-      return;
-    }
-    await requestCapability();
-  };
 
   return (
     <div>
@@ -216,18 +186,6 @@ export function MediaSection() {
           ✨ Auto-tag…
         </button>
       </div>
-
-      {missingCapability ? (
-        <div className="callout callout-warning row" style={{ marginBottom: 12 }}>
-          <span className="grow">
-            This pack has {wallpaperAssets.length} wallpaper{wallpaperAssets.length === 1 ? '' : 's'} but does not request the <code>wallpaper</code>{' '}
-            capability, so characters cannot set them.
-          </span>
-          <button type="button" className="btn btn-sm btn-primary" onClick={onRequestCapability}>
-            Request the wallpaper capability
-          </button>
-        </div>
-      ) : null}
 
       {view === 'assets' ? (
         <>
@@ -459,18 +417,6 @@ export function MediaSection() {
           onSettings={setTagSettings}
           onApply={applySuggested}
           onClose={() => setAutoTag(false)}
-        />
-      ) : null}
-      {capPrompt ? (
-        <ConfirmDialog
-          title="Save media.json first?"
-          message="Requesting the capability rewrites pack.json and reloads the project. Your unsaved media.json changes will be saved first."
-          confirmLabel="Save and request"
-          onCancel={() => setCapPrompt(false)}
-          onConfirm={async () => {
-            setCapPrompt(false);
-            if (await d.save()) await requestCapability();
-          }}
         />
       ) : null}
       {removing ? (

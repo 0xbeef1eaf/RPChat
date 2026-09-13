@@ -14,7 +14,7 @@ import { globToRegExp } from './glob.js';
 import { validateMediaManifest } from './media-manifest.js';
 import { joinRelative, normalizeRelativePath, resolveAssetPath } from './paths.js';
 import { readCharacterLibrary } from './library.js';
-import { BEHAVIOUR_HOOKS, validateCharacter, validateManifest } from './schema.js';
+import { BEHAVIOUR_HOOKS, IGNORED_CAPABILITIES_KEY, validateCharacter, validateManifest } from './schema.js';
 import { MAX_TAGS_PER_ASSET } from './tags.js';
 
 /** Directory that holds the pack's character directory (`characters/<id>/`). */
@@ -47,6 +47,15 @@ async function kindOf(abs: string): Promise<FileKind> {
 }
 
 type JsonRead = { ok: true; value: unknown } | { ok: false; error: string };
+
+/** The legacy `capabilities` key is accepted but does nothing: permissions are app-wide. */
+export function ignoredCapabilitiesWarning(file: string): string {
+  return `warning: ${file}: "${IGNORED_CAPABILITIES_KEY}" is ignored; permissions are set in the app under Settings → Permissions`;
+}
+
+function hasIgnoredCapabilities(raw: unknown): boolean {
+  return typeof raw === 'object' && raw !== null && !Array.isArray(raw) && IGNORED_CAPABILITIES_KEY in raw;
+}
 
 async function readJson(abs: string): Promise<JsonRead> {
   let text: string;
@@ -112,6 +121,7 @@ async function loadCharacter(
     problems.push(`${defRel}: ${RpError.from(err).message}`);
     return undefined;
   }
+  if (hasIgnoredCapabilities(raw.value)) warnings.push(ignoredCapabilitiesWarning(defRel));
 
   const before = problems.length;
 
@@ -227,6 +237,7 @@ export async function inspectPack(root: string): Promise<PackInspection> {
   } catch (err) {
     return { problems: [`${PACK_MANIFEST_FILENAME}: ${RpError.from(err).message}`], warnings };
   }
+  if (hasIgnoredCapabilities(raw.value)) warnings.push(ignoredCapabilitiesWarning(PACK_MANIFEST_FILENAME));
 
   const characters: LoadedCharacter[] = [];
   for (const dirInput of manifest.characters) {
@@ -323,13 +334,4 @@ export async function validatePack(root: string): Promise<{ ok: boolean; problem
   } catch (err) {
     return { ok: false, problems: [RpError.from(err).message], warnings: [] };
   }
-}
-
-/** Pack-level plus character-level capability requests, deduplicated and sorted. */
-export function requestedCapabilities(pack: LoadedPack): string[] {
-  const set = new Set<string>(pack.manifest.capabilities ?? []);
-  for (const character of pack.characters) {
-    for (const cap of character.definition.capabilities ?? []) set.add(cap);
-  }
-  return [...set].sort();
 }

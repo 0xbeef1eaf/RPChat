@@ -4,8 +4,9 @@ Goal: anyone can add capability modules to the SDK without forking the app. A **
 folder containing `plugin.json` and an entry JavaScript module. The manifest declares modules
 (typings, docs, permission, methods) exactly like the built-in `CapabilityModuleSpec`s; the entry
 module implements them on the host. Once loaded, plugin modules are indistinguishable from
-built-ins: they appear in the generated `sdk.d.ts` and prompt docs, packs request them by id,
-the global permission policy and per-pack grants apply, every call is audited.
+built-ins: they appear in the generated `sdk.d.ts` and prompt docs, every character may use them
+unless the user switches them off under Settings → Permissions (the app-wide policy is the only
+permission control), every call is audited.
 
 Trust model: plugins are ordinary Node code running in the app's main process, with the same
 power as the app. The UI says so on install. Contracts: `@rp/shared/plugin.ts`, `IpcApi.plugins`.
@@ -37,10 +38,12 @@ my-plugin/
   plugin) with `PACK_CONFLICT`-style `INVALID_ARGUMENT`; registers the spec and the handler in the
   dispatcher; `engine.capabilities.unregister(id)` removes both (calls the handler's `dispose`).
   Prompt builder, permissions, `capabilities.list()`/`typings()` read the registry live, so nothing
-  else changes. Add a test: register a fake module, call it through the dispatcher with a pack that
-  requests it and a grant, see it in the prompt, unregister, call fails with CAPABILITY_UNKNOWN.
-- `installed pack` validation currently rejects unknown capability ids at install; keep that, but
-  `packs.inspect` should report plugin-provided ids as known.
+  else changes. Add a test: register a fake module, call it through the dispatcher from an installed
+  pack (on by default), switch it off in the policy and see it denied, see it in the prompt,
+  unregister, call fails with CAPABILITY_UNKNOWN.
+- Packs do not declare capabilities (a legacy `capabilities` key is ignored with a warning), so
+  there is nothing to validate against the registry at install; a plugin module is simply on for
+  every character once registered, unless switched off under Settings → Permissions.
 
 ## Desktop main — `PluginService` (`src/main/plugins/`)
 

@@ -56,7 +56,7 @@ fails, shrug it off in character and carry on.
 const TEMPLATES: Record<BehaviourHook, { title: string; source: string }> = {
   onInstall: {
     title: 'On install',
-    source: `// Runs once, right after the user installed this pack and accepted its capability grants.
+    source: `// Runs once, right after the user installed this pack.
 // This is the body of an async function: \`sdk\` is in scope, \`await\` and \`return\` work, no imports.
 // \`input\` is null for this hook.
 

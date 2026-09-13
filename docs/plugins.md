@@ -2,8 +2,8 @@
 
 A plugin adds one or more capability modules to the SDK that characters program against. Once
 installed, a plugin module is indistinguishable from a built-in one: it appears in the generated
-`sdk.d.ts` and in the prompt docs, packs request it by id, the user's global permission policy and
-per-pack grants apply, and every call is audited.
+`sdk.d.ts` and in the prompt docs, every character may use it unless the user switches it off under
+Settings → Permissions, and every call is audited.
 
 **Trust warning.** A plugin is ordinary JavaScript that runs inside the app's main process with
 the same power as the app itself (files, network, processes). Install only plugins you trust; the
@@ -64,12 +64,16 @@ The typings are shown to the model verbatim, so they double as its documentation
 `methods` must list every method in the typings (and nothing else); the app validates this when the
 plugin loads and shows the problems in Settings → Plugins.
 
-## Permission levels and how packs get access
+## Permission levels
 
-- `trusted` — always available to every character, no dialog. Use only for modules with no effect
-  outside the app (reading the time, formatting, …).
-- `pack` — a pack must request the module in `pack.json` (`"capabilities": ["clock"]`) and the user
-  grants it once per pack (also subject to the global policy in Settings → Permissions).
+Permissions are app-wide: packs do not declare or request modules (a `capabilities` key in an old
+`pack.json` is ignored with a warning). The user switches modules on or off for every character
+under Settings → Permissions.
+
+- `trusted` — always available to every character, no dialog, cannot be switched off. Use only for
+  modules with no effect outside the app (reading the time, formatting, …).
+- `pack` — on for every character unless the user switches the module off under Settings →
+  Permissions.
 - `prompt` — like `pack`, plus a confirmation dialog for every call (the user may allow it for the
   session). Use for anything that touches the system or the network. A handler can skip the dialog
   for pre-approved calls by implementing `preauthorize(method, args, ctx)`.

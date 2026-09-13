@@ -24,7 +24,6 @@ export function EditorShell({ projectKey, active }: EditorShellProps) {
   const section = useAppState((s) => s.editor.section);
   const characterDir = useAppState((s) => s.editor.characterDir);
   const [project, setProjectState] = useState<EditorProject | null>(null);
-  const caps = useAppState((s) => s.capabilities);
   const [error, setError] = useState<string | null>(null);
   const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -79,7 +78,7 @@ export function EditorShell({ projectKey, active }: EditorShellProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [active]);
 
-  const ctx = useMemo(() => (project ? { project, caps, setProject, register } : null), [project, caps, setProject, register]);
+  const ctx = useMemo(() => (project ? { project, setProject, register } : null), [project, setProject, register]);
 
   const run = async (what: 'install' | 'export' | 'reveal') => {
     if (!project) return;

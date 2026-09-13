@@ -65,10 +65,15 @@ describe('packManifestSchema', () => {
     }
   });
 
-  it('validates capability ids', () => {
-    expect(packManifestSchema.safeParse({ ...goodManifest(), capabilities: ['media', 'ui'] }).success).toBe(true);
-    expect(packManifestSchema.safeParse({ ...goodManifest(), capabilities: ['Media'] }).success).toBe(false);
-    expect(packManifestSchema.safeParse({ ...goodManifest(), capabilities: ['my-cap'] }).success).toBe(false);
+  it('accepts and strips the legacy "capabilities" key whatever its value', () => {
+    for (const value of [['media', 'ui'], ['Media'], 'system', 42, null, { media: true }]) {
+      const result = packManifestSchema.safeParse({ ...goodManifest(), capabilities: value });
+      expect(result.success, JSON.stringify(value)).toBe(true);
+      expect('capabilities' in result.data!).toBe(false);
+    }
+    const character = characterDefinitionSchema.safeParse({ id: 'x', name: 'X', persona: 'persona.md', capabilities: ['system'] });
+    expect(character.success).toBe(true);
+    expect('capabilities' in character.data!).toBe(false);
   });
 
   it('throws RpError(PACK_INVALID) with issues from validateManifest', () => {

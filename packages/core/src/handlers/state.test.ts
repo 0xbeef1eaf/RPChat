@@ -53,7 +53,7 @@ describe('StateHandler', () => {
 });
 
 describe('HelpHandler', () => {
-  it('returns the full reference of granted modules only', async () => {
+  it('returns the full reference of available modules only', async () => {
     const { HelpHandler } = await import('./help.js');
     const { createStandardRegistry } = await import('@rp/sdk');
     const registry = createStandardRegistry();

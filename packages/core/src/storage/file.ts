@@ -4,7 +4,6 @@ import { randomBytes } from 'node:crypto';
 import type {
   AppSettings,
   AuditEntry,
-  CapabilityGrant,
   ChatMessage,
   EventSubscription,
   InstalledPackRecord,
@@ -77,13 +76,16 @@ async function writeAtomic(file: string, data: string): Promise<void> {
 }
 
 /** Filesystem-safe encoding of an arbitrary key for use as a file name. */
+/** Written by versions that kept per-pack capability grants; ignored and deleted now. */
+export const LEGACY_GRANTS_FILE = 'grants.json';
+
 function fileNameFor(key: string): string {
   return encodeURIComponent(key).replace(/\*/g, '%2A').replace(/\./g, '%2E');
 }
 
 /**
  * JSON-file `Storage` under `dataDir`. One file per aggregate (settings, packs,
- * grants, sessions, timers), one file per session's messages, one file per
+ * sessions, timers), one file per session's messages, one file per
  * state scope, and an append-only JSONL audit log capped at `auditCap` entries.
  * Every write is atomic (temp file + rename) and per-file writes are serialised.
  */
@@ -98,6 +100,9 @@ export class FileStorage implements Storage {
   constructor(dataDir: string, options: FileStorageOptions = {}) {
     this.dataDir = path.resolve(dataDir);
     this.auditCap = Math.max(1, options.auditCap ?? 5000);
+    // Per-pack capability grants no longer exist (permissions are app-wide); an old grants file is
+    // never read, and is removed so it cannot be mistaken for live state.
+    void fs.rm(this.file(LEGACY_GRANTS_FILE), { force: true }).catch(() => undefined);
   }
 
   // ---- generic helpers -------------------------------------------------
@@ -160,24 +165,6 @@ export class FileStorage implements Storage {
     remove: async (packId) => {
       const list = (await this.loadList<InstalledPackRecord>('packs.json')).filter((r) => r.packId !== packId);
       await this.save('packs.json', list);
-    },
-  };
-
-  // ---- grants -----------------------------------------------------------
-
-  readonly grants: Storage['grants'] = {
-    list: async (packId) =>
-      (await this.loadList<CapabilityGrant>('grants.json')).filter((g) => packId === undefined || g.packId === packId),
-    set: async (grant) => {
-      const list = (await this.loadList<CapabilityGrant>('grants.json')).filter(
-        (g) => !(g.packId === grant.packId && g.module === grant.module),
-      );
-      list.push(grant);
-      await this.save('grants.json', list);
-    },
-    removeForPack: async (packId) => {
-      const list = (await this.loadList<CapabilityGrant>('grants.json')).filter((g) => g.packId !== packId);
-      await this.save('grants.json', list);
     },
   };
 

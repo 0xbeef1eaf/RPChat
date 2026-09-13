@@ -4,9 +4,9 @@ import { api, errorMessage } from '../api';
 import { useAppState } from '../store/store';
 
 const PERMISSION_LABEL: Record<CapabilityInfo['permission'], { text: string; cls: string; hint: string }> = {
-  trusted: { text: 'always on', cls: 'badge badge-success', hint: 'Effects stay inside the app; never needs a grant.' },
-  pack: { text: 'per pack', cls: 'badge badge-accent', hint: 'The pack must request it and you grant it in Packs.' },
-  prompt: { text: 'asks each call', cls: 'badge badge-warning', hint: 'Granted per pack and confirmed on every call.' },
+  trusted: { text: 'always on', cls: 'badge badge-success', hint: 'Effects stay inside the app; cannot be switched off.' },
+  pack: { text: 'on unless switched off', cls: 'badge badge-accent', hint: 'On for every character unless switched off under Settings → Permissions.' },
+  prompt: { text: 'asks each call', cls: 'badge badge-warning', hint: 'On unless switched off under Settings → Permissions, and asks on every call.' },
 };
 
 export function SdkReferenceView() {
@@ -29,7 +29,8 @@ export function SdkReferenceView() {
       </div>
       <p className="muted" style={{ marginBottom: 16, maxWidth: 720 }}>
         Characters act by writing TypeScript against this SDK. The code runs in a sandbox and can only reach your PC through the
-        modules below, subject to the permissions you grant per pack. This is exactly what the model is shown.
+        modules below. Every character gets every module unless you switch it off under Settings → Permissions. This is exactly
+        what the model is shown.
       </p>
       {error ? <div className="callout callout-danger">{error}</div> : null}
 

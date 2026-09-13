@@ -55,7 +55,6 @@ including symlinks that point outside the pack.
   "homepage": "https://…",
   "tags": ["companion"],
   "characters": ["characters/luna"],  // the one directory containing character.json (exactly one)
-  "capabilities": ["media", "ui"],     // pack-level requests; trusted modules are implicit
   "mediaRoot": "media",               // optional, default "media"; the directory may be absent
   "minAppVersion": "0.1.0"
 }
@@ -68,8 +67,10 @@ Rules enforced by `@rp/pack`:
 - `characters` lists exactly one directory with a `character.json`. A pack has
   one character; a second `characters/<x>/character.json` on disk is reported
   as a problem even when the manifest does not list it.
-- `capabilities` entries match `/^[a-z][a-zA-Z0-9]*$/`. Whether a capability
-  actually exists is checked by the app when the pack is installed.
+- There is no `capabilities` key: permissions are set in the app, not by the
+  pack (see §6). A `capabilities` key from older packs is accepted but ignored,
+  with the warning `pack.json: "capabilities" is ignored; permissions are set in
+  the app under Settings → Permissions`.
 
 ## 3. `character.json`
 
@@ -83,7 +84,6 @@ Rules enforced by `@rp/pack`:
   "greeting": "…",                    // first assistant message in a new session
   "exampleDialogue": [{ "user": "…", "character": "…" }],
   "behaviours": { "onSessionStart": "scripts/on-session-start.ts" },
-  "capabilities": ["system"],         // extra per-character requests (optional)
   "modelHints": { "temperature": 0.9, "maxTokens": 800, "model": "…" }
 }
 ```
@@ -182,15 +182,22 @@ as their default in Settings.
 
 ## 6. Capabilities and permissions
 
-The SDK is made of modules, each with a permission level:
+The SDK is made of modules, each with a permission level. Permissions are
+**app-wide**: the user switches modules on or off once, for every character,
+under Settings → Permissions. Packs neither request nor are granted anything —
+there is nothing to declare in `pack.json` or `character.json`. (A
+`capabilities` key from older packs is accepted, ignored and reported as a
+loader warning.)
 
 | level     | meaning                                                                                  |
 |-----------|------------------------------------------------------------------------------------------|
-| `trusted` | always available (`chat`, `log`, `state`, `pack`, `timers`); no effects outside the app  |
-| `pack`    | must be listed in `capabilities`; the user grants it per pack at install time (`media`, `ui`) |
-| `prompt`  | as `pack`, plus a confirmation dialog on every call (`system`)                            |
+| `trusted` | always available (`chat`, `log`, `state`, `pack`, `timers`, …); no effects outside the app; cannot be switched off |
+| `pack`    | on for every character unless the user switches the module off under Settings → Permissions (`media`, `ui`, `system`, …) |
+| `prompt`  | as `pack`, plus a confirmation dialog on every call (no built-in module uses it)          |
 
-Only request what the character needs; users see the list at install time.
+Write the character so it copes with a module being off: the call fails with
+`PERMISSION_DENIED` naming Settings → Permissions, and the module is absent
+from the SDK reference the model sees.
 
 ## 7. Behaviour hooks
 
@@ -199,7 +206,7 @@ same sandbox and with the same permissions as code the model writes:
 
 | hook             | when                                                                  | `input`                                         | return value                                   |
 |------------------|-----------------------------------------------------------------------|-------------------------------------------------|------------------------------------------------|
-| `onInstall`      | once, after the user accepted the capability grants                   | `null`                                          | ignored                                        |
+| `onInstall`      | once, right after the user installed the pack                         | `null`                                          | ignored                                        |
 | `onSessionStart` | when a new chat session starts, before the first model turn           | `null`                                          | ignored (use `sdk.chat.say` to speak)          |
 | `onUserMessage`  | after each user message, before the model turn                        | `{ text }`                                      | `{ skipLlm: true }` to fully script the reply  |
 | `onTimer`        | when a timer scheduled with `sdk.timers.schedule` fires               | `{ timer: { id, payload, label? } }`            | ignored                                        |

@@ -29,6 +29,7 @@ import {
   ASSET_KIND_BY_EXTENSION,
   CHARACTER_ID_PATTERN,
   DEFAULT_MEDIA_ROOT,
+  IGNORED_CAPABILITIES_KEY,
   PACK_ID_PATTERN,
   PACK_README_FILENAME,
   assetKindFor,
@@ -232,8 +233,9 @@ export class EditorService {
   private async readManifestTolerant(dir: string): Promise<PackManifest> {
     const fallback: PackManifest = { formatVersion: 1, id: '', name: path.basename(dir), version: '0.0.0', characters: [] };
     try {
-      const raw = JSON.parse(await fs.readFile(path.join(dir, PACK_MANIFEST_FILENAME), 'utf8')) as Partial<PackManifest>;
+      const raw = JSON.parse(await fs.readFile(path.join(dir, PACK_MANIFEST_FILENAME), 'utf8')) as Partial<PackManifest> & Record<string, unknown>;
       if (!raw || typeof raw !== 'object') return fallback;
+      delete raw[IGNORED_CAPABILITIES_KEY]; // legacy per-pack capability requests: permissions are app-wide now
       return {
         ...(raw as PackManifest),
         formatVersion: 1,

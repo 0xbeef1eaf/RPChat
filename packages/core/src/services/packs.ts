@@ -1,9 +1,8 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import type { CapabilityRegistry } from '@rp/sdk';
 import * as os from 'node:os';
-import { extractPack, loadPack, packDirectory, readCharacterLibrary, readManifestFromArchive, requestedCapabilities, writeLibraryFunction } from '@rp/pack';
+import { extractPack, inspectPack, loadPack, packDirectory, readCharacterLibrary, readManifestFromArchive, writeLibraryFunction } from '@rp/pack';
 import type {
   CharacterLibraryEntry,
   CharacterSummary,
@@ -19,16 +18,19 @@ import { LIB_NAME_PATTERN, PACK_FILE_EXTENSION, RpError, assetUrl, characterRef,
 import { summariseTags } from '../assets.js';
 import { characterScope } from '../handlers/state.js';
 import { LIB_STATE_KEY } from './library.js';
-import type { PermissionService } from './permissions.js';
-import { policyAllows } from './permissions.js';
 import type { TimerService } from './timers.js';
 import type { Clock, Logger } from '../types.js';
 
-/** Runs the `onInstall` behaviours of every character of a freshly installed pack. */
+/** Runs the `onInstall` behaviour of a freshly installed pack's character. */
 export type InstallHookRunner = (pack: LoadedPack) => Promise<void>;
 
+/**
+ * State scope older versions used to park an `onInstall` deferred until per-pack grants were
+ * complete. Grants are gone (permissions are app-wide), so `start()` runs a hook still parked
+ * there once and clears the scope; nothing writes to it any more.
+ */
 const INSTALL_STATE_SCOPE = (packId: string): string => `pack:${packId}`;
-const INSTALL_PENDING_KEY = 'onInstallPending';
+const LEGACY_INSTALL_PENDING_KEY = 'onInstallPending';
 
 async function pathKind(p: string): Promise<'file' | 'dir' | 'missing'> {
   try {
@@ -69,28 +71,18 @@ async function copyPackDir(src: string, dest: string): Promise<void> {
  */
 export class PackService {
   private readonly loaded = new Map<string, LoadedPack>();
-  private readonly installChecks = new Map<string, Promise<boolean>>();
   private readonly changeListeners = new Set<(packId: string) => void | Promise<void>>();
   private installHooks: InstallHookRunner | undefined;
 
   constructor(
     private readonly storage: Pick<Storage, 'packs' | 'state'>,
     private readonly packsDir: string,
-    private readonly registry: CapabilityRegistry,
-    private readonly permissions: PermissionService,
     private readonly timers: TimerService,
     private readonly now: Clock,
     private readonly logger: Logger,
-    private readonly settings: () => Promise<import('@rp/shared').AppSettings> = async () => {
-      throw new RpError('INTERNAL', 'PackService has no settings accessor');
-    },
-  ) {
-    this.permissions.onGrantsChanged((packId) => {
-      void this.maybeRunInstallHooks(packId).catch((err) => this.logger.error('[packs] deferred onInstall failed', err));
-    });
-  }
+  ) {}
 
-  /** Wired by the Engine: how to run `onInstall` behaviours. */
+  /** Wired by the Engine: how to run the `onInstall` behaviour (right after install, once). */
   setInstallHookRunner(runner: InstallHookRunner): void {
     this.installHooks = runner;
   }
@@ -115,13 +107,25 @@ export class PackService {
   async start(): Promise<void> {
     for (const record of await this.storage.packs.list()) {
       try {
-        const pack = await loadPack(record.root);
+        const pack = await this.loadInstalled(record.root);
         this.loaded.set(record.packId, pack);
-        await this.syncRequestedCapabilities(record, pack);
         await this.migrateLibraryState(pack);
+        await this.runLegacyPendingInstallHook(pack);
       } catch (err) {
         this.logger.error(`[packs] cannot load installed pack ${record.packId} at ${record.root}`, err);
       }
+    }
+  }
+
+  /** An `onInstall` a previous version parked behind per-pack grants runs now, once. */
+  private async runLegacyPendingInstallHook(pack: LoadedPack): Promise<void> {
+    const scope = INSTALL_STATE_SCOPE(pack.manifest.id);
+    const pending = await this.storage.state.get(scope, LEGACY_INSTALL_PENDING_KEY);
+    if (pending === undefined) return;
+    await this.storage.state.clear(scope);
+    if (pending === true && this.installHooks && pack.characters.some((c) => c.behaviourSources.onInstall !== undefined)) {
+      this.logger.info(`[packs] ${pack.manifest.id}: running the onInstall hook an earlier version left pending`);
+      await this.installHooks(pack);
     }
   }
 
@@ -180,29 +184,6 @@ export class PackService {
         } catch (err) {
           this.logger.warn(`[packs] ${pack.manifest.id}: library rescan after migration failed`, err);
         }
-      }
-    }
-  }
-
-  /**
-   * The install record remembers what the pack requested at install time; a pack edited in place
-   * (pack.json or a character.json under the packs dir) would otherwise keep reporting the old
-   * list as "not requested by the pack" forever. Refresh it and default-grant new modules from the
-   * global policy, exactly as `install` does.
-   */
-  private async syncRequestedCapabilities(record: InstalledPackRecord, pack: LoadedPack): Promise<void> {
-    const requested = this.nonTrustedCapabilities(pack);
-    const same = requested.length === record.requestedCapabilities.length && requested.every((id, i) => id === record.requestedCapabilities[i]);
-    if (same) return;
-    const added = requested.filter((id) => !record.requestedCapabilities.includes(id));
-    const removed = record.requestedCapabilities.filter((id) => !requested.includes(id));
-    this.logger.info(`[packs] ${record.packId} capabilities changed on disk (+${added.join(',') || '-'} / -${removed.join(',') || '-'}); refreshing install record`);
-    await this.storage.packs.upsert({ ...record, requestedCapabilities: requested, characterIds: pack.characters.map((c) => c.definition.id) });
-    const grants = await this.permissions.grantsFor(record.packId);
-    const policy = await this.settings().catch(() => undefined);
-    for (const module of added) {
-      if (!grants.some((g) => g.module === module)) {
-        await this.permissions.setGrant(record.packId, module, policy ? policyAllows(policy, module) : false);
       }
     }
   }
@@ -273,14 +254,10 @@ export class PackService {
   private async viewFor(record: InstalledPackRecord): Promise<InstalledPackView | undefined> {
     const pack = this.loaded.get(record.packId);
     if (!pack) return undefined;
-    const { effective, blockedByPolicy } = await this.permissions.effective(record.packId);
     const view: InstalledPackView = {
       ...record,
       manifest: pack.manifest,
-      grants: await this.permissions.grantsFor(record.packId),
       characters: this.characters().filter((c) => c.packId === record.packId),
-      effectiveCapabilities: effective,
-      blockedByPolicy,
       assetTags: summariseTags(pack.assets, pack.tagDescriptions ?? {}),
       assetCounts: countByKind(pack),
     };
@@ -310,7 +287,7 @@ export class PackService {
     const staging = `${dest}.${randomBytes(4).toString('hex')}.installing`;
     let pack: LoadedPack;
     if (kind === 'dir' && source === dest) {
-      pack = await loadPack(dest);
+      pack = await this.loadInstalled(dest);
     } else {
       await fs.mkdir(path.dirname(dest), { recursive: true });
       try {
@@ -320,18 +297,16 @@ export class PackService {
         } else {
           pack = await extractPack(source, staging);
         }
-        this.checkCapabilities(pack);
         await fs.rm(dest, { recursive: true, force: true });
         await fs.rename(staging, dest);
       } catch (err) {
         await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
         throw err;
       }
-      pack = await loadPack(dest);
+      pack = await this.loadInstalled(dest);
     }
-    this.checkCapabilities(pack);
 
-    // 3. Replace a previous install of the same id (grants are kept).
+    // 3. Replace a previous install of the same id.
     const previous = await this.storage.packs.get(manifest.id);
     if (previous && path.resolve(previous.root) !== path.resolve(dest) && this.isInsidePacksDir(previous.root)) {
       await fs.rm(previous.root, { recursive: true, force: true }).catch((err) => {
@@ -339,36 +314,24 @@ export class PackService {
       });
     }
 
-    const requested = this.nonTrustedCapabilities(pack);
     const record: InstalledPackRecord = {
       packId: manifest.id,
       version: manifest.version,
       name: manifest.name,
       root: pack.root,
       installedAt: this.now().toISOString(),
-      requestedCapabilities: requested,
       characterIds: pack.characters.map((c) => c.definition.id),
     };
     await this.storage.packs.upsert(record);
     this.loaded.set(manifest.id, pack);
     await this.migrateLibraryState(pack);
-
-    // 4. onInstall hooks run now (everything granted) or once grants change; mark them pending first
-    //    so a grant listener can never run them before the record exists.
-    const hasInstallHooks = pack.characters.some((c) => c.behaviourSources.onInstall !== undefined);
-    if (hasInstallHooks) await this.storage.state.set(INSTALL_STATE_SCOPE(manifest.id), INSTALL_PENDING_KEY, true);
-    else await this.storage.state.delete(INSTALL_STATE_SCOPE(manifest.id), INSTALL_PENDING_KEY);
-
-    // 5. Make sure every requested capability has a grant record; new grants default to the global policy.
-    const grants = await this.permissions.grantsFor(manifest.id);
-    const policy = await this.settings().catch(() => undefined);
-    for (const module of requested) {
-      if (!grants.some((g) => g.module === module)) {
-        await this.permissions.setGrant(manifest.id, module, policy ? policyAllows(policy, module) : false);
-      }
-    }
-    if (hasInstallHooks) await this.maybeRunInstallHooks(manifest.id);
+    await this.storage.state.clear(INSTALL_STATE_SCOPE(manifest.id));
     await this.notifyChanged(manifest.id);
+
+    // 4. The onInstall hook runs right now, once: permissions are app-wide, so nothing is ever pending.
+    if (this.installHooks && pack.characters.some((c) => c.behaviourSources.onInstall !== undefined)) {
+      await this.installHooks(pack);
+    }
 
     return this.view(manifest.id);
   }
@@ -378,7 +341,6 @@ export class PackService {
     if (!record) throw new RpError('NOT_FOUND', `Pack "${packId}" is not installed`, { packId });
     this.loaded.delete(packId);
     await this.storage.packs.remove(packId);
-    await this.permissions.removeForPack(packId);
     await this.timers.removeForPack(packId);
     await this.storage.state.clear(INSTALL_STATE_SCOPE(packId));
     if (this.isInsidePacksDir(record.root)) {
@@ -392,7 +354,7 @@ export class PackService {
     await this.notifyChanged(packId);
   }
 
-  /** Read a pack directory or `.rppack` without installing it and report what it asks for. */
+  /** Read a pack directory or `.rppack` without installing it and report what it contains. */
   async inspect(sourcePath: string): Promise<PackInspection> {
     const source = path.resolve(sourcePath);
     const kind = await pathKind(source);
@@ -405,12 +367,6 @@ export class PackService {
         tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rp-inspect-'));
         pack = await extractPack(source, tempDir);
       }
-      const requested = requestedCapabilities(pack);
-      const settings = await this.settings().catch(() => undefined);
-      const unknownCapabilities = requested.filter((id) => !this.registry.has(id));
-      const known = requested.filter((id) => this.registry.has(id) && this.registry.get(id)?.permission !== 'trusted');
-      const allowedByPolicy = known.filter((id) => (settings ? policyAllows(settings, id) : true));
-      const blockedByPolicy = known.filter((id) => !allowedByPolicy.includes(id));
       const assetCounts = countByKind(pack);
       const inspection: PackInspection = {
         manifest: pack.manifest,
@@ -419,10 +375,6 @@ export class PackService {
           if (c.definition.tagline !== undefined) entry.tagline = c.definition.tagline;
           return entry;
         }),
-        requestedCapabilities: known.concat(unknownCapabilities),
-        allowedByPolicy,
-        blockedByPolicy,
-        unknownCapabilities,
         assetCounts,
         assetTags: summariseTags(pack.assets, pack.tagDescriptions ?? {}),
       };
@@ -438,39 +390,6 @@ export class PackService {
     await packDirectory(pack.root, destinationFile);
   }
 
-  /** Whether every requested `pack`/`prompt` capability is currently granted. */
-  async allGranted(packId: string): Promise<boolean> {
-    const record = await this.storage.packs.get(packId);
-    if (!record) return false;
-    const grants = await this.permissions.grantsFor(packId);
-    return record.requestedCapabilities.every((m) => grants.some((g) => g.module === m && g.granted));
-  }
-
-  /** Run the pending `onInstall` hooks once all requested capabilities are granted (serialised per pack). */
-  maybeRunInstallHooks(packId: string): Promise<boolean> {
-    const prev = this.installChecks.get(packId) ?? Promise.resolve(false);
-    const run = (): Promise<boolean> => this.runInstallHooksIfReady(packId);
-    const next = prev.then(run, run);
-    this.installChecks.set(packId, next);
-    next
-      .finally(() => {
-        if (this.installChecks.get(packId) === next) this.installChecks.delete(packId);
-      })
-      .catch(() => undefined);
-    return next;
-  }
-
-  private async runInstallHooksIfReady(packId: string): Promise<boolean> {
-    const pack = this.loaded.get(packId);
-    if (!pack || !this.installHooks) return false;
-    const pending = await this.storage.state.get(INSTALL_STATE_SCOPE(packId), INSTALL_PENDING_KEY);
-    if (pending !== true) return false;
-    if (!(await this.allGranted(packId))) return false;
-    await this.storage.state.delete(INSTALL_STATE_SCOPE(packId), INSTALL_PENDING_KEY);
-    await this.installHooks(pack);
-    return true;
-  }
-
   // ---- helpers ------------------------------------------------------------
 
   private isInsidePacksDir(p: string): boolean {
@@ -479,17 +398,14 @@ export class PackService {
     return abs !== root && abs.startsWith(root + path.sep);
   }
 
-  private nonTrustedCapabilities(pack: LoadedPack): string[] {
-    return requestedCapabilities(pack).filter((id) => this.registry.get(id)?.permission !== 'trusted');
-  }
-
-  private checkCapabilities(pack: LoadedPack): void {
-    const unknown = requestedCapabilities(pack).filter((id) => !this.registry.has(id));
-    if (unknown.length > 0) {
-      throw new RpError('PACK_INVALID', `Pack requests unknown capabilities: ${unknown.join(', ')}`, {
-        packId: pack.manifest.id,
-        unknown,
-      });
-    }
+  /**
+   * `loadPack` plus its non-fatal warnings in the log, so authors notice e.g. a legacy
+   * `capabilities` key (ignored: permissions are app-wide, Settings → Permissions).
+   */
+  private async loadInstalled(root: string): Promise<LoadedPack> {
+    const { pack, problems, warnings } = await inspectPack(root);
+    if (!pack) throw new RpError('PACK_INVALID', `Invalid pack at ${path.resolve(root)}:\n${problems.join('\n')}`, { problems });
+    for (const w of warnings) this.logger.warn(`[packs] ${pack.manifest.id}: ${w}`);
+    return pack;
   }
 }

@@ -203,7 +203,7 @@ describe('QuickJsRunner', () => {
   it('propagates host errors as catchable Errors with .code inside the isolate', async () => {
     const invoker = makeInvoker(async (call) =>
       call.method === 'showImage'
-        ? { ok: false, error: { code: 'PERMISSION_DENIED', message: 'media not granted', details: { module: 'media' } } }
+        ? { ok: false, error: { code: 'PERMISSION_DENIED', message: 'media switched off under Settings → Permissions', details: { module: 'media' } } }
         : { ok: true, value: 'fine' },
     );
     const result = await runner.run(
@@ -221,7 +221,7 @@ describe('QuickJsRunner', () => {
     expect(result.ok).toBe(true);
     expect(result.returnValue).toEqual({
       isError: true,
-      message: 'media not granted',
+      message: 'media switched off under Settings → Permissions',
       code: 'PERMISSION_DENIED',
       details: { module: 'media' },
       ok: 'fine',

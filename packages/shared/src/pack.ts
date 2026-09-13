@@ -29,8 +29,6 @@ export interface PackManifest {
    * array for format compatibility (`packId/characterId` refs, `characters/<id>/…` layout).
    */
   characters: string[];
-  /** Pack-level `pack`/`prompt` capability requests; `trusted` modules are implicit. */
-  capabilities?: string[];
   /** Directory (relative to pack root) that holds media assets. Default `media`. */
   mediaRoot?: string;
   minAppVersion?: string;
@@ -70,8 +68,6 @@ export interface CharacterDefinition {
   };
   /** Baselines for the mood model (`sdk.mood`). */
   mood?: { baseline?: number; energyBaseline?: number };
-  /** Extra capability requests specific to this character. */
-  capabilities?: string[];
   modelHints?: ModelHints;
 }
 
@@ -176,8 +172,6 @@ export interface InstalledPackRecord {
   name: string;
   root: string;
   installedAt: string;
-  /** Capabilities requested by the pack (pack + character level, deduplicated). */
-  requestedCapabilities: string[];
   characterIds: CharacterId[];
 }
 

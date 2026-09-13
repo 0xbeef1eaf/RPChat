@@ -84,7 +84,7 @@ export function CommandsSection({ settings, onPatch }: CommandsSectionProps) {
     <div className="stack" style={{ gap: 14 }}>
       <p className="muted small">
         External commands characters may run through the <code>wallpaper</code>, <code>browser</code>, <code>screen</code>,{' '}
-        <code>presence</code>, <code>desktop</code> and <code>voice</code> modules (each still needs a per-pack grant). When a
+        <code>presence</code>, <code>desktop</code> and <code>voice</code> modules (each can be switched off under Settings → Permissions). When a
         command is missing, the character receives an error naming this page and the row to fill in. Input locking and typing are not configured here: they go through
         the system integration daemon (Settings → System). Commands are tokenised like a shell line and run <em>without</em> a shell; placeholders are
         substituted inside tokens so values can never inject extra arguments. Leave a command empty to use the platform default.

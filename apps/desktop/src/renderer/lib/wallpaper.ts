@@ -36,16 +36,6 @@ export function wallpaperWarnings(width: number, height: number): string[] {
   return out;
 }
 
-/** True when wallpaper assets exist but the manifest does not request the `wallpaper` capability. */
-export function needsWallpaperCapability(hasWallpapers: boolean, capabilities: string[] | undefined): boolean {
-  return hasWallpapers && !(capabilities ?? []).includes(WALLPAPER_TAG);
-}
-
-export function withWallpaperCapability(capabilities: string[] | undefined): string[] {
-  const list = capabilities ?? [];
-  return list.includes(WALLPAPER_TAG) ? list : [...list, WALLPAPER_TAG];
-}
-
 /** Whether any per-asset edit or rule uses the wallpaper tag (folder tags are passed separately). */
 export function usesWallpaperTag(model: MediaEditModel, folderTagsByAsset: Record<string, string[]>): boolean {
   if (Object.values(model.perAsset).some((e) => e.tags.includes(WALLPAPER_TAG))) return true;

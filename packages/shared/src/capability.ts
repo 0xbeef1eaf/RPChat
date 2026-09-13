@@ -5,7 +5,8 @@ import type { SerializedError } from './errors.js';
  * Permission level of a capability module (or of a single method override).
  *
  * - `trusted`: always available; effects stay inside the app's own data.
- * - `pack`: must be requested in the pack manifest and granted by the user (per pack).
+ * - `pack`: on for every installed character unless the user switches the module off
+ *   under Settings → Permissions (app-wide; packs neither request nor are granted it).
  * - `prompt`: as `pack`, and every call additionally needs a user confirmation
  *   (which may be remembered for the session).
  */
@@ -112,14 +113,6 @@ export interface CapabilityHandler {
  */
 export interface CapabilityInvoker {
   invoke(call: CapabilityCall): Promise<CapabilityResult>;
-}
-
-/** A stored decision about a `pack`-level capability for one pack. */
-export interface CapabilityGrant {
-  packId: PackId;
-  module: string;
-  granted: boolean;
-  grantedAt: string;
 }
 
 /** A pending `prompt`-level confirmation shown to the user. */

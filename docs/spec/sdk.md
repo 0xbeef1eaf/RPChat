@@ -20,14 +20,16 @@ export function generateSdkTypings(registry, options?: { modules?: string[] }): 
 export function generateSdkDocs(registry, options?: { modules?: string[]; deniedModules?: string[] }): string;
 // Prompt reference generated from the type definitions: rules, then per module one entry per method —
 // `- name(sig): ret — TSDoc summary`, every `@param`, `@returns`, the first `@example` — helper types on one
-// line, one module example; shared preamble types only when referenced; ungranted modules are not mentioned.
+// line, one module example; shared preamble types only when referenced; unavailable modules are not mentioned.
 export function generateSdkIndex(registry, options?: { modules?: string[]; deniedModules?: string[]; helperTypes?: boolean }): string;
 export function describeSurface(registry, options?: { modules?: string[] }): SdkSurface;
 export const SDK_PREAMBLE_TYPINGS: string;  // shared helper types (AssetRef, MediaHandle, ...)
 export * as modules from './modules/index.js';   // chatModule, logModule, stateModule, packModule, timersModule, mediaModule, uiModule, systemModule
 ```
 
-`options.modules` filters to the granted modules (used by core when building prompts and sandbox surface).
+`options.modules` filters to the available modules — trusted plus every module the user has not switched off under Settings → Permissions (used by core when building prompts and sandbox surface).
+
+Permission levels (`CapabilityModuleSpec.permission`, per-method override in `methods[name].permission`): `trusted` — always available, cannot be switched off; `pack` — on for every character unless the user switches the module off under Settings → Permissions (app-wide; packs neither request nor are granted it); `prompt` — as `pack`, plus a confirmation dialog on every call (remembered per session on `allow-session`; a handler may `preauthorize`). No built-in module uses `prompt`.
 
 ## Generated typings format
 
@@ -127,7 +129,7 @@ system (pack; was `prompt` before per-call prompts were dropped) — every metho
 
 ## Docs for the LLM
 
-The prompt builder injects `generateSdkIndex` (not the full typings + docs); the `help` module (`sdk.help.modules()`, `sdk.help.module(id)`, trusted) returns a granted module's complete `typings` and `docs` on demand. The first code fence of `docs` doubles as the module's example in the index, so keep it short and representative.
+The prompt builder injects `generateSdkIndex` (not the full typings + docs); the `help` module (`sdk.help.modules()`, `sdk.help.module(id)`, trusted) returns an available module's complete `typings` and `docs` on demand. The first code fence of `docs` doubles as the module's example in the index, so keep it short and representative.
 
 Each module's `docs` is 5–20 lines of markdown: purpose, when to use, 1–2 short code examples, pitfalls. `generateSdkDocs` prefixes a general section: code is the body of an async function, `sdk` is global, `await` every call, return small JSON, keep actions short, do not busy-loop, prefer one action per intention, denied modules list.
 
@@ -137,4 +139,4 @@ Each module's `docs` is 5–20 lines of markdown: purpose, when to use, 1–2 sh
 - validateModuleSpec catches a method missing from `methods` and vice versa
 - generated typings compile (use `typescript` transpileModule / createProgram in-memory with `noEmit`, asserting zero semantic diagnostics; `typescript` as devDependency)
 - describeSurface lists nested `session.get` for state
-- filtering by granted modules omits typings and lists denied ones in docs
+- filtering by available modules omits typings and lists denied ones in docs

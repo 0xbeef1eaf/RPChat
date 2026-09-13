@@ -1,5 +1,4 @@
 import type { AuditEntry, ChatMessage, ScheduledTimer, Session } from './chat.js';
-import type { CapabilityGrant } from './capability.js';
 import type { Json, SessionId } from './ids.js';
 import type { InstalledPackRecord } from './pack.js';
 import type { MemoryEntry } from './memory.js';
@@ -17,11 +16,6 @@ export interface Storage {
     get(packId: string): Promise<InstalledPackRecord | undefined>;
     upsert(record: InstalledPackRecord): Promise<void>;
     remove(packId: string): Promise<void>;
-  };
-  grants: {
-    list(packId?: string): Promise<CapabilityGrant[]>;
-    set(grant: CapabilityGrant): Promise<void>;
-    removeForPack(packId: string): Promise<void>;
   };
   sessions: {
     list(): Promise<Session[]>;

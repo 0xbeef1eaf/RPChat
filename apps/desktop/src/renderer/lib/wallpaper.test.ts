@@ -3,13 +3,11 @@ import type { MediaEditModel } from './editor';
 import {
   ensureWallpaperVocabulary,
   isWallpaper,
-  needsWallpaperCapability,
   setWallpaperTag,
   usesWallpaperTag,
   wallpaperSource,
   wallpaperWarnings,
   WALLPAPER_MEANING,
-  withWallpaperCapability,
 } from './wallpaper';
 
 describe('wallpaper helpers', () => {
@@ -30,14 +28,6 @@ describe('wallpaper helpers', () => {
     expect(wallpaperWarnings(0, 0)).toEqual([]);
   });
 
-  it('capability check and addition', () => {
-    expect(needsWallpaperCapability(true, ['media'])).toBe(true);
-    expect(needsWallpaperCapability(true, ['media', 'wallpaper'])).toBe(false);
-    expect(needsWallpaperCapability(false, undefined)).toBe(false);
-    expect(withWallpaperCapability(undefined)).toEqual(['wallpaper']);
-    expect(withWallpaperCapability(['wallpaper'])).toEqual(['wallpaper']);
-    expect(withWallpaperCapability(['media'])).toEqual(['media', 'wallpaper']);
-  });
 
   it('adds the default vocabulary meaning only when the tag is used and undocumented', () => {
     const base: MediaEditModel = { perAsset: { 'a.png': { tags: [], description: '' } }, rules: [], vocabulary: {}, folderTags: true };

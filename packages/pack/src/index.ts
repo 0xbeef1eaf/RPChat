@@ -2,8 +2,8 @@ export {
   BEHAVIOUR_HOOKS,
   BEHAVIOUR_SCRIPT_EXTENSIONS,
   EXPRESSION_EXTENSIONS,
-  CAPABILITY_ID_PATTERN,
   CHARACTER_ID_PATTERN,
+  IGNORED_CAPABILITIES_KEY,
   PACK_ID_PATTERN,
   SEMVER_PATTERN,
   characterDefinitionSchema,
@@ -52,7 +52,7 @@ export {
   normalizeTags,
 } from './tags.js';
 
-export { CHARACTERS_DIR_NAME, PACK_README_FILENAME, inspectPack, loadPack, requestedCapabilities, validatePack } from './loader.js';
+export { CHARACTERS_DIR_NAME, PACK_README_FILENAME, ignoredCapabilitiesWarning, inspectPack, loadPack, validatePack } from './loader.js';
 export type { PackInspection } from './loader.js';
 
 export {

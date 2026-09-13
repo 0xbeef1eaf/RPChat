@@ -4,14 +4,14 @@ export const inputModule: CapabilityModuleSpec = {
   id: 'input',
   version: '1.2.1',
   title: 'Input control',
-  summary: "Lock the user's keyboard/mouse for a set duration, or type, press keys, click and move the mouse for them (through the system integration daemon; granted once per pack).",
+  summary: "Lock the user's keyboard/mouse for a set duration, or type, press keys, click and move the mouse for them (through the system integration daemon).",
   permission: 'pack',
   apiTypeName: 'InputApi',
   typings: `/**
  * Control the user's input devices: lock keyboard/mouse for a bounded time, or synthesise typing,
  * key presses, clicks and pointer moves. Everything goes through the rp-code system integration
  * daemon (Linux); when it is not installed or not connected every call fails with
- * CAPABILITY_FAILED. Once the user has granted the 'input' capability you may use it freely; lock
+ * CAPABILITY_FAILED. Unless the user switched 'input' off in the app you may use it freely; lock
  * durations are capped by their settings and by the machine's policy, and every call is logged.
  * Synthesised input goes to whatever window is focused, so focus the right window first
  * (sdk.desktop.focusWindow) and keep sequences short.
@@ -58,7 +58,7 @@ interface InputApi {
    */
   moveMouse(x: number, y: number): Promise<void>;
 }`,
-  docs: `Take the user's keyboard and mouse — lock them for a short agreed time, or type, press keys and click on their behalf. Requires the \`input\` capability (granted once per pack). Use it when it is clearly part of the play or the user asked for it; say what you are about to do.
+  docs: `Take the user's keyboard and mouse — lock them for a short agreed time, or type, press keys and click on their behalf. Available unless the user switched \`input\` off under Settings → Permissions. Use it when it is clearly part of the play or the user asked for it; say what you are about to do.
 
 - Keep lock durations short; say what you are doing before locking; \`unlock()\` early if the user seems distressed.
 - Synthesised input hits whatever window is focused: \`sdk.desktop.focusWindow\` first, then a few \`type\`/\`key\`/\`click\` calls at most. Never type into password fields or run destructive shortcuts.

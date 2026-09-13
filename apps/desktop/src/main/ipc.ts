@@ -97,7 +97,6 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       },
       install: (_e, sourcePath) => engine.packs.install(requireString(sourcePath, 'sourcePath')),
       uninstall: (_e, packId) => engine.packs.uninstall(requireString(packId, 'packId')),
-      setGrant: (_e, packId, module, granted) => engine.permissions.setGrant(requireString(packId, 'packId'), requireString(module, 'module'), Boolean(granted)),
       exportPack: (_e, packId, destinationFile) => engine.packs.exportPack(requireString(packId, 'packId'), requireString(destinationFile, 'destinationFile')),
     },
     capabilities: {

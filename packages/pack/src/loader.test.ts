@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RpError } from '@rp/shared';
 import { LIB_MAX_FUNCTIONS, LIB_MAX_SOURCE_BYTES, LIB_MAX_TOTAL_BYTES } from '@rp/shared';
-import { loadPack, requestedCapabilities, summariseTags, validatePack } from './index.js';
+import { ignoredCapabilitiesWarning, loadPack, summariseTags, validatePack } from './index.js';
 import { LUNA_DIR, MAKIMA_DIR, MINIMAL_DIR, makeTempDir, minimalPackFiles, writeTree } from './test/helpers.js';
 
 describe('loadPack', () => {
@@ -11,7 +11,7 @@ describe('loadPack', () => {
     const pack = await loadPack(LUNA_DIR);
     expect(pack.root).toBe(path.resolve(LUNA_DIR));
     expect(pack.manifest.id).toBe('com.example.luna');
-    expect(pack.manifest.capabilities).toEqual(['media', 'ui']);
+    expect('capabilities' in pack.manifest).toBe(false); // permissions are app-wide; packs declare none
     expect(pack.readme).toContain('# Luna');
 
     expect(pack.characters).toHaveLength(1);
@@ -40,13 +40,12 @@ describe('loadPack', () => {
     ]);
     const wav = pack.assets.find((a) => a.path === 'media/audio/chime.wav')!;
     expect(wav.bytes).toBeLessThan(100 * 1024);
-    expect(requestedCapabilities(pack)).toEqual(['media', 'ui']);
   });
 
   it('loads the makima example pack (every pack feature)', async () => {
     const pack = await loadPack(MAKIMA_DIR);
     expect(pack.manifest.id).toBe('com.example.makima');
-    expect(requestedCapabilities(pack)).toEqual(['avatar', 'browser', 'calendar', 'desktop', 'events', 'files', 'input', 'media', 'messaging', 'presence', 'screen', 'system', 'ui', 'voice', 'wallpaper', 'web', 'widgets']);
+    expect(await validatePack(MAKIMA_DIR)).toMatchObject({ ok: true, warnings: [] }); // no legacy capabilities key
     expect(pack.readme).toMatch(/Tatsuki Fujimoto/);
     expect(pack.readme).toMatch(/placeholder/i);
 
@@ -117,20 +116,33 @@ describe('loadPack', () => {
     expect(pack.assets).toEqual([]);
     expect(pack.tagDescriptions).toBeUndefined();
     expect(pack.readme).toBeUndefined();
-    expect(requestedCapabilities(pack)).toEqual([]);
     expect(await validatePack(MINIMAL_DIR)).toEqual({ ok: true, problems: [], warnings: [] });
   });
 
-  it('merges pack and character capabilities, deduplicated and sorted', async () => {
-    const pack = await loadPack(LUNA_DIR);
-    const withExtra = {
-      ...pack,
-      manifest: { ...pack.manifest, capabilities: ['ui', 'media'] },
-      characters: [
-        { ...pack.characters[0]!, definition: { ...pack.characters[0]!.definition, capabilities: ['system', 'media'] } },
-      ],
-    };
-    expect(requestedCapabilities(withExtra)).toEqual(['media', 'system', 'ui']);
+  it('accepts a legacy "capabilities" key in pack.json and character.json, drops it and warns', async () => {
+    const dir = await makeTempDir();
+    try {
+      const files = minimalPackFiles();
+      const manifest = JSON.parse(files['pack.json']!) as Record<string, unknown>;
+      manifest.capabilities = ['media', 'Not-Even-Valid', 42];
+      files['pack.json'] = JSON.stringify(manifest);
+      const def = JSON.parse(files['characters/a/character.json']!) as Record<string, unknown>;
+      def.capabilities = 'system';
+      files['characters/a/character.json'] = JSON.stringify(def);
+      await writeTree(dir, files);
+
+      const pack = await loadPack(dir);
+      expect('capabilities' in pack.manifest).toBe(false);
+      expect('capabilities' in pack.character.definition).toBe(false);
+      expect(await validatePack(dir)).toEqual({
+        ok: true,
+        problems: [ignoredCapabilitiesWarning('pack.json'), ignoredCapabilitiesWarning('characters/a/character.json')],
+        warnings: [ignoredCapabilitiesWarning('pack.json'), ignoredCapabilitiesWarning('characters/a/character.json')],
+      });
+      expect(ignoredCapabilitiesWarning('pack.json')).toBe('warning: pack.json: "capabilities" is ignored; permissions are set in the app under Settings → Permissions');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

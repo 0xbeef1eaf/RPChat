@@ -1,4 +1,4 @@
-import type { CapabilityGrant, PermissionDecision, PermissionRequest } from './capability.js';
+import type { PermissionDecision, PermissionRequest } from './capability.js';
 import type { AuditEntry, ChatEvent, ChatMessage, CreateSessionInput, Session } from './chat.js';
 import type { ModelInfo, ProviderConfig } from './llm.js';
 import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo } from './media.js';
@@ -68,28 +68,20 @@ export interface CapabilityInfo {
 
 export interface InstalledPackView extends InstalledPackRecord {
   manifest: PackManifest;
-  grants: CapabilityGrant[];
   readme?: string;
   characters: CharacterSummary[];
-  /** requested ∩ global policy ∩ per-pack grant. */
-  effectiveCapabilities: string[];
-  /** Requested modules the global policy denies (the per-pack toggle cannot override these). */
-  blockedByPolicy: string[];
   /** Tags used across the pack's media, most common first. */
   assetTags: TagSummary[];
   assetCounts: Record<string, number>;
 }
 
-/** What a pack asks for, computed before installing it (for browsing/comparing packs). */
+/**
+ * What a pack contains, computed before installing it (for browsing/comparing packs).
+ * Permissions are not part of it: they are app-wide (Settings → Permissions), not per pack.
+ */
 export interface PackInspection {
   manifest: PackManifest;
   characters: Array<{ id: string; name: string; tagline?: string }>;
-  requestedCapabilities: string[];
-  /** requestedCapabilities ∩ global policy. */
-  allowedByPolicy: string[];
-  blockedByPolicy: string[];
-  /** Requested modules this app does not know. */
-  unknownCapabilities: string[];
   readme?: string;
   assetCounts: Record<string, number>;
   assetTags: TagSummary[];
@@ -123,7 +115,6 @@ export interface IpcApi {
     inspect(sourcePath: string): Promise<PackInspection>;
     install(sourcePath: string): Promise<InstalledPackView>;
     uninstall(packId: string): Promise<void>;
-    setGrant(packId: string, module: string, granted: boolean): Promise<void>;
     exportPack(packId: string, destinationFile: string): Promise<void>;
   };
   capabilities: {

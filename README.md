@@ -5,7 +5,8 @@ code**. Each character is driven by an LLM that, besides talking, may write
 short TypeScript snippets against a documented SDK. The app runs those snippets
 in a WebAssembly sandbox and executes the requested actions on the host:
 show a picture, play a video or sound, remember something, set a reminder,
-notify you, and touch the system, all within the capabilities you grant.
+notify you, and touch the system, all within the capabilities you leave switched on
+under Settings → Permissions (one switch per capability, for every character).
 
 Characters, their behaviours and their media are distributed as shareable
 **packs** (`.rppack` files or plain directories).
@@ -96,7 +97,7 @@ Characters, their behaviours and their media are distributed as shareable
   speech and push-to-talk through your own commands.
 - **Desktop control**: launch apps, move and focus windows, switch workspaces,
   volume, brightness, do-not-disturb, theme; a per-character home folder; typed
-  input and clicks once you grant them; outbound messages via webhooks.
+  input and clicks unless you switch them off; outbound messages via webhooks.
 - **Inner life**: a mood model that decays and reacts, a daily routine with
   wake-ups on transitions, and long-term memory.
 - **Permissions are an intersection**: what a pack asks for ∩ what your global
@@ -312,9 +313,11 @@ with a code frame, the console output and every SDK call it made.
 
 Packs and model output are untrusted. Read the security model in
 [docs/ARCHITECTURE.md §7](docs/ARCHITECTURE.md#7-security-model) before
-installing packs from people you do not know. Nothing prompts per call: once you grant a
-capability to a pack (within your global policy), the character uses it freely,
-and every call is written to the audit log.
+installing packs from people you do not know. Permissions are app-wide: every installed
+character can use every capability you have not switched off under Settings → Permissions
+(packs neither request nor are granted anything; a `capabilities` key in an old pack is
+ignored with a warning). Nothing prompts per call: a character uses what is switched on
+freely, and every call is written to the audit log.
 
 ## License
 

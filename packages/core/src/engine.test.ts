@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { FakeRunHandler } from './fake-runner.js';
 import { RpError } from '@rp/shared';
 import type { ChatEvent, ChatMessage } from '@rp/shared';
 import {
@@ -32,18 +33,13 @@ describe('PackService', () => {
     const luna = await t.engine.packs.install(LUNA_DIR);
 
     expect(minimal.packId).toBe(MINIMAL_ID);
-    expect(minimal.requestedCapabilities).toEqual([]);
     expect(luna.packId).toBe(LUNA_ID);
-    expect(luna.requestedCapabilities).toEqual(['media', 'ui']);
     expect(luna.root).toBe(path.join(t.packsDir, LUNA_ID, '1.0.0'));
     expect(luna.readme).toContain('# Luna');
-    // grants default to the global policy (allowed unless switched off) for every requested capability
-    expect(luna.grants.map((g) => [g.module, g.granted])).toEqual([
-      ['media', true],
-      ['ui', true],
-    ]);
-    expect(luna.effectiveCapabilities).toEqual(['media', 'ui']);
-    expect(luna.blockedByPolicy).toEqual([]);
+    // permissions are app-wide: the view carries no per-pack grant or request state
+    expect(luna).not.toHaveProperty('grants');
+    expect(luna).not.toHaveProperty('requestedCapabilities');
+    expect(luna).not.toHaveProperty('effectiveCapabilities');
     // files were copied, not referenced in place
     await expect(fs.stat(path.join(luna.root, 'pack.json'))).resolves.toBeTruthy();
 
@@ -54,38 +50,37 @@ describe('PackService', () => {
 
     expect((await t.engine.packs.list()).map((p) => p.packId).sort()).toEqual([LUNA_ID, MINIMAL_ID].sort());
 
-    await t.engine.permissions.setGrant(LUNA_ID, 'media', true);
-    expect(await t.engine.permissions.grantsFor(LUNA_ID)).toHaveLength(2);
-
     await t.engine.packs.uninstall(LUNA_ID);
-    expect(await t.engine.permissions.grantsFor(LUNA_ID)).toEqual([]);
     expect(await t.storage.packs.get(LUNA_ID)).toBeUndefined();
     expect(t.engine.packs.characters().map((c) => c.ref)).toEqual([ECHO_REF]);
     await expect(fs.stat(path.join(t.packsDir, LUNA_ID))).rejects.toThrow();
     expect(() => t!.engine.packs.getLoaded(LUNA_ID)).toThrow(RpError);
   });
 
-  it('re-installing the same pack keeps grants', async () => {
+  it('re-installing the same pack replaces it and keeps the app-wide policy untouched', async () => {
     t = await createTestEngine();
     await t.engine.packs.install(LUNA_DIR);
-    await t.engine.permissions.setGrant(LUNA_ID, 'media', true);
-    const again = await t.engine.packs.install(LUNA_DIR);
-    expect(again.grants.find((g) => g.module === 'media')?.granted).toBe(true);
+    await t.engine.settings.update({ permissions: { moduleAllow: { ui: false } } });
+    await t.engine.packs.install(LUNA_DIR);
     expect(await t.engine.packs.list()).toHaveLength(1);
+    expect((await t.engine.settings.get()).permissions.moduleAllow).toEqual({ ui: false });
+    expect((await t.engine.permissions.effective(LUNA_ID)).denied).toEqual({ ui: 'policy' });
   });
 
-  it('rejects packs that request unknown capabilities', async () => {
+  it('installs packs whose legacy "capabilities" key names modules this app does not know (the key is ignored)', async () => {
     t = await createTestEngine();
-    const dir = path.join(t.packsDir, 'src-bad');
+    const dir = path.join(t.packsDir, 'src-legacy');
     await fs.mkdir(path.join(dir, 'characters', 'x'), { recursive: true });
     await fs.writeFile(
       path.join(dir, 'pack.json'),
-      JSON.stringify({ formatVersion: 1, id: 'com.example.bad', name: 'Bad', version: '1.0.0', characters: ['characters/x'], capabilities: ['teleport'] }),
+      JSON.stringify({ formatVersion: 1, id: 'com.example.legacy', name: 'Legacy', version: '1.0.0', characters: ['characters/x'], capabilities: ['teleport'] }),
     );
     await fs.writeFile(path.join(dir, 'characters', 'x', 'character.json'), JSON.stringify({ id: 'x', name: 'X', persona: 'persona.md' }));
     await fs.writeFile(path.join(dir, 'characters', 'x', 'persona.md'), 'You are X.');
-    await expect(t.engine.packs.install(dir)).rejects.toMatchObject({ code: 'PACK_INVALID' });
-    expect(await t.engine.packs.list()).toEqual([]);
+    const view = await t.engine.packs.install(dir);
+    expect(view.packId).toBe('com.example.legacy');
+    expect('capabilities' in view.manifest).toBe(false);
+    expect((await t.engine.packs.list()).map((p) => p.packId)).toEqual(['com.example.legacy']);
   });
 
   it('reloads installed packs on start', async () => {
@@ -109,8 +104,7 @@ describe('SessionService', () => {
         expect(request.code).toContain("sdk.state.set('sessions'");
         const surface = request.surface.modules.map((m) => m.id);
         expect(surface).toEqual(expect.arrayContaining(['chat', 'log', 'state', 'pack', 'timers']));
-        expect(surface).toEqual(expect.arrayContaining(['media', 'ui'])); // requested + policy default → granted
-        expect(surface).not.toContain('system'); // not requested
+        expect(surface).toEqual(expect.arrayContaining(['media', 'ui', 'system'])); // every module is on unless switched off under Settings → Permissions
         await runner.call(request, 'chat', 'say', 'Hey. I am Luna.');
         await runner.call(request, 'state', 'set', 'sessions', 1);
         return { sessions: 1 };
@@ -180,6 +174,7 @@ describe('ChatService turns', () => {
       },
     });
     await t.engine.packs.install(MINIMAL_DIR);
+    await t.engine.settings.update({ permissions: { moduleAllow: { media: false } } });
     await t.storage.state.set(`char:${ECHO_REF}`, 'mood', 'happy');
     const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
     t.events.length = 0;
@@ -232,8 +227,9 @@ describe('ChatService turns', () => {
     expect(second.system).toContain('You are Echo');
     expect(second.system).toContain('<sdk_reference>');
     expect(second.system).toContain('## sdk.state —');
-    expect(second.system).not.toContain('## sdk.media —');
-    expect(second.system).not.toContain('## Not available'); // ungranted modules are not described at all
+    expect(second.system).toContain('## sdk.ui —'); // on by default: nothing to request or grant
+    expect(second.system).not.toContain('## sdk.media —'); // switched off under Settings → Permissions
+    expect(second.system).not.toContain('## Not available'); // switched-off modules are not described at all
     expect(second.system).toContain('"mood": "happy"');
     expect(second.messages[0]!.role).toBe('user');
     expect(second.messages[0]!.content[0]).toEqual({ type: 'text', text: 'how do I seem?' });
@@ -348,19 +344,19 @@ describe('ChatService turns', () => {
 });
 
 describe('permissions', () => {
-  it('denies media without a grant, allows it with one, and normalises the asset argument', async () => {
+  it('denies media when switched off under Settings → Permissions, allows it otherwise, and normalises the asset argument', async () => {
     const media = new RecordingHandler('media', (method) => ({ id: 'm1', kind: 'image', asset: method }));
     t = await createTestEngine({ hostHandlers: [media] });
     await t.engine.packs.install(LUNA_DIR);
-    await t.engine.permissions.setGrant(LUNA_ID, 'media', false);
+    await t.engine.settings.update({ permissions: { moduleAllow: { media: false } } });
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const context = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: t.engine.packs.getLoaded(LUNA_ID).root, trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
 
     const denied = await t.engine.dispatcher.invoke({ callId: 'c1', module: 'media', method: 'showImage', args: ['images/luna-smile.png'], context });
-    expect(denied).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
+    expect(denied).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED', details: { reason: 'switched off under Settings → Permissions' } } });
     expect(media.calls).toHaveLength(0);
 
-    await t.engine.permissions.setGrant(LUNA_ID, 'media', true);
+    await t.engine.settings.update({ permissions: { moduleAllow: { media: true } } });
     const allowed = await t.engine.dispatcher.invoke({ callId: 'c2', module: 'media', method: 'showImage', args: ['images/luna-smile.png', { durationMs: 5 }], context });
     expect(allowed).toMatchObject({ ok: true, value: { id: 'm1' } });
     expect(media.calls).toHaveLength(1);
@@ -398,17 +394,17 @@ describe('permissions', () => {
     const system = new RecordingHandler('probe', 'opened');
     const decisions: Array<'allow-once' | 'allow-session' | 'deny'> = ['deny', 'allow-session'];
     t = await createTestEngine({ hostHandlers: [system], registry: createTestRegistryWithProbe(), prompter: async () => decisions.shift() ?? 'deny' });
-    await installLunaWith(t.engine, t.packsDir, ['media', 'ui', 'probe']);
-    await t.engine.permissions.setGrant(LUNA_ID, 'probe', false);
+    await installLunaWith(t.engine, t.packsDir);
+    await t.engine.settings.update({ permissions: { moduleAllow: { probe: false } } });
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const context = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: '/x', trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
     const call = (n: number) => t!.engine.dispatcher.invoke({ callId: `s${n}`, module: 'probe', method: 'ping', args: ['https://example.com'], context });
 
-    // Not granted at all → denied without prompting.
+    // Switched off under Settings → Permissions → denied without prompting.
     expect(await call(1)).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
     expect(t.prompts).toHaveLength(0);
 
-    await t.engine.permissions.setGrant(LUNA_ID, 'probe', true);
+    await t.engine.settings.update({ permissions: { moduleAllow: { probe: true } } });
     const emitted: unknown[] = [];
     t.engine.events.on('permission-request', (r) => emitted.push(r));
 
@@ -428,9 +424,9 @@ describe('permissions', () => {
     expect(t.prompts).toHaveLength(3);
     expect(system.calls).toHaveLength(2);
 
-    // The SDK surface handed to the runner includes granted prompt-level modules.
+    // The SDK surface handed to the runner includes prompt-level modules that are switched on.
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).toContain('probe');
-    await t.engine.permissions.setGrant(LUNA_ID, 'media', false);
+    await t.engine.settings.update({ permissions: { moduleAllow: { probe: true, media: false } } });
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).not.toContain('media');
   });
 
@@ -438,40 +434,41 @@ describe('permissions', () => {
     const rec = (id: string) => new RecordingHandler(id, `${id}-ok`);
     const handlers = [rec('display'), rec('wallpaper'), rec('browser'), rec('input')];
     t = await createTestEngine({ hostHandlers: handlers, prompter: async () => 'allow-once' });
-    await installLunaWith(t.engine, t.packsDir, ['media', 'ui', 'wallpaper', 'browser', 'input']);
-    for (const m of ['wallpaper', 'browser', 'input']) await t.engine.permissions.setGrant(LUNA_ID, m, false);
+    await installLunaWith(t.engine, t.packsDir);
+    // `settings.update` merges `moduleAllow`, so every module of interest is set explicitly each time.
+    const off = (modules: string[]) =>
+      t!.engine.settings.update({ permissions: { moduleAllow: Object.fromEntries(['wallpaper', 'browser', 'input'].map((m) => [m, !modules.includes(m)])) } });
+    await off(['wallpaper', 'browser', 'input']);
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const luna = t.engine.packs.getLoaded(LUNA_ID);
     const context = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: luna.root, trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
     const call = (n: string, module: string, method: string, args: import('@rp/shared').Json[] = []) => t!.engine.dispatcher.invoke({ callId: n, module, method, args, context });
 
-    // trusted: no grant needed, on the surface by default
+    // trusted: never subject to the policy, on the surface always
     expect(await call('d1', 'display', 'monitors')).toEqual({ ok: true, value: 'display-ok' });
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).toContain('display');
 
-    // pack-level: denied until granted (requested by this Luna copy; grants were switched off above)
+    // pack-level: denied while switched off under Settings → Permissions
     expect(await call('w1', 'wallpaper', 'set', ['images/luna-smile.png'])).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
     expect(await call('b1', 'browser', 'open', ['https://example.com'])).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
-    await t.engine.permissions.setGrant(LUNA_ID, 'wallpaper', true);
-    await t.engine.permissions.setGrant(LUNA_ID, 'browser', true);
+    await off(['input']);
     expect(await call('w2', 'wallpaper', 'set', ['images/luna-smile.png'])).toEqual({ ok: true, value: 'wallpaper-ok' });
     expect(handlers[1]!.calls[0]!.args).toEqual(['media/images/luna-smile.png']);
     expect(await call('b2', 'browser', 'open', ['https://example.com'])).toEqual({ ok: true, value: 'browser-ok' });
     expect(t.prompts).toHaveLength(0);
 
-    // input is pack-level: grant, then no per-call confirmation
+    // input is pack-level too: switch on, then no per-call confirmation
     expect(await call('i1', 'input', 'lock', [5000])).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
-    await t.engine.permissions.setGrant(LUNA_ID, 'input', true);
+    await off([]);
     expect(await call('i2', 'input', 'lock', [5000])).toEqual({ ok: true, value: 'input-ok' });
     expect(await call('i3', 'input', 'status')).toEqual({ ok: true, value: 'input-ok' });
     expect(t.prompts).toHaveLength(0);
 
     const surface = (await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id);
-    expect(surface).toEqual(expect.arrayContaining(['display', 'wallpaper', 'browser', 'input', 'media']));
-    expect(surface).not.toContain('system'); // never requested
+    expect(surface).toEqual(expect.arrayContaining(['display', 'wallpaper', 'browser', 'input', 'media', 'system'])); // everything is on
   });
 
-  it('runs deferred onInstall hooks once all requested capabilities are granted', async () => {
+  it('runs the onInstall hook right at install, once, whatever the policy says', async () => {
     const installs: string[] = [];
     t = await createTestEngine({
       runnerHandler: async (request) => {
@@ -487,21 +484,44 @@ describe('permissions', () => {
     def.behaviours.onInstall = 'scripts/on-install.ts';
     await fs.writeFile(path.join(charDir, 'character.json'), JSON.stringify(def));
 
-    // the global policy denies `ui`, so its per-pack grant starts off and the hook is deferred
+    // a switched-off module does not hold the hook back: permissions are app-wide, nothing is pending
     await t.engine.settings.update({ permissions: { moduleAllow: { ui: false } } });
     await t.engine.packs.install(src);
-    expect(installs).toEqual([]);
-    expect((await t.engine.packs.view(LUNA_ID)).blockedByPolicy).toEqual(['ui']);
-    await t.engine.permissions.setGrant(LUNA_ID, 'media', true);
-    expect(installs).toEqual([]);
+    expect(installs).toEqual(['onInstall']);
+    // policy changes never re-run it
     await t.engine.settings.update({ permissions: { moduleAllow: { ui: true } } });
-    await t.engine.permissions.setGrant(LUNA_ID, 'ui', true);
     await new Promise((r) => setTimeout(r, 0));
     expect(installs).toEqual(['onInstall']);
-    // not run twice
-    await t.engine.permissions.setGrant(LUNA_ID, 'ui', true);
-    await new Promise((r) => setTimeout(r, 0));
+    // re-installing runs it again (it is a fresh install of that version)
+    await t.engine.packs.install(src);
+    expect(installs).toEqual(['onInstall', 'onInstall']);
+  });
+
+  it('runs an onInstall hook an earlier version left pending behind per-pack grants, once, on start', async () => {
+    const installs: string[] = [];
+    const runnerHandler: FakeRunHandler = async (request) => {
+      if (request.context.trigger.kind === 'behaviour') installs.push(request.context.trigger.hook);
+    };
+    t = await createTestEngine({ runnerHandler });
+    const src = path.join(t.packsDir, 'src-luna-pending');
+    await fs.cp(LUNA_DIR, src, { recursive: true });
+    const charDir = path.join(src, 'characters', 'luna');
+    await fs.writeFile(path.join(charDir, 'scripts', 'on-install.ts'), 'return 1;');
+    const def = JSON.parse(await fs.readFile(path.join(charDir, 'character.json'), 'utf8'));
+    def.behaviours.onInstall = 'scripts/on-install.ts';
+    await fs.writeFile(path.join(charDir, 'character.json'), JSON.stringify(def));
+    await t.engine.packs.install(src);
     expect(installs).toEqual(['onInstall']);
+    // simulate the old deferred marker left on disk by a previous version
+    await t.storage.state.set(`pack:${LUNA_ID}`, 'onInstallPending', true);
+    const { storage, packsDir } = t;
+    await t.engine.stop();
+    t = await createTestEngine({ storage, packsDir, runnerHandler });
+    expect(installs).toEqual(['onInstall', 'onInstall']);
+    expect(await storage.state.keys(`pack:${LUNA_ID}`)).toEqual([]);
+    await t.engine.stop();
+    t = await createTestEngine({ storage, packsDir, runnerHandler });
+    expect(installs).toEqual(['onInstall', 'onInstall']);
   });
 });
 

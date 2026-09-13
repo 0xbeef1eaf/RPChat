@@ -67,7 +67,7 @@ interface UiApi {
    */
   pickFolder(opts?: { title?: string }): Promise<string | null>;
 }`,
-  docs: `Notify the user outside the chat, or ask a quick structured question. Requires the \`ui\` capability granted to the pack.
+  docs: `Notify the user outside the chat, or ask a quick structured question. Available unless the user switched \`ui\` off under Settings → Permissions.
 
 - \`notify\` is an OS notification — useful when the user may not be looking at the chat (e.g. from a timer). Do not spam it.
 - \`notify\` urgency: \`low\` is silent and unobtrusive, \`normal\` (default) makes a sound and times out, \`critical\` stays on screen until dismissed and can pierce do-not-disturb. Choose it from the message, not from how much you want to be noticed: a reminder is \`normal\`, "your build failed" is \`critical\`, "the song changed" is \`low\`. Only Linux is guaranteed to honour all three.

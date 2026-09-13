@@ -27,12 +27,12 @@ function orderKeys<T extends object>(obj: T, order: readonly (keyof T & string)[
 
 const MANIFEST_KEY_ORDER = [
   'formatVersion', 'id', 'name', 'version', 'description', 'author', 'license', 'homepage', 'tags',
-  'characters', 'capabilities', 'mediaRoot', 'minAppVersion',
+  'characters', 'mediaRoot', 'minAppVersion',
 ] as const satisfies readonly (keyof PackManifest)[];
 
 const CHARACTER_KEY_ORDER = [
   'id', 'name', 'tagline', 'avatar', 'persona', 'greeting', 'exampleDialogue', 'behaviours', 'avatarSet', 'mood',
-  'capabilities', 'modelHints',
+  'modelHints',
 ] as const satisfies readonly (keyof CharacterDefinition)[];
 
 const MEDIA_MANIFEST_KEY_ORDER = ['folderTags', 'tags', 'entries'] as const satisfies readonly (keyof MediaManifest)[];
@@ -163,8 +163,6 @@ export interface ScaffoldOptions {
   characterName: string;
   description?: string;
   author?: PackAuthor;
-  /** Pack-level capability requests. Default `['media']`. */
-  capabilities?: string[];
 }
 
 /**
@@ -188,7 +186,6 @@ export async function scaffoldPack(dir: string, options: ScaffoldOptions): Promi
     version: '0.1.0',
     description: options.description ?? `${options.name}: a character pack for rp-code.`,
     characters: [charDir],
-    capabilities: options.capabilities ?? ['media'],
     mediaRoot: DEFAULT_MEDIA_ROOT,
   };
   if (options.author) manifest.author = options.author;

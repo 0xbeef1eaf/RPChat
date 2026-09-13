@@ -10,7 +10,13 @@ export type { ValidationIssue } from './zod-common.js';
 export const PACK_ID_PATTERN = /^[a-z0-9]+(\.[a-z0-9-]+)+$/;
 export const CHARACTER_ID_PATTERN = /^[a-z0-9][a-z0-9-_]*$/;
 export const SEMVER_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
-export const CAPABILITY_ID_PATTERN = /^[a-z][a-zA-Z0-9]*$/;
+
+/**
+ * Older packs listed the capability modules they wanted under `capabilities` (pack.json and
+ * character.json). Permissions are app-wide now (Settings → Permissions), so the key is
+ * accepted for compatibility, ignored, and stripped from the parsed value; the loader warns.
+ */
+export const IGNORED_CAPABILITIES_KEY = 'capabilities';
 
 /** Every behaviour hook a character may bind a script to (runtime mirror of `BehaviourHook`). */
 export const BEHAVIOUR_HOOKS = [
@@ -86,7 +92,8 @@ const moodSchema = z.object({
 });
 
 const semverSchema = z.string().regex(SEMVER_PATTERN, 'must be a semver version like 1.2.3');
-const capabilityIdSchema = z.string().regex(CAPABILITY_ID_PATTERN, 'capability ids match /^[a-z][a-zA-Z0-9]*$/');
+/** The legacy `capabilities` key: accepted with any value, never validated, dropped after parsing. */
+const ignoredCapabilitiesSchema = z.unknown().optional();
 
 function uniqueCheck(label: string) {
   return (ctx: z.core.ParsePayload<string[]>): void => {
@@ -118,12 +125,18 @@ const packManifestObject = z.object({
   homepage: z.string().optional(),
   tags: z.array(z.string().min(1)).optional(),
   characters: z.array(relativePathSchema).min(1, 'a pack has exactly one character; list its directory').max(1, 'a pack has exactly one character; put a second character in a pack of its own').check(uniqueCheck('character directory')),
-  capabilities: z.array(capabilityIdSchema).optional(),
+  [IGNORED_CAPABILITIES_KEY]: ignoredCapabilitiesSchema,
   mediaRoot: relativePathSchema.optional(),
   minAppVersion: semverSchema.optional(),
 });
 
-export const packManifestSchema: z.ZodType<PackManifest> = packManifestObject;
+function dropIgnoredKeys<T extends object>(value: T): T {
+  const out = { ...value } as Record<string, unknown>;
+  delete out[IGNORED_CAPABILITIES_KEY];
+  return out as T;
+}
+
+export const packManifestSchema: z.ZodType<PackManifest> = packManifestObject.transform(dropIgnoredKeys);
 
 const exampleDialogueTurnSchema = z.object({
   user: z.string(),
@@ -147,11 +160,11 @@ const characterDefinitionObject = z.object({
   behaviours: z.partialRecord(z.enum(BEHAVIOUR_HOOKS), behaviourPathSchema).optional(),
   avatarSet: avatarSetSchema.optional(),
   mood: moodSchema.optional(),
-  capabilities: z.array(capabilityIdSchema).optional(),
+  [IGNORED_CAPABILITIES_KEY]: ignoredCapabilitiesSchema,
   modelHints: modelHintsSchema.optional(),
 });
 
-export const characterDefinitionSchema: z.ZodType<CharacterDefinition> = characterDefinitionObject;
+export const characterDefinitionSchema: z.ZodType<CharacterDefinition> = characterDefinitionObject.transform(dropIgnoredKeys);
 
 /** Validates the parsed contents of `pack.json`. Throws `RpError('PACK_INVALID', msg, { issues })`. */
 export function validateManifest(json: unknown): PackManifest {

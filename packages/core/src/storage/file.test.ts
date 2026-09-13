@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AuditEntry, ChatMessage, MemoryEntry, Session } from '@rp/shared';
 import { makeTempDir } from '../test/helpers.js';
-import { FileStorage } from './file.js';
+import { FileStorage, LEGACY_GRANTS_FILE } from './file.js';
 
 let dir: string;
 
@@ -35,8 +35,7 @@ describe('FileStorage', () => {
     expect(settings.runLimits.timeoutMs).toBe(10_000);
     await a.settings.set({ ...settings, userDisplayName: 'Ada' });
 
-    await a.packs.upsert({ packId: 'p', version: '1.0.0', name: 'P', root: '/r', installedAt: 't', requestedCapabilities: ['media'], characterIds: ['c'] });
-    await a.grants.set({ packId: 'p', module: 'media', granted: true, grantedAt: 't' });
+    await a.packs.upsert({ packId: 'p', version: '1.0.0', name: 'P', root: '/r', installedAt: 't', characterIds: ['c'] });
     const session: Session = { id: 's1', characterRef: 'p/c', title: 'T', createdAt: 't', updatedAt: 't', messageCount: 0 };
     await a.sessions.upsert(session);
     const m1: ChatMessage = { id: 'm1', sessionId: 's1', role: 'user', content: 'hi', createdAt: 't' };
@@ -59,7 +58,6 @@ describe('FileStorage', () => {
     const b = new FileStorage(dir);
     expect((await b.settings.get()).userDisplayName).toBe('Ada');
     expect((await b.packs.get('p'))?.name).toBe('P');
-    expect(await b.grants.list('p')).toHaveLength(1);
     expect((await b.sessions.get('s1'))?.title).toBe('T');
     expect((await b.messages.list('s1')).map((m) => m.content)).toEqual(['hi', 'hello']);
     expect(await b.state.get('char:p/c', 'k')).toEqual({ nested: [1, 2] });
@@ -83,7 +81,6 @@ describe('FileStorage', () => {
     await b.state.clear('session:s1');
     await b.sessions.remove('s1');
     await b.packs.remove('p');
-    await b.grants.removeForPack('p');
     await b.timers.remove('t1');
     await b.close();
     const c = new FileStorage(dir);
@@ -91,7 +88,6 @@ describe('FileStorage', () => {
     expect(await c.state.keys('session:s1')).toEqual([]);
     expect(await c.sessions.list()).toEqual([]);
     expect(await c.packs.list()).toEqual([]);
-    expect(await c.grants.list()).toEqual([]);
     expect(await c.timers.list()).toEqual([]);
     expect((await c.memories.list('p/c')).map((m) => m.id)).toEqual(['me2']);
     expect(await c.memories.get('me3')).toBeUndefined();
@@ -132,5 +128,16 @@ describe('FileStorage', () => {
     const s = new FileStorage(dir);
     expect((await s.audit.list()).map((e) => e.id)).toEqual(['a1', 'a2']);
     await expect(s.packs.list()).rejects.toMatchObject({ code: 'STORAGE' });
+  });
+
+  it('ignores and removes a grants file left by a version with per-pack grants', async () => {
+    dir = await makeTempDir();
+    await fs.writeFile(path.join(dir, LEGACY_GRANTS_FILE), JSON.stringify([{ packId: 'p', module: 'media', granted: true, grantedAt: 't' }]));
+    const a = new FileStorage(dir);
+    expect(await a.packs.list()).toEqual([]);
+    expect(a).not.toHaveProperty('grants');
+    await a.settings.set(await a.settings.get());
+    await a.close();
+    expect(await listFiles(dir)).not.toContain(LEGACY_GRANTS_FILE);
   });
 });

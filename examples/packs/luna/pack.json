@@ -8,7 +8,6 @@
   "license": "CC0-1.0",
   "tags": ["companion", "example"],
   "characters": ["characters/luna"],
-  "capabilities": ["media", "ui"],
   "mediaRoot": "media",
   "minAppVersion": "0.1.0"
 }

@@ -86,7 +86,7 @@ export function PublishSection({ onInstall, installing }: PublishSectionProps) {
           <div className="card row">
             <div className="item-text">
               <span className="item-title">Install to this app</span>
-              <span className="item-sub">Installs the project folder as a pack (replacing an installed pack with the same id; grants are kept). Then start a chat.</span>
+              <span className="item-sub">Installs the project folder as a pack (replacing an installed pack with the same id). Then start a chat.</span>
             </div>
             <button type="button" className="btn btn-primary" onClick={onInstall} disabled={installing || !v.ok}>
               {installing ? 'Installing…' : project.summary.installed ? 'Reinstall' : 'Install'}

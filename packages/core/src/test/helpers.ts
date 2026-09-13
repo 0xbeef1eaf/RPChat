@@ -84,19 +84,24 @@ export class FakeSenses implements SensesProvider {
   }
 }
 
-/** Copy the Luna example pack with a different capability list (and optional character patch) and install it. */
+/** Copy the Luna example pack (optionally patching pack.json / character.json, adding files) and install it. */
 export async function installLunaWith(
   engine: Engine,
   packsDir: string,
-  capabilities: string[],
-  patchCharacter?: (def: Record<string, unknown>) => void,
-  extraFiles: Record<string, string> = {},
+  options: {
+    patchManifest?: (manifest: Record<string, unknown>) => void;
+    patchCharacter?: (def: Record<string, unknown>) => void;
+    extraFiles?: Record<string, string>;
+  } = {},
 ): Promise<void> {
+  const { patchManifest, patchCharacter, extraFiles = {} } = options;
   const src = path.join(packsDir, `src-luna-${Math.random().toString(36).slice(2, 8)}`);
   await fs.cp(LUNA_DIR, src, { recursive: true });
-  const manifest = JSON.parse(await fs.readFile(path.join(src, 'pack.json'), 'utf8')) as Record<string, unknown>;
-  manifest.capabilities = capabilities;
-  await fs.writeFile(path.join(src, 'pack.json'), JSON.stringify(manifest));
+  if (patchManifest) {
+    const manifest = JSON.parse(await fs.readFile(path.join(src, 'pack.json'), 'utf8')) as Record<string, unknown>;
+    patchManifest(manifest);
+    await fs.writeFile(path.join(src, 'pack.json'), JSON.stringify(manifest));
+  }
   if (patchCharacter) {
     const file = path.join(src, 'characters', 'luna', 'character.json');
     const def = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>;
@@ -157,6 +162,7 @@ export interface TestEngineOptions {
   supportsTools?: boolean;
   useToolCalling?: boolean;
   senses?: SensesProvider;
+  logger?: EngineOptions['logger'];
 }
 
 export interface TestEngine {
@@ -201,6 +207,7 @@ export async function createTestEngine(options: TestEngineOptions = {}): Promise
     now: clock.now,
   };
   if (options.senses) engineOptions.senses = options.senses;
+  if (options.logger) engineOptions.logger = options.logger;
   const engine = new Engine(engineOptions);
   engine.events.on('chat', (e) => events.push(e));
   await engine.settings.update({

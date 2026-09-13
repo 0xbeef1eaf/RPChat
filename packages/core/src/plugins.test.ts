@@ -36,8 +36,9 @@ describe('engine.capabilities.register / unregister', () => {
     t = await createTestEngine({ respond: () => ({ text: 'ok' }) });
     const handler = new DisposableRecorder('clock', { iso: '2026-01-01T12:00:00.000Z' });
 
-    // a pack requesting an unknown module is refused before the plugin exists
-    await expect(installLunaWith(t.engine, t.packsDir, ['clock'])).rejects.toMatchObject({ code: 'PACK_INVALID' });
+    await installLunaWith(t.engine, t.packsDir);
+    // before the plugin exists the module is simply unknown
+    expect((await t.engine.permissions.effective(LUNA_ID)).effective).not.toContain('clock');
 
     t.engine.capabilities.register(clockSpec, handler);
     expect(() => t!.engine.capabilities.register(clockSpec, handler)).toThrow(/already registered/);
@@ -45,10 +46,8 @@ describe('engine.capabilities.register / unregister', () => {
     expect(t.engine.capabilities.list().find((c) => c.id === 'clock')).toMatchObject({ permission: 'pack', methods: [{ name: 'now', description: 'Read the current time.', dangerous: false }] });
     expect(t.engine.capabilities.typings()).toContain('interface ClockApi');
 
-    // now the pack installs with a policy-default grant, and the module is visible everywhere
-    await installLunaWith(t.engine, t.packsDir, ['clock']);
-    expect((await t.engine.packs.view(LUNA_ID)).effectiveCapabilities).toEqual(['clock']);
-    expect((await t.engine.packs.inspect(t.engine.packs.getLoaded(LUNA_ID).root)).unknownCapabilities).toEqual([]);
+    // now the module is on for every installed character (app-wide policy default) and visible everywhere
+    expect((await t.engine.permissions.effective(LUNA_ID)).effective).toContain('clock');
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const context: ActionContext = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: t.engine.packs.getLoaded(LUNA_ID).root, trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } };
     const call = (n: string, args: Json[] = []) => t!.engine.dispatcher.invoke({ callId: n, module: 'clock', method: 'now', args, context });
@@ -62,12 +61,12 @@ describe('engine.capabilities.register / unregister', () => {
     let system = t.provider.requests.at(-1)!.system;
     expect(system).toContain('## sdk.clock —');
     expect(system).toContain('## sdk.clock');
-    expect(system).toMatch(/Granted modules: .*\bsdk\.clock\b/);
+    expect(system).toMatch(/Available modules: .*\bsdk\.clock\b/);
 
-    // grant off → denied like any pack-level module
-    await t.engine.permissions.setGrant(LUNA_ID, 'clock', false);
+    // switched off under Settings → Permissions → denied like any pack-level module
+    await t.engine.settings.update({ permissions: { moduleAllow: { clock: false } } });
     expect(await call('c2')).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
-    await t.engine.permissions.setGrant(LUNA_ID, 'clock', true);
+    await t.engine.settings.update({ permissions: { moduleAllow: { clock: true } } });
 
     // unregister: handler disposed, calls fail CAPABILITY_UNKNOWN, prompt and list no longer mention it
     expect(await t.engine.capabilities.unregister('clock')).toBe(true);
@@ -81,7 +80,7 @@ describe('engine.capabilities.register / unregister', () => {
     system = t.provider.requests.at(-1)!.system;
     expect(system).not.toContain('## sdk.clock —');
     expect(system).not.toContain('sdk.clock');
-    expect((await t.engine.packs.view(LUNA_ID)).effectiveCapabilities).toEqual([]);
+    expect((await t.engine.permissions.effective(LUNA_ID)).effective).not.toContain('clock');
 
     // re-registering after unregister works (plugin reload)
     const again = new DisposableRecorder('clock', { iso: 'later' });

@@ -72,7 +72,8 @@ describe('scaffoldPack', () => {
       expect((await fs.stat(path.join(dir, sub))).isDirectory()).toBe(true);
     }
     const pack = await loadPack(dir);
-    expect(pack.manifest).toMatchObject({ id: 'com.test.scaffold', name: 'Scaffold', version: '0.1.0', capabilities: ['media'] });
+    expect(pack.manifest).toMatchObject({ id: 'com.test.scaffold', name: 'Scaffold', version: '0.1.0' });
+    expect('capabilities' in pack.manifest).toBe(false); // never written: permissions are app-wide
     expect(pack.characters[0]!.definition).toMatchObject({ id: 'nova', name: 'Nova', persona: 'persona.md' });
     expect(pack.characters[0]!.personaText).toContain('# Nova');
     expect(pack.characters[0]!.personaText).toContain('## Using your abilities');
@@ -97,9 +98,9 @@ describe('writeManifest / writeMediaManifest / writeReadme', () => {
   it('round-trips through loadPack with a stable key order', async () => {
     const dir = await scaffolded();
     const pack = await loadPack(dir);
-    await writeManifest(dir, { ...pack.manifest, tags: ['b', 'a'], license: 'MIT', name: 'Renamed', capabilities: ['media', 'ui'] });
+    await writeManifest(dir, { ...pack.manifest, tags: ['b', 'a'], license: 'MIT', name: 'Renamed' });
     const text = await fs.readFile(path.join(dir, 'pack.json'), 'utf8');
-    expect(Object.keys(JSON.parse(text))).toEqual(['formatVersion', 'id', 'name', 'version', 'description', 'license', 'tags', 'characters', 'capabilities', 'mediaRoot']);
+    expect(Object.keys(JSON.parse(text))).toEqual(['formatVersion', 'id', 'name', 'version', 'description', 'license', 'tags', 'characters', 'mediaRoot']);
     expect(text.endsWith('\n')).toBe(true);
     expect((await loadPack(dir)).manifest).toMatchObject({ name: 'Renamed', license: 'MIT', tags: ['b', 'a'] });
 

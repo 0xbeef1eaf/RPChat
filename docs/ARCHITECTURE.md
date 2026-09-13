@@ -99,7 +99,7 @@ to `dist/`, `pnpm test` = vitest, `pnpm typecheck` = `tsc --noEmit`.
 │  @rp/sandbox QuickJsRunner  (wasm isolate per action run)             │
 │  @rp/llm providers                                                    │
 │  Host handlers: media (opens MediaWindow), ui (notifications), timers,│
-│                 system (shell/fs, pack-level grant)                    │
+│                 system (shell/fs)                                      │
 │  rp-asset:// protocol: serves files from installed pack roots only    │
 └───────────┬──────────────────────────────┬────────────────────────────┘
             │ contextBridge IPC (IpcApi)   │ IPC media commands
@@ -255,11 +255,12 @@ System prompt sections, in order (each a stable `<section>` block):
    back to you, do not narrate what code you are running unless asked.
 2. **Character persona** – `persona.md` verbatim, plus example dialogue.
 3. **SDK reference** – the abridged SDK index (`generateSdkIndex`): general
-   rules, then per granted module one entry per method (signature, TSDoc summary,
+   rules, then per available module one entry per method (signature, TSDoc summary,
    every @param, @returns and the first @example, generated from the typings),
    its helper types on one line each and one example, then only the shared
-   types those modules reference. Ungranted modules are not mentioned. The full `sdk.d.ts` + docs of one module are available on
-   demand through `sdk.help.module(id)`. With every module granted the section is
+   types those modules reference. Modules the user switched off under
+   Settings → Permissions are not mentioned. The full `sdk.d.ts` + docs of one module are available on
+   demand through `sdk.help.module(id)`. With every module on the section is
    about 8k tokens (the full reference is about 23k, which used to crowd the
    transcript out of the default budget).
 4. **Memory** – current character `state` (JSON, truncated), active timers.
@@ -281,15 +282,21 @@ Threat model: pack authors and the LLM are **untrusted**. The user is trusted.
 - **Limits** (`RunLimits`): wall-clock timeout (default 10 s), interrupt-based
   CPU budget, memory limit (default 64 MB), max host calls per run (default
   50), max log bytes, max result bytes.
-- **Permission levels**
-  - `trusted` – always available (no side effects outside the app's own data).
-  - `pack` – requested in `pack.json` `capabilities`; the user grants per pack at
-    install time and can revoke in settings.
-  - `prompt` – additionally requires a per-call confirmation dialog. Supported by
-    the engine for third-party modules, but **no built-in module uses it**: the
-    product decision is that a granted character acts without interruptions, so
-    the user's control is the grant itself, the global policy, optional allowlists
-    (web hosts, launchable apps) and the audit log.
+- **Permission levels** — permissions are **app-wide**. The single control is
+  Settings → Permissions (`settings.permissions.moduleAllow`): every installed
+  character can use every non-trusted module the user has not switched off
+  there. Packs neither request nor are granted anything; a `capabilities` key in
+  an old `pack.json` / `character.json` is accepted, ignored and reported as a
+  loader warning.
+  - `trusted` – always available (no side effects outside the app's own data);
+    the policy cannot switch these off.
+  - `pack` – on for every character unless switched off under Settings →
+    Permissions.
+  - `prompt` – as `pack`, and additionally requires a per-call confirmation
+    dialog. Supported by the engine for third-party modules, but **no built-in
+    module uses it**: the product decision is that a character acts without
+    interruptions, so the user's control is the app-wide policy, optional
+    allowlists (web hosts, launchable apps) and the audit log.
 - **Paths**: pack assets are addressed by relative path, validated against the
   pack root (normalised, no `..`, no absolute, no symlink escape). Served to the
   renderer over `rp-asset://<packId>/<relative>` only.
@@ -298,7 +305,7 @@ Threat model: pack authors and the LLM are **untrusted**. The user is trusted.
 - **Renderer**: context isolation, sandboxed preload, strict CSP, no remote
   content. The media window only receives commands with `rp-asset://` URLs.
 - Packs are never executed on install except the optional `onInstall` hook,
-  which runs only after the user accepted the capability grants.
+  which runs once, right after the install.
 
 ---
 
@@ -338,7 +345,6 @@ my-pack/
   "license": "CC-BY-4.0",
   "tags": ["companion"],
   "characters": ["characters/luna"],  // the one directory containing character.json (exactly one entry)
-  "capabilities": ["media", "ui"],     // pack-level requests; trusted ones are implicit
   "mediaRoot": "media",
   "minAppVersion": "0.1.0"
 }
@@ -356,14 +362,17 @@ my-pack/
   "greeting": "…",                   // first assistant message in a new session
   "exampleDialogue": [{ "user": "…", "character": "…" }],
   "behaviours": { "onSessionStart": "scripts/on-session-start.ts" },
-  "capabilities": ["system"],          // extra per-character requests (optional)
   "modelHints": { "temperature": 0.9 }
 }
 ```
 
+Neither file declares permissions: what a character may do on the PC is set
+app-wide under Settings → Permissions (§7). A `capabilities` key from older
+packs is ignored with the warning `pack.json: "capabilities" is ignored;
+permissions are set in the app under Settings → Permissions`.
+
 Installed packs live in `<userData>/packs/<packId>/<version>/`. The pack store
-(`InstalledPackRecord`) keeps id, version, root path, grant state and install
-time. The app owns that folder: `sdk.lib.define` writes the character's own
+(`InstalledPackRecord`) keeps id, version, root path and install time. The app owns that folder: `sdk.lib.define` writes the character's own
 functions into `characters/<id>/lib/` of the installed copy (and `remove`
 deletes them), so they persist across sessions and restarts; reinstalling or
 upgrading the pack replaces the folder and therefore those definitions, unless
@@ -377,10 +386,11 @@ extension: image/video/audio/text/other).
 
 Plain JSON files under `<userData>/data/`, one file per aggregate, written
 atomically (write temp + rename). Interface `Storage` in `@rp/shared/storage`;
-`@rp/core` provides `FileStorage` and `MemoryStorage`. Aggregates: settings,
-installed packs, permission grants, sessions (index + one file of messages per
-session), character state (per pack+character), timers, audit log (append-only
-JSONL, size-capped).
+`@rp/core` provides `FileStorage` and `MemoryStorage`. Aggregates: settings
+(including the app-wide permission policy), installed packs, sessions (index +
+one file of messages per session), character state (per pack+character),
+timers, audit log (append-only JSONL, size-capped). A `grants.json` left by a
+version with per-pack grants is ignored and deleted on start.
 
 ---
 
@@ -391,10 +401,11 @@ JSONL, size-capped).
   (discard the newest reply and generate another from the same history),
   character status line, and a text size the user can zoom (`settings.chatZoom`;
   the reading column widens with the text).
-- **Packs view**: installed packs, install from `.rppack`/folder, capability
-  grants with toggles, uninstall, pack README.
+- **Packs view**: installed packs, install from `.rppack`/folder, uninstall,
+  pack README, and a link to Settings → Permissions (nothing is set per pack).
 - **Settings**: LLM providers (add/edit: type, base URL, API key, model),
-  default model, action limits, appearance.
+  default model, action limits, appearance, and **Permissions** — the one place
+  where capability modules are switched on or off for every character.
 - **Prompt window**: every pending question — a `prompt`-level permission request
   (allow once / allow for session / deny) and a character's `sdk.ui` question —
   opens its own small window, centred, above other windows and focused, so it is

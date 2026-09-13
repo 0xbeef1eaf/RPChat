@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef } from 'react';
-import type { CapabilityInfo, EditorProject } from '@rp/shared';
+import type { EditorProject } from '@rp/shared';
 import { draftReducer, initialDraft, jsonEqual, type DraftAction, type DraftState } from '../../lib/editor';
 
 /** What a section exposes to the shell: its dirty flag and how to save. */
@@ -10,7 +10,6 @@ export interface SectionHandle {
 
 export interface EditorCtx {
   project: EditorProject;
-  caps: CapabilityInfo[];
   setProject: (p: EditorProject) => void;
   /** The active section registers itself (null on unmount) so the shell can guard navigation and handle Ctrl+S. */
   register: (handle: SectionHandle | null) => void;

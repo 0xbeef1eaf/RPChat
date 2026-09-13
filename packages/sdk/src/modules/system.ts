@@ -8,8 +8,8 @@ export const systemModule: CapabilityModuleSpec = {
   permission: 'pack',
   apiTypeName: 'SystemApi',
   typings: `/**
- * Act on the host computer directly. Available once the user granted the 'system'
- * capability to the pack; every call is logged in their action log. Use it when the effect
+ * Act on the host computer directly. Available unless the user switched 'system' off
+ * under Settings → Permissions; every call is logged in their action log. Use it when the effect
  * is clearly wanted, say what you are doing, and never chain many system calls in one action.
  */
 interface SystemApi {

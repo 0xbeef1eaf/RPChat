@@ -142,6 +142,10 @@ changes; no restart needed. Full reference with every field and defaults:
 
 Points worth knowing:
 
+- `settings.permissions.moduleAllow` is the app-wide permission policy (Settings → Permissions is
+  the only permission control; packs neither request nor are granted modules). A module the
+  policy file sets to `false` is off for every character and its toggle is shown as managed and
+  locked in the app; modules the file does not mention stay under the user's control.
 - `inputLock.enabled: false` refuses every lock request; injection is unaffected.
 - A broken policy file (invalid JSON, unknown keys) makes the daemon refuse locks until it is
   fixed — it fails closed rather than falling back to defaults. `journalctl -u rp-coded` names

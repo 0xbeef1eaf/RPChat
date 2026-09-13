@@ -35,7 +35,7 @@ export function SensesSection({ settings, onPatch, NumberField }: SensesSectionP
             <input type="checkbox" checked={senses.includeInPrompt} disabled={promptManaged} onChange={(e) => patch({ includeInPrompt: e.target.checked })} />
             Include a one-line presence summary in every prompt
           </label>
-          <span className="field-hint">Only for packs whose effective capabilities include presence.</span>
+          <span className="field-hint">Only while the presence module is on under Settings → Permissions.</span>
         </div>
         <NumberField id="senses-poll" label="Poll interval (ms)" path="senses.pollMs" value={senses.pollMs} min={1000} step={500} hint="How often the host samples presence while something needs it." onCommit={(v) => patch({ pollMs: Math.round(v) })} />
         <NumberField

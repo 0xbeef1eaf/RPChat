@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CHAT_ZOOM_MAX, CHAT_ZOOM_MIN, CHAT_ZOOM_STEP, DEFAULT_RUN_LIMITS, type AppSettings, type ProviderConfig, type RunLimits } from '@rp/shared';
 import { api } from '../api';
 import { BrowserSection } from '../components/settings/BrowserSection';
@@ -18,6 +18,7 @@ import { maskSecret } from '../lib/format';
 import { applyTheme } from '../lib/theme';
 import { reportError, setChatZoom, toast } from '../store/actions';
 import { useAppState, update } from '../store/store';
+import type { SettingsTab } from '../store/state';
 
 async function patchSettings(patch: Partial<AppSettings>): Promise<boolean> {
   try {
@@ -81,7 +82,6 @@ function NumberField({ id, label, value, hint, min, step, path, onCommit }: Numb
   );
 }
 
-type SettingsTab = 'general' | 'providers' | 'permissions' | 'senses' | 'integrations' | 'commands' | 'plugins' | 'browser' | 'system' | 'updates' | 'display';
 
 const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'providers', label: 'Providers' },
@@ -99,7 +99,14 @@ const TABS: Array<{ id: SettingsTab; label: string }> = [
 
 export function SettingsView() {
   const settings = useAppState((s) => s.settings);
+  const requestedTab = useAppState((s) => s.settingsTab);
   const [tab, setTab] = useState<SettingsTab>('providers');
+  // `openSettings(tab)` (e.g. a pack card's link to Permissions) asks for a tab; adopt it once and clear the request.
+  useEffect(() => {
+    if (!requestedTab) return;
+    setTab(requestedTab);
+    update((s) => ({ ...s, settingsTab: null }));
+  }, [requestedTab]);
   const [editing, setEditing] = useState<{ config: ProviderConfig; isNew: boolean } | null>(null);
   const [removing, setRemoving] = useState<ProviderConfig | null>(null);
   const [name, setName] = useState<string | null>(null);

@@ -11,11 +11,11 @@ interface PermissionsSectionProps {
 }
 
 const LEVELS: Array<{ level: CapabilityInfo['permission']; title: string; hint: string }> = [
-  { level: 'pack', title: 'Per-pack capabilities', hint: 'Granted per pack when installed; characters use them freely once granted.' },
-  { level: 'prompt', title: 'Confirm-every-call capabilities', hint: 'Third-party modules may still declare this level; none of the built-in ones do.' },
+  { level: 'pack', title: 'Capabilities', hint: 'On for every character unless you switch them off here; characters use them without asking.' },
+  { level: 'prompt', title: 'Confirm-every-call capabilities', hint: 'Also on for every character unless switched off here, and every call additionally asks you first. Third-party modules may declare this level; none of the built-in ones do.' },
 ];
 
-/** Global policy: which non-trusted modules any pack may ever use. */
+/** The one and only permission control: which non-trusted modules every character may use. */
 export function PermissionsSection({ settings, onPatch }: PermissionsSectionProps) {
   const caps = useAppState((s) => s.capabilities);
   const managed = useAppState((s) => s.managed);
@@ -37,11 +37,11 @@ export function PermissionsSection({ settings, onPatch }: PermissionsSectionProp
   return (
     <div className="stack" style={{ gap: 14 }}>
       <div className="callout small">
-        <strong>How permissions combine.</strong> A pack can only use a capability if <em>all three</em> hold: its manifest requests it, this
-        global policy allows it, and the pack's own toggle (Packs view) is on. Turning a module off here blocks it for every pack,
-        installed or future, without changing per-pack toggles; the Packs view shows what is blocked. Trusted modules (chat, state,
-        timers, memory, events, mood, routine, …) only touch the app's own data and are always available.
-        {deniedCount > 0 ? ` Currently ${deniedCount} module${deniedCount === 1 ? '' : 's'} denied.` : ''}
+        <strong>Capabilities — on for every character unless you switch them off here.</strong> This is the only permission switch:
+        it applies to every installed character, now and in the future; packs neither request nor are granted anything. Turning a
+        module off removes it from every character's SDK, so it cannot even be attempted. Trusted modules (chat, state, timers,
+        memory, events, mood, routine, …) only touch the app's own data and are always available.
+        {deniedCount > 0 ? ` Currently ${deniedCount} module${deniedCount === 1 ? '' : 's'} off.` : ''}
       </div>
       {error ? <div className="callout callout-danger small">{error}</div> : null}
       {caps.length === 0 ? <p className="muted small">No capability modules reported.</p> : null}
@@ -71,14 +71,14 @@ export function PermissionsSection({ settings, onPatch }: PermissionsSectionProp
                         ) : null}
                         {!allowed ? (
                           <span className="badge badge-warning" style={{ marginLeft: 6 }}>
-                            denied for all packs
+                            off
                           </span>
                         ) : null}
                         <ManagedBadge show={forced} />
                       </span>
                       <span className="item-sub">{c.summary}</span>
                     </div>
-                    <Toggle checked={allowed} disabled={forced} aria-label={`Allow ${c.id} globally`} onChange={(v) => setModule(c.id, v)} />
+                    <Toggle checked={allowed} disabled={forced} aria-label={`Allow ${c.id} for every character`} onChange={(v) => setModule(c.id, v)} />
                   </div>
                 );
               })}

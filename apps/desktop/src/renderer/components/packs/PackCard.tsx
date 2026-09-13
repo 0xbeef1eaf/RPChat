@@ -1,31 +1,19 @@
 import { useState } from 'react';
-import type { CapabilityInfo, InstalledPackView } from '@rp/shared';
+import type { InstalledPackView } from '@rp/shared';
 import { formatDateTime } from '../../lib/format';
-import { createSession, openMemories, setGrant } from '../../store/actions';
+import { createSession, openMemories, openSettings } from '../../store/actions';
 import { Avatar } from '../common/Avatar';
 import { Markdown } from '../common/Markdown';
-import { Toggle } from '../common/Toggle';
 import { MediaSummary } from './MediaSummary';
 
 interface PackCardProps {
   pack: InstalledPackView;
-  capabilities: Map<string, CapabilityInfo>;
   onUninstall: () => void;
 }
 
-export function PackCard({ pack, capabilities, onUninstall }: PackCardProps) {
+export function PackCard({ pack, onUninstall }: PackCardProps) {
   const [readmeOpen, setReadmeOpen] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
   const m = pack.manifest;
-  const grantByModule = new Map(pack.grants.map((g) => [g.module, g]));
-  const blocked = pack.blockedByPolicy ?? [];
-  const effective = pack.effectiveCapabilities ?? [];
-
-  const toggle = async (module: string, granted: boolean) => {
-    setBusy(module);
-    await setGrant(pack.packId, module, granted);
-    setBusy(null);
-  };
 
   return (
     <article className="card">
@@ -35,11 +23,6 @@ export function PackCard({ pack, capabilities, onUninstall }: PackCardProps) {
             <h2>{m.name}</h2>
             <span className="badge">{m.version}</span>
             <span className="muted small mono">{m.id}</span>
-            {blocked.length > 0 ? (
-              <span className="badge badge-warning" title={`Denied by Settings → Permissions: ${blocked.join(', ')}`}>
-                {blocked.length} blocked by your policy
-              </span>
-            ) : null}
           </div>
           {m.description ? <p className="muted">{m.description}</p> : null}
           <p className="small muted">
@@ -84,50 +67,13 @@ export function PackCard({ pack, capabilities, onUninstall }: PackCardProps) {
           </div>
         </section>
         <section>
-          <h3 style={{ marginBottom: 8 }}>Capabilities</h3>
-          {pack.requestedCapabilities.length > 0 ? (
-            <p className="field-hint" style={{ marginBottom: 8 }}>
-              Effective now: {effective.length > 0 ? effective.map((e) => <code key={e} style={{ marginRight: 4 }}>{e}</code>) : <em>none beyond trusted</em>}
-            </p>
-          ) : null}
-          <div className="cap-list">
-            {pack.requestedCapabilities.length === 0 ? (
-              <span className="muted small">Only trusted capabilities (chat, state, timers, …) are used.</span>
-            ) : null}
-            {pack.requestedCapabilities.map((module) => {
-              const info = capabilities.get(module);
-              const grant = grantByModule.get(module);
-              const granted = grant?.granted ?? false;
-              const isBlocked = blocked.includes(module);
-              return (
-                <div key={module} className={isBlocked ? 'cap-row cap-row-blocked' : 'cap-row'}>
-                  <div className="item-text">
-                    <span className="item-title">
-                      {info?.title ?? module} <span className="muted mono small">{module}</span>
-                      {info?.permission === 'prompt' ? (
-                        <span className="badge badge-warning" style={{ marginLeft: 6 }} title="Every call asks for confirmation">
-                          asks each time
-                        </span>
-                      ) : null}
-                      {!info ? <span className="badge badge-danger" style={{ marginLeft: 6 }}>unknown</span> : null}
-                      {isBlocked ? (
-                        <span className="badge badge-warning" style={{ marginLeft: 6 }} title="Denied globally in Settings → Permissions; this toggle cannot override it">
-                          blocked by your policy
-                        </span>
-                      ) : null}
-                    </span>
-                    {info?.summary ? <span className="item-sub">{info.summary}</span> : null}
-                  </div>
-                  <Toggle
-                    checked={granted}
-                    disabled={busy === module}
-                    aria-label={`Allow ${module} for ${m.name}`}
-                    onChange={(v) => toggle(module, v)}
-                  />
-                </div>
-              );
-            })}
-          </div>
+          <h3 style={{ marginBottom: 8 }}>Permissions</h3>
+          <p className="field-hint pack-permissions-note">
+            Permissions apply to every character and are set under Settings → Permissions.
+          </p>
+          <button type="button" className="btn btn-sm" onClick={() => openSettings('permissions')}>
+            Open Settings → Permissions
+          </button>
         </section>
       </div>
 

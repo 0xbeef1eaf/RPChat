@@ -241,12 +241,12 @@ export function generateSdkIndex(registry: CapabilityRegistry, options: Generate
   const allowed = options.modules ? new Set(options.modules) : undefined;
   const specs = allowed ? all.filter((m) => allowed.has(m.id)) : all;
   const sections: string[] = [GENERAL_DOCS, INDEX_INTRO];
-  sections.push(`Granted modules: ${specs.map((s) => `sdk.${s.id}`).join(', ')}.`);
+  sections.push(`Available modules: ${specs.map((s) => `sdk.${s.id}`).join(', ')}.`);
   for (const spec of specs) sections.push(indexModule(spec));
   if (options.helperTypes !== false) {
     const shared = referencedTypes(indexTypes(SDK_PREAMBLE_TYPINGS), sections.join('\n'));
     if (shared.length > 0) sections.push(`## Shared types\n${shared.join('\n')}`);
   }
-  // Modules the pack cannot use are not mentioned at all: only granted modules exist for the character.
+  // Modules the user switched off (Settings → Permissions) are not mentioned at all: only available modules exist for the character.
   return sections.join('\n\n') + '\n';
 }

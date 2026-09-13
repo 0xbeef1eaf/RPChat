@@ -26,7 +26,7 @@ import {
   setSessions,
   upsertSession,
 } from './reducers';
-import type { AppState, MemoriesPanelTarget, RouteName, Toast } from './state';
+import type { AppState, MemoriesPanelTarget, RouteName, SettingsTab, Toast } from './state';
 import { appStore, update } from './store';
 
 export function toast(kind: Toast['kind'], text: string, ttlMs = kind === 'error' ? 8000 : 3500): void {
@@ -53,6 +53,12 @@ export function navigate(route: RouteName): void {
     // Coming back to the chat is reading it.
     return route === 'chat' && next.activeSessionId ? clearUnread(next, next.activeSessionId) : next;
   });
+}
+
+/** Open the Settings view on one tab (e.g. `openSettings('permissions')` from a pack card). */
+export function openSettings(tab: SettingsTab): void {
+  update((s) => ({ ...s, settingsTab: tab }));
+  navigate('settings');
 }
 
 export function setEditorLocation(patch: Partial<Omit<AppState['editor'], 'visited'>>): void {
@@ -284,16 +290,6 @@ export async function respondUiPrompt(promptId: string, answer: UiPromptAnswer):
     await api().ui.respondPrompt(promptId, answer);
   } catch (err) {
     reportError('Could not answer prompt', err);
-  }
-}
-
-export async function setGrant(packId: string, module: string, granted: boolean): Promise<void> {
-  try {
-    await api().packs.setGrant(packId, module, granted);
-    await refreshPacks();
-  } catch (err) {
-    reportError('Could not change capability', err);
-    await refreshPacks().catch(() => undefined);
   }
 }
 

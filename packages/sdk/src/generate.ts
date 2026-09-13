@@ -3,12 +3,12 @@ import { SDK_PREAMBLE_TYPINGS } from './preamble.js';
 import type { CapabilityRegistry } from './registry.js';
 
 export interface GenerateTypingsOptions {
-  /** Only include these modules (granted ones). Omit for all registered modules. Unknown ids are ignored. */
+  /** Only include these modules (the available ones). Omit for all registered modules. Unknown ids are ignored. */
   modules?: string[];
 }
 
 export interface GenerateDocsOptions extends GenerateTypingsOptions {
-  /** Modules to list as "not available" (denied / not granted). */
+  /** Modules to list as "not available" (switched off by the user). */
   deniedModules?: string[];
 }
 
@@ -126,7 +126,7 @@ export function generateSdkDocs(registry: CapabilityRegistry, options: GenerateD
       [
         '## Not available',
         '',
-        `These modules are **not granted** in this session and do not exist on \`sdk\`: ${denied.map((d) => `\`sdk.${d}\``).join(', ')}.`,
+        `These modules are **not available** in this session and do not exist on \`sdk\`: ${denied.map((d) => `\`sdk.${d}\``).join(', ')}.`,
         'Do not call them. If the user asks for something that needs one, explain that the capability is not enabled for this pack.',
       ].join('\n'),
     );

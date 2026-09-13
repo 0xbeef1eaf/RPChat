@@ -93,7 +93,7 @@ describe('EditorService tolerant read', () => {
     expect(p.validation.ok).toBe(false);
     expect(p.validation.problems.length).toBeGreaterThan(0);
     expect(p.summary).toMatchObject({ packId: 'com.test.broken', name: 'Broken', version: 'one', characterCount: 2, installed: true, dir });
-    expect(p.manifest.capabilities).toEqual(['media']);
+    expect('capabilities' in p.manifest).toBe(false); // the legacy key is dropped: permissions are app-wide
     expect(p.characters).toHaveLength(1);
     expect(p.characters[0]).toMatchObject({ dir: 'characters/mia', personaText: '# Mia', behaviours: { onTimer: 'return 1;' }, avatarUrl: `rp-asset://editor-${p.summary.key}/characters/mia/avatar.png` });
     const smile = p.assets.find((a) => a.path === 'media/images/happy/smile.png');

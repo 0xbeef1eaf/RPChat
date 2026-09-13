@@ -92,7 +92,7 @@ describe('generateSdkTypings', () => {
     expect(compile({ 'sdk.d.ts': none })).toEqual([]);
   }, 60_000);
 
-  it('filters by granted modules and ignores unknown ids', () => {
+  it('filters by available modules and ignores unknown ids', () => {
     const out = generateSdkTypings(registry, { modules: ['media', 'chat', 'nope'] });
     expect(out).toContain('  chat: ChatApi;');
     expect(out).toContain('  media: MediaApi;');
@@ -293,7 +293,7 @@ describe('generateSdkDocs', () => {
     expect(docs).not.toContain('confirmation dialog');
   });
 
-  it('filters granted modules and lists denied ones', () => {
+  it('filters available modules and lists denied ones', () => {
     const docs = generateSdkDocs(registry, { modules: ['chat', 'media'], deniedModules: ['system', 'ui', 'ui'] });
     expect(docs).toContain('## sdk.chat');
     expect(docs).toContain('## sdk.media');
@@ -329,7 +329,7 @@ describe('generateSdkIndex', () => {
     expect(index).toContain('ShowImageOptions extends OverlayOptions { durationMs?: number; caption?: string }');
     expect(index).toContain('## Shared types');
     expect(index).not.toContain('PresenceSnapshot'); // unreferenced shared types are dropped
-    expect(index).not.toContain('## Not available'); // ungranted modules are omitted, not described
+    expect(index).not.toContain('## Not available'); // unavailable modules are omitted, not described
     expect(index).not.toContain('sdk.system');
     expect(index).toContain('sdk.help.module("<id>")');
     expect(index).toContain('```ts\nconst pic = await sdk.pack.asset("media/images/luna-smile.png");');
@@ -368,6 +368,6 @@ describe('docFor', () => {
     const index = generateSdkIndex(createStandardRegistry(), { modules: ['events'] });
     expect(index).toContain('    event: A host event (see HostEventName)');
     expect(index).toContain('    e.g. await sdk.events.on("user-back"');
-    expect(index).not.toMatch(/sdk\.browser|sdk\.messaging/); // ungranted modules are never named
+    expect(index).not.toMatch(/sdk\.browser|sdk\.messaging/); // unavailable modules are never named
   });
 });

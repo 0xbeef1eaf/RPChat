@@ -12,8 +12,9 @@ Contents:
 - `media/images/teal-card.png`, `media/video/testcard.webm` — placeholder test media
 - `media.json` — tags and one-line descriptions for the media, plus a tag vocabulary
 
-Requested capabilities: `media` (show images, play the chime) and `ui`
-(desktop notifications). Everything else Luna uses (`chat`, `state`, `timers`,
-`pack`) is trusted and always available.
+Modules used: `media` (show images, play the chime) and `ui` (desktop
+notifications) — on unless you switch them off under Settings → Permissions;
+packs declare no permissions. Everything else Luna uses (`chat`, `state`,
+`timers`, `pack`) is trusted and always available.
 
 The media files are produced by `../scripts/generate-media.mjs`.

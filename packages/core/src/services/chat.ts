@@ -466,7 +466,7 @@ export class ChatService {
           `${stats.transcriptBudgetTokens} left for the transcript, ${stats.droppedMessages} older message(s) dropped` +
           (stats.summarisedMessages > 0 ? `; ${stats.summarisedMessages} summarised into ~${stats.summaryTokens} tokens` : '') +
           (stats.trimmedActionMessages > 0 ? `; action detail trimmed from ${stats.trimmedActionMessages} message(s)` : '') +
-          (stats.systemTokens * 2 > stats.budgetTokens ? ' — raise Settings → General → context token budget or grant fewer modules' : ''),
+          (stats.systemTokens * 2 > stats.budgetTokens ? ' — raise Settings → General → context token budget or switch off modules under Settings → Permissions' : ''),
       );
     }
 

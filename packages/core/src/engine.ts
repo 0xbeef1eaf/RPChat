@@ -141,9 +141,9 @@ export class Engine {
     this.settings = new SettingsService(opts.storage, providerFactory);
     this.audit = new AuditService(opts.storage, now, logger);
     this.senses = opts.senses;
-    this.permissions = new PermissionService(opts.storage, opts.registry, opts.permissionPrompter, this.events, now, logger, () => this.settings.get());
+    this.permissions = new PermissionService(opts.registry, opts.permissionPrompter, this.events, logger, () => this.settings.get());
     this.timers = new TimerService(opts.storage, now, logger, async () => (await this.settings.get()).autonomy);
-    this.packs = new PackService(opts.storage, opts.packsDir, opts.registry, this.permissions, this.timers, now, logger, () => this.settings.get());
+    this.packs = new PackService(opts.storage, opts.packsDir, this.timers, now, logger);
     this.sessions = new SessionService(opts.storage, this.packs, this.permissions, this.timers, this.events, now, logger);
     this.memories = new MemoryService({
       storage: opts.storage,

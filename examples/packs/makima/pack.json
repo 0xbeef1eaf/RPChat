@@ -19,25 +19,6 @@
   "characters": [
     "characters/makima"
   ],
-  "capabilities": [
-    "media",
-    "ui",
-    "wallpaper",
-    "browser",
-    "input",
-    "presence",
-    "screen",
-    "calendar",
-    "web",
-    "events",
-    "avatar",
-    "widgets",
-    "voice",
-    "desktop",
-    "files",
-    "messaging",
-    "system"
-  ],
   "mediaRoot": "media",
   "minAppVersion": "0.1.0"
 }

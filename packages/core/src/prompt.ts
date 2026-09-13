@@ -31,7 +31,7 @@ export interface PromptInput {
   pack: LoadedPack;
   character: LoadedCharacter;
   registry: CapabilityRegistry;
-  /** Module ids the character may use (trusted + granted). */
+  /** Module ids the character may use (trusted + every non-trusted module the user has not switched off under Settings → Permissions). */
   allowedModules: string[];
   session: Session;
   transcript: ChatMessage[];

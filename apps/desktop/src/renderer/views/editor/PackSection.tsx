@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { PackManifest } from '@rp/shared';
 import { api } from '../../api';
-import { CapabilityChecklist } from '../../components/editor/CapabilityChecklist';
 import { TagInput } from '../../components/editor/TagInput';
 import { isSemver, isValidPackId } from '../../lib/editor';
 import { reportError, toast } from '../../store/actions';
@@ -9,7 +8,7 @@ import { useDraft, useEditor } from './context';
 import { SaveBar } from './SaveBar';
 
 export function PackSection() {
-  const { project, caps, setProject } = useEditor();
+  const { project, setProject } = useEditor();
   const [idUnlocked, setIdUnlocked] = useState(false);
 
   const save = useCallback(
@@ -94,13 +93,6 @@ export function PackSection() {
       <div className="field" style={{ marginTop: 12 }}>
         <span className="field-label">Tags</span>
         <TagInput tags={draft.tags ?? []} onChange={(tags) => edit({ tags: tags.length ? tags : undefined })} placeholder="companion, sci-fi…" />
-      </div>
-      <div className="field" style={{ marginTop: 16 }}>
-        <span className="field-label">Capabilities the pack requests</span>
-        <span className="field-hint" style={{ marginBottom: 8 }}>
-          Users grant these at install time. Characters can request extra ones on their own page.
-        </span>
-        <CapabilityChecklist caps={caps} selected={draft.capabilities ?? []} onChange={(capabilities) => edit({ capabilities: capabilities.length ? capabilities : undefined })} />
       </div>
       <div className="field" style={{ marginTop: 12 }}>
         <span className="field-label">Characters</span>

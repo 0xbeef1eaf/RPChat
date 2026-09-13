@@ -27,7 +27,7 @@ if (payload.reason === 'task-check' && payload.task) {
   try {
     const p = await sdk.presence.status();
     if (!p.atKeyboard || p.idleMs > 10 * 60_000) await sdk.ui.notify('Makima', `About the ${payload.task}.`);
-  } catch { /* presence not granted */ }
+  } catch { /* presence switched off or unavailable */ }
   return { reAsked: payload.task };
 }
 

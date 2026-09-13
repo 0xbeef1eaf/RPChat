@@ -186,7 +186,7 @@ export function findExamplePack(appRoot: string, env: NodeJS.ProcessEnv = proces
   return candidates.find((p) => fs.existsSync(path.join(p, 'pack.json')));
 }
 
-/** Install the example pack (and grant what it asks for) when no packs are installed. */
+/** Install the example pack when no packs are installed (permissions are app-wide; nothing to grant). */
 export async function ensureExamplePack(engine: Engine, appRoot: string, logger: Logger, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const installed = await engine.storage.packs.list();
   if (installed.length > 0) return;
@@ -197,8 +197,7 @@ export async function ensureExamplePack(engine: Engine, appRoot: string, logger:
   }
   try {
     const view = await engine.packs.install(source);
-    for (const module of view.requestedCapabilities) await engine.permissions.setGrant(view.packId, module, true);
-    logger.info(`[dev] installed example pack ${view.packId}@${view.version} from ${source} (granted: ${view.requestedCapabilities.join(', ') || 'nothing'})`);
+    logger.info(`[dev] installed example pack ${view.packId}@${view.version} from ${source}`);
   } catch (err) {
     logger.warn(`[dev] auto-install of ${source} failed`, err);
   }
@@ -302,7 +301,7 @@ export async function writeBrowserSmokePack(dir: string): Promise<{ packId: stri
   await fs.promises.mkdir(characterDir, { recursive: true });
   await fs.promises.writeFile(
     path.join(dir, 'pack.json'),
-    JSON.stringify({ formatVersion: 1, id: packId, name: 'Browser smoke', version: '1.0.0', description: 'Exercises the browser extension in smoke runs.', characters: ['characters/smokey'], capabilities: ['browser'] }, null, 2),
+    JSON.stringify({ formatVersion: 1, id: packId, name: 'Browser smoke', version: '1.0.0', description: 'Exercises the browser extension in smoke runs.', characters: ['characters/smokey'] }, null, 2),
   );
   await fs.promises.writeFile(path.join(characterDir, 'character.json'), JSON.stringify({ id: 'smokey', name: 'Smokey', persona: 'persona.md', greeting: 'Ready to browse.' }, null, 2));
   await fs.promises.writeFile(path.join(characterDir, 'persona.md'), 'Smokey is a test character that drives the browser extension.\n');
@@ -361,8 +360,7 @@ export async function runBrowserSmoke(services: BrowserSmokeServices, logger: Lo
     const packDir = path.join(services.userData, 'smoke-browser-pack');
     const { packId, characterRef } = await writeBrowserSmokePack(packDir);
     if (!engine.packs.tryGetLoaded(packId)) {
-      const view = await engine.packs.install(packDir);
-      for (const module of view.requestedCapabilities) await engine.permissions.setGrant(view.packId, module, true);
+      await engine.packs.install(packDir);
     }
     const session = await engine.sessions.create({ characterRef, title: 'browser smoke' });
     const url = `http://127.0.0.1:${loopback.listeningPort}${SMOKE_PAGE_PATH}`;

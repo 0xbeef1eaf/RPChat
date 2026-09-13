@@ -1083,6 +1083,9 @@ textarea:disabled {
     grid-template-columns: 1fr;
   }
 }
+.pack-permissions-note {
+  margin-bottom: 8px;
+}
 .cap-list {
   display: flex;
   flex-direction: column;
@@ -1500,10 +1503,6 @@ table.table {
   border-color: var(--accent);
   color: var(--accent);
   font-weight: 600;
-}
-.cap-row-blocked {
-  opacity: 0.75;
-  border-style: dashed;
 }
 .event-marker {
   display: flex;

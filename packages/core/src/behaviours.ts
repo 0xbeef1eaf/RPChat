@@ -109,7 +109,7 @@ export class BehaviourRunner implements BehaviourHooks {
     return this.o.runner.run(request);
   }
 
-  /** The SDK surface currently allowed for a pack (trusted + granted modules). */
+  /** The SDK surface currently allowed (trusted + every module the app-wide policy allows; the same for every pack). */
   async surfaceFor(packId: string): Promise<SdkSurface> {
     const modules = await this.o.permissions.allowedModules(packId);
     return describeSurface(this.o.registry, { modules });

@@ -16,7 +16,7 @@ export function resolveAssetPath(root: string, relative: string): string;  // no
 export function packDirectory(root: string, destinationFile: string): Promise<void>;       // validates first; writes .rppack (zip, deflate) with paths relative to root; skips dotfiles, node_modules
 export function extractPack(file: string, destinationDir: string): Promise<LoadedPack>;    // zip-slip safe, rejects absolute/`..` entries; then loadPack
 export function readManifestFromArchive(file: string): Promise<PackManifest>;             // peek without extracting
-export function requestedCapabilities(pack: LoadedPack): string[];                           // pack + character level, deduped, sorted
+export const IGNORED_CAPABILITIES_KEY = 'capabilities'; export function ignoredCapabilitiesWarning(file: string): string;  // legacy key, see Validation rules
 export function assetKindFor(path: string): AssetKind; export function mimeFor(path: string): string;
 // function library files (see "Function library" below)
 export function readCharacterLibrary(rootAbs, charDir, { previous? }): Promise<{ library: Record<name, CharacterLibraryEntry>; skipped: LibraryFileProblem[]; problems: string[] }>;
@@ -32,7 +32,7 @@ export function libraryReadme(name): string; export function libraryFunctionTemp
 - `id`: /^[a-z0-9]+(\.[a-z0-9-]+)+$/ ; `version`: semver (simple regex `^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`); `formatVersion === 1`
 - **A pack has exactly one character.** `characters` holds exactly one relative dir containing `character.json` (the schema rejects zero or two entries); the loader also reports a problem when `characters/` holds a second directory with a `character.json` that the manifest does not list (`characters/<x>/character.json: a pack has exactly one character …`). The on-disk layout `characters/<id>/…`, the array in `pack.json` and the `packId/characterId` character ref are unchanged; `LoadedPack.character` is the convenience accessor and `LoadedPack.characters` stays a one-entry array for compatibility. `persona` file must exist; `behaviours` files must exist and end with `.ts` or `.js`; `avatar` must exist and be an image.
 - `characters/<id>/lib/*.ts`: see "Function library". A file that is not one function expression (or whose stem is not a valid name) is a `warning:` and skipped; the caps are problems.
-- `capabilities` entries: /^[a-z][a-zA-Z0-9]*$/ (existence against the registry is checked by core, not here).
+- `capabilities` (pack.json and character.json) is a **legacy key**: permissions are app-wide (Settings → Permissions), packs declare none. The schemas accept the key with any value, strip it from the parsed `PackManifest` / `CharacterDefinition` (the types have no such field), and `inspectPack`/`validatePack` add the warning `warning: <file>: "capabilities" is ignored; permissions are set in the app under Settings → Permissions`. `scaffoldPack`, `writeManifest` and `writeCharacter` never write it.
 - `mediaRoot` default `media`; may not exist (a pack can have no media).
 - File names inside the pack must not contain `..` segments or be absolute.
 
@@ -60,7 +60,7 @@ image: png jpg jpeg gif webp avif svg bmp — video: mp4 webm mkv mov m4v — au
 
 ## Example packs (create under `examples/packs/`)
 
-1. `examples/packs/luna/` — companion character "Luna" with persona.md, avatar (generate a small PNG programmatically in a script or commit a tiny 1×1/16×16 PNG), 2 images and 1 short generated WAV (write a tiny sine-wave WAV file with a script; keep < 100 KB), behaviours `on-session-start.ts` (calls `sdk.chat.say` with a time-aware greeting and `sdk.state.set('sessions', n+1)`), and `on-timer.ts`. Capabilities: media, ui.
+1. `examples/packs/luna/` — companion character "Luna" with persona.md, avatar (generate a small PNG programmatically in a script or commit a tiny 1×1/16×16 PNG), 2 images and 1 short generated WAV (write a tiny sine-wave WAV file with a script; keep < 100 KB), behaviours `on-session-start.ts` (calls `sdk.chat.say` with a time-aware greeting and `sdk.state.set('sessions', n+1)`), and `on-timer.ts`. Uses `media` and `ui` (no declaration needed: permissions are app-wide).
 2. `examples/packs/minimal/` — one character, no media, no behaviours. Used by tests as the smallest valid pack.
 
 Also add `examples/packs/README.md` documenting the format for pack authors (copy §8 of ARCHITECTURE.md and expand with the behaviour hooks and a full SDK usage example).

@@ -1,7 +1,6 @@
 import type {
   AppSettings,
   AuditEntry,
-  CapabilityGrant,
   ChatMessage,
   EventSubscription,
   InstalledPackRecord,
@@ -22,7 +21,6 @@ function clone<T>(value: T): T {
 export class MemoryStorage implements Storage {
   private settingsValue: AppSettings | undefined;
   private readonly packRecords = new Map<string, InstalledPackRecord>();
-  private readonly grantRecords = new Map<string, CapabilityGrant>();
   private readonly sessionRecords = new Map<string, Session>();
   private readonly messageRecords = new Map<string, ChatMessage[]>();
   private readonly stateRecords = new Map<string, Map<string, Json>>();
@@ -48,17 +46,6 @@ export class MemoryStorage implements Storage {
     },
     remove: async (packId) => {
       this.packRecords.delete(packId);
-    },
-  };
-
-  readonly grants: Storage['grants'] = {
-    list: async (packId) =>
-      [...this.grantRecords.values()].filter((g) => packId === undefined || g.packId === packId).map(clone),
-    set: async (grant) => {
-      this.grantRecords.set(`${grant.packId} ${grant.module}`, clone(grant));
-    },
-    removeForPack: async (packId) => {
-      for (const [key, grant] of this.grantRecords) if (grant.packId === packId) this.grantRecords.delete(key);
     },
   };
 

@@ -240,10 +240,10 @@ describe('sdk.lib through the engine', () => {
 
   it('lists functions the pack author shipped as lib/<name>.ts and puts them in the prelude from the first install', async () => {
     t = await createTestEngine();
-    await installLunaWith(t.engine, t.packsDir, ['media', 'ui'], undefined, {
+    await installLunaWith(t.engine, t.packsDir, { extraFiles: {
       'characters/luna/lib/wave.ts': '// wave at the user\nasync (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}\n',
       'characters/luna/lib/broken.ts': 'async ( => 1',
-    });
+    } });
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const ctx = ctxOf(LUNA_ID, 'luna', session.id);
     const listed = (await invoke(ctx, 'list')) as { ok: true; value: LibFunctionInfo[] };

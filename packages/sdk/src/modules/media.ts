@@ -61,7 +61,7 @@ interface MediaApi {
   /** Media items currently open/playing for this character. */
   list(): Promise<MediaHandle[]>;
 }`,
-  docs: `Show pictures, play video or audio from the pack in a small overlay on the user's screen. Requires the \`media\` capability granted to the pack.
+  docs: `Show pictures, play video or audio from the pack in a small overlay on the user's screen. Available unless the user switched \`media\` off under Settings → Permissions.
 
 - Pass a pack-relative path (or an \`AssetRef\`); files must exist in the pack — check the asset list in your prompt or use \`sdk.pack.listAssets\`.
 - Images stay open until \`durationMs\` elapses or you \`close()\` them; videos close on end by default. Without \`durationMs\` the user can click an overlay away; with one it is theirs for that long, so keep timed overlays short and out of the way. Do not open many overlays at once — \`closeAll()\` before showing something new if the screen is getting busy.

@@ -14,6 +14,9 @@ import type {
 
 export type RouteName = 'chat' | 'packs' | 'settings' | 'log' | 'sdk' | 'editor' | 'sandbox';
 
+/** Tabs of the Settings view; `openSettings(tab)` jumps straight to one. */
+export type SettingsTab = 'general' | 'providers' | 'permissions' | 'senses' | 'integrations' | 'commands' | 'plugins' | 'browser' | 'system' | 'updates' | 'display';
+
 export type EditorSection = 'pack' | 'character' | 'scripts' | 'media' | 'readme' | 'publish';
 
 export interface Toast {
@@ -53,6 +56,8 @@ export interface MemoriesPanelTarget {
 
 export interface AppState {
   route: RouteName;
+  /** A tab the Settings view should switch to on its next render (`openSettings`); it clears the request once adopted. */
+  settingsTab: SettingsTab | null;
   appVersion: string;
   /** True until the first data load finished (or failed). */
   booting: boolean;
@@ -101,6 +106,7 @@ export const EMPTY_RUNTIME: SessionRuntime = { turnId: null, status: null, error
 export function initialState(): AppState {
   return {
     route: 'chat',
+    settingsTab: null,
     appVersion: '',
     booting: true,
     bootError: null,

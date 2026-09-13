@@ -2,7 +2,7 @@ import type { CapabilityRegistry } from '@rp/sdk';
 import type { ActionContext, CapabilityHandler, Json } from '@rp/shared';
 import { RpError } from '@rp/shared';
 
-/** `sdk.help`: full typings and docs of a granted module, on demand (the prompt only carries the abridged index). */
+/** `sdk.help`: full typings and docs of an available module, on demand (the prompt only carries the abridged index). */
 export class HelpHandler implements CapabilityHandler {
   readonly moduleId = 'help';
 
@@ -24,7 +24,7 @@ export class HelpHandler implements CapabilityHandler {
         if (typeof id !== 'string' || id.trim().length === 0) throw new RpError('INVALID_ARGUMENT', 'module id must be a non-empty string');
         const key = id.trim().replace(/^sdk\./, '');
         const spec = this.registry.get(key);
-        if (!spec || !allowed.includes(spec.id)) throw new RpError('NOT_FOUND', `sdk.${key} is not a granted module (granted: ${allowed.join(', ')})`);
+        if (!spec || !allowed.includes(spec.id)) throw new RpError('NOT_FOUND', `sdk.${key} is not available (available: ${allowed.join(', ')})`);
         return { id: spec.id, title: spec.title, typings: spec.typings, docs: spec.docs };
       }
       default:

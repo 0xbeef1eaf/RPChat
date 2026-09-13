@@ -20,7 +20,6 @@ export interface Phase2Engine {
   routine?: { status(characterRef: string): Promise<RoutineStatus> | RoutineStatus; entries(characterRef: string): Promise<RoutineEntry[]> | RoutineEntry[] };
   subscriptions?: { list(sessionId?: string): Promise<EventSubscription[]>; remove(id: string): Promise<unknown> };
   packs: { inspect?(sourcePath: string): Promise<PackInspection> };
-  permissions: { effective?(packId: string): Promise<{ effective: string[]; blockedByPolicy: string[] }> | { effective: string[]; blockedByPolicy: string[] } };
   llm?: { describeImage(sessionId: string, pngBase64: string, question?: string): Promise<string> };
 }
 

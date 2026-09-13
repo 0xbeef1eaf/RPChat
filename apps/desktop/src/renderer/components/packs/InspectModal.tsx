@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { CapabilityInfo, PackInspection } from '@rp/shared';
+import type { PackInspection } from '@rp/shared';
 import { Markdown } from '../common/Markdown';
 import { Modal } from '../common/Modal';
 import { MediaSummary } from './MediaSummary';
@@ -7,13 +7,12 @@ import { MediaSummary } from './MediaSummary';
 interface InspectModalProps {
   sourcePath: string;
   inspection: PackInspection;
-  capabilities: Map<string, CapabilityInfo>;
   onConfirm: () => Promise<void>;
   onCancel: () => void;
 }
 
-/** What a pack asks for, shown before it is installed. */
-export function InspectModal({ sourcePath, inspection, capabilities, onConfirm, onCancel }: InspectModalProps) {
+/** What a pack contains, shown before it is installed. */
+export function InspectModal({ sourcePath, inspection, onConfirm, onCancel }: InspectModalProps) {
   const [busy, setBusy] = useState(false);
   const [readme, setReadme] = useState(false);
   const m = inspection.manifest;
@@ -22,22 +21,6 @@ export function InspectModal({ sourcePath, inspection, capabilities, onConfirm, 
     setBusy(true);
     await onConfirm();
     setBusy(false);
-  };
-
-  const capRow = (id: string, cls: string, label: string) => {
-    const info = capabilities.get(id);
-    return (
-      <div key={id} className="cap-row">
-        <div className="item-text">
-          <span className="item-title">
-            {info?.title ?? id} <span className="muted mono small">{id}</span>
-            {info?.methods.some((x) => x.dangerous) ? <span className="badge badge-danger" style={{ marginLeft: 6 }}>dangerous</span> : null}
-          </span>
-          {info?.summary ? <span className="item-sub">{info.summary}</span> : null}
-        </div>
-        <span className={cls}>{label}</span>
-      </div>
-    );
   };
 
   return (
@@ -66,20 +49,10 @@ export function InspectModal({ sourcePath, inspection, capabilities, onConfirm, 
         </ul>
       </div>
 
-      <div>
-        <div className="field-label">Capabilities it asks for</div>
-        {inspection.requestedCapabilities.length === 0 ? <span className="muted small">Only trusted capabilities.</span> : null}
-        <div className="cap-list" style={{ marginTop: 4 }}>
-          {inspection.allowedByPolicy.map((id) => capRow(id, 'badge badge-success', 'will be granted'))}
-          {inspection.blockedByPolicy.map((id) => capRow(id, 'badge badge-warning', 'blocked by your policy'))}
-          {inspection.unknownCapabilities.map((id) => capRow(id, 'badge badge-danger', 'unknown to this app'))}
-        </div>
-        {inspection.blockedByPolicy.length > 0 ? (
-          <p className="field-hint" style={{ marginTop: 6 }}>
-            Blocked modules stay off until you allow them in Settings → Permissions; the pack still installs.
-          </p>
-        ) : null}
-      </div>
+      <p className="field-hint">
+        Permissions are not part of a pack: what its character may do on this PC is what you allow for every character under
+        Settings → Permissions.
+      </p>
 
       <MediaSummary assetCounts={inspection.assetCounts} assetTags={inspection.assetTags} />
 

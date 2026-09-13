@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BehaviourHook, BehaviourTemplate, CharacterDefinition, EditorCharacter, ExampleDialogueTurn, ScriptProblem } from '@rp/shared';
 import { api } from '../../api';
 import { Markdown } from '../../components/common/Markdown';
-import { CapabilityChecklist } from '../../components/editor/CapabilityChecklist';
 import { isValidCharacterId, wordCount } from '../../lib/editor';
 import { reportError, toast } from '../../store/actions';
 import { useDraft, useEditor } from './context';
@@ -22,7 +21,7 @@ interface CharacterDraft {
 const CHECK_DEBOUNCE_MS = 400;
 
 const HOOKS: Array<{ hook: BehaviourHook; label: string; hint: string }> = [
-  { hook: 'onInstall', label: 'onInstall', hint: 'Once, after the user accepted the grants.' },
+  { hook: 'onInstall', label: 'onInstall', hint: 'Once, right after the user installed the pack.' },
   { hook: 'onSessionStart', label: 'onSessionStart', hint: 'Every new session; good for greetings with media.' },
   { hook: 'onUserMessage', label: 'onUserMessage', hint: 'Before the LLM sees a user message; may return { skipLlm: true }.' },
   { hook: 'onTimer', label: 'onTimer', hint: 'When a scheduled timer fires.' },
@@ -35,7 +34,7 @@ function toDraft(c: EditorCharacter): CharacterDraft {
 }
 
 export function CharacterSection({ dir }: CharacterSectionProps) {
-  const { project, caps, setProject } = useEditor();
+  const { project, setProject } = useEditor();
   const character = project.characters.find((c) => c.dir === dir)!;
   const [templates, setTemplates] = useState<BehaviourTemplate[]>([]);
   const [preview, setPreview] = useState(false);
@@ -157,7 +156,6 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
   };
 
   const words = useMemo(() => wordCount(draft.personaText), [draft.personaText]);
-  const packCaps = project.manifest.capabilities ?? [];
 
   return (
     <div>
@@ -297,11 +295,6 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
             );
           })}
         </div>
-      </div>
-
-      <div className="field" style={{ marginTop: 16 }}>
-        <span className="field-label">Extra capabilities for this character</span>
-        <CapabilityChecklist caps={caps} selected={def.capabilities ?? []} inherited={packCaps} onChange={(list) => setDef({ capabilities: list.length ? list : undefined })} />
       </div>
 
       <div className="field" style={{ marginTop: 16 }}>

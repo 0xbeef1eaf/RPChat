@@ -7,7 +7,7 @@ HostEvent, EventSubscription, MoodState, RoutineEntry/Status, MessagingChannel),
 `storage.ts` (`subscriptions`), `chat.ts` (new ChatEvents, origins), `capability.ts`
 (`preauthorize`, `onEvent` hook, `event` trigger), `llm.ts` (image ContentPart, `supportsVision`),
 `pack.ts` (`avatarSet`, `mood` in character.json), `ipc.ts` (`characters.status`, `events`,
-`senses`, `packs.inspect`, `InstalledPackView.effectiveCapabilities/blockedByPolicy`, `PackInspection`).
+`senses`, `packs.inspect`, `PackInspection`).
 
 Everything below is additive. Cross-pack character messaging is explicitly out of scope.
 
@@ -31,7 +31,7 @@ all mirroring `@rp/shared` (add them to the structural-identity test where they 
 | `widgets` | pack | `show(spec: { id?; title?; html; width?; height? } & OverlayOptions): WidgetInfo`; `update(id, patch: { html?; title?; postMessage?: Json }): void`; `close(id): void`; `closeAll(): void`; `list(): WidgetInfo[]` |
 | `voice` | pack | `speak(text, opts?: { rate?: number; voice?: string; wait?: boolean }): void`; `stop(): void`; `listen(opts?: { maxSeconds?: number }): { text: string }` (D) |
 | `desktop` | pack | `launch(app: string, args?: string[]): { pid?: number }` (D; restricted to launchAllowlist when one is set); `listWindows(): Array<{ id; title; app; monitor?; workspace?; focused }>`; `focusWindow(match: { id?; title?; app? }): boolean`; `moveWindow(match, to: { monitor?; x?; y?; width?; height?; workspace? }): boolean`; `workspace(target: string \| number): void`; `currentWorkspace(): { id; name }`; `setVolume(level: number): void`; `getVolume(): number \| null`; `setBrightness(level): void`; `doNotDisturb(on: boolean): void`; `setTheme(theme: 'dark'\|'light'): void` |
-| `input` (v1.1) | pack | existing lock/unlock/status + `type(text)`, `key(combo)`, `click(x, y, button?)`, `moveMouse(x, y)` (all D; no per-call prompt once granted) |
+| `input` (v1.1) | pack | existing lock/unlock/status + `type(text)`, `key(combo)`, `click(x, y, button?)`, `moveMouse(x, y)` (all D; no per-call prompt) |
 | `files` | pack | character home dir: `write(path, text): void`; `append(path, text): void`; `read(path, maxBytes?): string`; `list(prefix?): Array<{ path; bytes; modifiedAt }>`; `delete(path): boolean`; `open(path): void` (open with the default app, D); `homePath(): string` |
 | `mood` | trusted | `get(): MoodState`; `nudge(delta: { mood?: number; energy?: number }, reason: string): MoodState` (deltas clamped ±0.5); `set(state: { mood?; energy?; tags? }, reason: string): MoodState` |
 | `routine` | trusted | `set(entries: RoutineEntry[]): RoutineStatus`; `get(): { entries: RoutineEntry[]; status: RoutineStatus }`; `now(): RoutineStatus`; `override(state: RoutineStateName, opts?: { minutes?: number; label? }): RoutineStatus` |
@@ -69,23 +69,23 @@ engine.hostEvents.emit(event: HostEvent): void;       // alternative to subscrib
 engine.mood.get(characterRef); engine.routine.status(characterRef); engine.routine.entries(characterRef);
 engine.subscriptions.list(sessionId?); engine.subscriptions.remove(id);
 engine.packs.inspect(sourcePath): Promise<PackInspection>;
-engine.permissions.effective(packId): { effective: string[]; blockedByPolicy: string[] };
+engine.permissions.effective(packId?): { effective: string[]; denied: Record<string, 'policy'> };  // app-wide; packId is ignored
 ```
 
-### 3.2 Permission policy (intersection)
+### 3.2 Permission policy (app-wide)
 
-`PermissionService.isAllowed`: for non-trusted modules require (1) the pack requested the module
-(pack or character level), (2) `settings.permissions.moduleAllow[module] !== false`, (3) the per-pack
-grant is true. Install sets per-pack grants to `moduleAllow[module] !== false` (so the effective set is
-the intersection out of the box; the user can narrow further per pack). Changing the global policy
-does not rewrite per-pack grants; it is applied at check time and reflected in
-`InstalledPackView.effectiveCapabilities`/`blockedByPolicy`. The prompt's SDK reference is filtered to the
-effective set; blocked modules are listed as not available with the reason "denied by your settings".
-`prompt`-level methods: if the handler's `preauthorize(method, args, ctx)` resolves true, skip the dialog
-(still audited `allowed`); otherwise the existing per-call prompt with allow-session memory.
+`PermissionService.isAllowed`: for non-trusted modules the only requirement is
+`settings.permissions.moduleAllow[module] !== false` (Settings → Permissions). The policy applies to
+every installed character alike; packs neither request nor are granted modules, and there is no
+per-pack state. It is applied at check time, so a change takes effect on the next call. The prompt's
+SDK reference and the sandbox surface are filtered to the effective set; a switched-off module is
+absent from both and a call to it fails with PERMISSION_DENIED, reason "switched off under
+Settings → Permissions". `prompt`-level methods: if the handler's `preauthorize(method, args, ctx)`
+resolves true, skip the dialog (still audited `allowed`); otherwise the existing per-call prompt with
+allow-session memory.
 
-`packs.inspect(sourcePath)`: loads (dir or archive, without installing) → `PackInspection` with
-`allowedByPolicy`/`blockedByPolicy`/`unknownCapabilities` against the registry and policy.
+`packs.inspect(sourcePath)`: loads (dir or archive, without installing) → `PackInspection` with the
+manifest, characters, README and asset summary (no permission information).
 
 ### 3.3 Events (`EventService`)
 
@@ -228,9 +228,8 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   Senses section (poll, idle threshold, calendar sources, watch dirs, include-in-prompt, live snapshot
   from `senses.snapshot()`), Web allowlist, Desktop launch allowlist, Messaging channels editor,
   and the new command templates in the Commands section (grouped: senses, voice, desktop, input).
-- **Packs**: capability filter chips (show packs requesting a given module), per-pack badges
-  "N blocked by your policy" with the blocked list, effective capabilities shown; "Inspect" button on
-  the install picker showing `PackInspection` before confirming install.
+- **Packs**: no per-pack permission UI (permissions are app-wide, Settings → Permissions; each card
+  links there); "Inspect" button on the install picker showing `PackInspection` before confirming install.
 - **Chat**: character header shows mood word + energy and routine state (from `characters.status`,
   refreshed on `mood-changed`/`routine-changed`); an "Events" drawer listing live subscriptions for the
   session with remove buttons; `event-fired` shows a small inline marker.

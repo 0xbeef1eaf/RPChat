@@ -32,9 +32,11 @@ drop them into a tagged folder such as `media/images/wallpapers/`). The
 
 ## What the pack uses
 
-- **Capabilities**: `media`, `ui`, `wallpaper`, `avatar`, `presence`, `events`
-  (the trusted modules `chat`, `state`, `memory`, `mood`, `routine`, `timers`,
-  `llm`, `pack` are always available).
+- **Modules used**: `media`, `ui`, `wallpaper`, `avatar`, `presence`, `events`
+  and more (the trusted modules `chat`, `state`, `memory`, `mood`, `routine`,
+  `timers`, `llm`, `pack` are always available). Nothing is declared in
+  `pack.json`: permissions are app-wide, set under Settings → Permissions, and
+  the scripts cope with a module that is switched off.
 - **Behaviours**: `on-session-start.ts` (time- and count-aware greeting, shows
   the avatar, sets her daily routine once), `on-user-message.ts` (mood nudges
   on apologies and thanks, safeword handling; never skips the model),
