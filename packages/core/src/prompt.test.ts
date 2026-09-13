@@ -73,7 +73,7 @@ describe('PromptBuilder', () => {
     expect(system).not.toContain('interface MediaApi'); // abridged index, not the full d.ts
     expect(system).not.toContain('sdk.system —');
     expect(system).not.toContain('Not available'); // ungranted modules are omitted entirely
-    expect(stats.sdkReferenceTokens).toBeLessThan(3000);
+    expect(stats.sdkReferenceTokens).toBeLessThan(6000); // six modules with full TSDoc (params, examples)
     expect(stats.systemTokens).toBeLessThan(stats.budgetTokens / 2);
     expect(stats.droppedMessages).toBe(0);
     expect(system).toContain('"userName": "Sam"');

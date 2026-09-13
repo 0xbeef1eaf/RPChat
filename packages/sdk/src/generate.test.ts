@@ -308,10 +308,11 @@ describe('generateSdkDocs', () => {
 describe('generateSdkIndex', () => {
   const registry = createStandardRegistry();
 
-  it('is a fraction of the size of the full typings + docs and lists every method once', () => {
+  it('is smaller than the full typings + docs and lists every method once', () => {
     const index = generateSdkIndex(registry);
     const full = generateSdkTypings(registry) + generateSdkDocs(registry);
-    expect(index.length).toBeLessThan(full.length / 2.5);
+    expect(index.length).toBeLessThan(full.length); // complete TSDoc, but no raw declarations or duplicated docs
+    expect(index).not.toContain('interface MediaApi');
     for (const spec of registry.list()) {
       expect(index).toContain(`## sdk.${spec.id} — ${spec.title} (${spec.permission})`);
       for (const method of Object.keys(spec.methods)) {
@@ -347,5 +348,26 @@ describe('generateSdkIndex', () => {
     ]);
     expect(docSummary('interface Api {\n  /** Does a thing. Then more. @param x y */\n  m(x: number): void;\n}', 'm')).toBe('Does a thing.');
     expect(docSummary('interface Api {\n  m(x: number): void;\n}', 'm')).toBeUndefined();
+  });
+});
+
+describe('docFor', () => {
+  it('extracts the summary, every @param, @returns and @example from the type definitions', async () => {
+    const { docFor, createStandardRegistry, generateSdkIndex } = await import('./index.js');
+    const src = `interface Api {\n  /**\n   * Do a thing.\n   * Over two lines.\n   * @param a The first\n   *   continued.\n   * @param b The second.\n   * @returns Something.\n   * @example await sdk.x.m(1, 2);\n   * @example await sdk.x.m(3, 4);\n   */\n  m(a: number, b: number): Promise<void>;\n}`;
+    expect(docFor(src, 'm')).toEqual({
+      summary: 'Do a thing. Over two lines.',
+      params: [
+        { name: 'a', text: 'The first continued.' },
+        { name: 'b', text: 'The second.' },
+      ],
+      returns: 'Something.',
+      examples: ['await sdk.x.m(1, 2);', 'await sdk.x.m(3, 4);'],
+    });
+    expect(docFor(src, 'missing')).toEqual({ params: [], examples: [] });
+    const index = generateSdkIndex(createStandardRegistry(), { modules: ['events'] });
+    expect(index).toContain('    event: A host event (see HostEventName)');
+    expect(index).toContain('    e.g. await sdk.events.on("user-back"');
+    expect(index).not.toMatch(/sdk\.browser|sdk\.messaging/); // ungranted modules are never named
   });
 });

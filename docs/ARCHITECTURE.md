@@ -254,10 +254,10 @@ System prompt sections, in order (each a stable `<section>` block):
    back to you, do not narrate what code you are running unless asked.
 2. **Character persona** – `persona.md` verbatim, plus example dialogue.
 3. **SDK reference** – the abridged SDK index (`generateSdkIndex`): general
-   rules, then per granted module one line per method (signature + first TSDoc
-   sentence), its helper types on one line each and one example, then only the
-   shared types those modules reference. Denied modules are listed by name with
-   "not available". The full `sdk.d.ts` + docs of one module are available on
+   rules, then per granted module one entry per method (signature, TSDoc summary,
+   every @param, @returns and the first @example, generated from the typings),
+   its helper types on one line each and one example, then only the shared
+   types those modules reference. Ungranted modules are not mentioned. The full `sdk.d.ts` + docs of one module are available on
    demand through `sdk.help.module(id)`. With every module granted the section is
    about 8k tokens (the full reference is about 23k, which used to crowd the
    transcript out of the default budget).

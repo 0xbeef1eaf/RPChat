@@ -99,6 +99,51 @@ export function docSummary(typings: string, name: string): string | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+export interface MethodDoc {
+  /** The description text before the first tag, whitespace-collapsed. */
+  summary?: string;
+  params: Array<{ name: string; text: string }>;
+  returns?: string;
+  examples: string[];
+}
+
+/** The whole TSDoc block that precedes `name(` in `typings`: summary, every @param, @returns and @example. */
+export function docFor(typings: string, name: string): MethodDoc {
+  const last = name.split('.').pop()!;
+  const re = new RegExp(`/\\*\\*((?:(?!\\*/)[\\s\\S])*)\\*/\\s*(?:readonly\\s+)?${last}\\s*\\??\\s*[(<]`);
+  const m = re.exec(typings);
+  const doc: MethodDoc = { params: [], examples: [] };
+  if (!m) return doc;
+  const lines = m[1]!.split('\n').map((l) => l.replace(/^\s*\*\s?/, '').trimEnd());
+  // Split into blocks: text before the first tag, then one block per @tag (continuation lines belong to the tag).
+  const blocks: Array<{ tag: string; text: string }> = [];
+  let current: { tag: string; text: string } = { tag: '', text: '' };
+  for (const line of lines) {
+    const tag = /^@(\w+)\s*(.*)$/.exec(line.trim());
+    if (tag) {
+      blocks.push(current);
+      current = { tag: tag[1]!, text: tag[2] ?? '' };
+    } else current.text += (current.text ? '\n' : '') + line;
+  }
+  blocks.push(current);
+  const squash = (t: string): string => t.replace(/\s+/g, ' ').trim();
+  for (const b of blocks) {
+    if (b.tag === '') {
+      const text = squash(b.text);
+      if (text) doc.summary = text;
+    } else if (b.tag === 'param') {
+      const pm = /^([A-Za-z_$][\w$]*)\s*(.*)$/s.exec(b.text.trim());
+      if (pm) doc.params.push({ name: pm[1]!, text: squash(pm[2] ?? '') });
+    } else if (b.tag === 'returns' || b.tag === 'return') {
+      doc.returns = squash(b.text);
+    } else if (b.tag === 'example') {
+      const ex = b.text.split('\n').map((l) => l.trimEnd()).join('\n').trim();
+      if (ex) doc.examples.push(ex);
+    }
+  }
+  return doc;
+}
+
 /** One line per helper `interface`/`type` declared in `source` (not `apiTypeName`). */
 export function indexTypes(source: string, apiTypeName?: string): string[] {
   const clean = stripComments(source);
@@ -150,8 +195,13 @@ export function indexModule(spec: CapabilityModuleSpec): string {
   const body = extractInterfaceBody(clean, spec.apiTypeName) ?? '';
   for (const sig of indexMethods(body)) {
     const name = sig.slice(0, sig.search(/[(<]/));
-    const desc = docSummary(spec.typings, name) ?? spec.methods[name]?.description;
+    const doc = docFor(spec.typings, name);
+    const desc = doc.summary ?? spec.methods[name]?.description;
     lines.push(`- ${sig}${desc ? ` — ${desc}` : ''}`);
+    for (const p of doc.params) if (p.text) lines.push(`    ${p.name}: ${p.text}`);
+    if (doc.returns) lines.push(`    returns: ${doc.returns}`);
+    const example = doc.examples[0];
+    if (example) lines.push(`    e.g. ${example.split('\n').join('\n         ')}`);
   }
   const types = indexTypes(spec.typings, spec.apiTypeName);
   if (types.length > 0) lines.push(`Types: ${types.join(' · ')}`);
@@ -197,8 +247,6 @@ export function generateSdkIndex(registry: CapabilityRegistry, options: Generate
     const shared = referencedTypes(indexTypes(SDK_PREAMBLE_TYPINGS), sections.join('\n'));
     if (shared.length > 0) sections.push(`## Shared types\n${shared.join('\n')}`);
   }
-  // Modules the pack cannot use are left out entirely: naming them costs prompt space to describe
-  // what the character cannot do. A call that needs one still fails with an actionable
-  // PERMISSION_DENIED naming the module and where to enable it.
+  // Modules the pack cannot use are not mentioned at all: only granted modules exist for the character.
   return sections.join('\n\n') + '\n';
 }

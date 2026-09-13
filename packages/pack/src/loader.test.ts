@@ -43,7 +43,7 @@ describe('loadPack', () => {
   it('loads the makima example pack (every pack feature)', async () => {
     const pack = await loadPack(MAKIMA_DIR);
     expect(pack.manifest.id).toBe('com.example.makima');
-    expect(requestedCapabilities(pack)).toEqual(['avatar', 'events', 'media', 'presence', 'ui', 'wallpaper']);
+    expect(requestedCapabilities(pack)).toEqual(['avatar', 'browser', 'calendar', 'desktop', 'events', 'files', 'input', 'media', 'messaging', 'presence', 'screen', 'system', 'ui', 'voice', 'wallpaper', 'web', 'widgets']);
     expect(pack.readme).toMatch(/Tatsuki Fujimoto/);
     expect(pack.readme).toMatch(/placeholder/i);
 

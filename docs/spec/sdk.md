@@ -18,8 +18,9 @@ export function createStandardRegistry(): CapabilityRegistry;          // all v1
 export function validateModuleSpec(spec: CapabilityModuleSpec): string[]; // list of problems, [] = valid
 export function generateSdkTypings(registry, options?: { modules?: string[] }): string;
 export function generateSdkDocs(registry, options?: { modules?: string[]; deniedModules?: string[] }): string;
-// Abridged reference for the prompt: rules, then per module `- name(sig): ret — first TSDoc sentence`,
-// helper types on one line, one example; shared preamble types only when referenced. ~1/3 of typings+docs.
+// Prompt reference generated from the type definitions: rules, then per module one entry per method —
+// `- name(sig): ret — TSDoc summary`, every `@param`, `@returns`, the first `@example` — helper types on one
+// line, one module example; shared preamble types only when referenced; ungranted modules are not mentioned.
 export function generateSdkIndex(registry, options?: { modules?: string[]; deniedModules?: string[]; helperTypes?: boolean }): string;
 export function describeSurface(registry, options?: { modules?: string[] }): SdkSurface;
 export const SDK_PREAMBLE_TYPINGS: string;  // shared helper types (AssetRef, MediaHandle, ...)
