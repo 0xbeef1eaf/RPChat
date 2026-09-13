@@ -53,7 +53,8 @@ export type HostEventName =
   | 'time'               // data: { hour, minute, weekday, iso }  matches filter { hour?, minute?, weekday? } evaluated each minute
   | 'widget-message'     // data: { widgetId, message }
   | 'avatar-clicked'     // data: {}
-  | 'routine-changed';   // data: { from, to, label? }
+  | 'routine-changed'    // data: { from, to, label? }
+  | 'browser-navigated'; // data: { tabId, url, title }   a browser tab finished loading a page (needs the browser extension)
 
 /** Subscribable event names: host events plus character-raised `custom:<name>` events. */
 export type EventName = HostEventName | `custom:${string}`;

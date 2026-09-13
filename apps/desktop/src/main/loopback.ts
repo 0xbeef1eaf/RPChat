@@ -1,12 +1,15 @@
 /**
- * Loopback media server (docs/spec/overlay.md §1.0): lets native overlay
- * helpers load the app's media page and pack assets over http on 127.0.0.1.
- * Every path carries a random token; assets reuse the rp-asset:// guard and
- * Range logic from `asset-protocol.ts`.
+ * Loopback server on 127.0.0.1 (docs/spec/overlay.md §1.0, docs/browser-extension.md): lets native
+ * overlay helpers load the app's media page and pack assets over http (every such path carries a
+ * random token; assets reuse the rp-asset:// guard and Range logic from `asset-protocol.ts`), and
+ * hosts the browser-extension bridge: plain routes registered with `route()` (the extension's
+ * update manifest and CRX) and WebSocket upgrades handed to `onUpgrade` handlers (`/bridge`).
+ * It binds the stable `port` from settings when it can, else an ephemeral one with a warning.
  */
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
+import type { Duplex } from 'node:stream';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
 import type { MediaCommand } from '@rp/shared';
@@ -31,7 +34,14 @@ export interface LoopbackServerOptions {
   assets: AssetProtocolDeps;
   logger?: Pick<Console, 'info' | 'warn' | 'debug'>;
   token?: string;
+  /** Preferred port (`settings.browser.bridgePort`); 0 or a taken port falls back to an ephemeral one. */
+  port?: number;
 }
+
+/** A plain-HTTP route (any origin, no token): registered for a path prefix with `route()`. */
+export type RouteHandler = (req: http.IncomingMessage, res: http.ServerResponse, url: URL) => Promise<void> | void;
+/** An upgrade handler returns true when it took the socket over. */
+export type UpgradeHandler = (req: http.IncomingMessage, socket: Duplex, head: Buffer, url: URL) => boolean;
 
 export function encodeCommandHash(command: MediaCommand): string {
   return Buffer.from(JSON.stringify(command), 'utf8').toString('base64url');
@@ -76,13 +86,58 @@ export class LoopbackServer implements LoopbackServerLike {
   readonly token: string;
   private server: http.Server | undefined;
   private port = 0;
+  private wanted: number;
+  private readonly routes: Array<{ prefix: string; handler: RouteHandler }> = [];
+  private readonly upgrades: UpgradeHandler[] = [];
 
   constructor(private readonly opts: LoopbackServerOptions) {
     this.token = opts.token ?? randomBytes(32).toString('hex');
+    this.wanted = normalisePort(opts.port);
   }
 
   get baseUrl(): string {
     return `http://127.0.0.1:${this.port}/t/${this.token}`;
+  }
+
+  /** The port actually bound (0 before `start()`). */
+  get listeningPort(): number {
+    return this.port;
+  }
+
+  /** The port asked for; `portFallback` tells whether it could not be bound. */
+  get requestedPort(): number {
+    return this.wanted;
+  }
+
+  get portFallback(): boolean {
+    return this.wanted !== 0 && this.port !== this.wanted;
+  }
+
+  /** Serve `prefix` (and everything under it) without a token, e.g. `/extension/`. Returns the unregister function. */
+  route(prefix: string, handler: RouteHandler): () => void {
+    const entry = { prefix, handler };
+    this.routes.push(entry);
+    return () => {
+      const i = this.routes.indexOf(entry);
+      if (i >= 0) this.routes.splice(i, 1);
+    };
+  }
+
+  /** Take over WebSocket upgrades (first handler returning true wins; others get a 404). */
+  onUpgrade(handler: UpgradeHandler): () => void {
+    this.upgrades.push(handler);
+    return () => {
+      const i = this.upgrades.indexOf(handler);
+      if (i >= 0) this.upgrades.splice(i, 1);
+    };
+  }
+
+  /** Bind another port (settings change): closes the listener, keeps routes and upgrade handlers. */
+  async rebind(port: number): Promise<void> {
+    this.wanted = normalisePort(port);
+    if (!this.server) return;
+    await this.close();
+    await this.start();
   }
 
   rewriteAssetUrl(url: string): string {
@@ -103,29 +158,58 @@ export class LoopbackServer implements LoopbackServerLike {
       });
     });
     server.keepAliveTimeout = 5000;
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(0, '127.0.0.1', () => {
-        server.off('error', reject);
-        resolve();
-      });
+    server.on('upgrade', (req, socket, head) => {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      for (const handler of this.upgrades) {
+        try {
+          if (handler(req, socket, head, url)) return;
+        } catch (err) {
+          this.opts.logger?.warn?.('[loopback] upgrade handler failed', err);
+        }
+      }
+      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+      socket.destroy();
     });
+    const listen = (port: number): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, '127.0.0.1', () => {
+          server.off('error', reject);
+          resolve();
+        });
+      });
+    try {
+      await listen(this.wanted);
+    } catch (err) {
+      if (this.wanted === 0) throw err;
+      this.opts.logger?.warn?.(`[loopback] port ${this.wanted} is taken (${(err as Error).message}); falling back to an ephemeral port — the browser extension will not find the app until Settings → Browser is updated`);
+      await listen(0);
+    }
     const address = server.address();
     this.port = typeof address === 'object' && address ? address.port : 0;
     this.server = server;
-    this.opts.logger?.info?.(`[loopback] media server listening on 127.0.0.1:${this.port}`);
+    this.opts.logger?.info?.(`[loopback] server listening on 127.0.0.1:${this.port}${this.portFallback ? ` (wanted ${this.wanted})` : ''}`);
   }
 
   async close(): Promise<void> {
     const server = this.server;
     if (!server) return;
     this.server = undefined;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      // Keep-alive and upgraded sockets would otherwise hold the listener open.
+      server.closeAllConnections();
+    });
   }
 
-  /** Route: `/t/<token>/asset/<packId>/<path>` | `/t/<token>/<page or static>` | (dev only) anything → vite. */
+  /** Route: registered prefixes | `/t/<token>/asset/<packId>/<path>` | `/t/<token>/<page or static>` | (dev only) anything → vite. */
   private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    const route = this.routes.find((r) => url.pathname === r.prefix || url.pathname.startsWith(r.prefix.endsWith('/') ? r.prefix : `${r.prefix}/`));
+    if (route) {
+      await route.handler(req, res, url);
+      return;
+    }
     const tokenPrefix = `/t/${this.token}/`;
     if (url.pathname.startsWith(tokenPrefix)) {
       const rest = url.pathname.slice(tokenPrefix.length);
@@ -203,6 +287,10 @@ export class LoopbackServer implements LoopbackServerLike {
     const upstream = await fetch(target, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', headers });
     await pipeFetchResponse(upstream, res);
   }
+}
+
+function normalisePort(port: number | undefined): number {
+  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 0;
 }
 
 function firstHeader(value: string | string[] | undefined): string | null {

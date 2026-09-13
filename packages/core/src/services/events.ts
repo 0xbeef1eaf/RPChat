@@ -7,7 +7,7 @@ import type { Clock, EngineEmitter, Logger } from '../types.js';
 
 export const HOST_EVENT_NAMES: readonly HostEventName[] = [
   'user-idle', 'user-back', 'window-changed', 'app-launched', 'file-added', 'battery-low', 'screen-locked',
-  'screen-unlocked', 'song-changed', 'time', 'widget-message', 'avatar-clicked', 'routine-changed',
+  'screen-unlocked', 'song-changed', 'time', 'widget-message', 'avatar-clicked', 'routine-changed', 'browser-navigated',
 ];
 export const SUBSCRIPTIONS_PER_SESSION = 30;
 export const SUBSCRIPTION_CODE_MAX_BYTES = 16 * 1024;
@@ -91,7 +91,11 @@ export function matchesFilter(event: string, data: Json, filter: Record<string, 
         if (!includesCi(field(data, 'app'), wanted)) return false;
         break;
       case 'window-changed:title':
+      case 'browser-navigated:title':
         if (!includesCi(field(data, 'title'), wanted)) return false;
+        break;
+      case 'browser-navigated:url':
+        if (!includesCi(field(data, 'url'), wanted)) return false;
         break;
       case 'file-added:dir':
         if (!includesCi(field(data, 'dir'), wanted) && !includesCi(field(data, 'path'), wanted)) return false;

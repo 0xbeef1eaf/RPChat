@@ -66,6 +66,14 @@ executable or AppImage the autostart and menu entries should launch), `--autosta
 package ships its own), `--policy-template` (write the example policy if none exists), `--dry-run`
 (print the steps without changing anything), `--uninstall`.
 
+Browser extension flags (see [docs/browser-extension.md](browser-extension.md)):
+`--browser-extension <id>` with `--browser-update-url <url>` (and optionally `--browser-port <n>`,
+defaulting to the port in the URL) adds step 7, which writes the Chromium managed policy
+`rp-code.json` that force-installs the rp-code browser extension from the app's loopback update
+URL; `--browser-only` does just that step (what Settings → Browser → *Install browser policy…*
+runs, since it needs no daemon); `--remove-browser-policy` deletes those files and exits.
+The `.deb` never passes these: the extension id is derived from a per-user key.
+
 ### What the installer changes
 
 Every step prints `[ok]` when it did something and `[skip]` when it was already done, so
@@ -79,7 +87,8 @@ re-running is safe.
 | 4 | Policy file: **nothing is written by default** — the file is write-once and you can create it from the app afterwards (below). With `--policy-template`, writes `/etc/rp-code/policy.json` from the example **only if it does not exist**; an existing file is never modified (its ownership is corrected to `root:root 0644` if needed). |
 | 5 | Application menu entry `/usr/local/share/applications/rp-code.desktop` (`Exec=<app> %U`) and icon `/usr/local/share/icons/hicolor/512x512/apps/rp-code.png`, refreshed with `update-desktop-database`/`gtk-update-icon-cache` when present. Skipped with `--menu-entry no` (the `.deb` does this, it ships its own entry). |
 | 6 | Autostart for your user: `~/.config/autostart/rp-code.desktop` (`Exec=<app> --hidden`, XDG) or `~/.config/systemd/user/rp-code.service` (enabled with `systemctl --user` when a session bus is reachable, otherwise it prints the command). Switching methods removes the other entry. It also prints the Hyprland `exec-once = <app> --hidden` line for people who prefer that. |
-| 7 | Runs `rp-coded --check-devices` and prints what the daemon can see. |
+| 7 | Browser policy, only with `--browser-extension`: `rp-code.json` in `/etc/chromium/policies/managed` and `/etc/opt/chrome/policies/managed` (always) and in the Brave, Edge, Vivaldi and Opera policy directories when that browser looks installed (binary on `PATH` or its `/etc` config directory present). `--dry-run` lists every file it would write. |
+| 8 | Runs `rp-coded --check-devices` and prints what the daemon can see. |
 
 The daemon creates `/run/rp-code/` (`0750 root:rp-code`) and the socket
 `/run/rp-code/daemon.sock` (`0660 root:rp-code`) when it starts. Logs: `journalctl -u rp-coded`.
@@ -180,8 +189,8 @@ sudo native/rp-coded/install.sh --uninstall --user "$USER"
 ```
 
 `install.sh --uninstall` stops and disables the service, removes the unit, the binary
-directory, the udev rule, the modules-load entry, your autostart entry, your group membership
-and the `rp-code` group. It **keeps `/etc/rp-code/policy.json`** and prints how to remove it
+directory, the udev rule, the modules-load entry, your autostart entry, your group membership,
+the `rp-code` group and any browser policy files (`rp-code.json`) the installer wrote. It **keeps `/etc/rp-code/policy.json`** and prints how to remove it
 (`sudo rm -r /etc/rp-code`). The packaged app ships the script at
 `<resources>/system/install.sh` (Settings → System shows the exact path with a copy button).
 

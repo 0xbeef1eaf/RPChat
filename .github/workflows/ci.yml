@@ -59,6 +59,10 @@ jobs:
           native/rp-coded/target/release/rp-coded --check-devices || true
       - name: Headful smoke (Xvfb, mock LLM, pixel checks)
         run: scripts/headful-smoke.sh "$RUNNER_TEMP/headful"
+      - name: Browser extension smoke (Xvfb, Chromium with the unpacked extension)
+        run: |
+          pnpm --filter @rp/desktop exec playwright-core install chromium
+          scripts/browser-smoke.sh "$RUNNER_TEMP/browser"
       - name: Layer-shell smoke (nested Sway, native helper)
         run: scripts/wlr-smoke.sh "$RUNNER_TEMP/wlr"
       - name: Package (unpacked) and smoke the packaged app

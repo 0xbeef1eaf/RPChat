@@ -10,6 +10,7 @@
   },
   "scripts": {
     "build": "pnpm -r --filter \"@rp/*\" --filter \"!@rp/desktop\" run build && pnpm --filter @rp/desktop run build",
+    "build:extension": "pnpm --filter @rp/browser-extension run build",
     "build:packages": "pnpm -r --filter \"@rp/*\" --filter \"!@rp/desktop\" run build",
     "build:native": "cargo build --release --manifest-path native/overlay-wlr/Cargo.toml",
     "build:daemon": "cargo build --release --manifest-path native/rp-coded/Cargo.toml",
@@ -17,6 +18,7 @@
     "test": "pnpm -r run test",
     "dev": "pnpm --filter @rp/desktop run dev",
     "test:headful": "pnpm --filter @rp/desktop run build && scripts/headful-smoke.sh",
+    "test:browser": "pnpm --filter @rp/browser-extension run build && pnpm --filter @rp/desktop run build && scripts/browser-smoke.sh",
     "test:packaged": "pnpm --filter @rp/desktop run build && pnpm --filter @rp/desktop exec electron-builder --linux dir --publish never && RP_APP_BIN=apps/desktop/release/linux-unpacked/rp-code scripts/headful-smoke.sh /tmp/rp-packaged-shots",
     "test:wlr": "pnpm --filter @rp/desktop run build && pnpm run build:native && scripts/wlr-smoke.sh",
     "clean": "pnpm -r exec rm -rf dist out node_modules/.cache"

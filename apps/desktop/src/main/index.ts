@@ -12,7 +12,7 @@ import { handleAssetRequest } from './asset-protocol.js';
 import { isHyprland } from './display/layers.js';
 import { createApp } from './engine.js';
 import type { AppServices } from './engine.js';
-import { isSmokeRun, runSmokeTurn, smokeEnableModelTraffic, smokeLoadPlugin } from './dev-mode.js';
+import { isBrowserSmokeRun, isSmokeRun, runBrowserSmoke, runSmokeTurn, smokeEnableModelTraffic, smokeLoadPlugin } from './dev-mode.js';
 import { registerIpc } from './ipc.js';
 import { createLogger } from './logger.js';
 import { WindowManager } from './windows.js';
@@ -153,7 +153,9 @@ async function main(): Promise<void> {
   watchUpdateReady(active, windows);
   watchUnpromptedMessages(active, windows, () => visibleSession);
   logger.info(`[main] rp-code ${version} ready; ${engine.packs.characters().length} character(s) available`);
-  if (isSmokeRun(env)) {
+  if (isBrowserSmokeRun(env)) {
+    setTimeout(() => void runBrowserSmoke({ engine: active.engine, loopback: active.loopback, browser: active.browser, senses: active.senses, userData: app.getPath('userData') }, logger, env), 500);
+  } else if (isSmokeRun(env)) {
     await smokeLoadPlugin(active.plugins, APP_ROOT, logger, env);
     setTimeout(
       () =>

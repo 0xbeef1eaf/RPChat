@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { CHAT_ZOOM_MAX, CHAT_ZOOM_MIN, CHAT_ZOOM_STEP, DEFAULT_RUN_LIMITS, type AppSettings, type ProviderConfig, type RunLimits } from '@rp/shared';
 import { api } from '../api';
+import { BrowserSection } from '../components/settings/BrowserSection';
 import { CommandsSection } from '../components/settings/CommandsSection';
 import { DisplayInfo } from '../components/settings/DisplayInfo';
 import { IntegrationsSection } from '../components/settings/IntegrationsSection';
@@ -80,7 +81,7 @@ function NumberField({ id, label, value, hint, min, step, path, onCommit }: Numb
   );
 }
 
-type SettingsTab = 'general' | 'providers' | 'permissions' | 'senses' | 'integrations' | 'commands' | 'plugins' | 'system' | 'updates' | 'display';
+type SettingsTab = 'general' | 'providers' | 'permissions' | 'senses' | 'integrations' | 'commands' | 'plugins' | 'browser' | 'system' | 'updates' | 'display';
 
 const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'providers', label: 'Providers' },
@@ -90,6 +91,7 @@ const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'integrations', label: 'Integrations' },
   { id: 'commands', label: 'Commands' },
   { id: 'plugins', label: 'Plugins' },
+  { id: 'browser', label: 'Browser' },
   { id: 'system', label: 'System' },
   { id: 'updates', label: 'Updates' },
   { id: 'display', label: 'Display' },
@@ -442,6 +444,13 @@ export function SettingsView() {
           </div>
         </div>
       </section>
+
+      {tab === 'browser' ? (
+        <section className="section">
+          <h2>Browser extension</h2>
+          <BrowserSection />
+        </section>
+      ) : null}
 
       {tab === 'system' ? (
         <section className="section">

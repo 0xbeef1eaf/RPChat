@@ -51,6 +51,13 @@ Characters, their behaviours and their media are distributed as shareable
 - **External commands**: wallpaper, browser, desktop and voice actions run through
   command templates you edit in Settings. Input locking and injection are
   daemon-only (see *System integration* below).
+- **Your browser, driven by characters**: a bundled Manifest V3 extension for
+  Chromium-based browsers (Chrome, Chromium, Brave, Edge, Vivaldi, Opera) lets
+  `sdk.browser` list tabs, open and read pages, click, type, scroll and take
+  screenshots, and raises a `browser-navigated` event. It is installed through a
+  Chromium enterprise policy the app writes for you (**Settings → Browser**, Linux)
+  or loaded unpacked, talks to the app on `127.0.0.1` only, and every extension must
+  be allowed once. See [docs/browser-extension.md](docs/browser-extension.md).
 - **Questions come to you**: when a character asks something (`sdk.ui.confirm`,
   `choose`, `ask`) or a call needs your permission, it opens its own small window
   in front of whatever you are doing, focused and ready to answer — not a modal
@@ -142,6 +149,13 @@ is playing (colour spread and frame advance), checks audio playback was accepted
 checks a character's question opened a prompt window and that answering it there
 reached the action, and fails if the main process raised an uncaught exception. Needs `Xvfb`, `xwd`, `xdotool` and ImageMagick.
 
+`pnpm test:browser` runs the browser-extension smoke: the built app on Xvfb in browser
+smoke mode, Chromium launched through `playwright-core` with the unpacked extension, and
+a mock-LLM turn that opens, reads, queries, types into, screenshots and clicks through a
+page served by the app, checking that the `browser-navigated` event comes back. Needs
+`Xvfb` and a Chromium for playwright-core (`pnpm --filter @rp/desktop exec playwright-core
+install chromium`, or `PLAYWRIGHT_BROWSERS_PATH` / `RP_CHROMIUM_BIN`).
+
 `pnpm test:wlr` does the same for the Hyprland path: it runs the native
 layer-shell helper against a nested headless Sway compositor (real
 wlr-layer-shell, software rendered), with the app on Xvfb driving it through
@@ -190,6 +204,10 @@ outright. The app shows the daemon and policy state under **Settings → System*
 where you can also create the policy once without a root password (afterwards only
 root can change it).
 See [docs/system-integration.md](docs/system-integration.md).
+
+The same installer writes the browser extension policy for **Settings → Browser**
+(`install.sh --browser-only --browser-extension <id> --browser-update-url <url>`); see
+[docs/browser-extension.md](docs/browser-extension.md).
 
 To chat for real, open **Settings → Providers**, add a provider (Anthropic,
 or an OpenAI-compatible base URL such as `http://localhost:11434/v1` for

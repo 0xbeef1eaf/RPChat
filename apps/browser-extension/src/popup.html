@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>rp-code browser bridge</title>
+    <style>
+      :root { color-scheme: light dark; font: 13px/1.4 system-ui, sans-serif; }
+      body { margin: 0; padding: 12px 14px; width: 300px; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      .status { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: #b33; }
+      .dot.on { background: #3a3; }
+      dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0 0 10px; }
+      dt { opacity: 0.7; }
+      dd { margin: 0; font-family: ui-monospace, monospace; word-break: break-all; }
+      label { display: block; margin: 8px 0 4px; }
+      input { width: 100px; }
+      button { margin-top: 8px; margin-right: 6px; }
+      .hint { opacity: 0.7; font-size: 12px; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>rp-code browser bridge</h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="state">checking…</span></div>
+    <dl>
+      <dt>App</dt><dd id="url"></dd>
+      <dt>Extension id</dt><dd id="id"></dd>
+      <dt>Version</dt><dd id="version"></dd>
+      <dt>Requests</dt><dd id="requests"></dd>
+      <dt>Last error</dt><dd id="error">—</dd>
+    </dl>
+    <label for="port">App port</label>
+    <input id="port" type="number" min="1" max="65535" />
+    <span id="managed" class="hint" hidden>set by policy</span>
+    <div>
+      <button id="save" type="button">Save port</button>
+      <button id="reconnect" type="button">Reconnect</button>
+    </div>
+    <p class="hint">The app shows its bridge port under Settings → Browser. The extension only ever talks to 127.0.0.1.</p>
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

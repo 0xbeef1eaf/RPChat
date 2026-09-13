@@ -260,6 +260,30 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       createPolicy: (_e, text) => services.system.createPolicy(requireString(text, 'text')),
       policyTemplate: async () => services.system.policyTemplate(await engine.settings.get()),
     },
+    browser: {
+      status: () => services.browser.status(),
+      setPort: async (_e, port) => {
+        await services.setBridgePort(Number(port));
+        return services.browser.status();
+      },
+      trust: async (_e, id) => {
+        await services.browser.trust(requireString(id, 'id'));
+        return services.browser.status();
+      },
+      untrust: async (_e, id) => {
+        const wanted = requireString(id, 'id');
+        const current = (await engine.settings.get()).browser;
+        await engine.settings.update({ browser: { ...current, trustedExtensionIds: current.trustedExtensionIds.filter((x) => x !== wanted) } });
+        services.browser.untrust(wanted);
+        return services.browser.status();
+      },
+      installPolicy: async () => {
+        const [id, status] = await Promise.all([services.extension.id(), services.browser.status()]);
+        return services.system.installBrowserPolicy({ extensionId: id, updateUrl: status.updateUrl, port: status.requestedPort });
+      },
+      removePolicy: () => services.system.removeBrowserPolicy(),
+      extensionDir: async () => services.extension.dir() ?? null,
+    },
     updates: {
       status: () => services.updates.status(),
       check: () => services.updates.check(),
@@ -330,11 +354,15 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
   const offUpdates = services.updates.subscribe((status) => {
     windows.sendToMain(IPC_EVENT_CHANNELS.updateStatus, status);
   });
+  const offBrowser = services.browser.onStatus((status) => {
+    windows.sendToMain(IPC_EVENT_CHANNELS.browserStatus, status);
+  });
 
   logger.info(`[ipc] ${channels.length} channels registered (app ${opts.version})`);
   return () => {
     offChat();
     offUpdates();
+    offBrowser();
     for (const channel of channels) ipcMain.removeHandler(channel);
   };
 }

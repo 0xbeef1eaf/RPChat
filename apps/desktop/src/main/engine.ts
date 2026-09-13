@@ -10,7 +10,7 @@ import { createStandardRegistry } from '@rp/sdk';
 import { QuickJsRunner } from '@rp/sandbox';
 import { createProvider } from '@rp/llm';
 import type { AppSettings, LoadedPack, PermissionDecision, PermissionRequest, Storage, UiPromptAnswer, UiPromptRequest } from '@rp/shared';
-import { IPC_EVENT_CHANNELS, parseCharacterRef } from '@rp/shared';
+import { IPC_EVENT_CHANNELS, RpError, parseCharacterRef } from '@rp/shared';
 import { defaultSettings, mergeSettings } from '@rp/core';
 import { hasExecutable } from './commands.js';
 import { AvatarHandler } from './capabilities/avatar.js';
@@ -51,8 +51,10 @@ import { WallpaperHandler } from './capabilities/wallpaper.js';
 import type { DisplayBackend } from './display/backend.js';
 import { selectBackend } from './display/backend.js';
 import { findHelperBinary } from './display/helper-process.js';
-import { ensureExamplePack, ensureMockProvider, isMockLlm, mockProviderFactory } from './dev-mode.js';
+import { ensureExamplePack, ensureMockProvider, isMockLlm, isSmokeRun, mockProviderFactory } from './dev-mode.js';
 import { LoopbackServer } from './loopback.js';
+import { BrowserBridge } from './browser/bridge.js';
+import { EXTENSION_KEY_FILENAME, EXTENSION_ROUTE_PREFIX, ExtensionService } from './browser/extension.js';
 import { PendingPrompts } from './prompts.js';
 import type { WindowManager } from './windows.js';
 
@@ -72,7 +74,13 @@ export interface AppServices {
   backend(): DisplayBackend;
   /** Re-select the display backend after the setting changed. */
   selectBackend(setting: AppSettings['displayBackend']): Promise<void>;
-  loopback: LoopbackServer | undefined;
+  /** Always started: it carries the browser-extension bridge as well as the overlay media pages. */
+  loopback: LoopbackServer;
+  /** Browser extension bridge and the bundled extension it serves (docs/browser-extension.md). */
+  browser: BrowserBridge;
+  extension: ExtensionService;
+  /** Save `settings.browser.bridgePort` and rebind the loopback server. */
+  setBridgePort(port: number): Promise<void>;
   /** Absolute path of the bundled sample image (copied out of the asar when needed). */
   sampleImage(): Promise<string>;
   /** Root directory served for a pack id by rp-asset:// (installed packs + app-generated roots). */
@@ -114,21 +122,20 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     return extraRoots[packId] ?? engine.packs.tryGetLoaded(packId)?.root;
   };
 
-  // ---- display backend ----------------------------------------------------
-  let loopback: LoopbackServer | undefined;
-  const loopbackFor = async (): Promise<LoopbackServer> => {
-    if (loopback) return loopback;
-    const server = new LoopbackServer({
-      rendererDir: windows.rendererDir,
-      ...(env.ELECTRON_RENDERER_URL ? { devServerUrl: env.ELECTRON_RENDERER_URL } : {}),
-      assets: { packRootFor, logger },
-      logger,
-    });
-    await server.start();
-    loopback = server;
-    return server;
-  };
+  // ---- loopback server (overlay media pages + browser extension bridge) ----------------
+  const bridgePortEnv = Number(env.RP_BROWSER_BRIDGE_PORT);
+  const loopback = new LoopbackServer({
+    rendererDir: windows.rendererDir,
+    ...(env.ELECTRON_RENDERER_URL ? { devServerUrl: env.ELECTRON_RENDERER_URL } : {}),
+    assets: { packRootFor, logger },
+    logger,
+    port: Number.isInteger(bridgePortEnv) && bridgePortEnv > 0 ? bridgePortEnv : stored.browser.bridgePort,
+  });
+  await loopback.start();
+  const loopbackFor = async (): Promise<LoopbackServer> => loopback;
   const resourcesDirs = [...(app.isPackaged ? [process.resourcesPath] : []), path.join(opts.appRoot, 'resources'), path.join(app.getAppPath(), 'resources')];
+
+  // ---- display backend ----------------------------------------------------
   const backendContext = {
     env,
     logger,
@@ -191,6 +198,26 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     logger,
   });
   const wallpaper = new WallpaperHandler({ commands, packs, backend: () => backend, restoreFile: async () => (await settingsOf()).wallpaperRestoreFile });
+  // ---- browser extension bridge -----------------------------------------------------------
+  const extension = new ExtensionService({ resourcesDirs, keyFile: path.join(opts.userData, EXTENSION_KEY_FILENAME), port: () => loopback.listeningPort, logger });
+  loopback.route(EXTENSION_ROUTE_PREFIX, (req, res, url) => extension.handle(req, res, url));
+  const browser = new BrowserBridge({
+    trusted: async () => (await settingsOf()).browser.trustedExtensionIds,
+    remember: async (id) => {
+      const current = (await settingsOf()).browser;
+      if (!current.trustedExtensionIds.includes(id)) await engine.settings.update({ browser: { ...current, trustedExtensionIds: [...current.trustedExtensionIds, id] } });
+    },
+    confirm: (id, browserName) => {
+      const promptId = `browser-trust:${id}:${Date.now()}`;
+      const request: UiPromptRequest = { promptId, sessionId: '', characterName: 'rp-code', kind: 'confirm', question: `Browser extension ${id} (${browserName}) wants to connect to rp-code — Allow?` };
+      return uiPrompts.ask(promptId, () => windows.openPromptWindow({ kind: 'ui', prompt: request }) || windows.sendToMain(IPC_EVENT_CHANNELS.uiPrompt, request)).then((answer) => answer === true);
+    },
+    ports: () => ({ port: loopback.listeningPort, requested: loopback.requestedPort }),
+    extension: { id: () => extension.id(), version: () => extension.version(), dir: () => extension.dir(), updateUrl: () => extension.updateUrl() },
+    logger,
+    ...(isSmokeRun(env) ? { autoTrust: true } : {}),
+  });
+  loopback.onUpgrade(browser.upgradeHandler());
   // ---- system integration (Linux daemon + root-owned policy) --------------------
   const daemon = new DaemonClient({ ...(env.RP_DAEMON_SOCKET ? { socketPath: env.RP_DAEMON_SOCKET } : {}), logger });
   const policy = new PolicyWatcher(env.RP_POLICY_FILE, logger);
@@ -199,6 +226,10 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   // ---- phase 2: senses + handlers ------------------------------------------
   const senses = createSenses({ settings: settingsOf, commands, env, ...(hypr ? { hypr } : {}), logger });
   const emit = (event: Parameters<typeof senses.provider.push>[0]): void => senses.provider.push(event);
+  browser.onEvent((ev) => {
+    if (ev.event !== 'tab-updated' || ev.data.status !== 'complete' || typeof ev.data.url !== 'string') return;
+    emit({ name: 'browser-navigated', data: { tabId: ev.data.tabId, url: ev.data.url, title: ev.data.title ?? '' }, at: new Date().toISOString() });
+  });
   const avatar = new AvatarHandler({ backend: () => backend, packs, emit, logger });
   const widgets = new WidgetsHandler({ backend: () => backend, emit, defaultLayer: async () => ((await settingsOf()).mediaAlwaysOnTop ? 'top' : 'bottom') });
   const screenHandler = new ScreenHandler({
@@ -269,7 +300,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       new SystemHandler({ home: os.homedir() }),
       new DisplayHandler(() => backend),
       wallpaper,
-      new BrowserHandler({ commands }),
+      new BrowserHandler({ commands, bridge: browser, allowlist: async () => (await settingsOf()).web.allowlist }),
       input,
       new PresenceHandler(senses.provider),
       screenHandler,
@@ -384,6 +415,17 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     permissionPrompts,
     uiPrompts,
     loopback,
+    browser,
+    extension,
+    async setBridgePort(port) {
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new RpError('INVALID_ARGUMENT', 'port must be 1..65535');
+      const current = (await settingsOf()).browser;
+      if (current.bridgePort !== port) await engine.settings.update({ browser: { ...current, bridgePort: port } });
+      if (loopback.listeningPort === port) return;
+      browser.close();
+      await loopback.rebind(port);
+      logger.info(`[browser] bridge port set to ${port} (listening on ${loopback.listeningPort})`);
+    },
     backend: () => backend,
     async selectBackend(setting) {
       if (setting === backendSetting) return;
@@ -405,9 +447,10 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       await senses.dispose().catch((err: unknown) => logger.warn('[senses] dispose failed', err));
       await plugins.dispose().catch((err: unknown) => logger.warn('[plugins] dispose failed', err));
       daemon.close();
+      browser.close();
       await engine.stop().catch((err: unknown) => logger.warn('[engine] stop failed', err));
       await backend.dispose().catch((err: unknown) => logger.warn('[display] dispose failed', err));
-      await loopback?.close().catch(() => undefined);
+      await loopback.close().catch(() => undefined);
     },
   };
 }

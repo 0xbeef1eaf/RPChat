@@ -104,6 +104,13 @@ ui (pack)
 - `confirm(question: string): Promise<boolean>` — a window of its own, in front of the user; the user answers.
 - `choose(question: string, options: string[]): Promise<string | null>`
 
+browser (pack, v2.0.0; docs/browser-extension.md) — `open`, `openTab`, `close`, `navigate`, `click`, `type`, `screenshot` are `dangerous: true`
+- `open(url: string, options?: { newWindow?: boolean }): Promise<BrowserTab | null>` — the extension when connected (returns the tab), else the browser command template (returns null).
+- `status(): Promise<{ connected: boolean; browser?: string }>`
+- `tabs(): Promise<BrowserTab[]>`, `openTab(url, { active?, newWindow? }): Promise<BrowserTab>`, `activate(tabId)`, `close(tabId)`, `navigate(tabId, url)`, `back/forward/reload(tabId)` — all `BrowserTab` (`{ id, windowId, url, title, active, index }`).
+- `read(tabId?, { maxChars? }): Promise<{ url; title; text }>` (default cap 20 000 chars; tabId defaults to the active tab), `query(tabId, selector, { limit? }): Promise<BrowserElement[]>` (`{ index, tag, text, href?, value? }`), `click(tabId, selector, { index? })`, `type(tabId, selector, text, { submit? })`, `scroll(tabId, { y? | selector? })`, `screenshot(tabId?): Promise<{ dataUrl; url; title }>` (PNG data URL), `find(tabId, text): Promise<{ count; first? }>`.
+- Only http(s) URLs; `settings.web.allowlist` applies to every URL opened or navigated to. Every method but `open` throws `CAPABILITY_FAILED` while no extension is connected.
+
 system (pack; was `prompt` before per-call prompts were dropped) — every method `dangerous: true`
 - `openExternal(url: string): Promise<void>` (http/https only)
 - `exec(command: string, args?: string[], opts?: { timeoutMs?: number; cwd?: string }): Promise<{ code: number; stdout: string; stderr: string }>`

@@ -16,3 +16,4 @@ export * from './plugin.js';
 export * from './system.js';
 export * from './updates.js';
 export * from './ipc.js';
+export * from './browser.js';

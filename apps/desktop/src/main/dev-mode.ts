@@ -9,7 +9,8 @@ import * as path from 'node:path';
 import { MockProvider } from '@rp/llm';
 import type { MockTurn } from '@rp/llm';
 import type { Engine, Logger, ProviderFactory } from '@rp/core';
-import type { LlmChatRequest, ProviderConfig } from '@rp/shared';
+import type { BrowserBridgeEvent, HostEvent, LlmChatRequest, ProviderConfig } from '@rp/shared';
+import type { LoopbackServer } from './loopback.js';
 
 export const MOCK_PROVIDER_ID = 'mock-dev';
 
@@ -46,6 +47,34 @@ export const PROMPT_SMOKE_MESSAGE = 'ask me something';
 const ASK_CODE = `const answered = await sdk.ui.confirm("Shall I keep the picture up a little longer?");
 return { answered };`;
 
+/**
+ * The browser smoke's turn: "browse <url>" makes the mock model drive the browser extension
+ * end to end (open a tab, read it, find/query, type, click a link, screenshot) and subscribe to
+ * `browser-navigated`, whose handler writes what it saw into character state for the smoke to read.
+ */
+export const BROWSER_SMOKE_MESSAGE = 'browse';
+export const BROWSER_SMOKE_STATE_KEY = 'smoke.navigated';
+
+export function browseCodeFor(url: string): string {
+  return `const status = await sdk.browser.status();
+if (!status.connected) return { status };
+if (!(await sdk.events.list()).some((s) => s.label === "smoke-nav")) {
+  await sdk.events.on("browser-navigated", async (input) => {
+    await sdk.state.set(${JSON.stringify(BROWSER_SMOKE_STATE_KEY)}, input.data);
+  }, { filter: { url: "smoke" }, label: "smoke-nav" });
+}
+const tab = await sdk.browser.openTab(${JSON.stringify(url)});
+const page = await sdk.browser.read(tab.id, { maxChars: 2000 });
+const links = await sdk.browser.query(tab.id, "a", { limit: 5 });
+const found = await sdk.browser.find(tab.id, "smoke page");
+const typed = await sdk.browser.type(tab.id, "input#q", "hello smoke");
+const scrolled = await sdk.browser.scroll(tab.id, { selector: "a#next" });
+const shot = await sdk.browser.screenshot(tab.id);
+const clicked = await sdk.browser.click(tab.id, "a#next");
+const tabs = await sdk.browser.tabs();
+return { status, tab: tab.id, url: page.url, title: page.title, text: page.text.slice(0, 160), links: links.map((l) => l.href), found: found.count, typed, scrolled: scrolled.height > 0, clicked, screenshot: shot.dataUrl.slice(0, 22), screenshotBytes: shot.dataUrl.length, tabs: tabs.length };`;
+}
+
 /** Last message carries a tool result → this is the second round of the turn. */
 export function lastMessageHasToolResult(request: LlmChatRequest): boolean {
   const last = request.messages[request.messages.length - 1];
@@ -59,15 +88,18 @@ export function mockTurnFor(request: LlmChatRequest): MockTurn {
   }
   const lastUser = [...request.messages].reverse().find((m) => m.role === 'user');
   const text = lastUser?.content.find((p) => p.type === 'text');
-  const echo = text && text.type === 'text' ? text.text.trim().slice(0, 80) : '';
+  const full = text && text.type === 'text' ? text.text.trim() : '';
+  const echo = full.slice(0, 80);
   const asking = echo.toLowerCase().startsWith(PROMPT_SMOKE_MESSAGE);
-  const code = asking ? ASK_CODE : SHOW_IMAGE_CODE;
-  const purpose = asking ? 'ask the user a yes/no question' : 'show a picture from the pack';
+  const browsing = echo.toLowerCase().startsWith(BROWSER_SMOKE_MESSAGE);
+  const browseUrl = browsing ? (/https?:\/\/\S+/.exec(full)?.[0] ?? 'https://example.com/') : '';
+  const code = asking ? ASK_CODE : browsing ? browseCodeFor(browseUrl) : SHOW_IMAGE_CODE;
+  const purpose = asking ? 'ask the user a yes/no question' : browsing ? 'open and read a page in the browser' : 'show a picture from the pack';
   if (!request.tools || request.tools.length === 0) {
     return { text: `Mock reply${echo ? ` to "${echo}"` : ''}.\n\n\`\`\`action\n${code}\n\`\`\`` };
   }
   return {
-    text: asking ? 'Let me ask you something.' : echo ? `You said "${echo}". Let me show you something.` : 'Let me show you something.',
+    text: asking ? 'Let me ask you something.' : browsing ? 'Let me have a look at that page.' : echo ? `You said "${echo}". Let me show you something.` : 'Let me show you something.',
     toolCalls: [{ name: 'run_action', input: { purpose, code } }],
   };
 }
@@ -164,6 +196,148 @@ export async function smokeEnableModelTraffic(engine: Engine): Promise<void> {
 
 export function isSmokeRun(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.RP_SMOKE === '1';
+}
+
+/** `RP_SMOKE_BROWSER=1`: the smoke run drives the browser extension instead of the media tour. */
+export function isBrowserSmokeRun(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isSmokeRun(env) && env.RP_SMOKE_BROWSER === '1';
+}
+
+export const SMOKE_PAGE_PATH = '/smoke/page.html';
+export const SMOKE_PAGE2_PATH = '/smoke/page2.html';
+export const SMOKE_PAGE_TEXT = 'Hello from the rp-code smoke page';
+
+/** Two tiny pages the browser smoke opens (served by the loopback server, any origin). */
+export function smokePage(which: 1 | 2): string {
+  if (which === 2) {
+    return `<!doctype html><html><head><meta charset="utf-8"><title>rp-code smoke page 2</title></head><body><h1>Second smoke page</h1><p>You followed the link.</p></body></html>`;
+  }
+  return `<!doctype html><html><head><meta charset="utf-8"><title>rp-code smoke page</title></head><body style="font:16px sans-serif">
+<h1>${SMOKE_PAGE_TEXT}</h1>
+<p>This page exists so the browser extension can be exercised end to end.</p>
+<form onsubmit="return false"><label>Query <input id="q" name="q" type="text"></label></form>
+<p style="margin-top:1400px"><a id="next" href="${SMOKE_PAGE2_PATH}">Next page</a></p>
+</body></html>`;
+}
+
+export function registerSmokePages(loopback: LoopbackServer): void {
+  loopback.route('/smoke', (_req, res, url) => {
+    const which = url.pathname === SMOKE_PAGE2_PATH ? 2 : url.pathname === SMOKE_PAGE_PATH ? 1 : 0;
+    if (which === 0) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not found');
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(smokePage(which));
+  });
+}
+
+/** A minimal pack whose character has the `browser` capability, written under `dir`. */
+export async function writeBrowserSmokePack(dir: string): Promise<{ packId: string; characterRef: string }> {
+  const packId = 'dev.rp-code.browser-smoke';
+  const characterDir = path.join(dir, 'characters', 'smokey');
+  await fs.promises.mkdir(characterDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(dir, 'pack.json'),
+    JSON.stringify({ formatVersion: 1, id: packId, name: 'Browser smoke', version: '1.0.0', description: 'Exercises the browser extension in smoke runs.', characters: ['characters/smokey'], capabilities: ['browser'] }, null, 2),
+  );
+  await fs.promises.writeFile(path.join(characterDir, 'character.json'), JSON.stringify({ id: 'smokey', name: 'Smokey', persona: 'persona.md', greeting: 'Ready to browse.' }, null, 2));
+  await fs.promises.writeFile(path.join(characterDir, 'persona.md'), 'Smokey is a test character that drives the browser extension.\n');
+  return { packId, characterRef: `${packId}/smokey` };
+}
+
+export interface BrowserSmokeServices {
+  engine: Engine;
+  loopback: LoopbackServer;
+  browser: { readonly connected: boolean; onEvent(listener: (event: BrowserBridgeEvent) => void): () => void; status(): Promise<{ connected: boolean; browser?: string; extensionId?: string; port: number }> };
+  senses: { provider: { subscribe(listener: (event: HostEvent) => void): () => void } };
+  userData: string;
+}
+
+/**
+ * `RP_SMOKE_BROWSER=1`: serve the smoke pages, wait for the extension (the smoke script launches
+ * Chromium with it once the port line below is logged), then run one mock turn that drives the
+ * browser through `sdk.browser` and prove that the `browser-navigated` host event reached both a
+ * host-level subscriber and the character's own `sdk.events` handler.
+ */
+export async function runBrowserSmoke(services: BrowserSmokeServices, logger: Logger, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const { engine, loopback } = services;
+  registerSmokePages(loopback);
+  logger.info(`[smoke] browser bridge listening on port ${loopback.listeningPort}`);
+  const navigated: string[] = [];
+  const bridgeEvents: string[] = [];
+  const offBridge = services.browser.onEvent((ev) => bridgeEvents.push(`${ev.event}:${ev.data.status ?? ''}`));
+  const offHost = services.senses.provider.subscribe((ev) => {
+    if (ev.name === 'browser-navigated') {
+      const data = ev.data as { url?: string } | null;
+      navigated.push(String(data?.url ?? ''));
+    }
+  });
+  const actionResults: unknown[] = [];
+  const errors: string[] = [];
+  const offChat = engine.events.on('chat', (ev) => {
+    if (ev.type === 'action-finished') {
+      actionResults.push(ev.action.result?.ok ? ev.action.result.returnValue : { error: ev.action.result?.error });
+      logger.info(`[smoke] browser action ${ev.action.result?.ok ? 'ok' : 'failed'}: ${JSON.stringify(ev.action.result?.returnValue ?? ev.action.result?.error ?? null).slice(0, 900)} calls=${JSON.stringify((ev.action.result?.calls ?? []).map((c) => `${c.module}.${c.method}:${c.ok ? 'ok' : c.error?.code}`))}`);
+    }
+    if (ev.type === 'error') errors.push(`${ev.error.code}: ${ev.error.message}`);
+  });
+  try {
+    const waitMs = Number(env.RP_SMOKE_BROWSER_WAIT_MS) || 90_000;
+    const started = Date.now();
+    while (!services.browser.connected && Date.now() - started < waitMs) await new Promise((r) => setTimeout(r, 250));
+    const status = await services.browser.status();
+    if (!status.connected) {
+      logger.error(`[smoke] verify browser: FAIL (no extension connected within ${Math.round(waitMs / 1000)} s; port ${status.port})`);
+      return;
+    }
+    logger.info(`[smoke] browser extension connected: ${status.extensionId} (${status.browser})`);
+
+    const packDir = path.join(services.userData, 'smoke-browser-pack');
+    const { packId, characterRef } = await writeBrowserSmokePack(packDir);
+    if (!engine.packs.tryGetLoaded(packId)) {
+      const view = await engine.packs.install(packDir);
+      for (const module of view.requestedCapabilities) await engine.permissions.setGrant(view.packId, module, true);
+    }
+    const session = await engine.sessions.create({ characterRef, title: 'browser smoke' });
+    const url = `http://127.0.0.1:${loopback.listeningPort}${SMOKE_PAGE_PATH}`;
+    await engine.chat.send(session.id, `${BROWSER_SMOKE_MESSAGE} ${url}`);
+    const result = actionResults.find((r) => r && typeof r === 'object' && 'tab' in (r as object)) as Record<string, unknown> | undefined;
+    const problems: string[] = [];
+    if (!result) problems.push(`no browser action result (errors: ${errors.join('; ') || 'none'})`);
+    else {
+      if (typeof result['text'] !== 'string' || !result['text'].includes(SMOKE_PAGE_TEXT)) problems.push(`read text: ${JSON.stringify(result['text'])}`);
+      if (result['title'] !== 'rp-code smoke page') problems.push(`title: ${JSON.stringify(result['title'])}`);
+      if (!Array.isArray(result['links']) || !result['links'].some((l) => typeof l === 'string' && l.endsWith(SMOKE_PAGE2_PATH))) problems.push(`query links: ${JSON.stringify(result['links'])}`);
+      if (result['found'] !== 1) problems.push(`find count: ${JSON.stringify(result['found'])}`);
+      if (!(result['typed'] && typeof result['typed'] === 'object' && (result['typed'] as { typed?: unknown }).typed === true)) problems.push(`type: ${JSON.stringify(result['typed'])}`);
+      if (!(result['clicked'] && typeof result['clicked'] === 'object' && (result['clicked'] as { clicked?: unknown }).clicked === true)) problems.push(`click: ${JSON.stringify(result['clicked'])}`);
+      if (result['screenshot'] !== 'data:image/png;base64,' || Number(result['screenshotBytes']) < 1000) problems.push(`screenshot: ${JSON.stringify(result['screenshot'])} (${String(result['screenshotBytes'])} bytes)`);
+      if (result['scrolled'] !== true) problems.push('scroll');
+    }
+    // The click navigates to page 2: the host event must reach the host subscriber and the character's handler.
+    const deadline = Date.now() + 20_000;
+    const stateScope = `char:${characterRef}`;
+    let handlerSaw: unknown;
+    while (Date.now() < deadline) {
+      handlerSaw = await engine.storage.state.get(stateScope, BROWSER_SMOKE_STATE_KEY);
+      if (navigated.some((u) => u.endsWith(SMOKE_PAGE2_PATH)) && handlerSaw) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!navigated.some((u) => u.endsWith(SMOKE_PAGE2_PATH))) problems.push(`browser-navigated host event for page 2 not seen (saw: ${JSON.stringify(navigated)}; bridge events: ${bridgeEvents.slice(-6).join(', ')})`);
+    const handlerUrl = handlerSaw && typeof handlerSaw === 'object' ? (handlerSaw as { url?: unknown }).url : undefined;
+    if (typeof handlerUrl !== 'string' || !handlerUrl.includes('/smoke/')) problems.push(`sdk.events handler did not record a navigation (state: ${JSON.stringify(handlerSaw)})`);
+    const ok = problems.length === 0;
+    logger[ok ? 'info' : 'error'](`[smoke] verify browser: ${ok ? 'PASS' : 'FAIL'} (${ok ? `extension ${status.extensionId}, read ${String((result?.['text'] as string | undefined)?.length ?? 0)} chars, ${String((result?.['links'] as unknown[] | undefined)?.length ?? 0)} link(s), screenshot ${String(result?.['screenshotBytes'])} bytes, navigated ${navigated.length} event(s), handler saw ${String(handlerUrl)}` : problems.join(' | ')})`);
+  } catch (err) {
+    logger.error('[smoke] verify browser: FAIL', err);
+  } finally {
+    offChat();
+    offBridge();
+    offHost();
+    logger.info('[smoke] browser smoke done');
+  }
 }
 
 /**
@@ -309,6 +483,7 @@ export async function captureWindows(logger: Logger, mediaList: () => unknown[] 
     ['packs', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Packs'))?.click()"],
     ['settings', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Settings'))?.click()"],
     ['settings-updates', "[...document.querySelectorAll('.tabs .tab')].find(b => b.textContent.trim() === 'Updates')?.click()"],
+    ['settings-browser', "[...document.querySelectorAll('.tabs .tab')].find(b => b.textContent.trim() === 'Browser')?.click()"],
     ['settings-system', "[...document.querySelectorAll('.tabs .tab')].find(b => b.textContent.trim() === 'System')?.click()"],
     ['sdk-reference', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('SDK'))?.click()"],
     ['editor-projects', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Pack editor'))?.click()"],

@@ -32,6 +32,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   prompts: ['pending'],
   ui: ['respondPrompt'],
   system: ['status', 'install', 'setAutostart', 'installerPath', 'createPolicy', 'policyTemplate'],
+  browser: ['status', 'setPort', 'trust', 'untrust', 'installPolicy', 'removePolicy', 'extensionDir'],
   updates: ['status', 'check', 'download', 'install', 'setToken'],
   plugins: ['pluginsDir', 'list', 'install', 'remove', 'setEnabled', 'reload', 'openFolder'],
   editor: [
@@ -51,6 +52,7 @@ export const EVENT_METHODS: { [K in Namespaces]?: Partial<Record<keyof IpcApi[K]
   ui: { onPrompt: IPC_EVENT_CHANNELS.uiPrompt },
   media: { onCommand: IPC_EVENT_CHANNELS.mediaCommand },
   updates: { onStatus: IPC_EVENT_CHANNELS.updateStatus },
+  browser: { onStatus: IPC_EVENT_CHANNELS.browserStatus },
 };
 
 export function channelFor(namespace: string, method: string): string {

@@ -166,6 +166,13 @@ export interface AppSettings {
     /** Apps `sdk.desktop.launch` may start (executable names). Empty = any app. */
     launchAllowlist: string[];
   };
+  /** Browser extension bridge (`sdk.browser` beyond `open`; docs/browser-extension.md). */
+  browser: {
+    /** Port of the loopback server the extension connects to. Default 47821; needs the extension policy to match. */
+    bridgePort: number;
+    /** Extension ids the user allowed to connect (asked once per id when it first says hello). */
+    trustedExtensionIds: string[];
+  };
   messaging: {
     channels: MessagingChannel[];
   };
@@ -244,6 +251,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [], liveSnapshotAutoRefresh: false },
   web: { allowlist: [], maxBytes: 512 * 1024 },
   desktop: { launchAllowlist: [] },
+  browser: { bridgePort: 47821, trustedExtensionIds: [] },
   messaging: { channels: [] },
   permissions: { moduleAllow: {} },
   maxInputLockMs: 5 * 60_000,

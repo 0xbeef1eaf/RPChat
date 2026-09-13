@@ -6,12 +6,13 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "node scripts/build-native.mjs && electron-vite build",
+    "build": "node scripts/build-native.mjs && node scripts/build-extension.mjs && electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "package": "node scripts/build-native.mjs && electron-vite build && electron-builder",
-    "build:native": "node scripts/build-native.mjs"
+    "package": "node scripts/build-native.mjs && node scripts/build-extension.mjs && electron-vite build && electron-builder",
+    "build:native": "node scripts/build-native.mjs",
+    "build:extension": "node scripts/build-extension.mjs"
   },
   "dependencies": {
     "@rp/core": "workspace:*",
@@ -23,20 +24,24 @@
     "dompurify": "^3.2.0",
     "electron-updater": "^6.8.9",
     "esbuild": "^0.28.2",
+    "fflate": "^0.8.3",
     "marked": "^15.0.0",
     "quickjs-emscripten": "^0.32.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/dompurify": "^3",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^44.2.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "playwright-core": "1.56.1",
     "typescript": "^5.9.3",
     "vite": "^7.0.0",
     "vitest": "^4.1.11"
@@ -52,7 +57,8 @@
       "out/**",
       "resources/**",
       "!resources/bin/**",
-      "!resources/system/**"
+      "!resources/system/**",
+      "!resources/extension/**"
     ],
     "extraResources": [
       {
@@ -65,6 +71,13 @@
       {
         "from": "resources/system",
         "to": "system",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/extension",
+        "to": "extension",
         "filter": [
           "**/*"
         ]

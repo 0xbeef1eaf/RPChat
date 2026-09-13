@@ -1,0 +1,375 @@
+import { useCallback, useEffect, useState } from 'react';
+import type { BrowserBridgeStatus } from '@rp/shared';
+import { api, errorMessage } from '../../api';
+import { reportError, toast } from '../../store/actions';
+import { Modal } from '../common/Modal';
+
+type InstallerOutput = { ok: boolean; text: string; what: string };
+
+/** Settings → Browser: bridge status, port, trusted extensions, policy install, load-unpacked help. */
+export function BrowserSection() {
+  const [status, setStatus] = useState<BrowserBridgeStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [portText, setPortText] = useState<string | null>(null);
+  const [trustText, setTrustText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [running, setRunning] = useState<'install' | 'remove' | null>(null);
+  const [output, setOutput] = useState<InstallerOutput | null>(null);
+  const [installDialog, setInstallDialog] = useState(false);
+  const [removeDialog, setRemoveDialog] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setStatus(await api().browser.status());
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    return api().browser.onStatus((s) => setStatus(s));
+  }, [load]);
+
+  const copy = async (text: string, what: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('success', `${what} copied`);
+    } catch (err) {
+      reportError('Could not copy', err);
+    }
+  };
+
+  const savePort = async () => {
+    if (portText === null || !status) return;
+    const port = Number(portText);
+    setPortText(null);
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || port === status.requestedPort) return;
+    setBusy(true);
+    try {
+      setStatus(await api().browser.setPort(port));
+      toast('success', `Bridge port set to ${port}. Re-install the browser policy so the extension follows.`);
+    } catch (err) {
+      reportError('Could not change the bridge port', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const trust = async (id: string) => {
+    const clean = id.trim().toLowerCase();
+    if (!clean) return;
+    setBusy(true);
+    try {
+      setStatus(await api().browser.trust(clean));
+      setTrustText('');
+      toast('success', `Extension ${clean} allowed`);
+    } catch (err) {
+      reportError('Could not allow the extension', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const untrust = async (id: string) => {
+    setBusy(true);
+    try {
+      setStatus(await api().browser.untrust(id));
+      toast('success', `Extension ${id} removed`);
+    } catch (err) {
+      reportError('Could not remove the extension', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runInstaller = async (what: 'install' | 'remove') => {
+    setInstallDialog(false);
+    setRemoveDialog(false);
+    setRunning(what);
+    setOutput(null);
+    try {
+      const r = what === 'install' ? await api().browser.installPolicy() : await api().browser.removePolicy();
+      setOutput({ ok: r.ok, text: r.output || (r.ok ? 'Done.' : 'The installer reported a failure without output.'), what });
+      toast(r.ok ? 'success' : 'error', r.ok ? (what === 'install' ? 'Browser policy installed' : 'Browser policy removed') : 'Installer failed');
+      await load();
+    } catch (err) {
+      setOutput({ ok: false, text: errorMessage(err), what });
+      reportError('Installer failed', err);
+    } finally {
+      setRunning(null);
+    }
+  };
+
+  if (error) {
+    return (
+      <div className="stack">
+        <div className="callout callout-danger small">{error}</div>
+        <div>
+          <button type="button" className="btn btn-sm" onClick={load}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (!status) {
+    return (
+      <div className="row muted small">
+        <span className="spinner" /> Checking…
+      </div>
+    );
+  }
+
+  const portMismatch = status.requestedPort !== status.port;
+
+  return (
+    <div className="stack" style={{ gap: 14 }}>
+      <div className="row">
+        <p className="muted small grow">
+          Characters with the <code>browser</code> capability can open, read and drive tabs in your Chromium-based browser (Chrome, Chromium, Brave,
+          Edge, Vivaldi, Opera…) through the <strong>rp-code browser bridge</strong> extension. The extension only ever talks to this app on{' '}
+          <code>127.0.0.1</code>, and every extension has to be allowed here once before it can connect.
+        </p>
+        <button type="button" className="btn btn-sm" onClick={load} disabled={running !== null}>
+          Refresh
+        </button>
+      </div>
+
+      <div className="cap-cards">
+        <div className="card">
+          <div className="row" style={{ marginBottom: 6 }}>
+            <h3 className="grow">Extension</h3>
+            <span className={status.connected ? 'badge badge-success' : 'badge badge-danger'}>{status.connected ? 'connected' : 'not connected'}</span>
+          </div>
+          <dl className="kv small">
+            {status.connected ? (
+              <>
+                <dt>Browser</dt>
+                <dd>{status.browser ?? 'unknown'}</dd>
+                <dt>Extension id</dt>
+                <dd className="mono">{status.extensionId}</dd>
+              </>
+            ) : (
+              <>
+                <dt>Waiting</dt>
+                <dd className="muted">install the policy below, or load the extension unpacked; it connects on its own within 30 s</dd>
+              </>
+            )}
+            <dt>Bridge port</dt>
+            <dd>
+              <span className="row" style={{ gap: 6 }}>
+                <input
+                  type="number"
+                  min={1}
+                  max={65535}
+                  style={{ width: 110 }}
+                  value={portText ?? String(status.requestedPort)}
+                  disabled={busy}
+                  onChange={(e) => setPortText(e.target.value)}
+                  onBlur={savePort}
+                  onKeyDown={(e) => e.key === 'Enter' && savePort()}
+                  aria-label="Bridge port"
+                />
+                {portMismatch ? (
+                  <span className="badge badge-warning">
+                    port {status.requestedPort} was taken — listening on {status.port}
+                  </span>
+                ) : null}
+              </span>
+            </dd>
+          </dl>
+          {portMismatch ? (
+            <div className="callout callout-warning small" style={{ marginTop: 8 }}>
+              The extension looks for the app on port {status.requestedPort}. Choose a free port here (then re-install the policy, or set it in the
+              extension&apos;s popup), or stop whatever is using {status.requestedPort} and restart rp-code.
+            </div>
+          ) : null}
+        </div>
+
+        <div className="card">
+          <div className="row" style={{ marginBottom: 6 }}>
+            <h3 className="grow">Allowed extensions</h3>
+            <span className="badge">{status.trusted.length}</span>
+          </div>
+          {status.trusted.length === 0 ? (
+            <p className="muted small">None yet. The first time an extension connects, rp-code asks you whether to allow it.</p>
+          ) : (
+            <ul className="plain-list" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+              {status.trusted.map((id) => (
+                <li key={id} className="row" style={{ gap: 8, padding: '3px 0' }}>
+                  <code className="grow" style={{ overflowWrap: 'anywhere' }}>
+                    {id}
+                  </code>
+                  {status.extensionId === id ? <span className="badge badge-success">connected</span> : null}
+                  <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => untrust(id)}>
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {status.denied.length > 0 ? (
+            <div className="callout callout-warning small" style={{ marginTop: 8 }}>
+              Refused this session: {status.denied.map((id) => <code key={id}>{id}</code>)}. Allow one below to let it connect.
+            </div>
+          ) : null}
+          <div className="row" style={{ gap: 6, marginTop: 8 }}>
+            <input
+              type="text"
+              className="mono grow"
+              placeholder="extension id (32 letters a–p)"
+              value={trustText}
+              spellCheck={false}
+              disabled={busy}
+              onChange={(e) => setTrustText(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && trust(trustText)}
+              aria-label="Extension id to allow"
+            />
+            <button type="button" className="btn btn-sm" disabled={busy || trustText.trim().length !== 32} onClick={() => trust(trustText)}>
+              Allow
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="row wrap">
+          <div className="grow">
+            <h3 style={{ margin: 0 }}>Install browser policy</h3>
+            <p className="muted small" style={{ margin: '4px 0 0' }}>
+              Writes a managed policy for Chromium, Chrome and every other Chromium-based browser found on this machine that force-installs the bundled
+              extension from this app and pins the port; asks for your password (pkexec).
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => setInstallDialog(true)}
+            disabled={running !== null || !status.installedExtensionId || !status.extensionDir}
+          >
+            {running === 'install' ? 'Running…' : 'Install browser policy…'}
+          </button>
+          <button type="button" className="btn btn-sm" onClick={() => setRemoveDialog(true)} disabled={running !== null}>
+            {running === 'remove' ? 'Running…' : 'Remove policy'}
+          </button>
+        </div>
+        <dl className="kv small" style={{ marginTop: 8 }}>
+          <dt>Extension id</dt>
+          <dd>
+            {status.installedExtensionId ? (
+              <span className="row" style={{ gap: 6 }}>
+                <code style={{ overflowWrap: 'anywhere' }}>{status.installedExtensionId}</code>
+                <button type="button" className="btn btn-sm" onClick={() => copy(status.installedExtensionId ?? '', 'Extension id')}>
+                  Copy
+                </button>
+              </span>
+            ) : (
+              <span className="muted">not available (the signing key could not be created)</span>
+            )}
+          </dd>
+          <dt>Update URL</dt>
+          <dd>
+            <span className="row" style={{ gap: 6 }}>
+              <code style={{ overflowWrap: 'anywhere' }}>{status.updateUrl}</code>
+              <button type="button" className="btn btn-sm" onClick={() => copy(status.updateUrl, 'Update URL')}>
+                Copy
+              </button>
+            </span>
+          </dd>
+          {status.extensionVersion ? (
+            <>
+              <dt>Bundled version</dt>
+              <dd>{status.extensionVersion}</dd>
+            </>
+          ) : null}
+        </dl>
+        {!status.extensionDir ? <p className="field-hint">The browser extension is not bundled with this build (resources/extension).</p> : null}
+        <p className="field-hint" style={{ marginTop: 6 }}>
+          Google Chrome on Windows and macOS only force-installs extensions from the Chrome Web Store, so this policy has no effect there; Chrome on
+          Linux and every Chromium build (Chromium, Brave, Edge, Vivaldi, Opera…) accept it. Flatpak browsers keep their policies elsewhere — see the
+          documentation.
+        </p>
+        {running ? (
+          <div className="row muted small" style={{ marginTop: 8 }}>
+            <span className="spinner" /> Waiting for the installer (a password prompt may be open)…
+          </div>
+        ) : null}
+        {output ? (
+          <div style={{ marginTop: 8 }}>
+            <div className={output.ok ? 'badge badge-success' : 'badge badge-danger'}>{output.ok ? 'installer finished' : 'installer failed'}</div>
+            <pre style={{ marginTop: 6, maxHeight: 280, whiteSpace: 'pre-wrap' }}>
+              <code>{output.text}</code>
+            </pre>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="card">
+        <h3 style={{ margin: 0 }}>Developers: load the extension unpacked</h3>
+        <p className="muted small" style={{ margin: '4px 0 0' }}>
+          Open <code>chrome://extensions</code>, switch on <em>Developer mode</em>, choose <em>Load unpacked</em> and pick this folder. An unpacked copy
+          gets its own id; rp-code asks you to allow it when it first connects.
+        </p>
+        {status.extensionDir ? (
+          <div className="row" style={{ marginTop: 8 }}>
+            <code className="grow" style={{ overflowWrap: 'anywhere' }}>
+              {status.extensionDir}
+            </code>
+            <button type="button" className="btn btn-sm" onClick={() => copy(status.extensionDir ?? '', 'Path')}>
+              Copy
+            </button>
+          </div>
+        ) : (
+          <p className="field-hint">Not available in this build.</p>
+        )}
+      </div>
+
+      {installDialog ? (
+        <Modal title="Install the browser policy?" onClose={() => setInstallDialog(false)}>
+          <p>The installer runs with administrator rights and writes one policy file per browser:</p>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            <li>
+              <code>rp-code.json</code> in <code>/etc/chromium/policies/managed</code> and <code>/etc/opt/chrome/policies/managed</code>, plus the same for
+              Brave, Edge, Vivaldi and Opera when they are installed
+            </li>
+            <li>
+              it force-installs extension <code>{status.installedExtensionId}</code> from <code>{status.updateUrl}</code> (this app, on this computer only)
+              and tells it to use port {status.requestedPort}
+            </li>
+          </ul>
+          <p className="muted small">
+            The browser installs the extension within a few minutes or at its next start; the extension then connects to rp-code on its own. Remove the
+            policy with the button next to this one.
+          </p>
+          <div className="form-actions">
+            <button type="button" className="btn" onClick={() => setInstallDialog(false)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => runInstaller('install')}>
+              Install
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {removeDialog ? (
+        <Modal title="Remove the browser policy?" onClose={() => setRemoveDialog(false)}>
+          <p>
+            Deletes every <code>rp-code.json</code> policy file the installer wrote (administrator rights, pkexec). Browsers uninstall the
+            force-installed extension on their next policy refresh.
+          </p>
+          <div className="form-actions">
+            <button type="button" className="btn" onClick={() => setRemoveDialog(false)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-danger" onClick={() => runInstaller('remove')}>
+              Remove
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+    </div>
+  );
+}

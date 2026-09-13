@@ -57,6 +57,8 @@ Non-goals (v1)
 │   ├── sandbox/            @rp/sandbox   QuickJS (wasm) code runner, TS transpile, host bridge, limits
 │   └── core/               @rp/core      Chat engine: sessions, prompt builder, action loop,
 │                                         behaviours/timers, permissions, storage, audit log
+├── apps/
+│   └── browser-extension/  @rp/browser-extension  Manifest V3 extension (Chromium-based browsers) bridging tabs to the app
 ├── native/
 │   └── overlay-wlr/        rp-overlay-wlr  Rust wlr-layer-shell overlay helper (Hyprland & co.)
 ├── examples/packs/         Sample packs used by tests and as user documentation
@@ -181,7 +183,7 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `update(id, changes)`, `close(id)`, `closeAll()`, `list()`; overlay options: monitor, position or x/y, layer (background/bottom/top/overlay), opacity, clickThrough, width/height |
 | `ui`     | pack       | `notify(title, body?, opts?)` (urgency low/normal/critical), `confirm(question)`, `choose(question, options[])`, `ask(question, opts?)` (free text), `pickFile(opts?)`, `pickFolder(opts?)` (native pickers) |
 | `wallpaper` | pack    | `set(asset, { monitor? })`, `restore()`, `current()` — via the user's wallpaper command template |
-| `browser`| pack       | `open(url, { newWindow? })` — via the user's browser command template               |
+| `browser`| pack       | `open(url, { newWindow? })` via the user's browser command; with the browser extension connected also `status`, `tabs`, `openTab`, `activate`, `close`, `navigate`, `back/forward/reload`, `read`, `query`, `click`, `type`, `scroll`, `screenshot`, `find` (docs/browser-extension.md) |
 | `input`  | pack       | `lock(durationMs, { reason?, devices? })`, `unlock()`, `status()`, `type`, `key`, `click`, `moveMouse` — daemon-only (`rp-coded`, Linux), duration capped; `CAPABILITY_FAILED` without the daemon |
 | `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)`, `clipboardRead()` |
 

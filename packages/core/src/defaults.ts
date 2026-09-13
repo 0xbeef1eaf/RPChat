@@ -47,6 +47,7 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   if (stored.senses && typeof stored.senses === 'object') merged.senses = { ...base.senses, ...stored.senses };
   if (stored.web && typeof stored.web === 'object') merged.web = { ...base.web, ...stored.web };
   if (stored.desktop && typeof stored.desktop === 'object') merged.desktop = { ...base.desktop, ...stored.desktop };
+  if (stored.browser && typeof stored.browser === 'object') merged.browser = { ...base.browser, ...stored.browser };
   if (stored.messaging && typeof stored.messaging === 'object') merged.messaging = { ...base.messaging, ...stored.messaging };
   if (stored.updates && typeof stored.updates === 'object') merged.updates = { ...base.updates, ...stored.updates };
   if (stored.debug && typeof stored.debug === 'object') merged.debug = { ...base.debug, ...stored.debug };

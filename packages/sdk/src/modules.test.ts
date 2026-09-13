@@ -18,7 +18,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   media: { permission: 'pack', methods: ['showImage', 'playVideo', 'playAudio', 'update', 'close', 'closeAll', 'list'] },
   ui: { permission: 'pack', methods: ['notify', 'confirm', 'choose', 'ask', 'pickFile', 'pickFolder'] },
   wallpaper: { permission: 'pack', methods: ['set', 'restore', 'current'] },
-  browser: { permission: 'pack', methods: ['open'] },
+  browser: { permission: 'pack', methods: ['open', 'status', 'tabs', 'openTab', 'activate', 'close', 'navigate', 'back', 'forward', 'reload', 'read', 'query', 'click', 'type', 'scroll', 'screenshot', 'find'] },
   input: { permission: 'pack', methods: ['lock', 'unlock', 'status', 'type', 'key', 'click', 'moveMouse'] },
   presence: { permission: 'pack', methods: ['status', 'nowPlaying', 'activeWindow', 'idleMs'] },
   screen: { permission: 'pack', methods: ['look', 'draw', 'clear'] },
@@ -42,7 +42,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
 /** Method-level overrides required by docs/spec/living.md §1: (P) = permission 'prompt', (D) = dangerous. */
 const OVERRIDES: Record<string, { prompt?: string[]; dangerous?: string[] }> = {
   wallpaper: { dangerous: ['set'] },
-  browser: { dangerous: ['open'] },
+  browser: { dangerous: ['open', 'openTab', 'close', 'navigate', 'click', 'type', 'screenshot'] },
   screen: { dangerous: ['look'] },
   web: { dangerous: ['fetch'] },
   voice: { dangerous: ['listen'] },

@@ -238,6 +238,44 @@ export class SystemIntegration {
     }
   }
 
+  /**
+   * Write the Chromium managed policy that force-installs the bundled extension from the app's
+   * loopback update URL (`install.sh --browser-only --browser-extension … --browser-update-url …
+   * --browser-port …`, through pkexec; Linux only). The id is per user, so this never runs from
+   * the package's post-install.
+   */
+  async installBrowserPolicy(input: { extensionId: string; updateUrl: string; port: number }, onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
+    if (!/^[a-p]{32}$/.test(input.extensionId)) throw new RpError('INVALID_ARGUMENT', 'extensionId must be 32 letters a–p');
+    if (!/^http:\/\/127\.0\.0\.1:\d{1,5}\/extension\/update\.xml$/.test(input.updateUrl)) throw new RpError('INVALID_ARGUMENT', 'updateUrl must be the app\'s loopback update URL');
+    if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new RpError('INVALID_ARGUMENT', 'port must be 1..65535');
+    return this.runInstaller(['--browser-only', '--browser-extension', input.extensionId, '--browser-update-url', input.updateUrl, '--browser-port', String(input.port)], 'browser policy', onOutput);
+  }
+
+  /** Remove the policy files `installBrowserPolicy` wrote (pkexec; Linux only). */
+  async removeBrowserPolicy(onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
+    return this.runInstaller(['--remove-browser-policy'], 'browser policy removal', onOutput);
+  }
+
+  private async runInstaller(extraArgs: string[], what: string, onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
+    if (this.deps.platform !== 'linux') throw new RpError('CAPABILITY_FAILED', `${what[0]!.toUpperCase()}${what.slice(1)} is only available on Linux`);
+    const installer = await this.stageInstaller();
+    const args = [installer, ...extraArgs, '--user', this.userName()];
+    this.deps.logger.info(`[system] pkexec ${args.join(' ')}`);
+    let output = '';
+    const collect = (chunk: string): void => {
+      output += chunk;
+      for (const line of chunk.split('\n')) if (line.trim()) this.deps.logger.info(`[system:install] ${line.trimEnd()}`);
+      onOutput?.(chunk);
+    };
+    try {
+      const result = await this.run('pkexec', args, collect);
+      if (result.code !== 0 && output.trim().length === 0) output = result.stderr || `pkexec exited with ${result.code}`;
+      return { ok: result.code === 0, output };
+    } catch (err) {
+      throw new RpError('CAPABILITY_FAILED', `Cannot run pkexec: ${(err as Error).message} (install polkit, or run "sudo ${installer} ${extraArgs.join(' ')}" yourself)`);
+    }
+  }
+
   /** `policyTemplate()` for the given settings (see the pure function). */
   policyTemplate(settings: AppSettings): string {
     return policyTemplate(settings);

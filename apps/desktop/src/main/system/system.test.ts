@@ -306,6 +306,17 @@ describe('SystemIntegration', () => {
     expect(fs.statSync(path.join(stage, 'install.sh')).mode & 0o111).toBe(0o111);
     expect(fs.statSync(path.join(stage, 'rp-coded')).mode & 0o111).toBe(0o111);
     expect(fs.readFileSync(path.join(stage, 'rp-coded.service'), 'utf8')).toBe('[Unit]\n');
+    // Browser policy: the staged installer with the browser-only flags, then the removal flag.
+    const policy = await integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821 });
+    expect(policy).toEqual({ ok: true, output: '[ok] group\n' });
+    expect(commands.at(-1)).toEqual([
+      'pkexec', path.join(stage, 'install.sh'), '--browser-only', '--browser-extension', 'abcdefghijklmnopabcdefghijklmnop',
+      '--browser-update-url', 'http://127.0.0.1:47821/extension/update.xml', '--browser-port', '47821', '--user', 'alice',
+    ]);
+    await integration.removeBrowserPolicy();
+    expect(commands.at(-1)).toEqual(['pkexec', path.join(stage, 'install.sh'), '--remove-browser-policy', '--user', 'alice']);
+    await expect(integration.installBrowserPolicy({ extensionId: 'nope', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821 })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://evil.test/update.xml', port: 47821 })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

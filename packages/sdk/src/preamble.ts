@@ -250,7 +250,8 @@ interface CalendarEvent {
  * 'battery-low' { percent } (crosses below filter.percent, default 20); 'screen-locked' {};
  * 'screen-unlocked' {}; 'song-changed' NowPlaying; 'time' { hour, minute, weekday, iso }
  * (filter { hour?, minute?, weekday? }, checked every minute); 'widget-message' { widgetId, message };
- * 'avatar-clicked' {}; 'routine-changed' { from, to, label? }.
+ * 'avatar-clicked' {}; 'routine-changed' { from, to, label? }; 'browser-navigated' { tabId, url, title }
+ * (a browser tab finished loading; filter { url?, title? } substrings; needs the browser extension).
  */
 type HostEventName =
   | 'user-idle'
@@ -265,7 +266,8 @@ type HostEventName =
   | 'time'
   | 'widget-message'
   | 'avatar-clicked'
-  | 'routine-changed';
+  | 'routine-changed'
+  | 'browser-navigated';
 
 /** A host event or one of your own custom events ('custom:<name>', raised with sdk.events.emit()). */
 type EventName = HostEventName | \`custom:\${string}\`;

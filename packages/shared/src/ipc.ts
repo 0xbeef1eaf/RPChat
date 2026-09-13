@@ -9,6 +9,7 @@ import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, Rout
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
 import type { ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
+import type { BrowserBridgeStatus } from './browser.js';
 import type { UpdateStatus } from './updates.js';
 
 export type Unsubscribe = () => void;
@@ -238,6 +239,23 @@ export interface IpcApi {
     /** Pretty JSON of a policy seeded from the current settings, to start editing from. */
     policyTemplate(): Promise<string>;
   };
+  /** Browser extension bridge (Settings → Browser; docs/browser-extension.md). */
+  browser: {
+    status(): Promise<BrowserBridgeStatus>;
+    /** Save `settings.browser.bridgePort` and rebind the loopback server; resolves with the new status. */
+    setPort(port: number): Promise<BrowserBridgeStatus>;
+    /** Allow an extension id to connect (also lets a refused one retry). */
+    trust(id: string): Promise<BrowserBridgeStatus>;
+    /** Forget an extension id; its live connection, if any, is closed. */
+    untrust(id: string): Promise<BrowserBridgeStatus>;
+    /** Write the Chromium policy (force-install + port) through the installer with pkexec (Linux). */
+    installPolicy(): Promise<{ ok: boolean; output: string }>;
+    /** Remove the policy files written by `installPolicy` (pkexec). */
+    removePolicy(): Promise<{ ok: boolean; output: string }>;
+    /** Absolute path of the unpacked extension, for chrome://extensions → Load unpacked. */
+    extensionDir(): Promise<string | null>;
+    onStatus(listener: (status: BrowserBridgeStatus) => void): Unsubscribe;
+  };
   /** In-place app updates from the private GitHub releases (see `UpdateStatus`). */
   updates: {
     status(): Promise<UpdateStatus>;
@@ -318,6 +336,7 @@ export const IPC_EVENT_CHANNELS = {
   uiPrompt: 'ui:prompt',
   showSession: 'app:showSession',
   updateStatus: 'updates:status',
+  browserStatus: 'browser:status',
 } as const;
 
 declare global {

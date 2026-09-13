@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "port": {
+      "title": "rp-code bridge port",
+      "description": "TCP port on 127.0.0.1 where the rp-code desktop app accepts the extension (Settings → Browser in the app).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "policy": {
+      "title": "rp-code bridge settings (Windows/macOS 3rdparty layout)",
+      "type": "object",
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    }
+  }
+}

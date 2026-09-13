@@ -3,13 +3,17 @@
 #
 # Installs the rp-coded daemon (input lock + injection), its systemd unit, the rp-code group,
 # the udev rule / uinput module for fallback tools, the policy directory, an application menu
-# entry + icon for the app (AppImage users get one this way), and an autostart entry for one user. Idempotent: every step prints "[ok] ..." when it changed something and
-# "[skip] ..." when it was already done. Run as root (sudo or pkexec; the app runs it with
+# entry + icon for the app (AppImage users get one this way), an autostart entry for one user,
+# and optionally the Chromium browser policy that force-installs the rp-code browser extension
+# (docs/browser-extension.md). Idempotent: every step prints "[ok] ..." when it changed something
+# and "[skip] ..." when it was already done. Run as root (sudo or pkexec; the app runs it with
 # pkexec and passes --app-bin). See docs/system-integration.md.
 #
 # Usage:
 #   install.sh [--app-bin <path>] [--user <name>] [--autostart xdg|systemd|none]
 #              [--menu-entry yes|no] [--policy-template] [--daemon-bin <path>] [--dry-run]
+#              [--browser-extension <id> --browser-update-url <url> [--browser-port <n>] [--browser-only]]
+#   install.sh --remove-browser-policy [--dry-run]
 #   install.sh --uninstall [--user <name>] [--dry-run]
 set -euo pipefail
 
@@ -24,6 +28,18 @@ POLICY_DST="$POLICY_DIR/policy.json"
 RUN_DIR=/run/rp-code
 MENU_DST=/usr/local/share/applications/rp-code.desktop
 ICON_DST=/usr/local/share/icons/hicolor/512x512/apps/rp-code.png
+# Chromium-based browsers on Linux read managed policies from these directories (each browser its
+# own). Format: "<policy dir>|<config dir whose presence means the browser is installed>|<binaries on PATH>".
+BROWSER_POLICY_FILE=rp-code.json
+BROWSER_POLICY_DIRS="/etc/chromium/policies/managed|/etc/chromium|chromium chromium-browser
+/etc/opt/chrome/policies/managed|/etc/opt/chrome|google-chrome google-chrome-stable
+/etc/brave/policies/managed|/etc/brave|brave-browser brave
+/etc/opt/edge/policies/managed|/etc/opt/edge|microsoft-edge microsoft-edge-stable
+/etc/vivaldi/policies/managed|/etc/vivaldi|vivaldi vivaldi-stable
+/etc/opera/policies/managed|/etc/opera|opera"
+# Chromium and Chrome always get the policy (their policy dirs are created if needed); the others
+# only when the browser looks installed (its binary on PATH or its /etc config dir present).
+BROWSER_ALWAYS="/etc/chromium/policies/managed /etc/opt/chrome/policies/managed"
 
 APP_BIN=""
 TARGET_USER=""
@@ -34,9 +50,14 @@ DAEMON_BIN=""
 UNINSTALL=false
 DRY_RUN=false
 NEED_RELOGIN=false
+BROWSER_EXT=""
+BROWSER_UPDATE_URL=""
+BROWSER_PORT=""
+BROWSER_ONLY=false
+REMOVE_BROWSER_POLICY=false
 
 usage() {
-  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -48,6 +69,11 @@ while [ $# -gt 0 ]; do
     --policy-template) POLICY_TEMPLATE=true; shift ;;
     --daemon-bin) DAEMON_BIN="${2:?--daemon-bin needs a path}"; shift 2 ;;
     --uninstall) UNINSTALL=true; shift ;;
+    --browser-extension) BROWSER_EXT="${2:?--browser-extension needs an id}"; shift 2 ;;
+    --browser-update-url) BROWSER_UPDATE_URL="${2:?--browser-update-url needs a URL}"; shift 2 ;;
+    --browser-port) BROWSER_PORT="${2:?--browser-port needs a number}"; shift 2 ;;
+    --browser-only) BROWSER_ONLY=true; shift ;;
+    --remove-browser-policy) REMOVE_BROWSER_POLICY=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "install.sh: unknown argument: $1" >&2; usage >&2; exit 64 ;;
@@ -55,6 +81,21 @@ while [ $# -gt 0 ]; do
 done
 case "$AUTOSTART" in xdg|systemd|none) ;; *) echo "install.sh: --autostart must be xdg, systemd or none" >&2; exit 64 ;; esac
 case "$MENU_ENTRY" in yes|no) ;; *) echo "install.sh: --menu-entry must be yes or no" >&2; exit 64 ;; esac
+if [ -n "$BROWSER_EXT" ] || $BROWSER_ONLY; then
+  case "$BROWSER_EXT" in
+    [a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p][a-p]) ;;
+    *) echo "install.sh: --browser-extension must be a 32-letter (a-p) extension id" >&2; exit 64 ;;
+  esac
+  case "$BROWSER_UPDATE_URL" in
+    http://127.0.0.1:[0-9]*/extension/update.xml) ;;
+    *) echo "install.sh: --browser-update-url must look like http://127.0.0.1:<port>/extension/update.xml" >&2; exit 64 ;;
+  esac
+  if [ -z "$BROWSER_PORT" ]; then BROWSER_PORT="$(echo "$BROWSER_UPDATE_URL" | sed -E 's|^http://127\.0\.0\.1:([0-9]+)/.*$|\1|')"; fi
+  case "$BROWSER_PORT" in
+    ''|*[!0-9]*) echo "install.sh: --browser-port must be a number" >&2; exit 64 ;;
+  esac
+  if [ "$BROWSER_PORT" -lt 1 ] || [ "$BROWSER_PORT" -gt 65535 ]; then echo "install.sh: --browser-port must be 1..65535" >&2; exit 64; fi
+fi
 
 ok()   { printf '[ok]   %s\n' "$*"; }
 skip() { printf '[skip] %s\n' "$*"; }
@@ -173,6 +214,69 @@ as_user_write() { # as_user_write <dst> <content...>
   chown -R "$TARGET_USER" "$(dirname "$dst")" 2>/dev/null || chown "$TARGET_USER" "$dst"
 }
 
+# --- browser policy helpers -----------------------------------------------------------------
+# Policy directories that should get (or lose) the file: the always-on ones plus every browser
+# that looks installed. Prints one directory per line.
+browser_policy_targets() {
+  local line dir cfg bins b
+  echo "$BROWSER_POLICY_DIRS" | while IFS='|' read -r dir cfg bins; do
+    [ -n "$dir" ] || continue
+    case " $BROWSER_ALWAYS " in *" $dir "*) echo "$dir"; continue ;; esac
+    if [ -d "$cfg" ] || [ -d "$dir" ]; then echo "$dir"; continue; fi
+    for b in $bins; do if have "$b"; then echo "$dir"; break; fi; done
+  done
+}
+
+browser_policy_json() { # browser_policy_json <id> <update-url> <port>
+  printf '{\n  "ExtensionInstallForcelist": ["%s;%s"],\n  "ExtensionInstallSources": ["http://127.0.0.1:%s/*"],\n  "3rdparty": { "extensions": { "%s": { "policy": { "port": %s } } } }\n}\n' "$1" "$2" "$3" "$1" "$3"
+}
+
+install_browser_policy() {
+  local content dir dst
+  content="$(browser_policy_json "$BROWSER_EXT" "$BROWSER_UPDATE_URL" "$BROWSER_PORT")"
+  note "browser extension $BROWSER_EXT from $BROWSER_UPDATE_URL (port $BROWSER_PORT)"
+  for dir in $(browser_policy_targets); do
+    dst="$dir/$BROWSER_POLICY_FILE"
+    if [ -f "$dst" ] && [ "$(cat "$dst")" = "$content" ]; then
+      skip "$dst is up to date"
+      continue
+    fi
+    if $DRY_RUN; then
+      note "+ install -d -m 0755 $dir"
+      note "+ write $dst"
+    else
+      install -d -m 0755 -o root -g root "$dir"
+      printf '%s' "$content" > "$dst.tmp" && chmod 0644 "$dst.tmp" && mv -f "$dst.tmp" "$dst"
+    fi
+    ok "wrote $dst"
+  done
+  note "Chromium-based browsers pick the policy up within minutes or at their next start (chrome://policy → Reload policies)."
+  note "Google Chrome on Windows/macOS only force-installs Web Store extensions; this policy works with Linux Chrome and every Chromium build."
+}
+
+remove_browser_policy() {
+  local line dir cfg bins dst removed=false
+  echo "$BROWSER_POLICY_DIRS" | while IFS='|' read -r dir cfg bins; do
+    [ -n "$dir" ] || continue
+    dst="$dir/$BROWSER_POLICY_FILE"
+    if [ -e "$dst" ]; then run rm -f "$dst"; ok "removed $dst"; else skip "$dst absent"; fi
+  done
+}
+
+if $REMOVE_BROWSER_POLICY; then
+  echo "rp-code browser policy: remove"
+  remove_browser_policy
+  ok "browser policy removed"
+  exit 0
+fi
+
+if $BROWSER_ONLY; then
+  echo "rp-code browser policy: install"
+  install_browser_policy
+  ok "browser policy installed"
+  exit 0
+fi
+
 # =============================================================================================
 # Uninstall
 # =============================================================================================
@@ -219,6 +323,7 @@ if $UNINSTALL; then
   else
     skip "group $GROUP absent"
   fi
+  remove_browser_policy
   if [ -e "$POLICY_DST" ] || [ -d "$POLICY_DIR" ]; then
     note "kept $POLICY_DIR (the policy file). Remove it with: sudo rm -r $POLICY_DIR"
   fi
@@ -368,7 +473,14 @@ else
   skip "autostart (no user)"
 fi
 
-# 7. device check ----------------------------------------------------------------------------------
+# 7. browser extension policy (only with --browser-extension; the id is per user, so never from the deb) -----
+if [ -n "$BROWSER_EXT" ]; then
+  install_browser_policy
+else
+  skip "browser extension policy (pass --browser-extension/--browser-update-url, or use Settings → Browser in the app)"
+fi
+
+# 8. device check ----------------------------------------------------------------------------------
 if [ -x "$DAEMON_DST" ] && ! $DRY_RUN; then
   echo "device check ($DAEMON_DST --check-devices):"
   "$DAEMON_DST" --check-devices 2>&1 | sed 's/^/       /' || true
