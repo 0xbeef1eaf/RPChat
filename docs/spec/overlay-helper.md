@@ -24,8 +24,8 @@ stdin → helper (requests). Every request may carry `"seq": n`; responses echo 
 |---|---|---|
 | `hello` | `version: 1` | `{ ev: "ready", version, features: { layers: [...4], opacity, clickThrough, exactPosition: true, video: true } }` |
 | `monitors` | – | `{ ev: "monitors", monitors: [MonitorInfo] }` — GDK monitors: `id` = `"<index>"`, `name` = model or connector when available, geometry = **work area** in logical px, `scale`, `primary` (index 0 or GDK primary), `hasCursor` from the pointer device position |
-| `show` | `id, url, layer, anchor, marginPx, x?, y?, monitor?, width, height?, contentPadding? (default 24, added to a page-reported content height), opacity, clickThrough, namespace?` | `{ ev: "shown", id }` after the window is mapped; the page size is fixed to `width`×`height` (height default 320 until the page reports `content-size`, see below) |
-| `update` | `id, patch: { layer?, anchor?, marginPx?, x?, y?, monitor?, width?, height?, opacity?, clickThrough? }` | `{ ev: "updated", id }` |
+| `show` | `id, url, layer, anchor, marginPx, x?, y?, monitor?, width, height?, maxHeight?, contentPadding? (default 24, added to a page-reported content height), opacity, clickThrough, namespace?` | `{ ev: "shown", id }` after the window is mapped; the page size is fixed to `width`×`height` (height default `maxHeight`, else 320, until the page reports `content-size`, see below) |
+| `update` | `id, patch: { layer?, anchor?, marginPx?, x?, y?, monitor?, width?, height?, maxHeight?, opacity?, clickThrough? }` | `{ ev: "updated", id }` |
 | `js` | `id, script` | `{ ev: "js-done", id }` — runs the script in that overlay's web view (used to forward `MediaCommand`s to the page) |
 | `close` | `id` | `{ ev: "closed", id }` |
 | `closeAll` | – | one `closed` per overlay |

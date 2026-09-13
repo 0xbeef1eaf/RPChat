@@ -74,7 +74,7 @@ export class MediaManager {
     const backend = this.deps.backend();
     const settings = await this.deps.settings();
     const monitors = await backend.monitors();
-    const resolved = resolveOverlayOptions(options as OverlayOptions, monitors, { layer: settings.mediaAlwaysOnTop ? 'top' : 'bottom' });
+    const resolved = resolveOverlayOptions(options as OverlayOptions, monitors, { layer: settings.mediaAlwaysOnTop ? 'top' : 'bottom', randomSize: true });
     const id = randomUUID();
     const page: ShowImageOptions | PlayVideoOptions =
       kind === 'image'

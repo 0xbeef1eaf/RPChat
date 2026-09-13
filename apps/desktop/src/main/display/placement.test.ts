@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { MonitorInfo } from '@rp/shared';
-import { placeOverlay, resolvePlacement, selectMonitor, setRandomSource } from './placement.js';
-import { applyOverlayUpdate, nearestLayer, resolveOverlayOptions, setRandomSource as setBackendRandomSource, visualPatch } from './backend.js';
+import { placeOverlay, randomSizeBox, randomSizeFraction, resolvePlacement, selectMonitor, setRandomSource } from './placement.js';
+import { applyOverlayUpdate, nearestLayer, resolveOverlayOptions, setRandomSource as setBackendRandomSource, visualPatch, type OverlaySpec } from './backend.js';
+import { showCommand } from './electron.js';
+import { helperPlacement } from './helper-backend.js';
 
 const primary: MonitorInfo = { id: '1', name: 'DP-1', index: 0, primary: true, x: 0, y: 30, width: 1920, height: 1050, scale: 1, hasCursor: false };
 const second: MonitorInfo = { id: '2', name: 'HDMI-A-1', index: 1, primary: false, x: 1920, y: 0, width: 1280, height: 720, scale: 1, hasCursor: true };
@@ -153,5 +155,58 @@ describe('random default placement', () => {
     expect(rnd).toMatchObject({ anchor: 'random', randomSeed: { x: 0.75, y: 0.75 } });
     const explicit = applyOverlayUpdate(rnd, { x: 5, y: 5 }, monitors);
     expect(explicit).toMatchObject({ x: 5, y: 5 });
+  });
+});
+
+describe('random media size', () => {
+  it('maps a 0..1 draw onto 5%–50% of the monitor, one fraction for both axes', () => {
+    expect(randomSizeFraction(0)).toBeCloseTo(0.05);
+    expect(randomSizeFraction(1)).toBeCloseTo(0.5);
+    expect(randomSizeFraction(0.5)).toBeCloseTo(0.275);
+    expect(randomSizeFraction(Number.NaN)).toBeCloseTo(0.275);
+    expect(randomSizeFraction(7)).toBeCloseTo(0.5);
+    expect(randomSizeBox({ width: 1920, height: 1080 }, 0.5)).toEqual({ width: 960, height: 540 });
+    expect(randomSizeBox({ width: 1920, height: 1080 }, 0.05)).toEqual({ width: 96, height: 54 });
+    // Never below the minimum overlay size on a sane monitor.
+    expect(randomSizeBox({ width: 100, height: 100 }, 0.05)).toEqual({ width: 16, height: 16 });
+  });
+
+  it('resolveOverlayOptions draws the box only for media without an explicit size', () => {
+    setBackendRandomSource(() => 1);
+    const drawn = resolveOverlayOptions(undefined, monitors, { layer: 'top', randomSize: true });
+    // Seed 1 → second monitor (1920×1080 work area) and the largest box: half of it.
+    expect(drawn.monitor).toBe(second);
+    expect(drawn.width).toBe(Math.round(0.5 * second.width));
+    expect(drawn.maxHeight).toBe(Math.round(0.5 * second.height));
+    expect(drawn.height).toBeUndefined();
+    setBackendRandomSource(() => 0);
+    const small = resolveOverlayOptions({ monitor: 'primary' }, monitors, { layer: 'top', randomSize: true });
+    expect(small.width).toBe(Math.round(0.05 * primary.width));
+    expect(small.maxHeight).toBe(Math.round(0.05 * primary.height));
+    // An explicit width or height switches the random box off entirely.
+    expect(resolveOverlayOptions({ width: 300 }, monitors, { layer: 'top', randomSize: true })).toMatchObject({ width: 300 });
+    expect(resolveOverlayOptions({ width: 300 }, monitors, { layer: 'top', randomSize: true }).maxHeight).toBeUndefined();
+    expect(resolveOverlayOptions({ height: 200 }, monitors, { layer: 'top', randomSize: true })).toMatchObject({ width: 480, height: 200 });
+    // Avatar/widgets (no randomSize) keep the fixed default.
+    expect(resolveOverlayOptions(undefined, monitors, { layer: 'top' })).toMatchObject({ width: 480 });
+    expect(resolveOverlayOptions(undefined, monitors, { layer: 'top' }).maxHeight).toBeUndefined();
+  });
+
+  it('the page receives the cap as its height while the helper gets it as maxHeight', () => {
+    setBackendRandomSource(() => 1);
+    const drawn = resolveOverlayOptions({ monitor: 'primary' }, monitors, { layer: 'top', randomSize: true });
+    const spec: OverlaySpec = { id: 'o', kind: 'image', file: '/p/a.png', assetUrl: 'rp-asset://p/a.png', packId: 'p', asset: 'a.png', options: drawn, page: {} };
+    expect(showCommand(spec, spec.assetUrl)).toMatchObject({ type: 'show-image', options: { width: 960, height: 525 } });
+    expect(helperPlacement(drawn)).toMatchObject({ width: 960, maxHeight: 525 });
+    expect(helperPlacement(drawn)).not.toHaveProperty('height');
+  });
+
+  it('an update that resizes drops the random cap; other updates keep it', () => {
+    setBackendRandomSource(() => 0.5);
+    const drawn = resolveOverlayOptions({ monitor: 'primary' }, monitors, { layer: 'top', randomSize: true });
+    expect(drawn.maxHeight).toBeDefined();
+    expect(applyOverlayUpdate(drawn, { opacity: 0.5 }, monitors).maxHeight).toBe(drawn.maxHeight);
+    expect(applyOverlayUpdate(drawn, { width: 800 }, monitors).maxHeight).toBeUndefined();
+    expect(applyOverlayUpdate(drawn, { height: 300 }, monitors).maxHeight).toBeUndefined();
   });
 });

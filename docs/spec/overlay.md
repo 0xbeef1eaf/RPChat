@@ -1,7 +1,7 @@
 # Display backends, overlays and external commands (desktop main process)
 
 This spec extends `docs/spec/desktop.md`. It covers how media overlays honour
-`OverlayOptions` (`layer`, `monitor` — default `random` for media overlays (avatar and widgets default to `primary`), one of the connected monitors drawn per window —, `position`/`x`/`y` — default position `random`: a spot drawn once per overlay so the whole window stays on the monitor, re-clamped when the content size arrives; the helper receives `randomX`/`randomY` and applies the same formula —, `opacity`,
+`OverlayOptions` (`layer`, `monitor` — default `random` for media overlays (avatar and widgets default to `primary`), one of the connected monitors drawn per window —, `position`/`x`/`y` — default position `random`: a spot drawn once per overlay so the whole window stays on the monitor, re-clamped when the content size arrives; the helper receives `randomX`/`randomY` and applies the same formula —, `width`/`height` — media overlays with neither are drawn a random box, one fraction in [5%, 50%] of the monitor's width and height (`RANDOM_SIZE_MIN_FRACTION`/`RANDOM_SIZE_MAX_FRACTION`, `randomSizeFraction`/`randomSizeBox` in placement.ts, `randomSize: true` passed by the media capability only): `width` is the box width and `maxHeight` its height; the page (`fitMedia`, media/fit.ts) scales the image/video up or down to fill the width and shrinks it if the cap bites, keeping the aspect ratio, and reports the fitted size so the window ends content-sized; backends open the window at the full box height first so the page is never squeezed; an update that sets `width` or `height` drops the cap —, `opacity`,
 `clickThrough`), how the app runs on **Hyprland** (Wayland), and how the
 `wallpaper`, `browser` and `input` modules execute user-configured command
 templates. Contracts: `@rp/shared/media.ts` (`OverlayOptions`, `OverlayUpdate`,
@@ -29,6 +29,7 @@ export interface ResolvedOverlayOptions {
   anchor: MediaPosition; marginPx: number; x?: number; y?: number;   // x/y resolved to logical px on the monitor
   randomSeed?: { x: number; y: number };                              // anchor 'random': fractions of the free space, drawn once per overlay
   width: number; height?: number;
+  maxHeight?: number;                                                 // media with no size: the random box's height; the page fits the content into width×maxHeight, the window stays content-sized
 }
 export interface OverlayHandle {
   readonly id: string;

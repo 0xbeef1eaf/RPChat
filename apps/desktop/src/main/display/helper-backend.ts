@@ -35,6 +35,7 @@ export function helperPlacement(o: ResolvedOverlayOptions): Record<string, unkno
     clickThrough: o.clickThrough,
   };
   if (o.height !== undefined) out.height = o.height;
+  if (o.maxHeight !== undefined) out.maxHeight = o.maxHeight;
   if (o.x !== undefined) out.x = o.x;
   if (o.y !== undefined) out.y = o.y;
   if (o.randomSeed) {

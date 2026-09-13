@@ -21,7 +21,7 @@ import type {
   WidgetSpec,
 } from '@rp/shared';
 import type { Bounds } from './placement.js';
-import { DEFAULT_MARGIN_PX, DEFAULT_OVERLAY_WIDTH, randomSource, selectMonitor } from './placement.js';
+import { DEFAULT_MARGIN_PX, DEFAULT_OVERLAY_WIDTH, randomSizeBox, randomSizeFraction, randomSource, selectMonitor } from './placement.js';
 import type { ScreenLike } from './electron.js';
 import { ElectronBackend } from './electron.js';
 import { createHyprlandBackend } from './hyprland.js';
@@ -45,6 +45,12 @@ export interface ResolvedOverlayOptions {
   y?: number;
   width: number;
   height?: number;
+  /**
+   * Content height cap in logical px when the character gave no size and the overlay was drawn a
+   * random box (`randomSize`): the page fits the media inside `width` × `maxHeight` keeping its aspect
+   * ratio, and the window itself stays content-sized (unlike `height`, which fixes it).
+   */
+  maxHeight?: number;
   /** For `anchor: 'random'`: fractions (0..1) of the free space, fixed when the overlay is created. */
   randomSeed?: { x: number; y: number };
 }
@@ -127,11 +133,23 @@ export function resolveOffset(value: number | undefined, extent: number): number
   return value <= 1 ? Math.round(value * extent) : Math.round(value);
 }
 
+export interface OverlayDefaults {
+  layer: OverlayLayer;
+  /**
+   * Media overlays: when the character gives neither `width` nor `height`, draw a random box of the
+   * monitor (5%–50% of its width and height, one fraction for both) instead of the fixed default width.
+   */
+  randomSize?: boolean;
+}
+
 /** Pure: defaults + monitor selection + validation. Layers are NOT clamped here; backends degrade them. */
-export function resolveOverlayOptions(opts: OverlayOptions | undefined, monitors: MonitorInfo[], defaults: { layer: OverlayLayer }): ResolvedOverlayOptions {
+export function resolveOverlayOptions(opts: OverlayOptions | undefined, monitors: MonitorInfo[], defaults: OverlayDefaults): ResolvedOverlayOptions {
   const o = opts && typeof opts === 'object' ? opts : {};
   // Media overlays land on a random monitor unless the character picks one (avatar/widgets pass 'primary').
   const monitor = selectMonitor(o.monitor ?? 'random', monitors);
+  const explicitWidth = typeof o.width === 'number' && Number.isFinite(o.width) && o.width > 0 ? Math.round(o.width) : undefined;
+  const explicitHeight = typeof o.height === 'number' && Number.isFinite(o.height) && o.height > 0 ? Math.round(o.height) : undefined;
+  const box = defaults.randomSize === true && explicitWidth === undefined && explicitHeight === undefined ? randomSizeBox(monitor, randomSizeFraction()) : undefined;
   const resolved: ResolvedOverlayOptions = {
     monitor,
     layer: isOverlayLayer(o.layer) ? o.layer : defaults.layer,
@@ -139,9 +157,10 @@ export function resolveOverlayOptions(opts: OverlayOptions | undefined, monitors
     clickThrough: o.clickThrough === true,
     anchor: typeof o.position === 'string' && POSITIONS.has(o.position) ? o.position : 'random',
     marginPx: typeof o.marginPx === 'number' && Number.isFinite(o.marginPx) && o.marginPx >= 0 ? Math.round(o.marginPx) : DEFAULT_MARGIN_PX,
-    width: typeof o.width === 'number' && Number.isFinite(o.width) && o.width > 0 ? Math.round(o.width) : DEFAULT_OVERLAY_WIDTH,
+    width: explicitWidth ?? box?.width ?? DEFAULT_OVERLAY_WIDTH,
   };
-  if (typeof o.height === 'number' && Number.isFinite(o.height) && o.height > 0) resolved.height = Math.round(o.height);
+  if (explicitHeight !== undefined) resolved.height = explicitHeight;
+  if (box) resolved.maxHeight = box.height;
   const x = resolveOffset(o.x, monitor.width);
   const y = resolveOffset(o.y, monitor.height);
   if (x !== undefined) resolved.x = x;
@@ -172,6 +191,8 @@ export function applyOverlayUpdate(current: ResolvedOverlayOptions, patch: Overl
   if (typeof p.marginPx === 'number' && Number.isFinite(p.marginPx) && p.marginPx >= 0) next.marginPx = Math.round(p.marginPx);
   if (typeof p.width === 'number' && Number.isFinite(p.width) && p.width > 0) next.width = Math.round(p.width);
   if (typeof p.height === 'number' && Number.isFinite(p.height) && p.height > 0) next.height = Math.round(p.height);
+  // The character took over the size: the random box no longer caps the content.
+  if (next.width !== current.width || next.height !== current.height) delete next.maxHeight;
   const x = resolveOffset(p.x, next.monitor.width);
   const y = resolveOffset(p.y, next.monitor.height);
   if (x !== undefined) next.x = x;

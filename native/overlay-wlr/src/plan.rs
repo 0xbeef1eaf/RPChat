@@ -31,6 +31,8 @@ pub struct OverlaySettings {
     pub width: f64,
     /// Explicit height from the app; when `None` the page's `content-size` drives it.
     pub height: Option<f64>,
+    /// The box height the page fits into: initial height before the first `content-size`.
+    pub max_height: Option<f64>,
     /// Added to a content-driven height (stage padding / shadow / caption room).
     pub content_padding: f64,
     pub opacity: f64,
@@ -53,6 +55,7 @@ impl OverlaySettings {
             monitor: show.monitor.clone(),
             width: show.width,
             height: show.height,
+            max_height: show.max_height,
             content_padding: finite_non_negative(show.content_padding),
             opacity: show.opacity,
             click_through: show.click_through,
@@ -102,6 +105,9 @@ impl OverlaySettings {
         }
         if patch.height.is_some() {
             self.height = patch.height;
+        }
+        if patch.max_height.is_some() {
+            self.max_height = patch.max_height;
         }
         if let Some(o) = patch.opacity {
             self.opacity = o;
@@ -235,7 +241,7 @@ pub fn plan(settings: &OverlaySettings, monitors: &[MonitorInfo]) -> OverlayPlan
     };
 
     // Size: explicit width always wins; the height is explicit, else the page's
-    // reported content height, else the default.
+    // reported content height, else the box height the page fits into, else the default.
     let wanted_w = finite_positive(settings.width).unwrap_or(crate::protocol::DEFAULT_WIDTH);
     let wanted_h = settings
         .height
@@ -246,6 +252,7 @@ pub fn plan(settings: &OverlaySettings, monitors: &[MonitorInfo]) -> OverlayPlan
                 .and_then(|(_, h)| finite_positive(h))
                 .map(|h| h + settings.content_padding)
         })
+        .or_else(|| settings.max_height.and_then(finite_positive))
         .unwrap_or(DEFAULT_HEIGHT);
     let width = clamp_i32(wanted_w.round() as i32, MIN_SIZE.min(mon_w), mon_w);
     let height = clamp_i32(wanted_h.round() as i32, MIN_SIZE.min(mon_h), mon_h);
@@ -864,12 +871,27 @@ mod random_anchor_tests {
             monitor: None,
             width,
             height: Some(height),
+            max_height: None,
             content_padding: 0.0,
             opacity: 1.0,
             click_through: false,
             namespace: "rp".into(),
             content_size: None,
         }
+    }
+
+    #[test]
+    fn max_height_is_the_initial_height_until_content_reports() {
+        let mut s = settings((0.5, 0.5), 400.0, 200.0);
+        s.height = None;
+        s.max_height = Some(540.0);
+        let mons = monitor();
+        assert_eq!(plan(&s, &mons).height, 540);
+        assert!(s.set_content_size(400.0, 150.0));
+        assert_eq!(plan(&s, &mons).height, 150);
+        // An explicit height still wins over both.
+        s.height = Some(300.0);
+        assert_eq!(plan(&s, &mons).height, 300);
     }
 
     fn monitor() -> Vec<MonitorInfo> {

@@ -38,9 +38,9 @@ export interface OverlayOptions extends OverlayPlacement {
   opacity?: number;
   /** When true, mouse input passes through the overlay to whatever is underneath. Default false. */
   clickThrough?: boolean;
-  /** Max width in CSS px. Default 480. */
+  /** Max width in CSS px. Default for images/video: a random size, 5%–50% of the monitor (drawn once per overlay). */
   width?: number;
-  /** Max height in CSS px. Default: fit content. */
+  /** Max height in CSS px. Default: fit content within the random box; give both width and height to fix the size. */
   height?: number;
 }
 

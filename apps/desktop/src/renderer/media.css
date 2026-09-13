@@ -45,6 +45,7 @@ body {
   display: block;
   max-width: 100%;
   max-height: calc(100vh - 24px);
+  object-fit: contain;
   border-radius: 12px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   background: #000;

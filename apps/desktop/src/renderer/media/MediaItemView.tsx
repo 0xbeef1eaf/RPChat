@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { closesOnClick, effectiveOpacity, effectiveVolume, type MediaEntry, type MediaLocalEvent } from './mediaState';
+import { fitMedia, type NaturalSize } from './fit';
 
 interface MediaItemViewProps {
   entry: MediaEntry;
@@ -13,6 +14,8 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
   const containerRef = useRef<HTMLElement>(null);
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement>(null);
   const [contentReady, setContentReady] = useState(entry.kind === 'audio');
+  // Natural pixel size of the image/video once known; drives the aspect-preserving fit into the box.
+  const [natural, setNatural] = useState<NaturalSize | undefined>(undefined);
 
   const clickThrough = entry.kind !== 'audio' && Boolean(entry.options.clickThrough);
 
@@ -51,9 +54,14 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry.id, entry.url]);
 
-  // Report the rendered size once the content is known (and again if width/height options change).
-  const width = entry.kind !== 'audio' ? (entry.options.width ?? 480) : undefined;
-  const height = entry.kind !== 'audio' ? entry.options.height : undefined;
+  // The box the media may fill (`height` is a cap); the content is scaled to fit it keeping its aspect ratio.
+  const boxWidth = entry.kind !== 'audio' ? (entry.options.width ?? 480) : undefined;
+  const boxHeight = entry.kind !== 'audio' ? entry.options.height : undefined;
+  const fitted = boxWidth !== undefined && natural ? fitMedia(natural, { width: boxWidth, height: boxHeight }) : undefined;
+  const width = fitted?.width ?? boxWidth;
+  const height = fitted?.height ?? boxHeight;
+  const mediaStyle: CSSProperties | undefined = fitted ? { width: fitted.width, height: fitted.height } : height ? { maxHeight: height } : undefined;
+  // Report the rendered size once the content is known (and again if the fitted size changes).
   useLayoutEffect(() => {
     if (!contentReady) return;
     const el = containerRef.current;
@@ -81,8 +89,11 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
           src={entry.url}
           alt={entry.options.caption ?? ''}
           draggable={false}
-          style={height ? { maxHeight: height } : undefined}
-          onLoad={() => setContentReady(true)}
+          style={mediaStyle}
+          onLoad={(e) => {
+            setNatural({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight });
+            setContentReady(true);
+          }}
           onError={() => onEvent({ type: 'error', id: entry.id, message: 'Image failed to load' })}
         />
         {entry.options.caption ? <figcaption className="media-caption">{entry.options.caption}</figcaption> : null}
@@ -101,8 +112,11 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
           loop={Boolean(entry.options.loop)}
           muted={Boolean(entry.options.muted)}
           controls={false}
-          style={height ? { maxHeight: height } : undefined}
-          onLoadedMetadata={() => setContentReady(true)}
+          style={mediaStyle}
+          onLoadedMetadata={(e) => {
+            setNatural({ width: e.currentTarget.videoWidth, height: e.currentTarget.videoHeight });
+            setContentReady(true);
+          }}
           onEnded={() => onEvent({ type: 'ended', id: entry.id })}
           onError={() => onEvent({ type: 'error', id: entry.id, message: 'Video failed to load or decode' })}
           onClick={onClick}

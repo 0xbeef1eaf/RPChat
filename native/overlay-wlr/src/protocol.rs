@@ -159,6 +159,10 @@ pub struct ShowParams {
     pub width: f64,
     #[serde(default)]
     pub height: Option<f64>,
+    /// Height of the box the page fits its content into (the app's random size); used as the initial
+    /// height until the page reports `content-size`, so the content is never squeezed by a small window.
+    #[serde(default)]
+    pub max_height: Option<f64>,
     /// Added to the page's reported content height when no explicit `height` was given. Default 24.
     #[serde(default = "default_content_padding")]
     pub content_padding: f64,
@@ -194,6 +198,8 @@ pub struct UpdatePatch {
     pub width: Option<f64>,
     #[serde(default)]
     pub height: Option<f64>,
+    #[serde(default)]
+    pub max_height: Option<f64>,
     #[serde(default)]
     pub opacity: Option<f64>,
     #[serde(default)]

@@ -17,6 +17,9 @@ export const DEFAULT_OVERLAY_WIDTH = 480;
 export const DEFAULT_OVERLAY_HEIGHT = 320;
 export const DEFAULT_MARGIN_PX = 24;
 export const MIN_OVERLAY_SIZE = 16;
+/** A media overlay with no size from the character takes a random box of the monitor: this fraction of its width and height. */
+export const RANDOM_SIZE_MIN_FRACTION = 0.05;
+export const RANDOM_SIZE_MAX_FRACTION = 0.5;
 
 /** Injectable for tests. */
 export let randomSource: () => number = Math.random;
@@ -49,6 +52,20 @@ export function selectMonitor(selector: MonitorSelector | undefined, monitors: M
     return monitors.find((m) => m.id.toLowerCase() === wanted) ?? monitors.find((m) => m.name.toLowerCase() === wanted) ?? primary;
   }
   return primary;
+}
+
+/** Uniform fraction in [RANDOM_SIZE_MIN_FRACTION, RANDOM_SIZE_MAX_FRACTION] from a 0..1 draw (default: the injectable source). */
+export function randomSizeFraction(draw: number = randomSource()): number {
+  const f = Number.isFinite(draw) ? Math.min(1, Math.max(0, draw)) : 0.5;
+  return RANDOM_SIZE_MIN_FRACTION + f * (RANDOM_SIZE_MAX_FRACTION - RANDOM_SIZE_MIN_FRACTION);
+}
+
+/** The box a media overlay may fill on `monitor` at `fraction` of its width and height (content keeps its aspect ratio inside it). */
+export function randomSizeBox(monitor: Pick<MonitorInfo, 'width' | 'height'>, fraction: number): Size {
+  return {
+    width: Math.max(Math.min(MIN_OVERLAY_SIZE, monitor.width), Math.round(fraction * monitor.width)),
+    height: Math.max(Math.min(MIN_OVERLAY_SIZE, monitor.height), Math.round(fraction * monitor.height)),
+  };
 }
 
 function clamp(v: number, min: number, max: number): number {

@@ -133,7 +133,8 @@ export function showCommand(spec: OverlaySpec, url: string): MediaCommand {
     opacity: spec.options.opacity,
     clickThrough: spec.options.clickThrough,
     width: spec.options.width,
-    ...(spec.options.height !== undefined ? { height: spec.options.height } : {}),
+    // The page treats `height` as a cap (max-height); a random box passes its height that way.
+    ...(spec.options.height !== undefined ? { height: spec.options.height } : spec.options.maxHeight !== undefined ? { height: spec.options.maxHeight } : {}),
     layer: spec.options.layer,
   };
   switch (spec.kind) {
@@ -242,10 +243,14 @@ export class ElectronOverlay implements OverlayHandle {
     });
   }
 
-  /** Size the window should have right now (`width` is a maximum: narrower content shrinks the window). */
+  /**
+   * Size the window should have right now (`width` is a maximum: narrower content shrinks the window).
+   * Before the first `content-size` a random box opens at its full height so the page can lay the
+   * content out unsqueezed; the window then shrinks to what was rendered.
+   */
   desiredSize(): Size {
     const width = this.contentSize ? Math.min(this.options.width, this.contentSize.width) : this.options.width;
-    const height = this.options.height ?? this.contentSize?.height ?? DEFAULT_OVERLAY_HEIGHT;
+    const height = this.options.height ?? this.contentSize?.height ?? this.options.maxHeight ?? DEFAULT_OVERLAY_HEIGHT;
     return { width, height };
   }
 
