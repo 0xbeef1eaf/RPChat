@@ -4,10 +4,11 @@
  * 30 s alarm wakes the worker so a dropped connection is retried even when Chrome has put the
  * worker to sleep. The port comes from managed policy, then `chrome.storage.local`, then the default.
  */
-import { BridgeOps } from './lib/ops.js';
+import { BridgeOps, HOME_PAGE_KEY } from './lib/ops.js';
 import type { ChromeLike } from './lib/ops.js';
 import { backoffDelay, bridgeUrl, describeBrowser, dispatch, helloMessage, parseRequest, resolvePort } from './lib/protocol.js';
 import type { BridgeEvent } from './lib/protocol.js';
+import { RULES_ALARM, RULES_STORAGE_KEY, readTable } from './lib/rules.js';
 
 declare const __EXTENSION_VERSION__: string;
 
@@ -26,6 +27,9 @@ export interface BridgeState {
   requests: number;
   version: string;
   extensionId: string;
+  /** Active page blocks (rules.block) and the character's home page, for the popup. */
+  blocks: number;
+  homePage: string | null;
 }
 
 const ops = new BridgeOps(chrome as unknown as ChromeLike);
@@ -35,7 +39,18 @@ let socket: WebSocket | undefined;
 let connecting = false;
 let attempts = 0;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
-const state: BridgeState = { connected: false, port: 0, managedPort: false, url: '', attempts: 0, requests: 0, version: VERSION, extensionId: chrome.runtime.id };
+const state: BridgeState = { connected: false, port: 0, managedPort: false, url: '', attempts: 0, requests: 0, version: VERSION, extensionId: chrome.runtime.id, blocks: 0, homePage: null };
+
+/** Refresh the popup facts that live in storage (block count, home page). */
+async function refreshStoredState(): Promise<void> {
+  try {
+    const items = await chrome.storage.local.get([RULES_STORAGE_KEY, HOME_PAGE_KEY]);
+    state.blocks = readTable(items[RULES_STORAGE_KEY]).rules.length;
+    state.homePage = typeof items[HOME_PAGE_KEY] === 'string' ? (items[HOME_PAGE_KEY] as string) : null;
+  } catch {
+    /* storage unavailable */
+  }
+}
 
 async function currentPort(): Promise<{ port: number; managed: boolean }> {
   // Managed policy: Linux JSON puts the values straight under the extension id, the Windows
@@ -148,10 +163,18 @@ function pushEvent(event: BridgeEvent): void {
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.alarms.create(ALARM, { periodInMinutes: 0.5 });
+  void ops.purgeExpired().catch(() => undefined);
   void connect();
 });
-chrome.runtime.onStartup.addListener(() => void connect());
+chrome.runtime.onStartup.addListener(() => {
+  void ops.purgeExpired().catch(() => undefined);
+  void connect();
+});
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === RULES_ALARM) {
+    void ops.purgeExpired().then(() => refreshStoredState()).catch(() => undefined);
+    return;
+  }
   if (alarm.name === ALARM && !state.connected) {
     if (retryTimer) {
       clearTimeout(retryTimer);
@@ -161,6 +184,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && (changes[RULES_STORAGE_KEY] || changes[HOME_PAGE_KEY])) void refreshStoredState();
   if ((area === 'local' || area === 'managed') && (changes['port'] || changes['policy'])) {
     attempts = 0;
     disconnect('port changed');
@@ -172,8 +196,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 chrome.runtime.onMessage.addListener((message: { type?: string }, _sender, reply: (value: unknown) => void) => {
   if (message?.type === 'status') {
-    reply({ ...state });
-    return false;
+    void refreshStoredState().then(() => reply({ ...state }));
+    return true;
   }
   if (message?.type === 'reconnect') {
     attempts = 0;
@@ -204,4 +228,6 @@ void chrome.alarms.get(ALARM).then((existing) => {
   if (!existing) return chrome.alarms.create(ALARM, { periodInMinutes: 0.5 });
   return undefined;
 });
+void refreshStoredState();
+void ops.purgeExpired().catch(() => undefined);
 void connect();

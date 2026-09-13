@@ -32,7 +32,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   prompts: ['pending'],
   ui: ['respondPrompt'],
   system: ['status', 'install', 'setAutostart', 'installerPath', 'createPolicy', 'policyTemplate'],
-  browser: ['status', 'setPort', 'trust', 'untrust', 'installPolicy', 'removePolicy', 'extensionDir'],
+  browser: ['status', 'setPort', 'trust', 'untrust', 'installPolicy', 'removePolicy', 'extensionDir', 'blocks', 'clearBlocks', 'setHomePage'],
   updates: ['status', 'check', 'download', 'install', 'setToken'],
   plugins: ['pluginsDir', 'list', 'install', 'remove', 'setEnabled', 'reload', 'openFolder'],
   editor: [

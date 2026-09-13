@@ -10,7 +10,7 @@ import { createStandardRegistry } from '@rp/sdk';
 import { QuickJsRunner } from '@rp/sandbox';
 import { createProvider } from '@rp/llm';
 import type { AppSettings, LoadedPack, PermissionDecision, PermissionRequest, Storage, UiPromptAnswer, UiPromptRequest } from '@rp/shared';
-import { IPC_EVENT_CHANNELS, RpError, parseCharacterRef } from '@rp/shared';
+import { IPC_EVENT_CHANNELS, RpError, assetUrl, parseCharacterRef } from '@rp/shared';
 import { defaultSettings, mergeSettings } from '@rp/core';
 import { hasExecutable } from './commands.js';
 import { AvatarHandler } from './capabilities/avatar.js';
@@ -81,6 +81,8 @@ export interface AppServices {
   extension: ExtensionService;
   /** Save `settings.browser.bridgePort` and rebind the loopback server. */
   setBridgePort(port: number): Promise<void>;
+  /** Save `settings.browser.homePage` ('' clears it) and push it to the connected extension. */
+  setHomePage(url: string): Promise<void>;
   /** Absolute path of the bundled sample image (copied out of the asar when needed). */
   sampleImage(): Promise<string>;
   /** Root directory served for a pack id by rp-asset:// (installed packs + app-generated roots). */
@@ -214,10 +216,31 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     },
     ports: () => ({ port: loopback.listeningPort, requested: loopback.requestedPort }),
     extension: { id: () => extension.id(), version: () => extension.version(), dir: () => extension.dir(), updateUrl: () => extension.updateUrl() },
+    homePage: async () => (await settingsOf()).browser.homePage,
     logger,
     ...(isSmokeRun(env) ? { autoTrust: true } : {}),
   });
   loopback.onUpgrade(browser.upgradeHandler());
+  // The home page lives in settings; the extension's copy (chrome.storage.local) follows on every connection.
+  const pushHomePage = async (): Promise<void> => {
+    if (!browser.connected) return;
+    const url = (await settingsOf()).browser.homePage;
+    await browser.request('home.set', { url: url || null }).catch((err: unknown) => logger.warn('[browser] could not push the home page to the extension', err));
+  };
+  let lastPushedTo: string | undefined;
+  browser.onStatus((s) => {
+    const key = s.connected ? `${s.extensionId ?? ''}` : undefined;
+    if (key && key !== lastPushedTo) {
+      lastPushedTo = key;
+      void pushHomePage();
+    } else if (!key) lastPushedTo = undefined;
+  });
+  const setHomePage = async (url: string): Promise<void> => {
+    if (url !== '' && !/^https?:\/\//i.test(url)) throw new RpError('INVALID_ARGUMENT', 'The home page must be an http(s) URL (or empty to clear it)');
+    const current = (await settingsOf()).browser;
+    if (current.homePage !== url) await engine.settings.update({ browser: { ...current, homePage: url } });
+    await pushHomePage();
+  };
   // ---- system integration (Linux daemon + root-owned policy) --------------------
   const daemon = new DaemonClient({ ...(env.RP_DAEMON_SOCKET ? { socketPath: env.RP_DAEMON_SOCKET } : {}), logger });
   const policy = new PolicyWatcher(env.RP_POLICY_FILE, logger);
@@ -300,7 +323,16 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       new SystemHandler({ home: os.homedir() }),
       new DisplayHandler(() => backend),
       wallpaper,
-      new BrowserHandler({ commands, bridge: browser, allowlist: async () => (await settingsOf()).web.allowlist }),
+      new BrowserHandler({
+        commands,
+        bridge: browser,
+        allowlist: async () => (await settingsOf()).web.allowlist,
+        browserSettings: async () => (await settingsOf()).browser,
+        setHomePage,
+        characterName: (context) => characterOf(context.packId, context.characterId).name,
+        packs,
+        assetUrl: (packId, asset) => loopback.rewriteAssetUrl(assetUrl(packId, asset)),
+      }),
       input,
       new PresenceHandler(senses.provider),
       screenHandler,
@@ -417,6 +449,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     loopback,
     browser,
     extension,
+    setHomePage,
     async setBridgePort(port) {
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new RpError('INVALID_ARGUMENT', 'port must be 1..65535');
       const current = (await settingsOf()).browser;

@@ -88,7 +88,7 @@ pub struct PolicyFile {
 }
 
 /// Keys allowed under `settings` (documented in `docs/spec/system.md`).
-pub const SETTINGS_KEYS: [&str; 9] = [
+pub const SETTINGS_KEYS: [&str; 10] = [
     "autonomy",
     "maxInputLockMs",
     "permissions",
@@ -98,6 +98,7 @@ pub const SETTINGS_KEYS: [&str; 9] = [
     "senses",
     "displayBackend",
     "updates",
+    "browser",
 ];
 
 impl PolicyFile {
@@ -130,6 +131,7 @@ impl PolicyFile {
                 "memory",
                 "senses",
                 "updates",
+                "browser",
             ] {
                 if let Some(v) = map.get(key) {
                     if !v.is_object() {
@@ -144,6 +146,41 @@ impl PolicyFile {
                     }
                     if !value.is_boolean() {
                         return Err(format!("settings.updates.{key} must be a boolean"));
+                    }
+                }
+            }
+            if let Some(browser) = map.get("browser").and_then(Value::as_object) {
+                for (key, value) in browser {
+                    match key.as_str() {
+                        "allowBlocking" | "allowEval" | "allowHistory" => {
+                            if !value.is_boolean() {
+                                return Err(format!("settings.browser.{key} must be a boolean"));
+                            }
+                        }
+                        "maxBlockMs" => match value.as_f64() {
+                            Some(n) if n.is_finite() && n >= 0.0 => {}
+                            _ => {
+                                return Err(
+                                    "settings.browser.maxBlockMs must be a non-negative number"
+                                        .into(),
+                                )
+                            }
+                        },
+                        "homePage" => match value.as_str() {
+                            Some(s)
+                                if s.is_empty()
+                                    || s.starts_with("http://")
+                                    || s.starts_with("https://") => {}
+                            _ => {
+                                return Err(
+                                    "settings.browser.homePage must be an http(s) URL or \"\""
+                                        .into(),
+                                )
+                            }
+                        },
+                        _ => {
+                            return Err(format!("settings.browser.{key} is not a managed setting"))
+                        }
                     }
                 }
             }
@@ -456,7 +493,8 @@ mod tests {
                 "memory": {},
                 "senses": {"includeInPrompt": false},
                 "displayBackend": "electron",
-                "updates": {"automatic": false, "enabled": true}
+                "updates": {"automatic": false, "enabled": true},
+                "browser": {"allowBlocking": false, "maxBlockMs": 600000, "allowEval": true, "allowHistory": false, "homePage": "https://example.com/"}
             },
             "inputLock": {"maxDurationMs": 60000, "emergencyKey": "f12", "emergencyHoldMs": 2000, "enabled": true}
         }))
@@ -474,6 +512,7 @@ mod tests {
         // Round trip keeps the settings block verbatim.
         let back = serde_json::to_value(&p).unwrap();
         assert_eq!(back["settings"]["web"]["allowlist"], json!(["example.com"]));
+        assert_eq!(back["settings"]["browser"]["maxBlockMs"], json!(600000));
         assert_eq!(back["inputLock"]["emergencyKey"], json!("f12"));
     }
 
@@ -491,6 +530,11 @@ mod tests {
             json!({"version": 1, "settings": {"updates": true}}),
             json!({"version": 1, "settings": {"updates": {"enabled": "no"}}}),
             json!({"version": 1, "settings": {"updates": {"checkIntervalHours": 1}}}),
+            json!({"version": 1, "settings": {"browser": "x"}}),
+            json!({"version": 1, "settings": {"browser": {"allowEval": "no"}}}),
+            json!({"version": 1, "settings": {"browser": {"maxBlockMs": -1}}}),
+            json!({"version": 1, "settings": {"browser": {"homePage": "ftp://x"}}}),
+            json!({"version": 1, "settings": {"browser": {"bridgePort": 1}}}),
             json!({"version": 1, "inputLock": {"emergencyKey": "space"}}),
             json!({"version": 1, "inputLock": {"maxDurationMs": -5}}),
             json!({"version": 1, "inputLock": {"foo": 1}}),

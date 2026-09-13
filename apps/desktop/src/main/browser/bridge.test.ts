@@ -226,6 +226,9 @@ describe('policy', () => {
       '3rdparty': { extensions: { [ID_A]: { policy: { port: 47821 } } } },
     });
     expect(JSON.parse(browserPolicyText(ID_A, 5000, 'http://127.0.0.1:5000/extension/update.xml'))).toEqual(browserPolicy(ID_A, 5000));
+    expect(browserPolicy(ID_A, 5000)).not.toHaveProperty('HomepageLocation');
+    expect(browserPolicy(ID_A, 5000, undefined, 'https://home.test/')).toMatchObject({ HomepageLocation: 'https://home.test/', HomepageIsNewTabPage: false });
+    expect(browserPolicy(ID_A, 5000, undefined, 'chrome://newtab')).not.toHaveProperty('HomepageLocation');
     const xml = updateXml(ID_A, '0.1.0', 'http://127.0.0.1:47821/extension/rp-code.crx');
     expect(xml).toContain(`<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>`);
     expect(xml).toContain(`<app appid='${ID_A}'>`);

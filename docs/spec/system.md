@@ -136,6 +136,7 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
 | `senses` | `senses.includeInPrompt`, `senses.watchDirs`, `senses.calendarSources` | |
 | `displayBackend` | `displayBackend` | `auto` \| `electron` \| `hyprland` |
 | `updates` | `updates.automatic`, `updates.enabled` | booleans. `enabled: false` switches update checks off entirely (`UpdateStatus.state === 'disabled'`, token field hidden, `automatic` forced off); `automatic` pins the background-check toggle. |
+| `browser` | `browser.allowBlocking`, `browser.maxBlockMs`, `browser.allowEval`, `browser.allowHistory`, `browser.homePage` | booleans, a non-negative number (ms; the cap on `sdk.browser.block` durations), an http(s) URL or `""`. What characters may do through the browser extension (docs/browser-extension.md). |
 
 ## Renderer
 

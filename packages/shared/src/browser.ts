@@ -41,6 +41,21 @@ export interface BrowserBridgeStatus {
   extensionDir?: string;
   /** Extension ids that asked to connect and were refused this run (until trusted in Settings). */
   denied: string[];
+  /** `settings.browser.homePage` (mirrored to the extension and the policy). */
+  homePage: string;
+}
+
+/** A page block installed through `sdk.browser.block` (as `rules.list` reports it). */
+export interface BrowserBlock {
+  id: string;
+  patterns: string[];
+  redirect?: string;
+  expiresAt?: string;
+  /** Character name shown on the blocked page. */
+  by?: string;
+  /** The character's stated reason, shown on the blocked page. */
+  reason?: string;
+  createdAt: string;
 }
 
 /** Events the extension pushes; `tab-updated` with `status: 'complete'` becomes the `browser-navigated` host event. */
@@ -54,4 +69,7 @@ export interface BrowserPolicyJson {
   ExtensionInstallForcelist: string[];
   ExtensionInstallSources: string[];
   '3rdparty': { extensions: Record<string, { policy: { port: number } }> };
+  /** `settings.browser.homePage` when set (the new-tab override covers new tabs regardless). */
+  HomepageLocation?: string;
+  HomepageIsNewTabPage?: boolean;
 }

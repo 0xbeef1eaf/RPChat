@@ -51,6 +51,7 @@ Only these keys are accepted; each maps to a dotted settings path shown in the U
 | `senses` | object | `includeInPrompt` (boolean), `watchDirs` (string[]), `calendarSources` (string[]). |
 | `displayBackend` | `"auto"` \| `"electron"` \| `"hyprland"` | Which overlay backend the app uses. |
 | `updates` | `{ "automatic": boolean, "enabled": boolean }` | In-place app updates. `enabled: false` switches update checks off entirely (the Updates tab shows "disabled by policy" and hides the token field); `automatic` pins the "check automatically" toggle. Both optional. |
+| `browser` | `{ "allowBlocking": boolean, "maxBlockMs": number, "allowEval": boolean, "allowHistory": boolean, "homePage": string }` | What characters may do through the browser extension: block pages for a while (and for how long at most, ms), run JavaScript in pages, read the browser history, and the home page the extension opens in new tabs (an http(s) URL or `""`). All optional. |
 
 The daemon only validates that these are objects/numbers/strings of the right kind; the app
 validates the inner values against its settings schema and ignores what it cannot apply.

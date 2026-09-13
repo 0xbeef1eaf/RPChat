@@ -9,7 +9,7 @@ import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, Rout
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
 import type { ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
-import type { BrowserBridgeStatus } from './browser.js';
+import type { BrowserBlock, BrowserBridgeStatus } from './browser.js';
 import type { UpdateStatus } from './updates.js';
 
 export type Unsubscribe = () => void;
@@ -254,6 +254,12 @@ export interface IpcApi {
     removePolicy(): Promise<{ ok: boolean; output: string }>;
     /** Absolute path of the unpacked extension, for chrome://extensions → Load unpacked. */
     extensionDir(): Promise<string | null>;
+    /** Active page blocks (`sdk.browser.block`) as the connected extension reports them; empty when not connected. */
+    blocks(): Promise<BrowserBlock[]>;
+    /** Remove every page block. */
+    clearBlocks(): Promise<{ removed: number }>;
+    /** Save `settings.browser.homePage` (http(s) or empty) and push it to the extension; resolves with the new status. */
+    setHomePage(url: string): Promise<BrowserBridgeStatus>;
     onStatus(listener: (status: BrowserBridgeStatus) => void): Unsubscribe;
   };
   /** In-place app updates from the private GitHub releases (see `UpdateStatus`). */

@@ -104,12 +104,18 @@ ui (pack)
 - `confirm(question: string): Promise<boolean>` — a window of its own, in front of the user; the user answers.
 - `choose(question: string, options: string[]): Promise<string | null>`
 
-browser (pack, v2.0.0; docs/browser-extension.md) — `open`, `openTab`, `close`, `navigate`, `click`, `type`, `screenshot` are `dangerous: true`
+browser (pack, v2.1.0; docs/browser-extension.md) — `open`, `openTab`, `close`, `navigate`, `click`, `type`, `screenshot`, `block`, `imageEffect`, `setHomePage`, `addBookmark`, `removeBookmark`, `eval` are `dangerous: true`
 - `open(url: string, options?: { newWindow?: boolean }): Promise<BrowserTab | null>` — the extension when connected (returns the tab), else the browser command template (returns null).
 - `status(): Promise<{ connected: boolean; browser?: string }>`
 - `tabs(): Promise<BrowserTab[]>`, `openTab(url, { active?, newWindow? }): Promise<BrowserTab>`, `activate(tabId)`, `close(tabId)`, `navigate(tabId, url)`, `back/forward/reload(tabId)` — all `BrowserTab` (`{ id, windowId, url, title, active, index }`).
 - `read(tabId?, { maxChars? }): Promise<{ url; title; text }>` (default cap 20 000 chars; tabId defaults to the active tab), `query(tabId, selector, { limit? }): Promise<BrowserElement[]>` (`{ index, tag, text, href?, value? }`), `click(tabId, selector, { index? })`, `type(tabId, selector, text, { submit? })`, `scroll(tabId, { y? | selector? })`, `screenshot(tabId?): Promise<{ dataUrl; url; title }>` (PNG data URL), `find(tabId, text): Promise<{ count; first? }>`.
-- Only http(s) URLs; `settings.web.allowlist` applies to every URL opened or navigated to. Every method but `open` throws `CAPABILITY_FAILED` while no extension is connected.
+- `block(patterns, { durationMs?, redirect?, reason? }): Promise<{ id; expiresAt; patterns }>` (duration capped by `settings.browser.maxBlockMs`; 127.0.0.1/localhost/browser pages refused), `unblock(id)`, `blocks(): Promise<BrowserBlock[]>`, `clearBlocks()`.
+- `imageEffect(tabId, effect, { selector?, replaceWith?: AssetRef | string, durationMs? }): Promise<{ applied; replaced; total }>` (`effect`: `blur | grayscale | sepia | invert | hue | pixelate | none | { css }`; pack assets are served through the loopback asset route), `clearImageEffects(tabId)`.
+- `setHomePage(url | null)`, `homePage()` — the extension's new-tab override and the policy's `HomepageLocation`.
+- `bookmarks({ folder? })`, `searchBookmarks(query)`, `addBookmark(url, title, { folder? })`, `removeBookmark(idOrUrl)` — `BrowserBookmark` = `{ id, title, url?, parentId, path }`.
+- `eval(tabId, code, { world?: "isolated" | "main", timeoutMs? }): Promise<{ value; world; fallback? }>` — the code is an async function body; result JSON, 64 KiB cap. The isolated world refuses eval under the MV3 extension CSP, so the extension falls back to the main world and reports it (`fallback`); the main world is subject to the page's CSP.
+- `history({ text?, since?, until?, limit? })`, `historyVisits(url)`, `recentHistory(limit?)` — `BrowserHistoryItem` = `{ url, title, lastVisitTime, visitCount }`.
+- Only http(s) URLs; `settings.web.allowlist` applies to every URL opened, navigated to, bookmarked, redirected to or set as home page. Every method but `open` (and `setHomePage`/`homePage`, which read and write the setting) throws `CAPABILITY_FAILED` while no extension is connected; `block`, `eval` and the history methods throw `CAPABILITY_FAILED` with a message naming the toggle when `settings.browser.allowBlocking` / `allowEval` / `allowHistory` is off.
 
 system (pack; was `prompt` before per-call prompts were dropped) — every method `dangerous: true`
 - `openExternal(url: string): Promise<void>` (http/https only)

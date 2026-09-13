@@ -1,13 +1,48 @@
 {
   "manifest_version": 3,
   "name": "rp-code browser bridge",
-  "version": "0.1.0",
-  "description": "Lets rp-code characters open, read and drive browser tabs through the app running on this computer (127.0.0.1 only).",
+  "version": "0.2.0",
+  "description": "Lets rp-code characters open, read and drive browser tabs, block pages, style images, set the home page, use bookmarks and history, and run page scripts through the app running on this computer (127.0.0.1 only).",
   "minimum_chrome_version": "116",
-  "permissions": ["tabs", "scripting", "activeTab", "storage", "alarms"],
-  "host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "background.js", "type": "module" },
-  "action": { "default_title": "rp-code browser bridge", "default_popup": "popup.html" },
-  "options_ui": { "page": "popup.html", "open_in_tab": false },
-  "storage": { "managed_schema": "schema.json" }
+  "permissions": [
+    "tabs",
+    "scripting",
+    "activeTab",
+    "storage",
+    "alarms",
+    "declarativeNetRequest",
+    "bookmarks",
+    "history"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "rp-code browser bridge",
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "popup.html",
+    "open_in_tab": false
+  },
+  "chrome_url_overrides": {
+    "newtab": "newtab.html"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "blocked.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "storage": {
+    "managed_schema": "schema.json"
+  }
 }

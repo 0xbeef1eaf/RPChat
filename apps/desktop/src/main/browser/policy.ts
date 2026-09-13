@@ -38,16 +38,19 @@ export function crxUrlFor(port: number): string {
  * the layout Chrome documents for the Windows registry / macOS plist, and the extension accepts
  * a flat `{ "port": n }` as well.
  */
-export function browserPolicy(extensionId: string, port: number, updateUrl: string = updateUrlFor(port)): BrowserPolicyJson {
+export function browserPolicy(extensionId: string, port: number, updateUrl: string = updateUrlFor(port), homePage?: string): BrowserPolicyJson {
   return {
     ExtensionInstallForcelist: [`${extensionId};${updateUrl}`],
     ExtensionInstallSources: [`http://127.0.0.1:${port}/*`],
     '3rdparty': { extensions: { [extensionId]: { policy: { port } } } },
+    // The home page a character set: `HomepageLocation` covers the Home button and browsers where
+    // the user disabled the extension's new-tab override; `HomepageIsNewTabPage: false` keeps it a URL.
+    ...(homePage && /^https?:\/\//i.test(homePage) ? { HomepageLocation: homePage, HomepageIsNewTabPage: false } : {}),
   };
 }
 
-export function browserPolicyText(extensionId: string, port: number, updateUrl?: string): string {
-  return `${JSON.stringify(browserPolicy(extensionId, port, updateUrl), null, 2)}\n`;
+export function browserPolicyText(extensionId: string, port: number, updateUrl?: string, homePage?: string): string {
+  return `${JSON.stringify(browserPolicy(extensionId, port, updateUrl, homePage), null, 2)}\n`;
 }
 
 /** Omaha v2 update manifest Chromium polls for force-installed extensions. */

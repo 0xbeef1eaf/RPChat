@@ -1,6 +1,6 @@
 {
   "name": "@rp/browser-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "rp-code browser bridge: a Manifest V3 extension that lets characters drive the user's Chromium-based browser through the app's loopback bridge",
   "type": "module",

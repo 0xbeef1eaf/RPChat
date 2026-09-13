@@ -19,6 +19,8 @@ export interface PolicyFile {
     displayBackend?: AppSettings['displayBackend'];
     /** `enabled: false` switches update checks off entirely; `automatic` pins the background check toggle. */
     updates?: { automatic?: boolean; enabled?: boolean };
+    /** Browser extension limits: what characters may do in the browser and the block cap. */
+    browser?: Partial<Pick<AppSettings['browser'], 'allowBlocking' | 'maxBlockMs' | 'allowEval' | 'allowHistory' | 'homePage'>>;
   };
   /** Input-lock hard limits enforced by the daemon regardless of app settings. */
   inputLock?: {

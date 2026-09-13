@@ -9,6 +9,10 @@
  * Usage: node scripts/browser-smoke-chromium.mjs --port <n> --extension <dir> --user-data <dir> [--mode unpacked|policy --expect-id <id>]
  * `policy` mode launches without --load-extension and waits for the browser to force-install the
  * extension from the managed policy (scripts/browser-smoke.sh writes it), proving the CRX path.
+ *
+ * Both modes map the host `smoke.test` onto 127.0.0.1 (so the app can block a loopback page under
+ * a name that is not protected) and, once the extension has stored a home page, open
+ * chrome://newtab once and report where the new-tab override took it (`[chromium] newtab → <url>`).
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -62,10 +66,12 @@ const headless = !process.env.DISPLAY;
 const context = await chromium.launchPersistentContext(userDataDir, {
   executablePath,
   headless,
-  args:
-    mode === 'unpacked'
+  args: [
+    '--host-resolver-rules=MAP smoke.test 127.0.0.1',
+    ...(mode === 'unpacked'
       ? [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`, '--no-first-run', '--no-default-browser-check', '--disable-background-networking']
-      : ['--no-first-run', '--no-default-browser-check'],
+      : ['--no-first-run', '--no-default-browser-check']),
+  ],
   ignoreDefaultArgs: mode === 'unpacked' ? ['--disable-extensions'] : ['--disable-extensions', '--disable-component-extensions-with-background-pages', '--disable-background-networking'],
   viewport: { width: 1024, height: 700 },
 });
@@ -106,7 +112,40 @@ if (mode === 'unpacked') {
 const pages = context.pages();
 if (pages.length === 0) await context.newPage();
 
+// Home page check: when the app has set one (sdk.browser.setHomePage → chrome.storage.local.homePage),
+// open a new tab once; the extension's newtab override must take it to that URL.
+let newtabChecked = false;
+const newtabTimer = setInterval(() => {
+  if (newtabChecked) return;
+  void (async () => {
+    const stored = await worker.evaluate(() => chrome.storage.local.get('homePage')).catch(() => ({}));
+    const home = stored && typeof stored.homePage === 'string' ? stored.homePage : undefined;
+    if (!home || newtabChecked) return;
+    newtabChecked = true;
+    console.log(`[chromium] home page stored: ${home}`);
+    // A real new tab (no URL → the new-tab page → the extension's override → the home page). The
+    // tab is watched through chrome.tabs rather than a Playwright page handle, which the
+    // chrome:// → chrome-extension:// → http redirect chain can leave behind.
+    const before = new Set((await worker.evaluate(() => chrome.tabs.query({}))).map((t) => t.id));
+    const created = await worker.evaluate(() => chrome.tabs.create({}).then((t) => t.id)).catch((err) => {
+      console.log(`[chromium] chrome.tabs.create failed (${err.message}); falling back to a Playwright page`);
+      return context.newPage().then((p) => p.goto('chrome://newtab/', { waitUntil: 'commit', timeout: 10_000 }).catch(() => undefined)).then(() => undefined);
+    });
+    const deadline = Date.now() + 15_000;
+    let url = '';
+    while (Date.now() < deadline) {
+      const tabs = await worker.evaluate(() => chrome.tabs.query({})).catch(() => []);
+      const tab = tabs.find((t) => (created !== undefined ? t.id === created : !before.has(t.id)));
+      url = tab?.url ?? tab?.pendingUrl ?? '';
+      if (/^https?:/.test(url)) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    console.log(`[chromium] newtab → ${url || '(no http URL within 15 s)'}${url === home ? ' (home page)' : ''}`);
+  })().catch((err) => console.log(`[chromium] newtab check failed: ${err.message}`));
+}, 500);
+
 const shutdown = async () => {
+  clearInterval(newtabTimer);
   console.log('[chromium] closing');
   await context.close().catch(() => undefined);
   process.exit(0);

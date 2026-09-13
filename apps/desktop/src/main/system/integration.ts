@@ -77,10 +77,27 @@ export function policyTemplate(settings: AppSettings): string {
       senses: { includeInPrompt: settings.senses.includeInPrompt, watchDirs: [...settings.senses.watchDirs], calendarSources: [...settings.senses.calendarSources] },
       displayBackend: settings.displayBackend,
       updates: { enabled: true, automatic: settings.updates.automatic },
+      browser: { allowBlocking: settings.browser.allowBlocking, maxBlockMs: settings.browser.maxBlockMs, allowEval: settings.browser.allowEval, allowHistory: settings.browser.allowHistory, homePage: settings.browser.homePage },
     },
     inputLock: { enabled: true, maxDurationMs: settings.maxInputLockMs, emergencyKey: 'esc', emergencyHoldMs: 5000 },
   };
   return `${JSON.stringify(policy, null, 2)}\n`;
+}
+
+/** Managed-policy directories a Chromium fork keeps outside the built-in list (`settings.browser.extraPolicyDirs`). */
+export function parseExtraPolicyDirs(dirs: string[] | undefined): string[] {
+  const out: string[] = [];
+  for (const raw of dirs ?? []) {
+    const dir = raw.trim().replace(/\/+$/, '');
+    if (dir.length === 0) continue;
+    if (!/^\/[^\s|"'\\]+\/policies\/managed$/.test(dir)) throw new RpError('INVALID_ARGUMENT', `"${dir}" is not a managed-policy directory (an absolute path ending in /policies/managed, no spaces)`);
+    if (!out.includes(dir)) out.push(dir);
+  }
+  return out;
+}
+
+function extraPolicyDirArgs(dirs: string[] | undefined): string[] {
+  return parseExtraPolicyDirs(dirs).flatMap((d) => ['--browser-policy-dir', d]);
 }
 
 export function defaultRunner(): ProcessRunner {
@@ -244,16 +261,25 @@ export class SystemIntegration {
    * --browser-port …`, through pkexec; Linux only). The id is per user, so this never runs from
    * the package's post-install.
    */
-  async installBrowserPolicy(input: { extensionId: string; updateUrl: string; port: number }, onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
+  async installBrowserPolicy(input: { extensionId: string; updateUrl: string; port: number; homePage?: string; extraPolicyDirs?: string[] }, onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
     if (!/^[a-p]{32}$/.test(input.extensionId)) throw new RpError('INVALID_ARGUMENT', 'extensionId must be 32 letters a–p');
     if (!/^http:\/\/127\.0\.0\.1:\d{1,5}\/extension\/update\.xml$/.test(input.updateUrl)) throw new RpError('INVALID_ARGUMENT', 'updateUrl must be the app\'s loopback update URL');
     if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new RpError('INVALID_ARGUMENT', 'port must be 1..65535');
-    return this.runInstaller(['--browser-only', '--browser-extension', input.extensionId, '--browser-update-url', input.updateUrl, '--browser-port', String(input.port)], 'browser policy', onOutput);
+    if (input.homePage !== undefined && !/^https?:\/\/[^\s"\\]+$/i.test(input.homePage)) throw new RpError('INVALID_ARGUMENT', 'homePage must be an http(s) URL');
+    return this.runInstaller(
+      [
+        '--browser-only', '--browser-extension', input.extensionId, '--browser-update-url', input.updateUrl, '--browser-port', String(input.port),
+        ...(input.homePage ? ['--browser-home', input.homePage] : []),
+        ...extraPolicyDirArgs(input.extraPolicyDirs),
+      ],
+      'browser policy',
+      onOutput,
+    );
   }
 
-  /** Remove the policy files `installBrowserPolicy` wrote (pkexec; Linux only). */
-  async removeBrowserPolicy(onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
-    return this.runInstaller(['--remove-browser-policy'], 'browser policy removal', onOutput);
+  /** Remove the policy files `installBrowserPolicy` wrote (pkexec; Linux only), including those in `extraPolicyDirs`. */
+  async removeBrowserPolicy(extraPolicyDirs?: string[], onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
+    return this.runInstaller(['--remove-browser-policy', ...extraPolicyDirArgs(extraPolicyDirs)], 'browser policy removal', onOutput);
   }
 
   private async runInstaller(extraArgs: string[], what: string, onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {

@@ -3,7 +3,10 @@
 With the **rp-code browser bridge** extension installed, a character that has the `browser`
 capability can list your tabs, open pages, read them, click links, fill in fields, scroll,
 take screenshots and react when a page finishes loading — in your real browser, with your
-real logins. Without the extension `sdk.browser.open(url)` still works (it runs the browser
+real logins. Since `sdk.browser` 2.1 it can also keep pages from opening for a while, restyle
+or swap the pictures on a page, set your home page, use your bookmarks and history, and run a
+script in a page (each of those switchable in Settings → Browser; see
+[What else a character can do](#what-else-a-character-can-do-sdkbrowser-21)). Without the extension `sdk.browser.open(url)` still works (it runs the browser
 command from Settings → Commands) and every other `sdk.browser` method fails with
 `CAPABILITY_FAILED` ("The browser extension is not connected …"), so nothing breaks when it
 is absent.
@@ -40,17 +43,124 @@ Vivaldi, Opera. Firefox is not supported (different extension platform).
 - Protocol: the app sends `{ id, op, args }`, the extension answers `{ id, ok: true, value }` or
   `{ id, ok: false, error: { code, message } }`, and pushes `{ event: 'tab-updated' |
   'tab-activated' | 'tab-removed', data }`. The first frame after connecting is
-  `{ hello: { version, browser, extensionId } }`. Requests time out after 15 s.
-- Ops: `tabs.list/open/activate/close/navigate/back/forward/reload` and
-  `page.read/query/click/type/scroll/screenshot/find`. Page ops inject a self-contained
-  function with `chrome.scripting.executeScript` for that one call; there are no persistent
-  content scripts. Internal pages (`chrome://…`, the Web Store) are listed without URL or
-  title and can never be read or scripted.
+  `{ hello: { version, browser, extensionId } }`. Requests time out after 15 s (`page.eval` gets its own timeout plus 5 s).
+- Ops: `tabs.list/open/activate/close/navigate/back/forward/reload`,
+  `page.read/query/click/type/scroll/screenshot/find`, and (2.1) `page.imageEffect`,
+  `page.clearImageEffects`, `page.eval`, `rules.block/unblock/list/clear`, `home.set/get`,
+  `bookmarks.list/search/add/remove`, `history.search/visits/recent`. Page ops inject a
+  self-contained function with `chrome.scripting.executeScript` for that one call; there are no
+  persistent content scripts. Internal pages (`chrome://…`, the Web Store) are listed without URL
+  or title and can never be read or scripted.
 - `sdk.browser` (`packages/sdk/src/modules/browser.ts`, v2) maps 1:1 onto those ops; the host
   handler (`apps/desktop/src/main/capabilities/browser.ts`) applies the web allowlist and
   routes to the bridge. `tab-updated` with `status: 'complete'` becomes the
   **`browser-navigated`** host event (`{ tabId, url, title }`, filter `{ url?, title? }`
   substrings) for `sdk.events.on`.
+
+## What else a character can do (`sdk.browser` 2.1)
+
+Every method below needs the extension, passes the web allowlist for any URL it takes, and is
+audited like the rest. Settings → Browser → **What characters may do** switches page blocking,
+JavaScript injection and history access off individually; a switched-off call fails with
+`CAPABILITY_FAILED` and a message naming the setting.
+
+### Blocking pages for a while
+
+`sdk.browser.block(patterns, { durationMs, redirect?, reason? })` → `{ id, expiresAt }`,
+`unblock(id)`, `blocks()`, `clearBlocks()`. Patterns: `example.com` (the host and every
+subdomain), `*.example.com` (the same), `example.com/path*` (a path prefix), `example.com/exact`
+(that path; `*` inside a path matches anything). Each pattern becomes one dynamic
+`declarativeNetRequest` rule (`regexFilter`, `main_frame` only, any port), so only top-level
+navigations are affected — embedded resources, the extension's own traffic and the app's pages
+are not. Without `redirect` the rule sends the navigation to the extension's `blocked.html`
+("This page is unavailable right now — blocked by *character* until *time*", the reason, and an
+"Ask in rp-code" hint); with `redirect` it goes to that URL instead. Tabs already showing a
+newly blocked page are moved the same way. The rule table lives in `chrome.storage.local`
+(dynamic DNR rules persist on their own) and a `chrome.alarms` alarm removes expired rules; the
+list and the popup's counter are refreshed from it.
+
+- `durationMs` is capped by `settings.browser.maxBlockMs` (default 4 h, Settings → Browser
+  "Longest block", policy key `browser.maxBlockMs`); the result reports `cappedToMs` when it was
+  shortened. Omitting it means "the cap".
+- `127.0.0.1`, `localhost`, `*.localhost`, `chrome://…` and every other browser scheme are
+  protected (the app's own media pages, assets and the extension update URL) —
+  `PERMISSION_DENIED` in the app, and refused again by the extension.
+- Settings → Browser lists the active blocks (who, until when, redirect, reason) with **Clear
+  all blocks**; `browser.allowBlocking` (policy: `browser.allowBlocking`) switches the feature
+  off ("Blocking pages is disabled in Settings → Browser"). Unblocking and listing keep working
+  while it is off so the user can clean up.
+
+### Image effects
+
+`sdk.browser.imageEffect(tabId, effect, { selector?, replaceWith?, durationMs? })` →
+`{ applied, replaced, total }` and `clearImageEffects(tabId)`. `effect` is a preset — `blur`
+(`blur(6px)`), `grayscale`, `sepia`, `invert`, `hue` (`hue-rotate(180deg)`), `pixelate`, `none` —
+or `{ css: "<filter value>" }` (a plain `filter` value; braces, `url()` and markup are rejected).
+The extension injects or updates one `<style data-rp-effect>` element applying `filter` to
+`img, picture, video` (or `selector`). `pixelate` is approximate: CSS has no pixelation filter,
+so it combines `image-rendering: pixelated` with `blur(1px) contrast(2)`. `replaceWith` swaps
+every matching `<img>`'s `src` (and drops `srcset`, also on `<picture>` sources) for an http(s)
+URL or a pack asset (`AssetRef` or a pack-relative path, served through the app's loopback
+asset route as `http://127.0.0.1:<port>/t/<token>/asset/<pack>/<path>`); originals are kept in
+`data-rp-original-src` / `data-rp-original-srcset` and restored by `clearImageEffects` or when
+`durationMs` runs out (an in-page timer). Nothing persists across navigations.
+
+Caveat: a site with a strict `Content-Security-Policy` `img-src` refuses the replacement image
+(the browser shows a broken picture; `replaced` still counts the swapped elements) — use a
+filter there, or `clearImageEffects`.
+
+### Home page
+
+`sdk.browser.setHomePage(url | null)`, `homePage()`. The extension overrides the browser's
+new-tab page (`chrome_url_overrides.newtab` → `newtab.html`): when a home page is stored in
+`chrome.storage.local.homePage` and it is http(s), the page does `location.replace(url)`;
+otherwise it shows a plain "rp-code" page. The value lives in `settings.browser.homePage` (Settings → Browser "Home page";
+policy key `browser.homePage`) and is pushed to the extension every time one connects, so it
+survives extension re-installs. **Install browser policy…** also writes it as
+`HomepageLocation` + `HomepageIsNewTabPage: false` (`install.sh --browser-home <url>`), which
+covers the browser's Home button and browsers where the user switched the extension's new-tab
+override off (`chrome://extensions` lets them) — the policy value still applies there.
+
+### Bookmarks
+
+`sdk.browser.bookmarks({ folder? })` (the tree flattened to `{ id, title, url?, parentId, path }`,
+folders included, at most 500), `searchBookmarks(query)`, `addBookmark(url, title, { folder? })`,
+`removeBookmark(idOrUrl)`. `folder` is the title of an existing folder or a path such as
+`Work/Reading`; missing segments are created under "Other bookmarks". Removing by URL removes
+every bookmark of that URL; folders are never removed. Permission: `bookmarks`.
+
+### JavaScript in a page
+
+`sdk.browser.eval(tabId, code, { world?, timeoutMs? })` → `{ value, world, fallback? }`, marked
+*dangerous*. `code` is the body of an async function; the awaited return value comes back
+JSON-serialised (64 KiB cap; non-serialisable results are an error). The extension injects a
+fixed wrapper (`new Function('return (async () => {' + code + '})()')`) with
+`chrome.scripting.executeScript`. Timeout default 10 s, max 60 s. `settings.browser.allowEval`
+(policy: `browser.allowEval`) switches it off ("JavaScript injection is disabled in Settings →
+Browser").
+
+Two worlds, and a finding: `world: "isolated"` (the default) asks for the content-script world
+(`world: 'ISOLATED'`) — it sees the DOM but not the page's own JavaScript variables. In
+Manifest V3, though, the extension's own CSP (`script-src 'self'`, not relaxable) applies to
+content scripts as well, so `new Function` is refused there ("Refused to evaluate a string as
+JavaScript because 'unsafe-eval' is not an allowed source"), and `executeScript` serialises
+`func` from its real source (an overridden `toString` is ignored), so there is no other way to
+run dynamic code in that world. Verified against Chromium 141 by the smoke. The extension
+therefore falls back to the main world on that refusal, remembers it for the worker's lifetime,
+and reports `world: "main"` plus `fallback: "The isolated world refuses eval (extension CSP);
+ran in the main world"`. `world: "main"` runs as the page itself (`world: 'MAIN'`) and can read
+page globals — but a page CSP without `unsafe-eval` refuses it, and the error then says "the
+page's Content Security Policy forbids eval in the main world". In practice: expect `eval` to
+run in the main world; on strict-CSP sites use the fixed helpers (`read`, `query`, `click`, …).
+
+### History
+
+`sdk.browser.history({ text?, since?, until?, limit? })` (`since`/`until`: ISO date-time or a
+number of milliseconds ago; default the last 7 days, limit default 100, max 500),
+`historyVisits(url)` → `[{ visitTime, transition }]`, `recentHistory(limit?)`. This reads the
+whole profile's history through `chrome.history` (permission `history`), which is why
+`settings.browser.allowHistory` (policy: `browser.allowHistory`) exists: off → "Browser history
+access is disabled in Settings → Browser".
 
 ## Installing the extension
 
@@ -99,8 +209,21 @@ and the extension connects. The app must be running for the download to succeed;
 started while rp-code is closed retries later. `chrome://policy` shows the policy and any
 error; `chrome://extensions` shows the extension as "Installed by your administrator".
 
-**Remove policy** (`install.sh --remove-browser-policy`) deletes every `rp-code.json` the
-installer wrote; browsers uninstall the extension at their next policy refresh.
+With a home page set (Settings → Browser), the file also carries `"HomepageLocation": "<url>"`
+and `"HomepageIsNewTabPage": false` (`--browser-home <url>`).
+
+**Extra policy directories.** Chromium forks whose managed-policy directory is not in the table
+(Helium, ungoogled-chromium derivatives, distribution builds with their own name) can be added
+under Settings → Browser → **Extra policy directories** (one per line; stored in
+`settings.browser.extraPolicyDirs`, passed to the installer as repeatable
+`--browser-policy-dir <dir>` flags on install *and* remove). Each must be an absolute path ending
+in `/policies/managed`. To find a browser's directory, open `chrome://policy` in it (the page
+names the platform policy path when a policy is loaded) or watch it look for the directory:
+`strace -f -e trace=openat <browser> 2>&1 | grep policies/managed`.
+
+**Remove policy** (`install.sh --remove-browser-policy [--browser-policy-dir <dir>]…`) deletes
+every `rp-code.json` the installer wrote; browsers uninstall the extension at their next policy
+refresh.
 `install.sh --uninstall` removes them as well. The `.deb` post-install never writes this
 policy: the extension id is derived from a per-user key (below), so it has to be done from
 the app for the user in question. `--dry-run` prints every file it would write.
@@ -150,7 +273,11 @@ Can (with the `browser` capability granted to its pack, and only while the exten
   enumerate elements by CSS selector, click them, type into inputs/textareas/selects/
   contenteditables (with a real form submit when asked), scroll;
 - take a PNG screenshot of the visible part of a tab (the tab is brought to the front first);
-- get `browser-navigated` events when a tab finishes loading.
+- get `browser-navigated` events when a tab finishes loading;
+- (2.1) block pages for a while, restyle or swap a page's pictures, set the home page, list,
+  search, add and remove bookmarks, read the history, and run a script in a page — each
+  described above, and each of blocking, scripting and history switchable off in Settings →
+  Browser.
 
 Cannot:
 
@@ -159,8 +286,11 @@ Cannot:
 - open or navigate to hosts outside `settings.web.allowlist` when you set one (Settings →
   Integrations → Web access; empty = any host) — `PERMISSION_DENIED`;
 - read, script or capture internal pages (`chrome://…`, the Web Store);
-- run arbitrary JavaScript in pages: only the fixed, self-contained page helpers are ever
-  injected, with the arguments listed above;
+- run JavaScript in pages while `Run JavaScript in pages` is off in Settings → Browser (with it
+  on, `eval` is a *dangerous* method: audited, and refused by the page's CSP in the main world);
+  every other page op only injects the fixed, self-contained helpers with the arguments above;
+- block the app's own pages, `localhost` or browser pages, block for longer than the cap in
+  Settings → Browser, or block anything while blocking is switched off;
 - reach the extension at all when it is not connected, or from another machine (the bridge
   and the update URL are bound to `127.0.0.1`);
 - act without your grant: `browser` is a pack-level capability and `openTab`, `navigate`,
@@ -187,14 +317,16 @@ give `browser` only to packs you trust, and keep the web allowlist tight when in
 5. **Signed package.** The CRX is signed with your key, so the id in the policy can only be
    satisfied by a package this app built; the key never leaves `<userData>`.
 6. **Least privilege in the extension.** Permissions: `tabs`, `scripting`, `activeTab`,
-   `storage`, `alarms`, host permission `<all_urls>` (needed to read pages the character is
-   sent to and to capture tabs). No persistent content scripts, no cookies/history/downloads
-   permissions, no remote code.
+   `storage`, `alarms`, `declarativeNetRequest` (page blocks), `bookmarks`, `history`, host
+   permission `<all_urls>` (needed to read pages the character is sent to and to capture tabs).
+   No persistent content scripts, no cookies/downloads permissions, no remote code; the only
+   web-accessible resource is `blocked.html`, the page blocked navigations are sent to.
 
 ## How the package is built
 
-`pnpm --filter @rp/browser-extension build` bundles `src/background.ts` and `src/popup.ts`
-with esbuild into `dist/` next to `manifest.json`, `schema.json` and `popup.html`; the
+`pnpm --filter @rp/browser-extension build` bundles `src/background.ts`, `src/popup.ts`,
+`src/newtab.ts` and `src/blocked.ts` with esbuild into `dist/` next to `manifest.json`,
+`schema.json`, `popup.html`, `newtab.html` and `blocked.html`; the
 desktop build (`apps/desktop/scripts/build-extension.mjs`, run by `pnpm --filter @rp/desktop
 build`) copies `dist/` to `apps/desktop/resources/extension/` (git-ignored, shipped by
 electron-builder as `resources/extension`). The manifest has no `key` field: the packaged
@@ -219,7 +351,9 @@ that version so browsers pick updates up. `GET /extension/id` returns the id as 
 ## Testing
 
 - Unit: `apps/browser-extension/src/*.test.ts` (protocol, URL policy, backoff, text
-  normalisation, every op against a fake `chrome`), `apps/desktop/src/main/browser/*.test.ts`
+  normalisation, every op against a fake `chrome` — including the DNR rule table, expiry,
+  bookmarks, history and eval; `rules.test.ts` for pattern → `regexFilter` conversion and
+  expiry, `bookmarks.test.ts` for folder path resolution, `effects.test.ts` for the effect CSS), `apps/desktop/src/main/browser/*.test.ts`
   (CRX3 layout and signature, pinned id derivation for a fixed key, policy JSON/XML, the
   bridge over a fake socket: origin rejection, hello/trust flow, request/response, error
   mapping, timeout, disconnect, event forwarding) and
@@ -231,7 +365,16 @@ that version so browsers pick updates up. `GET /extension/id` returns the id as 
   `--load-extension`, points the extension at the app's port, and lets the mock model run a
   turn that opens the loopback smoke page, reads it, queries and finds, types, scrolls,
   screenshots and clicks the link — then checks the `browser-navigated` event reached both a
-  host subscriber and the character's own `sdk.events` handler. A second phase repeats this
+  host subscriber and the character's own `sdk.events` handler. A second turn exercises the 2.1
+  capabilities: block `smoke.test/smoke/page2*` (Chromium maps `smoke.test` onto 127.0.0.1 with
+  `--host-resolver-rules`, since 127.0.0.1 itself is protected), open it and land on the blocked
+  page, unblock and open it for real; `grayscale` + a pack-asset `replaceWith` on the smoke page
+  with the computed style and `src` read back through `eval`; set the home page (the launcher
+  then opens `chrome://newtab` and the app waits for the `browser-navigated` event on it); add,
+  search, list and remove a bookmark; `eval` in the isolated world (`document.title`, plus a
+  `new Function` probe) and the main world (`location.href`); `history` / `historyVisits` for
+  the smoke page — `[smoke] verify browser capabilities: PASS` lists each. A second phase
+  repeats this
   with the **policy path**: the installer writes the managed policy (root or passwordless sudo;
   `RP_SMOKE_POLICY=auto|1|0`), Chromium starts without `--load-extension`, force-installs the
   app-signed CRX from the loopback update URL, receives its port from the `3rdparty` block and

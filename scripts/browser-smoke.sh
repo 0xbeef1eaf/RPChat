@@ -3,7 +3,10 @@
 # (RP_MOCK_LLM=1 RP_SMOKE=1 RP_SMOKE_BROWSER=1), launches Chromium through playwright-core, and
 # lets a mock-LLM turn drive `sdk.browser` end to end: open the loopback smoke page, read it,
 # query/find/type/scroll, screenshot, click a link, and check that the `browser-navigated` host
-# event reached a host subscriber and the character's own handler.
+# event reached a host subscriber and the character's own handler. A second turn exercises the
+# 2.1 capabilities (block/unblock a pattern, image effect with a pack-asset replacement, home page
+# + the new-tab override, bookmarks, eval in both worlds, history); `[smoke] verify browser
+# capabilities: PASS` reports each one.
 #
 # Phase "unpacked" loads the extension with --load-extension (always). Phase "policy" writes the
 # Chromium managed policy with the installer (root or passwordless sudo needed) and lets the
@@ -86,11 +89,15 @@ run_phase() {
     if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
     sleep 0.5
   done
+  # The launcher's new-tab check runs alongside the app's last verification; let it report before we kill it.
+  for _ in $(seq 1 16); do grep -q "\[chromium\] newtab →" "$CLOG" 2>/dev/null && break; sleep 0.5; done
   echo "--- chromium ($MODE)"; grep -E "^\[chromium\]" "$CLOG" | cut -c1-200
   echo "--- smoke log ($MODE)"; grep -E "\[(smoke|error|browser)\]" "$LOG" | cut -c1-240
   if ! grep -q "\[smoke\] browser extension connected" "$LOG"; then echo "FAIL ($MODE): the extension never connected to the bridge"; STATUS=1; fi
   if ! grep -q "\[smoke\] browser action ok" "$LOG"; then echo "FAIL ($MODE): the browser action did not succeed"; STATUS=1; fi
   if ! grep -q "\[smoke\] verify browser: PASS" "$LOG"; then echo "FAIL ($MODE): browser verification failed (see verify line above)"; STATUS=1; fi
+  if ! grep -q "\[smoke\] verify browser capabilities: PASS" "$LOG"; then echo "FAIL ($MODE): browser capabilities verification failed (see the capabilities line above)"; STATUS=1; fi
+  if ! grep -q "\[chromium\] newtab → http" "$CLOG"; then echo "FAIL ($MODE): the new-tab override did not open the home page (see the chromium lines above)"; STATUS=1; fi
   if grep -qiE "typeerror|unhandled" "$LOG"; then echo "FAIL ($MODE): TypeError/unhandled in app log"; STATUS=1; fi
   if [ "$MODE" = policy ] && ! grep -q "force-installed by policy" "$CLOG"; then echo "FAIL (policy): the browser did not force-install the extension from the policy"; STATUS=1; fi
   kill "$APP_PID" "$CHROME_PID" 2>/dev/null; wait "$APP_PID" "$CHROME_PID" 2>/dev/null; APP_PID=""; CHROME_PID=""

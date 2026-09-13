@@ -448,7 +448,7 @@ export function SettingsView() {
       {tab === 'browser' ? (
         <section className="section">
           <h2>Browser extension</h2>
-          <BrowserSection />
+          <BrowserSection settings={settings} onPatch={patchSettings} />
         </section>
       ) : null}
 

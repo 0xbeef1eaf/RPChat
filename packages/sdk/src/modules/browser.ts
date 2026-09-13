@@ -2,9 +2,10 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const browserModule: CapabilityModuleSpec = {
   id: 'browser',
-  version: '2.0.0',
+  version: '2.1.0',
   title: 'Web browser',
-  summary: "Open web pages, and — with the rp-code browser extension connected — list, read, click, type into and screenshot the user's browser tabs.",
+  summary:
+    "Open web pages, and — with the rp-code browser extension connected — list, read, click, type into and screenshot the user's browser tabs, block pages for a while, style or swap images, set the home page, use bookmarks and history, and run JavaScript in a page.",
   permission: 'pack',
   apiTypeName: 'BrowserApi',
   typings: `/** A browser tab as the extension reports it. Internal pages (chrome://…) are listed with an empty url and title. */
@@ -24,6 +25,30 @@ interface BrowserElement {
   href?: string;
   value?: string;
 }
+/** A page block installed with browser.block(). */
+interface BrowserBlock {
+  id: string;
+  patterns: string[];
+  redirect?: string;
+  expiresAt?: string;
+  by?: string;
+  reason?: string;
+}
+/** A bookmark or bookmark folder (folders have no url); path is the folder path from the root, e.g. "Bookmarks bar/Work". */
+interface BrowserBookmark {
+  id: string;
+  title: string;
+  url?: string;
+  parentId: string;
+  path: string;
+}
+interface BrowserHistoryItem {
+  url: string;
+  title: string;
+  lastVisitTime: string;
+  visitCount: number;
+}
+type BrowserImageEffect = "blur" | "grayscale" | "sepia" | "invert" | "hue" | "pixelate" | "none" | { css: string };
 /**
  * The user's web browser. \`open()\` always works (it runs the browser command from Settings). Everything
  * else drives tabs through the rp-code browser extension, so it needs the extension installed and
@@ -92,6 +117,59 @@ interface BrowserApi {
   screenshot(tabId?: number): Promise<{ dataUrl: string; url: string; title: string }>;
   /** Count occurrences of a text on the page (case-insensitive) and scroll the first one into view. */
   find(tabId: number, text: string): Promise<{ count: number; first?: { snippet: string; tag: string } }>;
+  /**
+   * Keep pages matching the patterns from opening for a while: "example.com" (the host and its subdomains),
+   * "*.example.com", "example.com/path*". Blocked navigations land on a page that names you and the end time
+   * (or on redirect); tabs already there are moved. durationMs is capped by the user's setting (default 4 h).
+   * The app's own pages and browser pages can never be blocked. Fails when the user switched blocking off.
+   * @example const b = await sdk.browser.block(["*.youtube.com"], { durationMs: 30 * 60_000, reason: "focus time, as you asked" });
+   */
+  block(patterns: string[], options?: { durationMs?: number; redirect?: string; reason?: string }): Promise<{ id: string; expiresAt: string; patterns: string[] }>;
+  /** Lift one block early. */
+  unblock(id: string): Promise<{ removed: boolean }>;
+  /** Blocks currently in place. */
+  blocks(): Promise<BrowserBlock[]>;
+  /** Lift every block. */
+  clearBlocks(): Promise<{ removed: number }>;
+  /**
+   * Style the images (and pictures/videos) of a page with a CSS filter preset or your own filter value, and/or
+   * swap every matching <img> for another picture (an http(s) URL or a pack asset). Gone on navigation; use
+   * durationMs to revert earlier. pixelate is approximate. Strict sites (CSP img-src) may refuse a swapped picture.
+   * @example await sdk.browser.imageEffect(tab.id, "grayscale", { durationMs: 60_000 });
+   */
+  imageEffect(tabId: number, effect: BrowserImageEffect, options?: { selector?: string; replaceWith?: AssetRef | string; durationMs?: number }): Promise<{ applied: boolean; replaced: number; total: number }>;
+  /** Undo imageEffect() on a page right away. */
+  clearImageEffects(tabId: number): Promise<{ cleared: boolean; restored: number }>;
+  /** Set (http(s)) or clear (null) the page the browser opens in new tabs and as its home page. */
+  setHomePage(url: string | null): Promise<{ url: string | null }>;
+  /** The home page currently set, or null. */
+  homePage(): Promise<{ url: string | null }>;
+  /** Bookmarks and folders (at most 500), optionally only inside a folder given by title or path ("Bookmarks bar/Work"). */
+  bookmarks(options?: { folder?: string }): Promise<BrowserBookmark[]>;
+  /** Bookmarks whose title or URL contains the words. */
+  searchBookmarks(query: string): Promise<BrowserBookmark[]>;
+  /** Add a bookmark; folder is a folder title or an "A/B" path, created under "Other bookmarks" when missing. */
+  addBookmark(url: string, title: string, options?: { folder?: string }): Promise<BrowserBookmark>;
+  /** Remove a bookmark by id, or every bookmark of a URL. Folders are never removed. */
+  removeBookmark(idOrUrl: string): Promise<{ removed: number }>;
+  /**
+   * Run JavaScript in a page and get its return value (the code is the body of an async function; return plain
+   * JSON, at most 64 KiB). world "isolated" (default) is tried first, but Chromium's extension CSP refuses eval
+   * there, so the code runs in the "main" world (as the page itself; result says world: "main" and fallback);
+   * a page whose own CSP forbids eval refuses it, and the error says so. Timeout default 10 s. The user can
+   * switch this off.
+   * @example const links = await sdk.browser.eval(tab.id, "return [...document.querySelectorAll('a')].map(a => a.href).slice(0, 20)");
+   */
+  eval(tabId: number, code: string, options?: { world?: "isolated" | "main"; timeoutMs?: number }): Promise<{ value: unknown; world: "isolated" | "main"; fallback?: string }>;
+  /**
+   * Search the browser history (whole profile; the user can switch this off). since/until: ISO date-time or a
+   * number of milliseconds ago; default the last 7 days, limit default 100 (max 500).
+   */
+  history(options?: { text?: string; since?: string | number; until?: string | number; limit?: number }): Promise<BrowserHistoryItem[]>;
+  /** Every recorded visit of one URL. */
+  historyVisits(url: string): Promise<Array<{ visitTime: string; transition: string }>>;
+  /** The most recently visited pages (default 20). */
+  recentHistory(limit?: number): Promise<BrowserHistoryItem[]>;
 }`,
   docs: `Open pages and, when the user has installed the browser extension, work inside their browser. Requires the \`browser\` capability.
 
@@ -100,13 +178,14 @@ interface BrowserApi {
 - Read before you act: \`read()\` for the text, \`query()\` for the links/buttons/fields you need, then \`click()\` / \`type()\`. Keep to one page and a couple of interactions per action; return what you learned, not whole pages.
 - Clicks and typing land in the user's real browser session (logged in accounts, forms). Do not submit forms or buy, post or send anything without the user asking for it in this conversation.
 - Internal pages (chrome://, the web store) cannot be read or controlled. \`browser-navigated\` (sdk.events) fires when a tab finishes loading a page.
+- \`block()\` keeps pages from opening for a while (capped by the user's setting, default 4 h; say so when you use it and lift it with \`unblock()\` when asked). \`imageEffect()\` styles or swaps a page's pictures until navigation. \`setHomePage()\` changes what new tabs open. Bookmarks and history are the user's own — read them for what they asked, do not recite them. \`eval()\` runs code in a page: prefer the fixed helpers, keep scripts small and return plain data. Each of these can be switched off in Settings → Browser; then the call fails with CAPABILITY_FAILED and the message says so.
 
 \`\`\`ts
+const block = await sdk.browser.block(["*.example-social.com"], { durationMs: 45 * 60_000, reason: "the focus hour you asked for" });
 const tab = await sdk.browser.openTab("https://open-meteo.com/");
+await sdk.browser.imageEffect(tab.id, "sepia", { durationMs: 120_000 });
 const page = await sdk.browser.read(tab.id, { maxChars: 4000 });
-const docs = await sdk.browser.query(tab.id, "a[href*='docs']", { limit: 5 });
-if (docs[0]) await sdk.browser.click(tab.id, "a[href*='docs']");
-return { title: page.title, snippet: page.text.slice(0, 300), followed: docs[0]?.href ?? null };
+return { blockedUntil: block.expiresAt, title: page.title, snippet: page.text.slice(0, 300) };
 \`\`\``,
   methods: {
     open: { description: "Open an http(s) URL in the user's browser.", dangerous: true },
@@ -126,5 +205,21 @@ return { title: page.title, snippet: page.text.slice(0, 300), followed: docs[0]?
     scroll: { description: 'Scroll the page.' },
     screenshot: { description: 'Screenshot the visible tab.', dangerous: true },
     find: { description: 'Find text on the page.' },
+    block: { description: 'Block pages matching URL patterns for a while.', dangerous: true },
+    unblock: { description: 'Lift one page block.' },
+    blocks: { description: 'List active page blocks.' },
+    clearBlocks: { description: 'Lift every page block.' },
+    imageEffect: { description: 'Apply a CSS filter to, or swap, the images of a page.', dangerous: true },
+    clearImageEffects: { description: 'Undo image effects on a page.' },
+    setHomePage: { description: "Set or clear the browser's home / new-tab page.", dangerous: true },
+    homePage: { description: 'The home page currently set.' },
+    bookmarks: { description: 'List bookmarks.' },
+    searchBookmarks: { description: 'Search bookmarks.' },
+    addBookmark: { description: 'Add a bookmark.', dangerous: true },
+    removeBookmark: { description: 'Remove a bookmark.', dangerous: true },
+    eval: { description: 'Run JavaScript in a page.', dangerous: true },
+    history: { description: 'Search the browser history.' },
+    historyVisits: { description: 'Visits of one URL in the browser history.' },
+    recentHistory: { description: 'The most recently visited pages.' },
   },
 };

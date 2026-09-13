@@ -54,6 +54,8 @@ export interface BrowserBridgeDeps {
     updateUrl(): string;
   };
   logger: Pick<Console, 'info' | 'warn' | 'debug'>;
+  /** `settings.browser.homePage`, reported in `status()`. */
+  homePage?: () => Promise<string>;
   /** Smoke/dev: trust every extension that says hello without asking. */
   autoTrust?: boolean;
   requestTimeoutMs?: number;
@@ -298,13 +300,16 @@ export class BrowserBridge {
     return this.current !== undefined && this.current.state === 'active';
   }
 
-  /** Send one op to the connected extension; `CAPABILITY_FAILED` when none is connected or it does not answer in time. */
-  request(op: string, args: Record<string, Json> = {}): Promise<Json> {
+  /**
+   * Send one op to the connected extension; `CAPABILITY_FAILED` when none is connected or it does
+   * not answer in time (15 s, or `opts.timeoutMs` for ops that legitimately take longer, e.g. eval).
+   */
+  request(op: string, args: Record<string, Json> = {}, opts: { timeoutMs?: number } = {}): Promise<Json> {
     const conn = this.current;
     if (!conn || conn.state !== 'active') return Promise.reject(new RpError('CAPABILITY_FAILED', NOT_CONNECTED_MESSAGE));
     const id = randomUUID();
     return new Promise<Json>((resolve, reject) => {
-      const timeoutMs = this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+      const timeoutMs = opts.timeoutMs ?? this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new RpError('CAPABILITY_FAILED', `The browser extension did not answer ${op} within ${Math.round(timeoutMs / 1000)} s`));
@@ -349,6 +354,7 @@ export class BrowserBridge {
       trusted: [...trusted],
       updateUrl: this.deps.extension.updateUrl(),
       denied: [...this.denied],
+      homePage: (await this.deps.homePage?.().catch(() => '')) ?? '',
     };
     if (conn && conn.state === 'active') {
       status.extensionId = conn.id;

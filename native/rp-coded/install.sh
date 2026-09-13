@@ -12,7 +12,8 @@
 # Usage:
 #   install.sh [--app-bin <path>] [--user <name>] [--autostart xdg|systemd|none]
 #              [--menu-entry yes|no] [--policy-template] [--daemon-bin <path>] [--dry-run]
-#              [--browser-extension <id> --browser-update-url <url> [--browser-port <n>] [--browser-only]]
+#              [--browser-extension <id> --browser-update-url <url> [--browser-port <n>] [--browser-home <url>]
+#               [--browser-policy-dir <dir>]... [--browser-only]]
 #   install.sh --remove-browser-policy [--dry-run]
 #   install.sh --uninstall [--user <name>] [--dry-run]
 set -euo pipefail
@@ -53,6 +54,10 @@ NEED_RELOGIN=false
 BROWSER_EXT=""
 BROWSER_UPDATE_URL=""
 BROWSER_PORT=""
+BROWSER_HOME=""
+# Extra managed-policy directories (--browser-policy-dir, repeatable): Chromium forks whose policy
+# path is not in BROWSER_POLICY_DIRS. Written and removed like the built-in ones. Newline separated.
+BROWSER_EXTRA_DIRS=""
 BROWSER_ONLY=false
 REMOVE_BROWSER_POLICY=false
 
@@ -72,6 +77,15 @@ while [ $# -gt 0 ]; do
     --browser-extension) BROWSER_EXT="${2:?--browser-extension needs an id}"; shift 2 ;;
     --browser-update-url) BROWSER_UPDATE_URL="${2:?--browser-update-url needs a URL}"; shift 2 ;;
     --browser-port) BROWSER_PORT="${2:?--browser-port needs a number}"; shift 2 ;;
+    --browser-home) BROWSER_HOME="${2:?--browser-home needs a URL}"; shift 2 ;;
+    --browser-policy-dir)
+      case "${2:?--browser-policy-dir needs an absolute directory}" in
+        /*/policies/managed) ;;
+        *) echo "install.sh: --browser-policy-dir must be an absolute path ending in /policies/managed (got $2)" >&2; exit 64 ;;
+      esac
+      case "$2" in *[[:space:]]*|*'|'*) echo "install.sh: --browser-policy-dir must not contain spaces or |" >&2; exit 64 ;; esac
+      BROWSER_EXTRA_DIRS="$BROWSER_EXTRA_DIRS
+$2"; shift 2 ;;
     --browser-only) BROWSER_ONLY=true; shift ;;
     --remove-browser-policy) REMOVE_BROWSER_POLICY=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
@@ -95,6 +109,11 @@ if [ -n "$BROWSER_EXT" ] || $BROWSER_ONLY; then
     ''|*[!0-9]*) echo "install.sh: --browser-port must be a number" >&2; exit 64 ;;
   esac
   if [ "$BROWSER_PORT" -lt 1 ] || [ "$BROWSER_PORT" -gt 65535 ]; then echo "install.sh: --browser-port must be 1..65535" >&2; exit 64; fi
+  case "$BROWSER_HOME" in
+    ''|http://*|https://*) ;;
+    *) echo "install.sh: --browser-home must be an http(s) URL" >&2; exit 64 ;;
+  esac
+  case "$BROWSER_HOME" in *['"\\']*|*[[:space:]]*) echo "install.sh: --browser-home must not contain quotes, backslashes or spaces" >&2; exit 64 ;; esac
 fi
 
 ok()   { printf '[ok]   %s\n' "$*"; }
@@ -219,22 +238,32 @@ as_user_write() { # as_user_write <dst> <content...>
 # that looks installed. Prints one directory per line.
 browser_policy_targets() {
   local line dir cfg bins b
-  echo "$BROWSER_POLICY_DIRS" | while IFS='|' read -r dir cfg bins; do
-    [ -n "$dir" ] || continue
-    case " $BROWSER_ALWAYS " in *" $dir "*) echo "$dir"; continue ;; esac
-    if [ -d "$cfg" ] || [ -d "$dir" ]; then echo "$dir"; continue; fi
-    for b in $bins; do if have "$b"; then echo "$dir"; break; fi; done
-  done
+  {
+    echo "$BROWSER_POLICY_DIRS" | while IFS='|' read -r dir cfg bins; do
+      [ -n "$dir" ] || continue
+      case " $BROWSER_ALWAYS " in *" $dir "*) echo "$dir"; continue ;; esac
+      if [ -d "$cfg" ] || [ -d "$dir" ]; then echo "$dir"; continue; fi
+      for b in $bins; do if have "$b"; then echo "$dir"; break; fi; done
+    done
+    # Extra directories from --browser-policy-dir always get the file (the user named them on purpose).
+    echo "$BROWSER_EXTRA_DIRS" | while read -r dir; do [ -n "$dir" ] && echo "$dir"; done
+  } | awk '!seen[$0]++'
 }
 
-browser_policy_json() { # browser_policy_json <id> <update-url> <port>
-  printf '{\n  "ExtensionInstallForcelist": ["%s;%s"],\n  "ExtensionInstallSources": ["http://127.0.0.1:%s/*"],\n  "3rdparty": { "extensions": { "%s": { "policy": { "port": %s } } } }\n}\n' "$1" "$2" "$3" "$1" "$3"
+browser_policy_json() { # browser_policy_json <id> <update-url> <port> [home-url]
+  # With a home page (Settings → Browser), HomepageLocation covers the Home button and browsers where
+  # the user switched the extension's new-tab override off; the same JSON as apps/desktop/src/main/browser/policy.ts.
+  if [ -n "${4:-}" ]; then
+    printf '{\n  "ExtensionInstallForcelist": ["%s;%s"],\n  "ExtensionInstallSources": ["http://127.0.0.1:%s/*"],\n  "3rdparty": { "extensions": { "%s": { "policy": { "port": %s } } } },\n  "HomepageLocation": "%s",\n  "HomepageIsNewTabPage": false\n}\n' "$1" "$2" "$3" "$1" "$3" "$4"
+  else
+    printf '{\n  "ExtensionInstallForcelist": ["%s;%s"],\n  "ExtensionInstallSources": ["http://127.0.0.1:%s/*"],\n  "3rdparty": { "extensions": { "%s": { "policy": { "port": %s } } } }\n}\n' "$1" "$2" "$3" "$1" "$3"
+  fi
 }
 
 install_browser_policy() {
   local content dir dst
-  content="$(browser_policy_json "$BROWSER_EXT" "$BROWSER_UPDATE_URL" "$BROWSER_PORT")"
-  note "browser extension $BROWSER_EXT from $BROWSER_UPDATE_URL (port $BROWSER_PORT)"
+  content="$(browser_policy_json "$BROWSER_EXT" "$BROWSER_UPDATE_URL" "$BROWSER_PORT" "$BROWSER_HOME")"
+  note "browser extension $BROWSER_EXT from $BROWSER_UPDATE_URL (port $BROWSER_PORT)${BROWSER_HOME:+, home page $BROWSER_HOME}"
   for dir in $(browser_policy_targets); do
     dst="$dir/$BROWSER_POLICY_FILE"
     if [ -f "$dst" ] && [ "$(cat "$dst")" = "$content" ]; then
@@ -256,8 +285,10 @@ install_browser_policy() {
 
 remove_browser_policy() {
   local line dir cfg bins dst removed=false
-  echo "$BROWSER_POLICY_DIRS" | while IFS='|' read -r dir cfg bins; do
-    [ -n "$dir" ] || continue
+  {
+    echo "$BROWSER_POLICY_DIRS" | while IFS='|' read -r dir cfg bins; do [ -n "$dir" ] && echo "$dir"; done
+    echo "$BROWSER_EXTRA_DIRS" | while read -r dir; do [ -n "$dir" ] && echo "$dir"; done
+  } | awk '!seen[$0]++' | while read -r dir; do
     dst="$dir/$BROWSER_POLICY_FILE"
     if [ -e "$dst" ]; then run rm -f "$dst"; ok "removed $dst"; else skip "$dst absent"; fi
   done

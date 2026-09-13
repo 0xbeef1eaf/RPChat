@@ -32,6 +32,14 @@ describe('mergeSettings commandTemplates', () => {
 });
 
 describe('mergeSettings nested defaults', () => {
+  it('fills the browser toggles and caps from the defaults and keeps stored values', () => {
+    expect(mergeSettings({}).browser).toEqual({ bridgePort: 47821, trustedExtensionIds: [], allowBlocking: true, maxBlockMs: 4 * 60 * 60_000, allowEval: true, allowHistory: true, homePage: '', extraPolicyDirs: [] });
+    // A settings file from before these keys existed keeps its port and ids and gains the defaults.
+    const older = mergeSettings({ browser: { bridgePort: 5000, trustedExtensionIds: ['abcdefghijklmnopabcdefghijklmnop'] } as AppSettings['browser'] }).browser;
+    expect(older).toEqual({ bridgePort: 5000, trustedExtensionIds: ['abcdefghijklmnopabcdefghijklmnop'], allowBlocking: true, maxBlockMs: 4 * 60 * 60_000, allowEval: true, allowHistory: true, homePage: '', extraPolicyDirs: [] });
+    expect(mergeSettings({ browser: { allowEval: false, homePage: 'https://home.test/' } as AppSettings['browser'] }).browser).toMatchObject({ allowEval: false, homePage: 'https://home.test/', allowBlocking: true });
+  });
+
   it('fills debug from the defaults and merges a stored partial onto it', () => {
     expect(mergeSettings({}).debug).toEqual({ showModelTraffic: false });
     expect(mergeSettings({ debug: { showModelTraffic: true } }).debug).toEqual({ showModelTraffic: true });

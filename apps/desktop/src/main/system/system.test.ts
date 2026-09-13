@@ -147,6 +147,24 @@ describe('policy', () => {
     expect(() => parsePolicy({ version: 1, settings: { updates: { enabled: 'no' } } })).toThrow(/updates.enabled must be a boolean/);
   });
 
+  it('parses and applies the browser block', () => {
+    const policy = parsePolicy({ version: 1, settings: { browser: { allowBlocking: false, maxBlockMs: 600_000, allowEval: false, allowHistory: true, homePage: 'https://home.test/' } } });
+    expect(policy.settings?.browser).toEqual({ allowBlocking: false, maxBlockMs: 600_000, allowEval: false, allowHistory: true, homePage: 'https://home.test/' });
+    expect(managedPaths(policy)).toEqual(['browser.allowBlocking', 'browser.allowEval', 'browser.allowHistory', 'browser.homePage', 'browser.maxBlockMs']);
+    expect(managedPaths(parsePolicy({ version: 1, settings: { browser: {} } }))).toEqual([]);
+    expect(() => parsePolicy({ version: 1, settings: { browser: { allowEval: 'no' } } })).toThrow(/browser.allowEval must be a boolean/);
+    expect(() => parsePolicy({ version: 1, settings: { browser: { maxBlockMs: -1 } } })).toThrow(/browser.maxBlockMs/);
+    expect(() => parsePolicy({ version: 1, settings: { browser: { homePage: 'ftp://x' } } })).toThrow(/browser.homePage/);
+    // Unknown keys inside the block are ignored (the daemon rejects them; the app applies what it knows).
+    expect(parsePolicy({ version: 1, settings: { browser: { bridgePort: 1 } } }).settings?.browser).toEqual({});
+    const applied = applyPolicy(base, parsePolicy({ version: 1, settings: { browser: { allowEval: false, maxBlockMs: 1000 } } }));
+    expect(applied.settings.browser).toEqual({ ...base.browser, allowEval: false, maxBlockMs: 1000 });
+    expect(applied.managed).toEqual(['browser.allowEval', 'browser.maxBlockMs']);
+    const { allowEval: _managed, ...rest } = base.browser;
+    void _managed;
+    expect(stripManagedPatch({ browser: { ...base.browser, allowEval: true, homePage: 'https://x.test/' } }, ['browser.allowEval'])).toEqual({ browser: { ...rest, homePage: 'https://x.test/' } });
+  });
+
   it('applyPolicy pins updates.automatic and switches it off when updates are disabled', () => {
     const pinned = applyPolicy({ ...base, updates: { automatic: true, checkIntervalHours: 6 } }, parsePolicy({ version: 1, settings: { updates: { automatic: false } } }));
     expect(pinned.settings.updates).toEqual({ automatic: false, checkIntervalHours: 6 });
@@ -313,8 +331,16 @@ describe('SystemIntegration', () => {
       'pkexec', path.join(stage, 'install.sh'), '--browser-only', '--browser-extension', 'abcdefghijklmnopabcdefghijklmnop',
       '--browser-update-url', 'http://127.0.0.1:47821/extension/update.xml', '--browser-port', '47821', '--user', 'alice',
     ]);
+    await integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821, homePage: 'https://home.test/start' });
+    expect(commands.at(-1)!.slice(-4)).toEqual(['--browser-home', 'https://home.test/start', '--user', 'alice']);
+    await expect(integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821, homePage: 'javascript:1' })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821, extraPolicyDirs: ['/etc/helium/policies/managed/', ' ', '/etc/helium/policies/managed'] });
+    expect(commands.at(-1)!.slice(-4)).toEqual(['--browser-policy-dir', '/etc/helium/policies/managed', '--user', 'alice']);
+    await expect(integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821, extraPolicyDirs: ['/etc/helium'] })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
     await integration.removeBrowserPolicy();
     expect(commands.at(-1)).toEqual(['pkexec', path.join(stage, 'install.sh'), '--remove-browser-policy', '--user', 'alice']);
+    await integration.removeBrowserPolicy(['/etc/helium/policies/managed']);
+    expect(commands.at(-1)).toEqual(['pkexec', path.join(stage, 'install.sh'), '--remove-browser-policy', '--browser-policy-dir', '/etc/helium/policies/managed', '--user', 'alice']);
     await expect(integration.installBrowserPolicy({ extensionId: 'nope', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821 })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
     await expect(integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://evil.test/update.xml', port: 47821 })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
     fs.rmSync(tmp, { recursive: true, force: true });

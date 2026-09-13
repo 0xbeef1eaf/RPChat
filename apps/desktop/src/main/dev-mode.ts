@@ -75,6 +75,52 @@ const tabs = await sdk.browser.tabs();
 return { status, tab: tab.id, url: page.url, title: page.title, text: page.text.slice(0, 160), links: links.map((l) => l.href), found: found.count, typed, scrolled: scrolled.height > 0, clicked, screenshot: shot.dataUrl.slice(0, 22), screenshotBytes: shot.dataUrl.length, tabs: tabs.length };`;
 }
 
+/**
+ * The browser smoke's second turn: "exercise <smoke url> <blocked url> <home url>" runs the
+ * capabilities added in `sdk.browser` 2.1: block a pattern and try to open it, unblock and open it
+ * again, apply an image effect with a pack-asset replacement and read the style back, set the home
+ * page, add/search/remove a bookmark, eval in both worlds, and read the history.
+ */
+export const EXERCISE_SMOKE_MESSAGE = 'exercise';
+/** Host the smoke Chromium maps onto 127.0.0.1 (`--host-resolver-rules`) so a loopback page can be blocked (127.0.0.1 itself is protected). */
+export const SMOKE_BLOCK_HOST = 'smoke.test';
+export const SMOKE_BLOCK_PATTERN = `${SMOKE_BLOCK_HOST}/smoke/page2*`;
+export const SMOKE_ASSET = 'media/smoke.png';
+
+export function exerciseCodeFor(smokeUrl: string, blockUrl: string, homeUrl: string): string {
+  return `const out = {};
+const block = await sdk.browser.block([${JSON.stringify(SMOKE_BLOCK_PATTERN)}], { durationMs: 120000, reason: "smoke test" });
+out.block = { id: block.id, expiresAt: block.expiresAt };
+const blockedTab = await sdk.browser.openTab(${JSON.stringify(blockUrl)});
+out.blockedUrl = blockedTab.url;
+out.blocksWhileBlocked = (await sdk.browser.blocks()).length;
+out.unblocked = await sdk.browser.unblock(block.id);
+out.blocksAfter = (await sdk.browser.blocks()).length;
+out.reopenedUrl = (await sdk.browser.navigate(blockedTab.id, ${JSON.stringify(blockUrl)})).url;
+await sdk.browser.close(blockedTab.id);
+const tab = await sdk.browser.openTab(${JSON.stringify(smokeUrl)});
+out.effect = await sdk.browser.imageEffect(tab.id, "grayscale", { replaceWith: ${JSON.stringify(SMOKE_ASSET)} });
+const probe = "const img = document.querySelector('img#pic'); await new Promise((r) => { if (img.complete) r(); else { img.onload = r; img.onerror = r; setTimeout(r, 3000); } }); return { filter: getComputedStyle(img).filter, src: img.getAttribute('src'), original: img.getAttribute('data-rp-original-src'), loaded: img.complete && img.naturalWidth > 0 };";
+out.styled = (await sdk.browser.eval(tab.id, probe)).value;
+out.cleared = await sdk.browser.clearImageEffects(tab.id);
+out.restored = (await sdk.browser.eval(tab.id, probe)).value;
+out.home = await sdk.browser.setHomePage(${JSON.stringify(homeUrl)});
+out.homeGet = await sdk.browser.homePage();
+const bm = await sdk.browser.addBookmark(${JSON.stringify(smokeUrl)}, "rp-code smoke page", { folder: "rp-code smoke/Pages" });
+out.bookmark = bm;
+out.bookmarkFound = (await sdk.browser.searchBookmarks("rp-code smoke page")).map((b) => b.url);
+out.bookmarkListed = (await sdk.browser.bookmarks({ folder: "rp-code smoke/Pages" })).map((b) => b.url);
+out.bookmarkRemoved = await sdk.browser.removeBookmark(bm.id);
+out.bookmarkLeft = (await sdk.browser.searchBookmarks("rp-code smoke page")).filter((b) => b.url).length;
+out.evalIsolated = await sdk.browser.eval(tab.id, "return document.title");
+out.evalMain = await sdk.browser.eval(tab.id, "return window.location.href", { world: "main" });
+out.evalHasNewFunction = (await sdk.browser.eval(tab.id, "return typeof Function === 'function' && new Function('return 6 * 7')()")).value;
+out.history = (await sdk.browser.history({ text: "smoke" })).map((h) => h.url);
+out.visits = (await sdk.browser.historyVisits(${JSON.stringify(smokeUrl)})).length;
+out.recent = (await sdk.browser.recentHistory(5)).length;
+return out;`;
+}
+
 /** Last message carries a tool result → this is the second round of the turn. */
 export function lastMessageHasToolResult(request: LlmChatRequest): boolean {
   const last = request.messages[request.messages.length - 1];
@@ -91,15 +137,17 @@ export function mockTurnFor(request: LlmChatRequest): MockTurn {
   const full = text && text.type === 'text' ? text.text.trim() : '';
   const echo = full.slice(0, 80);
   const asking = echo.toLowerCase().startsWith(PROMPT_SMOKE_MESSAGE);
-  const browsing = echo.toLowerCase().startsWith(BROWSER_SMOKE_MESSAGE);
-  const browseUrl = browsing ? (/https?:\/\/\S+/.exec(full)?.[0] ?? 'https://example.com/') : '';
-  const code = asking ? ASK_CODE : browsing ? browseCodeFor(browseUrl) : SHOW_IMAGE_CODE;
-  const purpose = asking ? 'ask the user a yes/no question' : browsing ? 'open and read a page in the browser' : 'show a picture from the pack';
+  const exercising = echo.toLowerCase().startsWith(EXERCISE_SMOKE_MESSAGE);
+  const browsing = !exercising && echo.toLowerCase().startsWith(BROWSER_SMOKE_MESSAGE);
+  const urls = full.match(/https?:\/\/\S+/g) ?? [];
+  const browseUrl = browsing ? (urls[0] ?? 'https://example.com/') : '';
+  const code = asking ? ASK_CODE : browsing ? browseCodeFor(browseUrl) : exercising ? exerciseCodeFor(urls[0] ?? 'https://example.com/', urls[1] ?? 'https://example.com/2', urls[2] ?? 'https://example.com/home') : SHOW_IMAGE_CODE;
+  const purpose = asking ? 'ask the user a yes/no question' : browsing ? 'open and read a page in the browser' : exercising ? 'block, style, bookmark, script and look up pages in the browser' : 'show a picture from the pack';
   if (!request.tools || request.tools.length === 0) {
     return { text: `Mock reply${echo ? ` to "${echo}"` : ''}.\n\n\`\`\`action\n${code}\n\`\`\`` };
   }
   return {
-    text: asking ? 'Let me ask you something.' : browsing ? 'Let me have a look at that page.' : echo ? `You said "${echo}". Let me show you something.` : 'Let me show you something.',
+    text: asking ? 'Let me ask you something.' : browsing ? 'Let me have a look at that page.' : exercising ? 'Let me try the rest of the browser.' : echo ? `You said "${echo}". Let me show you something.` : 'Let me show you something.',
     toolCalls: [{ name: 'run_action', input: { purpose, code } }],
   };
 }
@@ -205,16 +253,25 @@ export function isBrowserSmokeRun(env: NodeJS.ProcessEnv = process.env): boolean
 
 export const SMOKE_PAGE_PATH = '/smoke/page.html';
 export const SMOKE_PAGE2_PATH = '/smoke/page2.html';
+export const SMOKE_HOME_PATH = '/smoke/home.html';
+export const SMOKE_IMAGE_PATH = '/smoke/dot.png';
 export const SMOKE_PAGE_TEXT = 'Hello from the rp-code smoke page';
 
-/** Two tiny pages the browser smoke opens (served by the loopback server, any origin). */
-export function smokePage(which: 1 | 2): string {
+/** A 1×1 red PNG: the smoke page's picture and the pack asset `imageEffect` swaps in. */
+export const SMOKE_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64');
+
+/** The tiny pages the browser smoke opens (served by the loopback server, any origin). */
+export function smokePage(which: 1 | 2 | 3): string {
   if (which === 2) {
     return `<!doctype html><html><head><meta charset="utf-8"><title>rp-code smoke page 2</title></head><body><h1>Second smoke page</h1><p>You followed the link.</p></body></html>`;
+  }
+  if (which === 3) {
+    return `<!doctype html><html><head><meta charset="utf-8"><title>rp-code smoke home</title></head><body><h1>Smoke home page</h1><p>Opened by the new-tab override.</p></body></html>`;
   }
   return `<!doctype html><html><head><meta charset="utf-8"><title>rp-code smoke page</title></head><body style="font:16px sans-serif">
 <h1>${SMOKE_PAGE_TEXT}</h1>
 <p>This page exists so the browser extension can be exercised end to end.</p>
+<p><img id="pic" src="${SMOKE_IMAGE_PATH}" width="48" height="48" alt="smoke dot"></p>
 <form onsubmit="return false"><label>Query <input id="q" name="q" type="text"></label></form>
 <p style="margin-top:1400px"><a id="next" href="${SMOKE_PAGE2_PATH}">Next page</a></p>
 </body></html>`;
@@ -222,7 +279,12 @@ export function smokePage(which: 1 | 2): string {
 
 export function registerSmokePages(loopback: LoopbackServer): void {
   loopback.route('/smoke', (_req, res, url) => {
-    const which = url.pathname === SMOKE_PAGE2_PATH ? 2 : url.pathname === SMOKE_PAGE_PATH ? 1 : 0;
+    if (url.pathname === SMOKE_IMAGE_PATH) {
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store', 'Content-Length': String(SMOKE_PNG.length) });
+      res.end(SMOKE_PNG);
+      return;
+    }
+    const which = url.pathname === SMOKE_PAGE2_PATH ? 2 : url.pathname === SMOKE_PAGE_PATH ? 1 : url.pathname === SMOKE_HOME_PATH ? 3 : 0;
     if (which === 0) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not found');
@@ -244,6 +306,8 @@ export async function writeBrowserSmokePack(dir: string): Promise<{ packId: stri
   );
   await fs.promises.writeFile(path.join(characterDir, 'character.json'), JSON.stringify({ id: 'smokey', name: 'Smokey', persona: 'persona.md', greeting: 'Ready to browse.' }, null, 2));
   await fs.promises.writeFile(path.join(characterDir, 'persona.md'), 'Smokey is a test character that drives the browser extension.\n');
+  await fs.promises.mkdir(path.join(dir, 'media'), { recursive: true });
+  await fs.promises.writeFile(path.join(dir, SMOKE_ASSET), SMOKE_PNG);
   return { packId, characterRef: `${packId}/smokey` };
 }
 
@@ -330,6 +394,63 @@ export async function runBrowserSmoke(services: BrowserSmokeServices, logger: Lo
     if (typeof handlerUrl !== 'string' || !handlerUrl.includes('/smoke/')) problems.push(`sdk.events handler did not record a navigation (state: ${JSON.stringify(handlerSaw)})`);
     const ok = problems.length === 0;
     logger[ok ? 'info' : 'error'](`[smoke] verify browser: ${ok ? 'PASS' : 'FAIL'} (${ok ? `extension ${status.extensionId}, read ${String((result?.['text'] as string | undefined)?.length ?? 0)} chars, ${String((result?.['links'] as unknown[] | undefined)?.length ?? 0)} link(s), screenshot ${String(result?.['screenshotBytes'])} bytes, navigated ${navigated.length} event(s), handler saw ${String(handlerUrl)}` : problems.join(' | ')})`);
+
+    // Second turn: the 2.1 capabilities (block, image effect, home page, bookmarks, eval, history).
+    const port = loopback.listeningPort;
+    const blockUrl = `http://${SMOKE_BLOCK_HOST}:${port}${SMOKE_PAGE2_PATH}`;
+    const homeUrl = `http://127.0.0.1:${port}${SMOKE_HOME_PATH}`;
+    await engine.chat.send(session.id, `${EXERCISE_SMOKE_MESSAGE} ${url} ${blockUrl} ${homeUrl}`);
+    const ex = actionResults.find((r) => r && typeof r === 'object' && 'evalIsolated' in (r as object)) as Record<string, unknown> | undefined;
+    const caps: string[] = [];
+    const bad: string[] = [];
+    const check = (name: string, good: boolean, detail: string): void => {
+      (good ? caps : bad).push(`${name}: ${detail}`);
+    };
+    if (!ex) bad.push(`no exercise action result (errors: ${errors.join('; ') || 'none'}; last result: ${JSON.stringify(actionResults.at(-1)).slice(0, 400)})`);
+    else {
+      const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {});
+      const blockedUrl = String(ex['blockedUrl'] ?? '');
+      const reopened = String(ex['reopenedUrl'] ?? '');
+      check(
+        'block',
+        blockedUrl !== blockUrl && (blockedUrl.startsWith('chrome-extension://') || blockedUrl === '') && ex['blocksWhileBlocked'] === 1 && obj(ex['unblocked'])['removed'] === true && ex['blocksAfter'] === 0 && reopened === blockUrl,
+        `opening ${blockUrl} landed on ${JSON.stringify(blockedUrl) || 'the blocked page'} while blocked, blocks=${String(ex['blocksWhileBlocked'])}→${String(ex['blocksAfter'])}, reopened ${reopened === blockUrl ? 'fine' : JSON.stringify(reopened)} after unblock`,
+      );
+      const styled = obj(ex['styled']);
+      const restored = obj(ex['restored']);
+      const assetPath = `/asset/${packId}/${SMOKE_ASSET}`;
+      check(
+        'imageEffect',
+        obj(ex['effect'])['replaced'] === 1 && styled['filter'] === 'grayscale(1)' && String(styled['src']).includes(assetPath) && String(styled['original']).endsWith(SMOKE_IMAGE_PATH) && styled['loaded'] === true && obj(ex['cleared'])['restored'] === 1 && restored['filter'] === 'none' && String(restored['src']).endsWith(SMOKE_IMAGE_PATH),
+        `filter ${String(styled['filter'])}, src ${String(styled['src']).includes(assetPath) ? 'pack asset' : JSON.stringify(styled['src'])} (loaded=${String(styled['loaded'])}), restored → ${String(restored['filter'])} ${String(restored['src'])}`,
+      );
+      check('homePage', obj(ex['home'])['url'] === homeUrl && obj(ex['homeGet'])['url'] === homeUrl, `set ${String(obj(ex['home'])['url'])}`);
+      const bm = obj(ex['bookmark']);
+      check(
+        'bookmarks',
+        bm['url'] === url && bm['path'] === 'Other bookmarks/rp-code smoke/Pages' && Array.isArray(ex['bookmarkFound']) && ex['bookmarkFound'].includes(url) && Array.isArray(ex['bookmarkListed']) && ex['bookmarkListed'].includes(url) && obj(ex['bookmarkRemoved'])['removed'] === 1 && ex['bookmarkLeft'] === 0,
+        `added in ${String(bm['path'])}, found ${String((ex['bookmarkFound'] as unknown[] | undefined)?.length)}, listed ${String((ex['bookmarkListed'] as unknown[] | undefined)?.length)}, removed ${String(obj(ex['bookmarkRemoved'])['removed'])}, left ${String(ex['bookmarkLeft'])}`,
+      );
+      const iso = obj(ex['evalIsolated']);
+      const main = obj(ex['evalMain']);
+      // The isolated world refuses `new Function` (extension CSP); the extension falls back to the main world and says so.
+      check(
+        'eval',
+        iso['value'] === 'rp-code smoke page' && (iso['world'] === 'isolated' || (iso['world'] === 'main' && typeof iso['fallback'] === 'string')) && main['value'] === url && main['world'] === 'main' && ex['evalHasNewFunction'] === 42,
+        `isolated request → ${JSON.stringify(iso['value'])} in the ${String(iso['world'])} world${iso['fallback'] ? ' (fallback: isolated world refuses eval, extension CSP)' : ''}, main → ${JSON.stringify(main['value'])}, new Function → ${String(ex['evalHasNewFunction'])}`,
+      );
+      check(
+        'history',
+        Array.isArray(ex['history']) && ex['history'].includes(url) && Number(ex['visits']) >= 1 && Number(ex['recent']) >= 1,
+        `${String((ex['history'] as unknown[] | undefined)?.length)} entries for "smoke" (smoke page ${Array.isArray(ex['history']) && ex['history'].includes(url) ? 'included' : 'missing'}), ${String(ex['visits'])} visit(s), ${String(ex['recent'])} recent`,
+      );
+    }
+    // The launcher opens chrome://newtab once the extension stored the home page; the override must land on it.
+    const homeDeadline = Date.now() + 25_000;
+    while (Date.now() < homeDeadline && !navigated.includes(homeUrl)) await new Promise((r) => setTimeout(r, 250));
+    check('newtab', navigated.includes(homeUrl), navigated.includes(homeUrl) ? `a new tab navigated to ${homeUrl}` : `no browser-navigated event for ${homeUrl} (saw ${JSON.stringify(navigated.slice(-5))})`);
+    const capsOk = bad.length === 0;
+    logger[capsOk ? 'info' : 'error'](`[smoke] verify browser capabilities: ${capsOk ? 'PASS' : 'FAIL'} (${[...caps, ...bad.map((b) => `FAILED ${b}`)].join(' | ')})`);
   } catch (err) {
     logger.error('[smoke] verify browser: FAIL', err);
   } finally {

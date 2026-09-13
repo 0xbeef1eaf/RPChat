@@ -17,6 +17,8 @@ function render(state: BridgeState | undefined): void {
   el('version').textContent = state?.version ?? chrome.runtime.getManifest().version;
   el('requests').textContent = String(state?.requests ?? 0);
   el('error').textContent = state?.lastError ?? '—';
+  el('blocks').textContent = state ? `${state.blocks} active${state.blocks > 0 ? ' (managed by the app; Settings → Browser clears them)' : ''}` : '—';
+  el('home').textContent = state?.homePage ?? 'not set';
   const port = el<HTMLInputElement>('port');
   if (state && document.activeElement !== port) port.value = String(state.port);
   port.disabled = Boolean(state?.managedPort);

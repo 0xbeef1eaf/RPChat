@@ -1,36 +1,130 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { BrowserBridgeStatus } from '@rp/shared';
+import type { AppSettings, BrowserBlock, BrowserBridgeStatus } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { reportError, toast } from '../../store/actions';
 import { Modal } from '../common/Modal';
+import { ManagedBadge, useManaged } from './Managed';
 
 type InstallerOutput = { ok: boolean; text: string; what: string };
 
-/** Settings → Browser: bridge status, port, trusted extensions, policy install, load-unpacked help. */
-export function BrowserSection() {
+interface BrowserSectionProps {
+  settings: AppSettings;
+  onPatch: (patch: Partial<AppSettings>) => Promise<boolean>;
+}
+
+/** Settings → Browser: bridge status, port, trusted extensions, what characters may do, active blocks, policy install, load-unpacked help. */
+export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
   const [status, setStatus] = useState<BrowserBridgeStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [portText, setPortText] = useState<string | null>(null);
   const [trustText, setTrustText] = useState('');
+  const [homeText, setHomeText] = useState<string | null>(null);
+  const [maxBlockText, setMaxBlockText] = useState<string | null>(null);
+  const [extraDirsText, setExtraDirsText] = useState<string | null>(null);
+  const [blocks, setBlocks] = useState<BrowserBlock[]>([]);
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState<'install' | 'remove' | null>(null);
   const [output, setOutput] = useState<InstallerOutput | null>(null);
   const [installDialog, setInstallDialog] = useState(false);
   const [removeDialog, setRemoveDialog] = useState(false);
+  const browser = settings.browser;
+  const blockingManaged = useManaged('browser.allowBlocking');
+  const evalManaged = useManaged('browser.allowEval');
+  const historyManaged = useManaged('browser.allowHistory');
+  const maxBlockManaged = useManaged('browser.maxBlockMs');
+  const homeManaged = useManaged('browser.homePage');
+
+  const loadBlocks = useCallback(async () => {
+    try {
+      setBlocks(await api().browser.blocks());
+    } catch {
+      setBlocks([]);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
       setStatus(await api().browser.status());
       setError(null);
+      await loadBlocks();
     } catch (err) {
       setError(errorMessage(err));
     }
-  }, []);
+  }, [loadBlocks]);
 
   useEffect(() => {
     void load();
-    return api().browser.onStatus((s) => setStatus(s));
-  }, [load]);
+    return api().browser.onStatus((s) => {
+      setStatus(s);
+      void loadBlocks();
+    });
+  }, [load, loadBlocks]);
+
+  // Blocks come and go on their own (expiry, the character); keep the list fresh while the tab is open.
+  useEffect(() => {
+    if (!status?.connected) return;
+    const timer = setInterval(() => void loadBlocks(), 10_000);
+    return () => clearInterval(timer);
+  }, [status?.connected, loadBlocks]);
+
+  const patchBrowser = (patch: Partial<AppSettings['browser']>) => onPatch({ browser: { ...browser, ...patch } });
+
+  const saveHomePage = async () => {
+    if (homeText === null) return;
+    const url = homeText.trim();
+    setHomeText(null);
+    if (url === browser.homePage) return;
+    if (url !== '' && !/^https?:\/\//i.test(url)) {
+      toast('error', 'The home page must start with http:// or https://');
+      return;
+    }
+    setBusy(true);
+    try {
+      setStatus(await api().browser.setHomePage(url));
+      toast('success', url ? `Home page set to ${url}${status?.connected ? '' : ' (sent to the extension when it connects)'}` : 'Home page cleared');
+    } catch (err) {
+      reportError('Could not set the home page', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveMaxBlock = async () => {
+    if (maxBlockText === null) return;
+    const minutes = Number(maxBlockText);
+    setMaxBlockText(null);
+    if (!Number.isFinite(minutes) || minutes < 1) return;
+    await patchBrowser({ maxBlockMs: Math.round(minutes) * 60_000 });
+  };
+
+  const saveExtraDirs = async () => {
+    if (extraDirsText === null) return;
+    const dirs = extraDirsText
+      .split(/[\n,]/)
+      .map((d) => d.trim().replace(/\/+$/, ''))
+      .filter((d) => d.length > 0);
+    setExtraDirsText(null);
+    if (dirs.join('\n') === browser.extraPolicyDirs.join('\n')) return;
+    const bad = dirs.find((d) => !/^\/[^\s|"'\\]+\/policies\/managed$/.test(d));
+    if (bad) {
+      toast('error', `"${bad}" is not a managed-policy directory (absolute path ending in /policies/managed)`);
+      return;
+    }
+    if (await patchBrowser({ extraPolicyDirs: dirs })) toast('success', dirs.length === 0 ? 'Extra policy directories cleared' : 'Extra policy directories saved; re-install the policy to write them');
+  };
+
+  const clearBlocks = async () => {
+    setBusy(true);
+    try {
+      const r = await api().browser.clearBlocks();
+      toast('success', r.removed === 0 ? 'No blocks to clear' : `Cleared ${r.removed} block${r.removed === 1 ? '' : 's'}`);
+      await loadBlocks();
+    } catch (err) {
+      reportError('Could not clear the blocks', err);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const copy = async (text: string, what: string) => {
     try {
@@ -234,6 +328,101 @@ export function BrowserSection() {
         </div>
       </div>
 
+      <div className="cap-cards">
+        <div className="card">
+          <h3 style={{ margin: '0 0 6px' }}>What characters may do</h3>
+          <p className="muted small" style={{ margin: '0 0 8px' }}>
+            Beyond opening, reading and driving tabs, a character with the <code>browser</code> capability can do the following unless you switch
+            it off here. A switched-off call fails and the character is told why.
+          </p>
+          <div className="stack" style={{ gap: 8 }}>
+            <label className="check">
+              <input type="checkbox" checked={browser.allowBlocking} disabled={blockingManaged || busy} onChange={(e) => void patchBrowser({ allowBlocking: e.target.checked })} />
+              Block pages for a while (<code>sdk.browser.block</code>)
+              <ManagedBadge show={blockingManaged} />
+            </label>
+            <div className="row" style={{ gap: 8, paddingLeft: 22 }}>
+              <label htmlFor="browser-max-block" className="small">
+                Longest block (minutes)
+                <ManagedBadge show={maxBlockManaged} />
+              </label>
+              <input
+                id="browser-max-block"
+                type="number"
+                min={1}
+                style={{ width: 90 }}
+                value={maxBlockText ?? String(Math.max(1, Math.round(browser.maxBlockMs / 60_000)))}
+                disabled={maxBlockManaged || busy || !browser.allowBlocking}
+                onChange={(e) => setMaxBlockText(e.target.value)}
+                onBlur={saveMaxBlock}
+                onKeyDown={(e) => e.key === 'Enter' && saveMaxBlock()}
+              />
+              <span className="field-hint">Longer requests are shortened to this (default 240).</span>
+            </div>
+            <label className="check">
+              <input type="checkbox" checked={browser.allowEval} disabled={evalManaged || busy} onChange={(e) => void patchBrowser({ allowEval: e.target.checked })} />
+              Run JavaScript in pages (<code>sdk.browser.eval</code>)
+              <ManagedBadge show={evalManaged} />
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={browser.allowHistory} disabled={historyManaged || busy} onChange={(e) => void patchBrowser({ allowHistory: e.target.checked })} />
+              Read the browser history (<code>sdk.browser.history</code>)
+              <ManagedBadge show={historyManaged} />
+            </label>
+            <div className="field" style={{ marginTop: 4 }}>
+              <label htmlFor="browser-home">
+                Home page
+                <ManagedBadge show={homeManaged} />
+              </label>
+              <input
+                id="browser-home"
+                type="url"
+                placeholder="https://… (empty: the plain new-tab page)"
+                value={homeText ?? browser.homePage}
+                disabled={homeManaged || busy}
+                spellCheck={false}
+                onChange={(e) => setHomeText(e.target.value)}
+                onBlur={saveHomePage}
+                onKeyDown={(e) => e.key === 'Enter' && saveHomePage()}
+              />
+              <span className="field-hint">
+                What new tabs open (the extension overrides the new-tab page) and, once the policy is re-installed, the browser&apos;s Home button
+                (<code>HomepageLocation</code>). Characters can change it with <code>sdk.browser.setHomePage</code>.
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="row" style={{ marginBottom: 6 }}>
+            <h3 className="grow">Active blocks</h3>
+            <span className="badge">{blocks.length}</span>
+            <button type="button" className="btn btn-sm btn-danger" disabled={busy || !status.connected || blocks.length === 0} onClick={clearBlocks}>
+              Clear all blocks
+            </button>
+          </div>
+          {!status.connected ? (
+            <p className="muted small">Blocks live in the extension; connect it to see them.</p>
+          ) : blocks.length === 0 ? (
+            <p className="muted small">No pages are blocked right now.</p>
+          ) : (
+            <ul className="plain-list" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+              {blocks.map((b) => (
+                <li key={b.id} className="stack" style={{ gap: 2, padding: '4px 0' }}>
+                  <code style={{ overflowWrap: 'anywhere' }}>{b.patterns.join(', ')}</code>
+                  <span className="muted small">
+                    {b.by ? `by ${b.by}` : 'by a character'}
+                    {b.expiresAt ? ` · until ${new Date(b.expiresAt).toLocaleString()}` : ' · no expiry'}
+                    {b.redirect ? ` · redirects to ${b.redirect}` : ''}
+                    {b.reason ? ` · “${b.reason}”` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
       <div className="card">
         <div className="row wrap">
           <div className="grow">
@@ -286,6 +475,25 @@ export function BrowserSection() {
           ) : null}
         </dl>
         {!status.extensionDir ? <p className="field-hint">The browser extension is not bundled with this build (resources/extension).</p> : null}
+        <div className="field" style={{ marginTop: 8 }}>
+          <label htmlFor="browser-extra-dirs">Extra policy directories</label>
+          <textarea
+            id="browser-extra-dirs"
+            rows={2}
+            className="mono"
+            placeholder={'/etc/helium/policies/managed\n/etc/ungoogled-chromium/policies/managed'}
+            value={extraDirsText ?? browser.extraPolicyDirs.join('\n')}
+            disabled={busy || running !== null}
+            spellCheck={false}
+            onChange={(e) => setExtraDirsText(e.target.value)}
+            onBlur={saveExtraDirs}
+          />
+          <span className="field-hint">
+            One per line (or comma separated): managed-policy directories of Chromium forks the installer does not know (Helium, ungoogled-chromium
+            derivatives…). They get the same <code>rp-code.json</code>, and <em>Remove policy</em> cleans them too. Find a browser&apos;s directory
+            with <code>chrome://policy</code> or <code>strace -f -e trace=openat &lt;browser&gt; 2&gt;&amp;1 | grep policies/managed</code>.
+          </span>
+        </div>
         <p className="field-hint" style={{ marginTop: 6 }}>
           Google Chrome on Windows and macOS only force-installs extensions from the Chrome Web Store, so this policy has no effect there; Chrome on
           Linux and every Chromium build (Chromium, Brave, Edge, Vivaldi, Opera…) accept it. Flatpak browsers keep their policies elsewhere — see the
@@ -333,10 +541,20 @@ export function BrowserSection() {
             <li>
               <code>rp-code.json</code> in <code>/etc/chromium/policies/managed</code> and <code>/etc/opt/chrome/policies/managed</code>, plus the same for
               Brave, Edge, Vivaldi and Opera when they are installed
+              {browser.extraPolicyDirs.length > 0 ? (
+                <>
+                  , and in {browser.extraPolicyDirs.map((d) => <code key={d}>{d}</code>).reduce<React.ReactNode[]>((acc, el, i) => (i === 0 ? [el] : [...acc, ', ', el]), [])}
+                </>
+              ) : null}
             </li>
             <li>
               it force-installs extension <code>{status.installedExtensionId}</code> from <code>{status.updateUrl}</code> (this app, on this computer only)
               and tells it to use port {status.requestedPort}
+              {browser.homePage ? (
+                <>
+                  , and sets <code>{browser.homePage}</code> as the browser&apos;s home page
+                </>
+              ) : null}
             </li>
           </ul>
           <p className="muted small">

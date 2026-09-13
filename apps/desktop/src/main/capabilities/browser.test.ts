@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Json } from '@rp/shared';
-import { BrowserHandler, NOT_CONNECTED_MESSAGE } from './browser.js';
+import { BLOCKING_DISABLED_MESSAGE, BrowserHandler, EVAL_DISABLED_MESSAGE, HISTORY_DISABLED_MESSAGE, NOT_CONNECTED_MESSAGE } from './browser.js';
 import type { BrowserBridgeLike } from './browser.js';
 import type { CommandRunner } from './commands-runner.js';
 
@@ -147,5 +147,175 @@ describe('BrowserHandler with the extension', () => {
     await expect(offline.invoke('open', ['https://evil.test/'], ctx)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
     await offline.invoke('open', ['https://example.com/'], ctx);
     expect(runs).toHaveLength(1);
+  });
+});
+
+describe('BrowserHandler: blocking, effects, home page, bookmarks, eval, history', () => {
+  const ctxNamed = { ...ctx, packId: 'com.x.p', characterId: 'mira' };
+  const settingsOf = (over: Partial<{ allowBlocking: boolean; maxBlockMs: number; allowEval: boolean; allowHistory: boolean; homePage: string }> = {}) => async () => ({
+    allowBlocking: true,
+    maxBlockMs: 60 * 60_000,
+    allowEval: true,
+    allowHistory: true,
+    homePage: '',
+    ...over,
+  });
+
+  it('block: validates patterns, protects the app and browser pages, caps the duration, names the character', async () => {
+    const { commands } = fakeCommands();
+    const { bridge, calls } = fakeBridge(true, { 'rules.block': (a) => ({ ...a, redirectedTabs: 1 }), 'rules.list': [{ id: 'blk-1', patterns: ['a.test'] }], 'rules.unblock': { removed: true }, 'rules.clear': { removed: 2 } });
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf(), characterName: () => 'Mira' });
+    const before = Date.now();
+    const r = (await h.invoke('block', [['*.social.test', 'news.test/feed*'], { durationMs: 5 * 60_000, reason: 'focus time' }], ctxNamed)) as Record<string, unknown>;
+    expect(r).toMatchObject({ patterns: ['*.social.test', 'news.test/feed*'], cappedToMs: null, redirectedTabs: 1 });
+    expect(typeof r['id']).toBe('string');
+    const expires = Date.parse(r['expiresAt'] as string);
+    expect(expires).toBeGreaterThanOrEqual(before + 5 * 60_000 - 5);
+    expect(expires).toBeLessThan(before + 5 * 60_000 + 5_000);
+    expect(calls[0]).toMatchObject({ op: 'rules.block', args: { patterns: ['*.social.test', 'news.test/feed*'], by: 'Mira', reason: 'focus time' } });
+    // Longer than the cap → shortened to the cap (and reported).
+    const capped = (await h.invoke('block', [['a.test'], { durationMs: 10 * 60 * 60_000 }], ctxNamed)) as Record<string, unknown>;
+    expect(capped['cappedToMs']).toBe(60 * 60_000);
+    expect(Date.parse(capped['expiresAt'] as string)).toBeLessThan(before + 60 * 60_000 + 5_000);
+    // No duration → the cap.
+    const dflt = (await h.invoke('block', [['a.test']], ctxNamed)) as Record<string, unknown>;
+    expect(Date.parse(dflt['expiresAt'] as string)).toBeGreaterThan(before + 59 * 60_000);
+    // Redirect goes through the URL check and the allowlist.
+    await h.invoke('block', [['a.test'], { redirect: 'https://calm.test/' }], ctxNamed);
+    expect(calls.at(-1)!.args['redirect']).toBe('https://calm.test/');
+    await expect(h.invoke('block', [['a.test'], { redirect: 'javascript:1' }], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(h.invoke('block', [['a.test'], { redirect: 'http://127.0.0.1:47821/x' }], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    for (const bad of [[], ['   '], 'a.test', [1], Array.from({ length: 51 }, (_, i) => `h${i}.test`)]) {
+      await expect(h.invoke('block', [bad as never], ctxNamed), JSON.stringify(bad)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    }
+    for (const p of ['127.0.0.1', 'http://127.0.0.1:47821/extension/update.xml', 'localhost', 'localhost:47821/x', 'chrome://settings', 'chrome-extension://abc/x', 'app.localhost']) {
+      await expect(h.invoke('block', [[p]], ctxNamed), p).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    }
+    await expect(h.invoke('block', [['a.test'], { durationMs: -1 }], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect(await h.invoke('blocks', [], ctxNamed)).toEqual([{ id: 'blk-1', patterns: ['a.test'] }]);
+    expect(await h.invoke('unblock', ['blk-1'], ctxNamed)).toEqual({ removed: true });
+    expect(await h.invoke('clearBlocks', [], ctxNamed)).toEqual({ removed: 2 });
+    expect(calls.map((c) => c.op).slice(-3)).toEqual(['rules.list', 'rules.unblock', 'rules.clear']);
+  });
+
+  it('the toggles in Settings → Browser switch block, eval and history off with a clear message', async () => {
+    const { commands } = fakeCommands();
+    const { bridge, calls } = fakeBridge(true, {});
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf({ allowBlocking: false, allowEval: false, allowHistory: false }) });
+    await expect(h.invoke('block', [['a.test']], ctxNamed)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: BLOCKING_DISABLED_MESSAGE });
+    await expect(h.invoke('eval', [1, 'return 1'], ctxNamed)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: EVAL_DISABLED_MESSAGE });
+    await expect(h.invoke('history', [], ctxNamed)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: HISTORY_DISABLED_MESSAGE });
+    await expect(h.invoke('historyVisits', ['https://a.test/'], ctxNamed)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: HISTORY_DISABLED_MESSAGE });
+    await expect(h.invoke('recentHistory', [5], ctxNamed)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: HISTORY_DISABLED_MESSAGE });
+    expect(calls).toEqual([]);
+    // Unblocking and listing still work while blocking is off (so the user can clean up).
+    await h.invoke('blocks', [], ctxNamed);
+    await h.invoke('clearBlocks', [], ctxNamed);
+    expect(calls.map((c) => c.op)).toEqual(['rules.list', 'rules.clear']);
+  });
+
+  it('imageEffect resolves pack assets to the loopback URL, allowlists http replacements, validates the effect', async () => {
+    const { commands } = fakeCommands();
+    const { bridge, calls } = fakeBridge(true, { 'page.imageEffect': { applied: true, replaced: 3, total: 3, effect: 'grayscale' }, 'page.clearImageEffects': { cleared: true, restored: 3 } });
+    const packs = { getLoaded: (packId: string) => ({ root: `/packs/${packId}` }) as never };
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => ['example.com'], browserSettings: settingsOf(), packs, assetUrl: (packId, asset) => `http://127.0.0.1:4/t/tok/asset/${packId}/${asset}` });
+    expect(await h.invoke('imageEffect', [1, 'grayscale', { replaceWith: 'media/cat.png', durationMs: 5000, selector: '.hero img' }], ctxNamed)).toMatchObject({ replaced: 3 });
+    expect(calls[0]).toEqual({ op: 'page.imageEffect', args: { tabId: 1, effect: 'grayscale', selector: '.hero img', replaceWith: 'http://127.0.0.1:4/t/tok/asset/com.x.p/media/cat.png', durationMs: 5000 } });
+    await h.invoke('imageEffect', [1, { css: 'blur(3px)' }, { replaceWith: { path: 'media/dog.png', kind: 'image' } }], ctxNamed);
+    expect(calls[1]!.args).toEqual({ tabId: 1, effect: { css: 'blur(3px)' }, replaceWith: 'http://127.0.0.1:4/t/tok/asset/com.x.p/media/dog.png' });
+    await h.invoke('imageEffect', [1, 'none', { replaceWith: 'https://example.com/a.png' }], ctxNamed);
+    expect(calls[2]!.args['replaceWith']).toBe('https://example.com/a.png');
+    await expect(h.invoke('imageEffect', [1, 'blur', { replaceWith: 'https://evil.test/a.png' }], ctxNamed)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    await expect(h.invoke('imageEffect', [1, 'blur', { replaceWith: '../../etc/passwd' }], ctxNamed)).rejects.toMatchObject({ code: 'PATH_ESCAPE' });
+    await expect(h.invoke('imageEffect', [1, 42], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(h.invoke('imageEffect', ['x', 'blur'], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect(await h.invoke('clearImageEffects', [1], ctxNamed)).toEqual({ cleared: true, restored: 3 });
+  });
+
+  it('setHomePage persists the setting, pushes it to the extension and allowlists it; homePage reads the setting', async () => {
+    const { commands } = fakeCommands();
+    const { bridge, calls } = fakeBridge(true, { 'home.set': (a) => ({ url: a['url'] }) });
+    let stored = '';
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => ['home.test'], browserSettings: async () => ({ ...(await settingsOf()()), homePage: stored }), setHomePage: async (url) => void (stored = url) });
+    expect(await h.invoke('setHomePage', ['https://home.test/start'], ctxNamed)).toEqual({ url: 'https://home.test/start', pushedToExtension: true });
+    expect(stored).toBe('https://home.test/start');
+    expect(calls).toEqual([{ op: 'home.set', args: { url: 'https://home.test/start' } }]);
+    expect(await h.invoke('homePage', [], ctxNamed)).toEqual({ url: 'https://home.test/start' });
+    await expect(h.invoke('setHomePage', ['https://evil.test/'], ctxNamed)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    await expect(h.invoke('setHomePage', ['chrome://newtab'], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect(await h.invoke('setHomePage', [null], ctxNamed)).toEqual({ url: null, pushedToExtension: true });
+    expect(stored).toBe('');
+    expect(calls.at(-1)).toEqual({ op: 'home.set', args: { url: null } });
+    // Without the extension the setting is still saved (pushed on the next connection).
+    const offline = new BrowserHandler({ commands, bridge: fakeBridge(false).bridge, allowlist: async () => [], browserSettings: settingsOf(), setHomePage: async (url) => void (stored = url) });
+    expect(await offline.invoke('setHomePage', ['https://home.test/'], ctxNamed)).toEqual({ url: 'https://home.test/', pushedToExtension: false });
+  });
+
+  it('bookmarks: list/search/add/remove with the allowlist on add and id-or-url on remove', async () => {
+    const { commands } = fakeCommands();
+    const { bridge, calls } = fakeBridge(true, { 'bookmarks.list': [], 'bookmarks.search': [], 'bookmarks.add': (a) => ({ id: '9', title: a['title'], url: a['url'], parentId: '2', path: 'Other bookmarks' }), 'bookmarks.remove': { removed: 1 } });
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => ['example.com'], browserSettings: settingsOf() });
+    await h.invoke('bookmarks', [], ctxNamed);
+    await h.invoke('bookmarks', [{ folder: 'Work/Docs' }], ctxNamed);
+    await h.invoke('searchBookmarks', ['soup'], ctxNamed);
+    expect(await h.invoke('addBookmark', ['https://example.com/a', 'A', { folder: 'Work' }], ctxNamed)).toMatchObject({ id: '9', url: 'https://example.com/a' });
+    await expect(h.invoke('addBookmark', ['https://evil.test/', 'E'], ctxNamed)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    await expect(h.invoke('searchBookmarks', [''], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await h.invoke('removeBookmark', ['9'], ctxNamed);
+    await h.invoke('removeBookmark', ['https://example.com/a'], ctxNamed);
+    expect(calls.map((c) => [c.op, c.args])).toEqual([
+      ['bookmarks.list', {}],
+      ['bookmarks.list', { folder: 'Work/Docs' }],
+      ['bookmarks.search', { query: 'soup' }],
+      ['bookmarks.add', { url: 'https://example.com/a', title: 'A', folder: 'Work' }],
+      ['bookmarks.remove', { id: '9' }],
+      ['bookmarks.remove', { url: 'https://example.com/a' }],
+    ]);
+  });
+
+  it('eval: defaults to the isolated world, caps the timeout and stretches the bridge wait to fit', async () => {
+    const { commands } = fakeCommands();
+    const opts: Array<{ timeoutMs?: number } | undefined> = [];
+    const calls: Array<{ op: string; args: Record<string, Json> }> = [];
+    const bridge: BrowserBridgeLike = {
+      connected: true,
+      request: async (op, args = {}, o) => {
+        calls.push({ op, args });
+        opts.push(o);
+        return { value: 'T', world: args['world'] };
+      },
+      status: async () => ({ connected: true }),
+    };
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf() });
+    expect(await h.invoke('eval', [1, 'return document.title'], ctxNamed)).toEqual({ value: 'T', world: 'isolated' });
+    expect(calls[0]).toEqual({ op: 'page.eval', args: { tabId: 1, code: 'return document.title', world: 'isolated', timeoutMs: 10_000 } });
+    expect(opts[0]).toEqual({ timeoutMs: 15_000 });
+    await h.invoke('eval', [1, 'return location.href', { world: 'main', timeoutMs: 120_000 }], ctxNamed);
+    expect(calls[1]!.args).toMatchObject({ world: 'main', timeoutMs: 60_000 });
+    expect(opts[1]).toEqual({ timeoutMs: 65_000 });
+    await expect(h.invoke('eval', [1, ''], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(h.invoke('eval', [1, 'return 1', { world: 'worker' }], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+  });
+
+  it('history: since/until as ISO or ms-ago, limit capped, visits need an http URL', async () => {
+    const { commands } = fakeCommands();
+    const { bridge, calls } = fakeBridge(true, { 'history.search': [], 'history.visits': [], 'history.recent': [] });
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf() });
+    const now = Date.now();
+    await h.invoke('history', [], ctxNamed);
+    await h.invoke('history', [{ text: 'weather', since: 3_600_000, limit: 9999 }], ctxNamed);
+    await h.invoke('history', [{ since: '2026-01-01T00:00:00Z', until: '2026-01-02T00:00:00Z', limit: 5 }], ctxNamed);
+    await h.invoke('historyVisits', ['https://a.test/'], ctxNamed);
+    await h.invoke('recentHistory', [3], ctxNamed);
+    await h.invoke('recentHistory', [], ctxNamed);
+    expect(calls[0]).toEqual({ op: 'history.search', args: {} });
+    expect(calls[1]!.args).toMatchObject({ text: 'weather', maxResults: 500 });
+    expect(calls[1]!.args['startTime'] as number).toBeGreaterThanOrEqual(now - 3_600_000 - 50);
+    expect(calls[2]!.args).toEqual({ startTime: Date.parse('2026-01-01T00:00:00Z'), endTime: Date.parse('2026-01-02T00:00:00Z'), maxResults: 5 });
+    expect(calls[3]).toEqual({ op: 'history.visits', args: { url: 'https://a.test/' } });
+    expect(calls[4]).toEqual({ op: 'history.recent', args: { maxResults: 3 } });
+    expect(calls[5]).toEqual({ op: 'history.recent', args: {} });
+    await expect(h.invoke('history', [{ since: 'yesterday' }], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(h.invoke('historyVisits', ['chrome://history'], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
   });
 });

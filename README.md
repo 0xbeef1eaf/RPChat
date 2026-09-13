@@ -54,7 +54,10 @@ Characters, their behaviours and their media are distributed as shareable
 - **Your browser, driven by characters**: a bundled Manifest V3 extension for
   Chromium-based browsers (Chrome, Chromium, Brave, Edge, Vivaldi, Opera) lets
   `sdk.browser` list tabs, open and read pages, click, type, scroll and take
-  screenshots, and raises a `browser-navigated` event. It is installed through a
+  screenshots, block pages for a while, restyle or swap a page's pictures, set the
+  home page, use bookmarks and history, and run a script in a page (blocking,
+  scripting and history each switchable off in Settings → Browser), and raises a
+  `browser-navigated` event. It is installed through a
   Chromium enterprise policy the app writes for you (**Settings → Browser**, Linux)
   or loaded unpacked, talks to the app on `127.0.0.1` only, and every extension must
   be allowed once. See [docs/browser-extension.md](docs/browser-extension.md).
@@ -206,7 +209,7 @@ root can change it).
 See [docs/system-integration.md](docs/system-integration.md).
 
 The same installer writes the browser extension policy for **Settings → Browser**
-(`install.sh --browser-only --browser-extension <id> --browser-update-url <url>`); see
+(`install.sh --browser-only --browser-extension <id> --browser-update-url <url> [--browser-home <url>] [--browser-policy-dir <dir>]…`); see
 [docs/browser-extension.md](docs/browser-extension.md).
 
 To chat for real, open **Settings → Providers**, add a provider (Anthropic,

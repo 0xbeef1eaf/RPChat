@@ -10,6 +10,7 @@ const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTim
 const MEMORY_KEYS = ['enabled', 'consolidateEveryTurns', 'maxEntriesPerCharacter', 'promptBudgetTokens'] as const;
 const SENSES_KEYS = ['includeInPrompt', 'watchDirs', 'calendarSources'] as const;
 const UPDATES_KEYS = ['automatic', 'enabled'] as const;
+const BROWSER_KEYS = ['allowBlocking', 'maxBlockMs', 'allowEval', 'allowHistory', 'homePage'] as const;
 const BACKENDS = new Set(['auto', 'electron', 'hyprland']);
 
 function isNumber(v: unknown): v is number {
@@ -105,6 +106,23 @@ export function parsePolicy(json: unknown): PolicyFile {
       }
       settings.updates = u;
     }
+    if (s.browser && typeof s.browser === 'object') {
+      const b: NonNullable<NonNullable<PolicyFile['settings']>['browser']> = {};
+      const raw3 = s.browser as Record<string, unknown>;
+      for (const k of BROWSER_KEYS) {
+        const v = raw3[k];
+        if (v === undefined) continue;
+        if (k === 'maxBlockMs') {
+          if (isNumber(v) && v >= 0) b.maxBlockMs = Math.round(v);
+          else problems.push('settings.browser.maxBlockMs must be a non-negative number');
+        } else if (k === 'homePage') {
+          if (typeof v === 'string' && (v === '' || /^https?:\/\//i.test(v))) b.homePage = v;
+          else problems.push('settings.browser.homePage must be an http(s) URL or ""');
+        } else if (typeof v === 'boolean') b[k] = v;
+        else problems.push(`settings.browser.${k} must be a boolean`);
+      }
+      settings.browser = b;
+    }
     out.settings = settings;
   }
   if (raw.inputLock && typeof raw.inputLock === 'object') {
@@ -146,6 +164,7 @@ export function managedPaths(policy: PolicyFile | null | undefined): ManagedSett
   for (const k of SENSES_KEYS) if (s.senses?.[k] !== undefined) out.add(`senses.${k}`);
   if (s.displayBackend !== undefined) out.add('displayBackend');
   for (const k of UPDATES_KEYS) if (s.updates?.[k] !== undefined) out.add(`updates.${k}`);
+  for (const k of BROWSER_KEYS) if (s.browser?.[k] !== undefined) out.add(`browser.${k}`);
   return [...out].sort();
 }
 
@@ -166,6 +185,7 @@ export function applyPolicy(settings: AppSettings, policy: PolicyFile | null | u
   // `enabled: false` also switches the background toggle off so the UI reflects the effective state.
   if (s.updates?.automatic !== undefined) next.updates = { ...settings.updates, automatic: s.updates.automatic };
   if (s.updates?.enabled === false) next.updates = { ...next.updates, automatic: false };
+  if (s.browser) next.browser = { ...settings.browser, ...definedOnly(s.browser) };
   const hardMax = policy.inputLock?.maxDurationMs;
   if (hardMax !== undefined && next.maxInputLockMs > hardMax) next.maxInputLockMs = hardMax;
   if (policy.inputLock?.enabled === false) next.maxInputLockMs = Math.min(next.maxInputLockMs, 1000);
