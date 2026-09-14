@@ -1412,6 +1412,40 @@ mod os {
 
     /// The real guard hooks: securityfs presence, `/etc/apparmor.d/abi/*`, files written
     /// `0644` through a temp file + rename, `apparmor_parser`, `/proc` socket discovery.
+    /// Running processes whose executable is one of `helpers` and whose AppArmor label is
+    /// `unconfined` (read from `/proc/<pid>/attr/current`, "unconfined" or absent): they were
+    /// started before the profiles were loaded and cannot enter a hat.
+    pub fn unconfined_login_helpers(helpers: &[String]) -> Vec<(u32, String)> {
+        let mut out = Vec::new();
+        let Ok(procs) = fs::read_dir("/proc") else {
+            return out;
+        };
+        for entry in procs.flatten() {
+            let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                continue;
+            };
+            let Ok(exe) = fs::read_link(entry.path().join("exe")) else {
+                continue;
+            };
+            let exe = exe
+                .to_string_lossy()
+                .trim_end_matches(" (deleted)")
+                .to_string();
+            if !helpers.iter().any(|h| h == &exe) {
+                continue;
+            }
+            let label = fs::read_to_string(entry.path().join("attr/current"))
+                .or_else(|_| fs::read_to_string(entry.path().join("attr/apparmor/current")))
+                .unwrap_or_default();
+            let label = label.trim_end_matches(['\n', '\0']).trim();
+            if label.is_empty() || label == "unconfined" {
+                out.push((pid, exe));
+            }
+        }
+        out.sort();
+        out
+    }
+
     pub fn guard_hooks() -> GuardHooks {
         GuardHooks {
             available: Box::new(|| Path::new(guard::APPARMOR_FS).is_dir()),
@@ -1427,6 +1461,7 @@ mod os {
             remove_file: Box::new(|p| fs::remove_file(p)),
             parser: Box::new(run_apparmor_parser),
             discover: Box::new(discover_sockets),
+            unconfined_helpers: Box::new(unconfined_login_helpers),
             now: Box::new(|| {
                 let ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

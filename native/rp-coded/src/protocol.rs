@@ -788,6 +788,7 @@ mod tests {
             loaded: vec!["rp-code-session".into()],
             users: vec!["work".into()],
             residual: vec!["audit mode".into()],
+            warnings: vec![],
             pam_configured: Some(true),
             shell: Some("noctalia".into()),
             compositor: Some("hyprland".into()),

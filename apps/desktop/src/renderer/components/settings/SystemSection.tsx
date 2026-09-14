@@ -256,6 +256,11 @@ export function SystemSection() {
               {guard.lastError}
             </div>
           ) : null}
+          {(guard.warnings ?? []).map((w) => (
+            <div key={w} className="callout callout-warning small" style={{ marginTop: 8 }}>
+              {w}
+            </div>
+          ))}
           {guard.configured && guard.daemonSupportsGuard && guard.pamConfigured === false ? (
             <div className="callout callout-warning small" style={{ marginTop: 8 }}>
               The <code>pam_apparmor</code> session line is missing, so new logins are not confined. Run the installer below (it passes <code>--guard</code> while the policy has the
@@ -438,12 +443,13 @@ function guardBadge(guard: SystemIntegrationStatus['guard']): string {
   if (!guard.configured) return 'off';
   if (!guard.daemonSupportsGuard || !guard.available) return 'unavailable';
   if (guard.lastError) return 'error';
+  if ((guard.warnings ?? []).length > 0) return `${guard.mode} (not effective)`;
   return guard.loaded.length > 0 ? guard.mode : `${guard.mode} (pending)`;
 }
 
 function guardBadgeClass(guard: SystemIntegrationStatus['guard']): string {
   if (!guard.configured) return 'badge';
-  if (!guard.daemonSupportsGuard || !guard.available || guard.lastError) return 'badge badge-warning';
+  if (!guard.daemonSupportsGuard || !guard.available || guard.lastError || (guard.warnings ?? []).length > 0) return 'badge badge-warning';
   return guard.mode === 'enforce' ? 'badge badge-accent' : 'badge badge-success';
 }
 

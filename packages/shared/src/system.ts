@@ -95,6 +95,11 @@ export interface GuardInfo {
   users: string[];
   /** Documented gaps for this configuration, one sentence each. */
   residual: string[];
+  /**
+   * What makes the guard ineffective right now and how to fix it, e.g. a login helper that
+   * started before the profiles were loaded (sessions stay unconfined until it restarts).
+   */
+  warnings?: string[];
   /** The `pam_apparmor.so` session line is present (undefined when no known PAM file exists). */
   pamConfigured?: boolean;
   shell?: string;

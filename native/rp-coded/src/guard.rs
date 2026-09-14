@@ -936,6 +936,10 @@ pub struct GuardInfo {
     pub loaded: Vec<String>,
     pub users: Vec<String>,
     pub residual: Vec<String>,
+    /// Things that make the guard ineffective right now and how to fix them (e.g. a login
+    /// helper that started before the profiles were loaded); empty when everything is in place.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pam_configured: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -978,6 +982,10 @@ pub type WriteFile = Box<dyn Fn(&Path, &str) -> io::Result<()> + Send + Sync>;
 pub type RemoveFile = Box<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
 pub type Parser = Box<dyn Fn(ParserOp, &[PathBuf]) -> Result<(), String> + Send + Sync>;
 pub type Discover = Box<dyn Fn(&[String]) -> Vec<DiscoveredSocket> + Send + Sync>;
+/// Login helpers (by executable path) that are running right now WITHOUT an AppArmor label:
+/// `(pid, exe)` pairs. Such a helper was exec'd before the profiles were loaded and cannot enter
+/// a hat, so every login it handles stays unconfined until it restarts.
+pub type UnconfinedHelpers = Box<dyn Fn(&[String]) -> Vec<(u32, String)> + Send + Sync>;
 
 /// The OS-touching parts, injectable for tests.
 pub struct GuardHooks {
@@ -992,6 +1000,8 @@ pub struct GuardHooks {
     pub parser: Parser,
     /// Listening sockets of the listed users' shell/compositor processes, generalised.
     pub discover: Discover,
+    /// Running login helpers that carry no profile (see `UnconfinedHelpers`).
+    pub unconfined_helpers: UnconfinedHelpers,
     pub now: Box<dyn Fn() -> String + Send + Sync>,
 }
 
@@ -1185,6 +1195,7 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
     match result {
         Ok(()) => {
             info.loaded = plan.files.iter().map(|f| f.name.to_string()).collect();
+            info.warnings = helper_warnings(&(hooks.unconfined_helpers)(&ctx.login_helpers));
             state.mode = rules.mode;
             state.hash = plan.hash.clone();
             state.loaded = info.loaded.clone();
@@ -1205,6 +1216,29 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
         info.last_error = Some(e);
     }
     info
+}
+
+/// Warning lines for login helpers running without a profile: they were started before the
+/// profiles were loaded, so the sessions they open cannot be confined until they restart.
+pub fn helper_warnings(unconfined: &[(u32, String)]) -> Vec<String> {
+    unconfined
+        .iter()
+        .map(|(pid, exe)| {
+            let name = Path::new(exe)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| exe.clone());
+            let unit = match name.as_str() {
+                "greetd" => "greetd",
+                "sddm-helper" => "sddm",
+                "sshd" => "sshd",
+                _ => "the login service",
+            };
+            format!(
+                "{name} (pid {pid}) is running unconfined: it started before the profiles were loaded, so logins it opens are not guarded until it restarts (from a TTY: systemctl restart {unit}, or reboot); pam_apparmor then reports \"Operation not permitted\" changing to the hat"
+            )
+        })
+        .collect()
 }
 
 /// `status.guard` without touching anything: from the state file and the LSM presence.
@@ -1232,6 +1266,13 @@ pub fn current_info(
             rules.mode.as_str(),
             state.mode.as_str()
         ));
+    }
+    if !info.loaded.is_empty() {
+        let helpers = match &rules.login_helpers {
+            Some(list) => list.clone(),
+            None => KNOWN_LOGIN_HELPERS.iter().map(|s| s.to_string()).collect(),
+        };
+        info.warnings = helper_warnings(&(hooks.unconfined_helpers)(&helpers));
     }
     info
 }
@@ -1291,12 +1332,22 @@ pub mod tests {
                     Ok(())
                 }),
                 discover: Box::new(move |_| g.discovered.lock().unwrap().clone()),
+                unconfined_helpers: Box::new(move |_| Vec::new()),
                 now: Box::new(move || {
                     let _ = &h;
                     "2026-09-14T12:00:00.000Z".to_string()
                 }),
             }
         }
+    }
+
+    #[test]
+    fn unconfined_login_helper_becomes_a_warning_with_the_restart_hint() {
+        let w = helper_warnings(&[(962, "/usr/bin/greetd".to_string())]);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].starts_with("greetd (pid 962) is running unconfined"));
+        assert!(w[0].contains("systemctl restart greetd"));
+        assert!(helper_warnings(&[]).is_empty());
     }
 
     fn paths(dir: &Path) -> GuardPaths {

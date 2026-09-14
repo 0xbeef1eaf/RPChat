@@ -341,6 +341,14 @@ Rules of the flow:
 
 ## Session guard
 
+> **Login helper started before the profiles.** AppArmor attaches a profile at exec time, so a
+> `greetd`/`sddm-helper`/`sshd` that was already running when the guard was first engaged stays
+> unconfined; `pam_apparmor` then logs `changing to <user> hat: Operation not permitted` and the
+> login comes up unconfined. The daemon reports this as a warning in `status.guard.warnings`
+> (Settings → System shows it as "not effective"): restart the helper from a TTY
+> (`systemctl restart greetd`) or reboot. After a reboot `apparmor.service` loads the
+> `rp-code-*` files before the login service starts, so it does not recur.
+
 `app.allowQuit: false` keeps the app running; the **session guard** keeps the user from undoing
 what the character did *through their own session*: a terminal, a keybind script, the shell's
 wallpaper picker. With a `guard` block in the policy the login sessions of the users in
