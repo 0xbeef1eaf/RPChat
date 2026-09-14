@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import type { MediaCloseReason } from '@rp/shared';
 import { closesOnClick, effectiveOpacity, effectiveVolume, type MediaEntry, type MediaLocalEvent } from './mediaState';
 import { fitMedia, type NaturalSize } from './fit';
 
@@ -19,22 +20,28 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
 
   const clickThrough = entry.kind !== 'audio' && Boolean(entry.options.clickThrough);
 
-  // Animate out, then tell the state machine.
-  const dismiss = () => {
+  // Animate out, then tell the state machine (with why: a click, or the image's own timer).
+  const dismiss = (reason: MediaCloseReason = 'click') => {
     if (leaving) return;
     setLeaving(true);
-    window.setTimeout(() => onEvent({ type: 'dismiss', id: entry.id }), LEAVE_MS);
+    window.setTimeout(() => onEvent({ type: 'dismiss', id: entry.id, reason }), LEAVE_MS);
   };
-  // A timed image closes itself; clicking it should not cut that short (`closesOnClick`).
+  // Every click is reported (main turns it into the `media-clicked` event); whether it also closes
+  // the item is `closesOnClick` — a timed image keeps going unless `closeOnClick` says otherwise.
   const clickCloses = closesOnClick(entry);
-  const onClick = clickCloses ? dismiss : undefined;
+  const onClick = clickThrough
+    ? undefined
+    : () => {
+        onEvent({ type: 'click', id: entry.id });
+        if (clickCloses) dismiss('click');
+      };
   const clickTitle = clickCloses ? 'Click to close' : undefined;
 
   // Image auto-close.
   const durationMs = entry.kind === 'image' ? entry.options.durationMs : undefined;
   useEffect(() => {
     if (!durationMs) return;
-    const t = window.setTimeout(dismiss, Math.max(0, durationMs));
+    const t = window.setTimeout(() => dismiss('timeout'), Math.max(0, durationMs));
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry.id, durationMs]);
@@ -151,7 +158,7 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
       <div className="media-audio">
         <span>♪</span>
         <span>{decodeURIComponent(entry.url.split('/').pop() ?? 'audio')}</span>
-        <button type="button" className="media-audio-stop" onClick={dismiss} aria-label="Stop">
+        <button type="button" className="media-audio-stop" onClick={() => dismiss('click')} aria-label="Stop">
           ✕
         </button>
       </div>

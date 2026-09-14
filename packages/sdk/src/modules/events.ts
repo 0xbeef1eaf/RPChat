@@ -4,7 +4,7 @@ export const eventsModule: CapabilityModuleSpec = {
   id: 'events',
   version: '1.0.0',
   title: 'Events',
-  summary: 'React to things happening on the PC (idle, window/song changes, time, files, widget clicks) with a handler that runs when they occur.',
+  summary: 'React to things happening on the PC (idle, window/song changes, time, files, widget messages, media clicks) with a handler that runs when they occur.',
   permission: 'trusted',
   apiTypeName: 'EventsApi',
   typings: `/**
@@ -23,7 +23,8 @@ interface EventsApi {
    *   (A string with the body of an async function still works.)
    * @param opts filter: event-specific match, e.g. { idleMs: 600000 } for 'user-idle', { hour: 22, minute: 30 } for 'time',
    *   { app: "steam" } for 'window-changed', { percent: 15 } for 'battery-low', { widgetId } for 'widget-message',
-   *   { url: "wikipedia.org" } for 'browser-navigated' (data: { tabId, url, title }; needs the browser extension);
+   *   { url: "wikipedia.org" } for 'browser-navigated' (data: { tabId, url, title }; needs the browser extension),
+   *   { mediaId } or { asset } for 'media-clicked' / 'media-closed' (data: { mediaId, asset, packId, kind } plus reason for closed);
    *   input: extra Json merged into input; once: remove after the first firing; label: shown in the UI.
    * @returns The subscription (keep the id if you want to remove it later).
    * @example await sdk.events.on("user-back", async (input) => {
@@ -52,7 +53,7 @@ interface EventsApi {
 - Write the handler as a **function**: \`sdk.events.on("time", async (input) => { ... })\`. It is part of your code, so it is checked like the rest of it, instead of hiding in a string.
 - It runs later as its own action with \`input = { event, data, ...opts.input }\`, in a fresh run: **nothing around it is in scope** — no variable you just computed, no helper you defined above. Pass those through \`opts.input\`. Keep it small: usually store something, show something, or \`sdk.llm.wake({...})\` so you can respond in words.
 - Check \`list()\` first and reuse/replace rather than stacking duplicates (30 per session). Use \`once: true\` for one-shot reactions.
-- Filters: \`time\` \`{ hour, minute?, weekday? }\`; \`user-idle\` \`{ idleMs }\` (without it, as soon as the host counts the user as idle; with it, once they have been away that long); \`window-changed\`/\`app-launched\` \`{ app?, title? }\` (substring); \`battery-low\` \`{ percent }\`; \`file-added\` \`{ dir?, ext? }\`; \`widget-message\` \`{ widgetId }\`; \`browser-navigated\` \`{ url?, title? }\` (substring; data \`{ tabId, url, title }\`, only while the browser extension is connected).
+- Filters: \`time\` \`{ hour, minute?, weekday? }\`; \`user-idle\` \`{ idleMs }\` (without it, as soon as the host counts the user as idle; with it, once they have been away that long); \`window-changed\`/\`app-launched\` \`{ app?, title? }\` (substring); \`battery-low\` \`{ percent }\`; \`file-added\` \`{ dir?, ext? }\`; \`widget-message\` \`{ widgetId }\`; \`browser-navigated\` \`{ url?, title? }\` (substring; data \`{ tabId, url, title }\`, only while the browser extension is connected); \`media-clicked\` / \`media-closed\` \`{ mediaId?, asset?, reason? }\` (exact; data \`{ mediaId, asset, packId, kind }\`, closed adds \`reason\`: 'click' | 'timeout' | 'ended' | 'api' | 'error') — the clicks on images you showed with \`sdk.media\`. Interaction events (widget messages, media clicks/closes, avatar clicks) are never debounced, but one that arrives while its handler is still running is dropped: keep those handlers short.
 
 \`\`\`ts
 const subs = await sdk.events.list();

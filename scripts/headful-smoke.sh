@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Headful smoke test: runs the desktop app on an Xvfb display with a file-backed framebuffer,
-# drives two mock-LLM turns (RP_MOCK_LLM=1 RP_SMOKE=1) — one showing media, one asking a
+# drives two mock-LLM turns (RP_MOCK_LLM=1 RP_SMOKE=1) — one showing media (an image, a video, audio and a
+# widget embedding the image through an asset placeholder), one asking a
 # question in a prompt window — captures every Electron window via
 # capturePage and the whole framebuffer via xwd, and fails if the main process raised an
 # uncaught exception (Electron shows those as an "Error" dialog window).
@@ -58,7 +59,8 @@ if ! grep -q "\[smoke\] action ok" "$OUT/app.log"; then echo "FAIL: the mock act
 if ! ls "$OUT"/*-main-chat-session.png >/dev/null 2>&1; then echo "FAIL: no main-window screenshot"; STATUS=1; fi
 if grep -qiE "typeerror|unhandled" "$OUT/app.log"; then echo "FAIL: TypeError/unhandled in app log"; STATUS=1; fi
 if grep -qE "\[smoke\] verify [a-z]+: FAIL" "$OUT/app.log"; then echo "FAIL: media verification failed (see verify lines above)"; STATUS=1; fi
-for kind in image video audio; do grep -qE "\[smoke\] verify $kind: PASS" "$OUT/app.log" || { echo "FAIL: no PASS line for $kind"; STATUS=1; }; done
+# `widget` proves a sandboxed widget iframe can load a pack image through an `{{asset:…}}` placeholder (pixel check).
+for kind in image video audio widget; do grep -qE "\[smoke\] verify $kind: PASS" "$OUT/app.log" || { echo "FAIL: no PASS line for $kind"; STATUS=1; }; done
 # A character's question must open a window of its own and its answer must reach the action.
 if ! grep -q "\[smoke\] verify prompt: PASS" "$OUT/app.log"; then echo "FAIL: the prompt window did not open or its answer did not come back"; STATUS=1; fi
 echo "--- screenshots in $OUT"; ls -1 "$OUT"/*.png

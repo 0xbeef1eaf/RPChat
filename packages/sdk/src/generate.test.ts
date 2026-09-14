@@ -326,7 +326,7 @@ describe('generateSdkIndex', () => {
     const index = generateSdkIndex(registry, { modules: ['media', 'state'] });
     expect(index).toContain('- showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle> — Show an image asset in an overlay.');
     expect(index).toContain('- session.get(key: string): Promise<Json | undefined>');
-    expect(index).toContain('ShowImageOptions extends OverlayOptions { durationMs?: number; caption?: string }');
+    expect(index).toContain('ShowImageOptions extends OverlayOptions { durationMs?: number; caption?: string; closeOnClick?: boolean }');
     expect(index).toContain('## Shared types');
     expect(index).not.toContain('PresenceSnapshot'); // unreferenced shared types are dropped
     expect(index).not.toContain('## Not available'); // unavailable modules are omitted, not described

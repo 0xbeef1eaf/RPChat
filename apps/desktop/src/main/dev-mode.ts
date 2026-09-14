@@ -26,6 +26,14 @@ const result = { shown: Boolean(pick), asset: pick ? pick.path : null, video: nu
 if (pick) {
   const h = await sdk.media.showImage(pick, { durationMs: 20000, position: "bottom-right", width: 320, caption: "hello from the mock model" });
   result.image = h.id;
+  // The same picture inside a widget through an asset placeholder (the smoke checks its pixels).
+  try {
+    const w = await sdk.widgets.show({ id: "smoke-widget", title: "smoke widget", position: "top-left", width: 300, height: 240,
+      html: '<body style="margin:0;background:#fff"><img src="{{asset:' + pick.path + '}}" style="display:block;width:280px;height:200px"></body>' });
+    result.widget = w.id;
+  } catch (err) {
+    result.widget = "failed: " + (err && err.message ? err.message : String(err));
+  }
 }
 if (videos[0]) {
   const v = await sdk.media.playVideo(videos[0], { position: "top-right", width: 320, muted: true, loop: true, closeOnEnd: false });
@@ -699,6 +707,8 @@ async function captureStats(win: BrowserWindow, target?: [number, number, number
 /**
  * Prove the media actually rendered, not just that windows exist:
  * - image: the teal card's colour covers a meaningful part of the overlay capture;
+ * - widget: the same card, loaded by the sandboxed widget iframe through an `{{asset:…}}` placeholder,
+ *   covers a meaningful part of the widget window (proves the iframe can load pack images);
  * - video: the overlay shows many colours (the ffmpeg test card) and two captures differ (frames advance);
  * - audio: the item was accepted and no error was reported (ends by itself when an output device exists).
  */
@@ -717,6 +727,14 @@ export async function verifyMedia(logger: Logger, mediaList: () => unknown[]): P
       const ok = st.opaque > 5000 && st.match > 0.3;
       logger[ok ? 'info' : 'error'](`[smoke] verify image: ${ok ? 'PASS' : 'FAIL'} (${st.width}x${st.height}, opaque=${st.opaque}, teal=${(st.match * 100).toFixed(0)}%, mean=${st.mean.join(',')})`);
     }
+  }
+
+  const widgetWin = overlayWindowFor('widget-smoke-widget');
+  if (!widgetWin) logger.error('[smoke] verify widget: FAIL (no window for widget "smoke-widget" — see the action result for the sdk.widgets.show error)');
+  else {
+    const st = await captureStats(widgetWin, [0x2a, 0x9d, 0x8f]);
+    const ok = st.opaque > 5000 && st.match > 0.25;
+    logger[ok ? 'info' : 'error'](`[smoke] verify widget: ${ok ? 'PASS' : 'FAIL'} (${st.width}x${st.height}, opaque=${st.opaque}, teal=${(st.match * 100).toFixed(0)}% — the iframe ${ok ? 'loaded' : 'did not load'} the rp-asset:// image behind {{asset:…}})`);
   }
 
   if (!video) logger.error('[smoke] verify video: FAIL (no video item)');

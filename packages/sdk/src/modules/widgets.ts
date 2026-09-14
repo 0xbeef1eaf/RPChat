@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const widgetsModule: CapabilityModuleSpec = {
   id: 'widgets',
-  version: '1.0.0',
+  version: '1.1.0',
   title: 'Widgets',
   summary: 'Put small self-made HTML windows on the desktop (timers, notes, mini games) and talk to them.',
   permission: 'pack',
@@ -12,6 +12,8 @@ export const widgetsModule: CapabilityModuleSpec = {
  * (scripts allowed; no network, no access to the app). Inside the widget, window.parent.postMessage(msg, "*")
  * raises the 'widget-message' event with data { widgetId, message } so your subscriptions can react;
  * messages you send with update({ postMessage }) arrive as a "message" event in the widget.
+ * Pack images inside the HTML: write {{asset:media/images/x.png}} wherever a URL goes (img src, CSS url(…));
+ * the host replaces every placeholder with a URL the widget can load. A path that is not a pack asset fails the call.
  */
 interface WidgetsApi {
   /**
@@ -20,6 +22,7 @@ interface WidgetsApi {
    *   width/height in px (default 320 x 240); plus overlay placement (monitor, position, x, y, layer, opacity, clickThrough).
    * @returns The widget's id and title.
    * @example await sdk.widgets.show({ id: "note", title: "Today", html: "<h2>Plan</h2><ul><li>walk</li></ul>", position: "top-right", width: 260, height: 180 });
+   * @example await sdk.widgets.show({ id: "pic", html: '<img src="{{asset:media/images/smile.png}}" style="width:100%">', width: 200, height: 200 });
    */
   show(spec: { id?: string; title?: string; html: string; width?: number; height?: number } & OverlayOptions): Promise<WidgetInfo>;
   /**
@@ -39,6 +42,7 @@ interface WidgetsApi {
   docs: `Build tiny tools on the desktop: a countdown, a shared note, a mood board, a two-button poll. Requires the \`widgets\` capability.
 
 - Write compact self-contained HTML with inline CSS/JS; there is no network inside the widget. Keep it readable at 300 px.
+- Pack images: \`{{asset:<pack-relative path>}}\` in the HTML (\`<img src="{{asset:media/images/a.png}}">\`, \`url({{asset:…}})\` in CSS) becomes a loadable URL; the path must exist in the pack (INVALID_ARGUMENT names a bad one). Nothing else can be loaded.
 - Two-way talk: in the widget, \`parent.postMessage({ choice: "tea" }, "*")\` → subscribe with \`sdk.events.on("widget-message", async (input) => { ... }, { filter: { widgetId: "poll" } })\`. From you: \`update(id, { postMessage })\`.
 - Use stable ids and \`closeAll()\` when the play is over; do not leave stale windows around.
 

@@ -323,6 +323,29 @@ function readFileSyncSafe(file) {
   return Buffer.from(readFileSync(file));
 }
 
+// ---------- game cards (Makima): 64x64 solid colours with one simple shape each ----------
+
+const CARDS = {
+  'red-circle': [[196, 48, 60], (x, y) => (x - 32) ** 2 + (y - 32) ** 2 <= 18 ** 2],
+  'blue-square': [[52, 98, 196], (x, y) => Math.abs(x - 32) <= 16 && Math.abs(y - 32) <= 16],
+  'green-diamond': [[46, 139, 87], (x, y) => Math.abs(x - 32) + Math.abs(y - 32) <= 20],
+  'yellow-triangle': [[232, 197, 71], (x, y) => y >= 16 && y <= 48 && Math.abs(x - 32) <= (y - 16) * 0.6],
+  'purple-ring': [[124, 77, 172], (x, y) => { const d = Math.sqrt((x - 32) ** 2 + (y - 32) ** 2); return d >= 11 && d <= 19; }],
+  'orange-cross': [[228, 120, 40], (x, y) => Math.abs(x - 32) <= 5 || Math.abs(y - 32) <= 5],
+  'teal-bar': [[42, 157, 143], (x, y) => Math.abs(y - 32) <= 7 && Math.abs(x - 32) <= 22],
+  'pink-dot': [[214, 96, 150], (x, y) => (x - 32) ** 2 + (y - 32) ** 2 <= 8 ** 2],
+};
+const cards = Object.fromEntries(
+  Object.entries(CARDS).map(([name, [colour, inside]]) => [
+    name,
+    png(64, 64, (x, y) => {
+      const edge = x < 2 || y < 2 || x > 61 || y > 61;
+      if (edge) return [30, 30, 34];
+      return inside(x, y) ? [245, 245, 245] : colour;
+    }, { rgb: true }),
+  ]),
+);
+
 // ---------- write ----------
 
 const outputs = [
@@ -337,13 +360,17 @@ const outputs = [
   [join(makima, 'media', 'images', 'wallpapers', 'ring-motif.png'), ringMotif],
   [join(makima, 'media', 'audio', 'attention.wav'), attentionWav],
   [join(makima, 'media', 'audio', 'click.wav'), clickWav],
+  ...Object.entries(cards).map(([name, bytes]) => [join(makima, 'media', 'images', 'cards', `${name}.png`), bytes]),
 ];
 try {
   outputs.push([join(makima, 'media', 'video', 'ring-pulse.webm'), ringPulseWebm()]);
 } catch (err) {
   console.warn(`skipping ring-pulse.webm (ffmpeg with libvpx-vp9 needed): ${err.message}`);
 }
+// `--only=<substring>` writes only the outputs whose path contains it (e.g. `--only=cards`).
+const only = process.argv.find((a) => a.startsWith('--only='))?.slice('--only='.length);
 for (const [file, bytes] of outputs) {
+  if (only && !file.includes(only)) continue;
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, bytes);
   console.log(`${file} (${bytes.length} bytes)`);

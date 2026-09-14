@@ -127,6 +127,14 @@ describe('event matching', () => {
     expect(matchesFilter('file-added', { path: '/home/u/Downloads/a.PDF', dir: '/home/u/Downloads', name: 'a.PDF' }, { dir: 'downloads', ext: '.pdf' })).toBe(true);
     expect(matchesFilter('file-added', { path: '/home/u/Downloads/a.png', dir: '/home/u/Downloads', name: 'a.png' }, { ext: 'pdf' })).toBe(false);
     expect(matchesFilter('widget-message', { widgetId: 'w1', message: {} }, { widgetId: 'w2' })).toBe(false);
+    // media clicks/closes: plain equality on any data key (mediaId, asset, reason)
+    const clicked = { mediaId: 'm1', asset: 'media/images/a.png', packId: 'com.x', kind: 'image' };
+    expect(matchesFilter('media-clicked', clicked, { mediaId: 'm1' })).toBe(true);
+    expect(matchesFilter('media-clicked', clicked, { mediaId: 'm2' })).toBe(false);
+    expect(matchesFilter('media-clicked', clicked, { asset: 'media/images/a.png' })).toBe(true);
+    expect(matchesFilter('media-clicked', clicked, { asset: 'media/images/b.png' })).toBe(false);
+    expect(matchesFilter('media-closed', { ...clicked, reason: 'timeout' }, { reason: 'timeout' })).toBe(true);
+    expect(matchesFilter('media-closed', { ...clicked, reason: 'click' }, { mediaId: 'm1', reason: 'timeout' })).toBe(false);
     expect(matchesFilter('song-changed', { title: 'x', status: 'playing' }, undefined)).toBe(true);
     expect(matchesFilter('custom:tick', { n: 1 }, { n: 1 })).toBe(true);
     expect(matchesFilter('custom:tick', { n: 1 }, { n: 2 })).toBe(false);
@@ -136,6 +144,49 @@ describe('event matching', () => {
     expect(matchesFilter('time', { hour: 9, minute: 30, weekday: 1 }, { hour: 9, minute: 30 })).toBe(true);
     expect(matchesFilter('time', { hour: 9, minute: 30, weekday: 6 }, { minute: 30, weekday: [0, 6] })).toBe(true);
     expect(matchesFilter('time', { hour: 9, minute: 30, weekday: 2 }, { weekday: [0, 6] })).toBe(false);
+  });
+
+  it('routes media-clicked / media-closed to subscriptions through their filters, never debounced', async () => {
+    const senses = new FakeSenses();
+    const runs: Array<{ subscriptionId: string; code: string }> = [];
+    t = await createTestEngine({
+      senses,
+      runnerHandler: async (request) => {
+        if (request.context.trigger.kind === 'event') runs.push({ subscriptionId: request.context.trigger.subscriptionId, code: request.code });
+        return null;
+      },
+    });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    const ctx = ctxOf(MINIMAL_ID, 'echo', session.id);
+    const byId = (await invoke(ctx, 'events', 'on', 'media-clicked', 'return "id";', { filter: { mediaId: 'm1' }, label: 'by id' })) as { ok: true; value: { id: string } };
+    const byAsset = (await invoke(ctx, 'events', 'on', 'media-clicked', 'return "asset";', { filter: { asset: 'media/a.png' } })) as { ok: true; value: { id: string } };
+    const timeouts = (await invoke(ctx, 'events', 'on', 'media-closed', 'return "timeout";', { filter: { reason: 'timeout' } })) as { ok: true; value: { id: string } };
+    const any = (await invoke(ctx, 'events', 'on', 'media-closed', 'return "any";')) as { ok: true; value: { id: string } };
+    expect(senses.interests.at(-1)?.sort()).toEqual(['media-clicked', 'media-closed', 'time']);
+
+    senses.push('media-clicked', { mediaId: 'm1', asset: 'media/a.png', packId: MINIMAL_ID, kind: 'image' });
+    senses.push('media-clicked', { mediaId: 'm2', asset: 'media/b.png', packId: MINIMAL_ID, kind: 'image' });
+    await t.engine.eventService.idle();
+    expect(runs.map((r) => r.subscriptionId)).toEqual([byId.value.id, byAsset.value.id]);
+
+    // three closes within a second: one per interaction, the reason filter picks the timeout
+    runs.length = 0;
+    senses.push('media-closed', { mediaId: 'm1', asset: 'media/a.png', packId: MINIMAL_ID, kind: 'image', reason: 'click' });
+    senses.push('media-closed', { mediaId: 'm2', asset: 'media/b.png', packId: MINIMAL_ID, kind: 'image', reason: 'timeout' });
+    senses.push('media-closed', { mediaId: 'm3', asset: 'media/c.png', packId: MINIMAL_ID, kind: 'image', reason: 'api' });
+    await t.engine.eventService.idle();
+    expect(runs.map((r) => r.subscriptionId)).toEqual([any.value.id, timeouts.value.id, any.value.id, any.value.id]);
+
+    // widget messages likewise: every click in a widget counts
+    runs.length = 0;
+    const widget = (await invoke(ctx, 'events', 'on', 'widget-message', 'return "w";', { filter: { widgetId: 'game' } })) as { ok: true; value: { id: string } };
+    senses.push('widget-message', { widgetId: 'game', message: { event: 'mistake', mistakes: 1 } });
+    senses.push('widget-message', { widgetId: 'game', message: { event: 'mistake', mistakes: 2 } });
+    senses.push('widget-message', { widgetId: 'other', message: { event: 'mistake', mistakes: 3 } });
+    await t.engine.eventService.idle();
+    expect(runs.map((r) => r.subscriptionId)).toEqual([widget.value.id, widget.value.id]);
+    expect((await t.engine.subscriptions.list(session.id)).find((s) => s.id === widget.value.id)?.fired).toBe(2);
   });
 
   it('fires a subscription with no idle filter as soon as the host reports the user idle', async () => {

@@ -5,10 +5,11 @@
  * opacity to `setOpacity` where Electron supports it (Windows/macOS) — the
  * media page always applies CSS opacity as well.
  */
-import type { AvatarState, DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo, OverlayLayer, OverlayUpdate, WidgetSpec } from '@rp/shared';
+import type { AvatarState, DisplayBackendInfo, MediaCloseReason, MediaCommand, MediaWindowEvent, MonitorInfo, OverlayLayer, OverlayUpdate, WidgetSpec } from '@rp/shared';
 import type {
   BackendLogger,
   DisplayBackend,
+  OverlayClosedDetail,
   OverlayEvent,
   OverlayEventListener,
   OverlayHandle,
@@ -209,7 +210,10 @@ export class ElectronOverlay implements OverlayHandle {
         this.events.emit('error', event.message);
         return;
       case 'closed':
-        this.finish();
+        this.finish(event.reason ?? 'api');
+        return;
+      case 'clicked':
+        this.events.emit('clicked');
         return;
       case 'avatar-clicked':
         this.events.emit('avatar-clicked');
@@ -273,8 +277,8 @@ export class ElectronOverlay implements OverlayHandle {
     return this.events.on(event, listener);
   }
 
-  /** Idempotent teardown: destroy the window, emit `closed` once. */
-  finish(): void {
+  /** Idempotent teardown: destroy the window, emit `closed` once (detail `{ reason }`). */
+  finish(reason: MediaCloseReason = 'api'): void {
     if (this.closed) return;
     this.closed = true;
     for (const d of this.disposers.splice(0)) d();
@@ -287,7 +291,8 @@ export class ElectronOverlay implements OverlayHandle {
         /* already gone */
       }
     }
-    this.events.emit('closed');
+    const detail: OverlayClosedDetail = { reason };
+    this.events.emit('closed', detail);
     this.events.clear();
   }
 }

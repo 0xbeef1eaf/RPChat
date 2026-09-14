@@ -10,7 +10,9 @@ import type {
   ActionContext,
   AppSettings,
   CapabilityHandler,
+  HostEvent,
   Json,
+  MediaCloseReason,
   MediaItem,
   MediaKind,
   MediaWindowEvent,
@@ -23,7 +25,7 @@ import type {
 import { RpError, assetUrl, characterRef } from '@rp/shared';
 import { resolveAssetPath } from '@rp/pack';
 import type { Logger } from '@rp/core';
-import type { DisplayBackend, OverlayHandle, OverlaySpec, OverlayWindowLike } from '../display/backend.js';
+import type { DisplayBackend, OverlayClosedDetail, OverlayHandle, OverlaySpec, OverlayWindowLike } from '../display/backend.js';
 import { nearestLayer, resolveOverlayOptions } from '../display/backend.js';
 
 export interface MediaHandle {
@@ -39,6 +41,8 @@ export interface MediaManagerDeps {
   packs: { getLoaded(packId: string): LoadedPack };
   settings(): Promise<AppSettings>;
   logger: Logger;
+  /** Host events for `sdk.events`: `media-clicked` and `media-closed` (see `docs/spec/living.md`). */
+  emit?: (event: HostEvent) => void;
 }
 
 interface Managed {
@@ -78,7 +82,11 @@ export class MediaManager {
     const id = randomUUID();
     const page: ShowImageOptions | PlayVideoOptions =
       kind === 'image'
-        ? { ...(options.caption !== undefined ? { caption: String(options.caption) } : {}), ...(durationOf(options) !== undefined ? { durationMs: durationOf(options) } : {}) }
+        ? {
+            ...(options.caption !== undefined ? { caption: String(options.caption) } : {}),
+            ...(durationOf(options) !== undefined ? { durationMs: durationOf(options) } : {}),
+            ...(options.closeOnClick !== undefined ? { closeOnClick: Boolean(options.closeOnClick) } : {}),
+          }
         : {
             ...(typeof options.volume === 'number' ? { volume: options.volume } : {}),
             ...(options.loop !== undefined ? { loop: Boolean(options.loop) } : {}),
@@ -121,18 +129,19 @@ export class MediaManager {
     managed.handle = handle;
     const closeOnEnd = kind === 'video' && options.closeOnEnd !== false && !options.loop;
     managed.offs.push(
-      handle.on('closed', () => this.remove(id)),
+      handle.on('closed', (detail) => this.remove(id, (detail as OverlayClosedDetail | undefined)?.reason ?? 'api')),
+      handle.on('clicked', () => this.emitEvent('media-clicked', managed)),
       handle.on('ended', () => {
-        if (closeOnEnd) void this.close(id);
+        if (closeOnEnd) void this.close(id, 'ended');
       }),
       handle.on('error', (detail) => {
         this.deps.logger.warn(`[media] ${kind} ${asset} failed: ${String(detail)}`);
-        void this.close(id);
+        void this.close(id, 'error');
       }),
     );
     const duration = durationOf(options);
     if (kind === 'image' && duration !== undefined) {
-      managed.timer = setTimeout(() => void this.close(id), duration + 250);
+      managed.timer = setTimeout(() => void this.close(id, 'timeout'), duration + 250);
       managed.timer.unref?.();
     }
     if (!this.items.has(id)) {
@@ -164,14 +173,15 @@ export class MediaManager {
     win.onReport((event: MediaWindowEvent) => {
       const managed = this.items.get(event.id);
       if (!managed || managed.item.kind !== 'audio') return;
-      if (event.type === 'ended' || event.type === 'closed') this.remove(event.id);
+      if (event.type === 'ended') this.remove(event.id, 'ended');
+      else if (event.type === 'closed') this.remove(event.id, event.reason ?? 'api');
       else if (event.type === 'error') {
         this.deps.logger.warn(`[media] audio ${managed.item.asset} failed: ${event.message}`);
-        this.remove(event.id);
+        this.remove(event.id, 'error');
       }
     });
     win.onClosed(() => {
-      for (const [id, m] of [...this.items]) if (m.item.kind === 'audio') this.remove(id);
+      for (const [id, m] of [...this.items]) if (m.item.kind === 'audio') this.remove(id, 'api');
       if (this.audioListening === win) this.audioListening = undefined;
     });
   }
@@ -188,16 +198,17 @@ export class MediaManager {
     }
   }
 
-  async close(id: string): Promise<void> {
+  /** Close an item; `reason` is what `media-closed` reports (`api` for a character's or the app's own close). */
+  async close(id: string, reason: MediaCloseReason = 'api'): Promise<void> {
     const managed = this.items.get(id);
     if (!managed) return;
     if (managed.item.kind === 'audio') {
       const win = this.audioListening;
       if (win && !win.isDestroyed()) win.send({ type: 'close', id });
-      this.remove(id);
+      this.remove(id, reason);
       return;
     }
-    this.remove(id);
+    this.remove(id, reason);
     await managed.handle?.close().catch((err) => this.deps.logger.debug('[media] close failed', err));
   }
 
@@ -213,13 +224,24 @@ export class MediaManager {
     return [...this.items.values()].map((m) => m.item);
   }
 
-  /** Forget an item; tolerant of ids that were already removed. */
-  private remove(id: string): void {
+  /** Forget an item and report `media-closed` once; tolerant of ids that were already removed. */
+  private remove(id: string, reason: MediaCloseReason): void {
     const managed = this.items.get(id);
     if (!managed) return;
     this.items.delete(id);
     if (managed.timer) clearTimeout(managed.timer);
     for (const off of managed.offs.splice(0)) off();
+    this.emitEvent('media-closed', managed, { reason });
+  }
+
+  private emitEvent(name: 'media-clicked' | 'media-closed', managed: Managed, extra: Record<string, Json> = {}): void {
+    if (!this.deps.emit) return;
+    const { id, asset, packId, kind } = managed.item;
+    try {
+      this.deps.emit({ name, data: { mediaId: id, asset, packId, kind, characterRef: managed.owner, ...extra }, at: new Date().toISOString() });
+    } catch (err) {
+      this.deps.logger.debug(`[media] ${name} listener failed`, err);
+    }
   }
 
   async dispose(): Promise<void> {

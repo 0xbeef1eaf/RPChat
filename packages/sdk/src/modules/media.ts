@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const mediaModule: CapabilityModuleSpec = {
   id: 'media',
-  version: '1.1.0',
+  version: '1.2.0',
   title: 'Media playback',
   summary: 'Show images and play video/audio from the pack in an overlay window on the user\'s screen.',
   permission: 'pack',
@@ -18,13 +18,15 @@ interface MediaApi {
   /**
    * Show an image asset in an overlay.
    * @param asset An AssetRef from sdk.pack, or a pack-relative path such as "media/images/smile.png".
-   * @param options durationMs (auto-close), caption, plus OverlayOptions: monitor, position or x/y,
+   * @param options durationMs (auto-close), caption, closeOnClick (default true; false keeps the image up after a click,
+   *   a timed image never closes on click), plus OverlayOptions: monitor, position or x/y,
    *   layer ('top' default; 'background' puts it behind windows like a wallpaper), opacity, clickThrough, width, height.
    *   Without monitor/position/x/y the window is placed on a random monitor at a random in-bounds spot; without width/height it
    *   is drawn a random size, 5%–50% of that monitor (the picture keeps its aspect ratio inside that box).
    * @returns Handle of the shown image.
    * @example await sdk.media.showImage("media/images/smile.png", { durationMs: 8000, position: "bottom-right" });
    * @example await sdk.media.showImage("media/images/rain.png", { monitor: "cursor", layer: "background", opacity: 0.6, clickThrough: true, width: 1920 });
+   * @example const h = await sdk.media.showImage("media/images/target.png", { closeOnClick: false, width: 160 }); // react to clicks with sdk.events.on("media-clicked", …, { filter: { mediaId: h.id } })
    */
   showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>;
   /**
@@ -69,6 +71,7 @@ interface MediaApi {
 - Playback calls resolve when playback starts, not when it finishes; do not wait for the end inside an action (schedule a timer instead if you need to react later).
 - Keep a handle in session state if you want to close it in a later action: \`await sdk.state.session.set("song", handle.id)\`.
 - Placement: \`monitor\` ('primary', 'cursor', an index or a name from \`sdk.display.monitors()\`), an anchor \`position\`, or exact \`x\`/\`y\` (fractions 0..1 or px). With none of these each window lands on a random monitor at a random spot that stays fully on it, so you do not need to place things unless it matters ('primary' or 'cursor' pin the monitor). Size works the same way: without \`width\`/\`height\` each image or video is drawn a random size between 5% and 50% of the monitor, keeping its aspect ratio; give \`width\` (and optionally \`height\` as a cap) when the size matters. \`layer\` picks stacking: 'top' (default) or 'overlay' float above windows; 'bottom' sits behind windows but above the wallpaper (use it for ambient art); 'background' shares the wallpaper's layer and is usually hidden by the wallpaper daemon. \`opacity\` fades; \`clickThrough: true\` lets the user keep working through the overlay — combine it with a background layer for decorations, never for things they must click.
+- Clicks and closes are events: a click on an image/video raises \`media-clicked\` \`{ mediaId, asset, packId, kind }\` and every item that goes away raises \`media-closed\` \`{ mediaId, asset, packId, kind, reason: 'click' | 'timeout' | 'ended' | 'api' | 'error' }\`; subscribe with \`sdk.events.on\` (filter \`{ mediaId }\` or \`{ asset }\`) to build clickable things — targets, choices, mini games. \`closeOnClick: false\` keeps an image up after a click.
 - Check \`sdk.display.backend()\` once per session to learn which of these the desktop honours; unsupported options degrade gracefully instead of failing. Only a display backend that cannot open an overlay at all throws CAPABILITY_FAILED (the message says why).
 
 \`\`\`ts

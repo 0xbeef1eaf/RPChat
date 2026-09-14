@@ -54,7 +54,7 @@ describe('applyMediaCommand', () => {
     const s = applyMediaCommand(INITIAL_MEDIA_STATE, img('a')).state;
     const r = applyMediaCommand(s, { type: 'close', id: 'a' });
     expect(r.state.items).toEqual([]);
-    expect(r.reports).toEqual([{ type: 'closed', id: 'a' }]);
+    expect(r.reports).toEqual([{ type: 'closed', id: 'a', reason: 'api' }]);
     const r2 = applyMediaCommand(r.state, { type: 'close', id: 'a' });
     expect(r2.reports).toEqual([]);
     expect(r2.state).toBe(r.state);
@@ -66,8 +66,8 @@ describe('applyMediaCommand', () => {
     const r = applyMediaCommand(s, { type: 'close-all' });
     expect(r.state.items).toEqual([]);
     expect(r.reports).toEqual([
-      { type: 'closed', id: 'a' },
-      { type: 'closed', id: 'b' },
+      { type: 'closed', id: 'a', reason: 'api' },
+      { type: 'closed', id: 'b', reason: 'api' },
     ]);
   });
 });
@@ -107,18 +107,32 @@ describe('applyMediaLocalEvent', () => {
       options: opts,
     }).state;
 
-  it('dismiss reports closed', () => {
+  it('dismiss reports closed with why (a click by default, or the image timer)', () => {
     const s = applyMediaCommand(INITIAL_MEDIA_STATE, img('a')).state;
     const r = applyMediaLocalEvent(s, { type: 'dismiss', id: 'a' });
     expect(r.state.items).toEqual([]);
-    expect(r.reports).toEqual([{ type: 'closed', id: 'a' }]);
+    expect(r.reports).toEqual([{ type: 'closed', id: 'a', reason: 'click' }]);
+    const timed = applyMediaLocalEvent(s, { type: 'dismiss', id: 'a', reason: 'timeout' });
+    expect(timed.reports).toEqual([{ type: 'closed', id: 'a', reason: 'timeout' }]);
+  });
+
+  it('click reports clicked for images and videos, never for audio or click-through items', () => {
+    const s = applyMediaCommand(INITIAL_MEDIA_STATE, img('a')).state;
+    const r = applyMediaLocalEvent(s, { type: 'click', id: 'a' });
+    expect(r.state).toBe(s);
+    expect(r.reports).toEqual([{ type: 'clicked', id: 'a' }]);
+    expect(applyMediaLocalEvent(video({}), { type: 'click', id: 'v' }).reports).toEqual([{ type: 'clicked', id: 'v' }]);
+    expect(applyMediaLocalEvent(video({ clickThrough: true }), { type: 'click', id: 'v' }).reports).toEqual([]);
+    const audio = applyMediaCommand(INITIAL_MEDIA_STATE, { type: 'play-audio', id: 'au', url: 'rp-asset://com.example.pack/media/a.wav', options: {} }).state;
+    expect(applyMediaLocalEvent(audio, { type: 'click', id: 'au' }).reports).toEqual([]);
+    expect(applyMediaLocalEvent(s, { type: 'click', id: 'nope' }).reports).toEqual([]);
   });
 
   it('ended on a video with closeOnEnd (default) reports ended then closed', () => {
     const r = applyMediaLocalEvent(video({}), { type: 'ended', id: 'v' });
     expect(r.reports).toEqual([
       { type: 'ended', id: 'v' },
-      { type: 'closed', id: 'v' },
+      { type: 'closed', id: 'v', reason: 'ended' },
     ]);
     expect(r.state.items).toEqual([]);
   });
@@ -175,7 +189,7 @@ describe('avatar / widget / draw pages', () => {
     expect(size.reports[0]?.type).toBe('content-size');
     const hide = applyMediaCommand(s, { type: 'avatar-hide', id: 'av' });
     expect(hide.state.avatar).toBeNull();
-    expect(hide.reports).toEqual([{ type: 'closed', id: 'av' }]);
+    expect(hide.reports).toEqual([{ type: 'closed', id: 'av', reason: 'api' }]);
   });
 
   it('update applies the visual subset to avatars and widgets', () => {
@@ -208,7 +222,7 @@ describe('avatar / widget / draw pages', () => {
     expect(s.draws[0]?.shapes).toEqual([]);
     const r = applyMediaCommand(s, { type: 'close', id: 'mon0' });
     expect(r.state.draws).toEqual([]);
-    expect(r.reports).toEqual([{ type: 'closed', id: 'mon0' }]);
+    expect(r.reports).toEqual([{ type: 'closed', id: 'mon0', reason: 'api' }]);
   });
 
   it('close-all closes every page kind', () => {
@@ -239,6 +253,10 @@ describe('helpers', () => {
     expect(closesOnClick(entry('image', {}))).toBe(true);
     expect(closesOnClick(entry('image', { durationMs: 8000 }))).toBe(false); // it closes itself
     expect(closesOnClick(entry('image', { durationMs: 0 }))).toBe(true); // no timer is armed for 0
+    // an explicit closeOnClick wins over both defaults (a game target that stays, or a timed mole that goes on a hit)
+    expect(closesOnClick(entry('image', { closeOnClick: false }))).toBe(false);
+    expect(closesOnClick(entry('image', { durationMs: 8000, closeOnClick: true }))).toBe(true);
+    expect(closesOnClick(entry('image', { closeOnClick: true, clickThrough: true }))).toBe(false); // click-through takes no clicks at all
     expect(closesOnClick(entry('image', { clickThrough: true }))).toBe(false);
     expect(closesOnClick(entry('video', {}))).toBe(true); // durationMs is an image-only option
     expect(closesOnClick(entry('audio', {}))).toBe(false); // it has a stop button instead

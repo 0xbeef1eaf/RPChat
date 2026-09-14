@@ -49,6 +49,11 @@ export interface ShowImageOptions extends OverlayOptions {
   durationMs?: number;
   /** Caption rendered under the image. */
   caption?: string;
+  /**
+   * Whether a click closes the image. Default: true, except for a timed image (`durationMs`), which
+   * closes by itself. Either way a click raises the `media-clicked` host event.
+   */
+  closeOnClick?: boolean;
 }
 
 export interface PlayVideoOptions extends OverlayOptions {
@@ -185,14 +190,24 @@ export type MediaCommand =
   | { type: 'draw-set'; id: MediaItemId; shapes: Array<DrawShape & { shapeId: string }> }
   | { type: 'draw-clear'; id: MediaItemId };
 
+/**
+ * Why a media item went away: `click` (the user dismissed it), `timeout` (`durationMs` elapsed),
+ * `ended` (playback finished), `api` (`sdk.media.close`/`closeAll`, the app or the window closing),
+ * `error` (it failed to load or play).
+ */
+export type MediaCloseReason = 'click' | 'timeout' | 'ended' | 'api' | 'error';
+
 /** Events sent from a media window back to main. */
 export type MediaWindowEvent =
   | { type: 'content-size'; id: MediaItemId; width: number; height: number }
   | { type: 'avatar-clicked'; id: MediaItemId }
   | { type: 'widget-message'; id: MediaItemId; message: Json }
+  /** The user clicked an image/video item (whether or not the click also closes it). */
+  | { type: 'clicked'; id: MediaItemId }
   | { type: 'ended'; id: MediaItemId }
   | { type: 'error'; id: MediaItemId; message: string }
-  | { type: 'closed'; id: MediaItemId };
+  /** The page removed the item; `reason` says why (absent from older pages: treated as `api`). */
+  | { type: 'closed'; id: MediaItemId; reason?: MediaCloseReason };
 
 export const ASSET_PROTOCOL = 'rp-asset';
 

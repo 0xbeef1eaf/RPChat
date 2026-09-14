@@ -186,7 +186,10 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const settingsOf = (): Promise<AppSettings> => engine.settings.get();
   const commands = new CommandRunner({ settings: settingsOf, logger, env });
   const packs = { getLoaded: (packId: string): LoadedPack => engine.packs.getLoaded(packId) };
-  const media = new MediaManager({ backend: () => backend, audioWindow: () => windows.audioWindow(), packs, settings: settingsOf, logger });
+  // ---- phase 2 senses (created early: media clicks/closes are host events too) ----------
+  const senses = createSenses({ settings: settingsOf, commands, env, ...(hypr ? { hypr } : {}), logger });
+  const emit = (event: Parameters<typeof senses.provider.push>[0]): void => senses.provider.push(event);
+  const media = new MediaManager({ backend: () => backend, audioWindow: () => windows.audioWindow(), packs, settings: settingsOf, logger, emit });
   const ui = new UiHandler({
     prompts: uiPrompts,
     deliver: (request: UiPromptRequest) => windows.openPromptWindow({ kind: 'ui', prompt: request }) || windows.sendToMain(IPC_EVENT_CHANNELS.uiPrompt, request),
@@ -246,15 +249,13 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const policy = new PolicyWatcher(env.RP_POLICY_FILE, logger);
   const input = new InputHandler({ maxLockMs: async () => (await settingsOf()).maxInputLockMs, logger, ...(process.platform === 'linux' ? { daemon } : {}) });
 
-  // ---- phase 2: senses + handlers ------------------------------------------
-  const senses = createSenses({ settings: settingsOf, commands, env, ...(hypr ? { hypr } : {}), logger });
-  const emit = (event: Parameters<typeof senses.provider.push>[0]): void => senses.provider.push(event);
+  // ---- phase 2: handlers ---------------------------------------------------
   browser.onEvent((ev) => {
     if (ev.event !== 'tab-updated' || ev.data.status !== 'complete' || typeof ev.data.url !== 'string') return;
     emit({ name: 'browser-navigated', data: { tabId: ev.data.tabId, url: ev.data.url, title: ev.data.title ?? '' }, at: new Date().toISOString() });
   });
   const avatar = new AvatarHandler({ backend: () => backend, packs, emit, logger });
-  const widgets = new WidgetsHandler({ backend: () => backend, emit, defaultLayer: async () => ((await settingsOf()).mediaAlwaysOnTop ? 'top' : 'bottom') });
+  const widgets = new WidgetsHandler({ backend: () => backend, emit, packs, defaultLayer: async () => ((await settingsOf()).mediaAlwaysOnTop ? 'top' : 'bottom') });
   const screenHandler = new ScreenHandler({
     backend: () => backend,
     commands,

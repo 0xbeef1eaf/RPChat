@@ -66,8 +66,19 @@ describe('loadPack', () => {
     expect(makima.behaviourSources.onEvent).toContain("'user-back'");
     expect(makima.behaviourSources.onEvent).toContain("'window-changed'");
     expect(makima.personaText).toMatch(/\*\*chainsaw\*\*/);
-    // the shipped function library: characters/makima/lib/glance.ts
-    expect(Object.keys(makima.library)).toEqual(['glance']);
+    // the shipped function library: characters/makima/lib/glance.ts plus the mini games and their helpers
+    expect(Object.keys(makima.library)).toEqual(['endGame', 'gameLost', 'gameSetup', 'glance', 'memoryGame', 'molePop', 'punish', 'quitGame', 'reactionTest', 'reward', 'simonSays', 'slidingPuzzle', 'whackAMole', 'writeLines']);
+    for (const name of ['memoryGame', 'simonSays', 'writeLines', 'whackAMole', 'reactionTest', 'slidingPuzzle']) {
+      const fn = makima.library[name]!;
+      expect(fn.file, name).toBe(`characters/makima/lib/${name}.ts`);
+      expect(fn.description, name).toMatch(/^\(game\) .*lib\[onLose\]/); // the loss function is named, and what it receives is documented
+      expect(fn.source, name).toMatch(/^async \(opts: \{ onLose: string; onWin\?: string;/);
+      expect(fn.source, name).toContain('lib.gameSetup(');
+      expect(fn.source, name).toContain('lib.endGame(');
+    }
+    for (const name of ['memoryGame', 'simonSays', 'slidingPuzzle']) expect(makima.library[name]!.source, name).toContain('{{asset:');
+    expect(makima.library['punish']!.description).toMatch(/onLose/);
+    expect(makima.library['reward']!.description).toMatch(/onWin/);
     expect(makima.library['glance']).toMatchObject({
       file: 'characters/makima/lib/glance.ts',
       description: 'show a random portrait of Makima for five seconds and return its path',
@@ -90,6 +101,14 @@ describe('loadPack', () => {
       'characters/makima/expressions/stare.png',
       'media/audio/attention.wav',
       'media/audio/click.wav',
+      'media/images/cards/blue-square.png',
+      'media/images/cards/green-diamond.png',
+      'media/images/cards/orange-cross.png',
+      'media/images/cards/pink-dot.png',
+      'media/images/cards/purple-ring.png',
+      'media/images/cards/red-circle.png',
+      'media/images/cards/teal-bar.png',
+      'media/images/cards/yellow-triangle.png',
       'media/images/wallpapers/dim-office.png',
       'media/images/wallpapers/red-dusk.png',
       'media/images/wallpapers/ring-motif.png',
@@ -98,9 +117,16 @@ describe('loadPack', () => {
     expect(byPath.get('media/images/wallpapers/red-dusk.png')).toMatchObject({ kind: 'image', tags: ['control', 'dusk', 'wallpaper', 'wallpapers'] });
     expect(byPath.get('characters/makima/expressions/stare.png')).toMatchObject({ kind: 'image', tags: ['expression', 'expressions', 'makima', 'portrait'] });
     expect(byPath.get('media/video/ring-pulse.webm')).toMatchObject({ kind: 'video', mime: 'video/webm', tags: ['pulse', 'ring'] });
+    // the game tiles: eight tiny solid-colour PNGs tagged `card` (folder tag `cards`), under a kilobyte together
+    const cards = pack.assets.filter((a) => a.path.startsWith('media/images/cards/'));
+    expect(cards).toHaveLength(8);
+    for (const c of cards) expect(c, c.path).toMatchObject({ kind: 'image', tags: ['card', 'cards'] });
+    expect(cards.reduce((n, c) => n + c.bytes, 0)).toBeLessThan(4 * 1024);
     expect(byPath.get('media/audio/attention.wav')!.bytes).toBeLessThan(100 * 1024);
     for (const a of pack.assets) expect(a.description ?? (a.tags.length > 0 ? 'x' : '')).not.toBe('');
-    expect(summariseTags(pack.assets, pack.tagDescriptions).slice(0, 2)).toEqual([
+    expect(summariseTags(pack.assets, pack.tagDescriptions).slice(0, 4)).toEqual([
+      { tag: 'card', count: 8, description: expect.stringContaining('mini games') },
+      { tag: 'cards', count: 8 },
       { tag: 'makima', count: 5 },
       { tag: 'portrait', count: 5, description: expect.stringContaining('placeholder') },
     ]);

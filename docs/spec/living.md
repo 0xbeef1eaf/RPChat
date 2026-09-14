@@ -28,7 +28,7 @@ all mirroring `@rp/shared` (add them to the structural-identity test where they 
 | `web` | pack | `fetch(url, opts?: { method?: 'GET'\|'POST'; headers?; body?: string; maxBytes? }): { status; headers; text }` (D; restricted to the allowlist when one is set); `rss(url, limit?): Array<{ title; link; published?; summary? }>` (allowlist likewise); `weather(place: string): { place; tempC; feelsLikeC; condition; windKph; humidity; forecast: Array<{ day; minC; maxC; condition }> }` (open-meteo, always allowed) |
 | `events` | trusted | `on(event: HostEventName, handler: Handler, opts?: { filter?: Record<string, Json>; input?: Json; once?: boolean; label?: string }): EventSubscriptionInfo`; `off(id): boolean`; `list(): EventSubscriptionInfo[]`; `emit(name: string, data?: Json): void` (custom `custom:<name>` events a character can raise for its own subscriptions) |
 | `avatar` | pack | `show(opts?: { expression?; size?; monitor?; position?; x?; y?; layer?; opacity?; clickThrough?; lookAtCursor? }): AvatarStateInfo`; `set(patch: { expression?; size?; lookAtCursor?; opacity?; clickThrough? }): AvatarStateInfo`; `say(text, opts?: { durationMs? }): void` (speech bubble); `animate(name: AvatarAnimation): void`; `moveTo(target: { monitor?; position?; x?; y? }, opts?: { durationMs? }): void`; `hide(): void`; `state(): AvatarStateInfo \| null`; `expressions(): string[]` |
-| `widgets` | pack | `show(spec: { id?; title?; html; width?; height? } & OverlayOptions): WidgetInfo`; `update(id, patch: { html?; title?; postMessage?: Json }): void`; `close(id): void`; `closeAll(): void`; `list(): WidgetInfo[]` |
+| `widgets` | pack | `show(spec: { id?; title?; html; width?; height? } & OverlayOptions): WidgetInfo`; `update(id, patch: { html?; title?; postMessage?: Json }): void`; `close(id): void`; `closeAll(): void`; `list(): WidgetInfo[]` — `html` may embed pack images as `{{asset:<path>}}` placeholders, substituted by the host (docs/spec/overlay.md §5; a bad path → INVALID_ARGUMENT) |
 | `voice` | pack | `speak(text, opts?: { rate?: number; voice?: string; wait?: boolean }): void`; `stop(): void`; `listen(opts?: { maxSeconds?: number }): { text: string }` (D) |
 | `desktop` | pack | `launch(app: string, args?: string[]): { pid?: number }` (D; restricted to launchAllowlist when one is set); `listWindows(): Array<{ id; title; app; monitor?; workspace?; focused }>`; `focusWindow(match: { id?; title?; app? }): boolean`; `moveWindow(match, to: { monitor?; x?; y?; width?; height?; workspace? }): boolean`; `workspace(target: string \| number): void`; `currentWorkspace(): { id; name }`; `setVolume(level: number): void`; `getVolume(): number \| null`; `setBrightness(level): void`; `doNotDisturb(on: boolean): void`; `setTheme(theme: 'dark'\|'light'): void` |
 | `input` (v1.1) | pack | existing lock/unlock/status + `type(text)`, `key(combo)`, `click(x, y, button?)`, `moveMouse(x, y)` (all D; no per-call prompt) |
@@ -60,7 +60,7 @@ EngineOptions {
 }
 interface SensesProvider {
   snapshot(sessionId?: string): Promise<PresenceSnapshot>;     // host samples; core adds sinceLastMessageMs/localTime/dayPart if missing
-  /** Host pushes raw events (window-changed, user-idle/back, battery-low, screen-locked/unlocked, song-changed, file-added, widget-message, avatar-clicked). */
+  /** Host pushes raw events (window-changed, user-idle/back, battery-low, screen-locked/unlocked, song-changed, file-added, widget-message, avatar-clicked, media-clicked, media-closed). */
   subscribe(listener: (event: HostEvent) => void): () => void;
   /** Called with the union of event names any live subscription needs, so the host only samples what is used. */
   setInterest?(events: HostEventName[]): void;
@@ -100,7 +100,10 @@ manifest, characters, README and asset summary (no permission information).
   while the user stays away; an `onEvent` behaviour is only run for the first of them. `battery-low`:
   edge below `filter.percent ?? 20`. `window-changed`/`app-launched`: optional `filter.app`/`filter.title`
   (case-insensitive substring). `file-added`: optional `filter.dir`, `filter.ext`. `song-changed`: any.
-  `widget-message`: `filter.widgetId`. Generic: any other filter key must equal `data[key]`.
+  `widget-message`: `filter.widgetId`. `media-clicked` (data `{ mediaId, asset, packId, kind }`, the user clicked an
+  image/video overlay of `sdk.media`) and `media-closed` (the same plus `reason: 'click' | 'timeout' | 'ended' | 'api' |
+  'error'`, whenever an item goes away — including `closeAll` and app shutdown): no special keys, so `{ mediaId }`,
+  `{ asset }` or `{ reason }` match through the generic path. Generic: any other filter key must equal `data[key]`.
 - Firing: run `code` via `BehaviourRunner.runScript` with `input = { event, data, ...input }`, trigger
   `{ kind: 'event', subscriptionId, event }`; if the character has an `onEvent` behaviour it also runs
   (input `{ event, data }`) for events with no matching subscription; audit as `events.fire`.
@@ -110,7 +113,11 @@ manifest, characters, README and asset summary (no permission information).
   gets to write — and have checked — real code. A handler runs in a fresh isolate: it closes over
   nothing, and everything it needs travels in `opts.input`
   allowed/failed; `fired++`; `once` → remove. Event code runs do not count toward autonomy limits, but
-  wakes they trigger do. Emit `event-fired` chat event. Debounce identical event+subscription within 2 s.
+  wakes they trigger do. Emit `event-fired` chat event. Debounce identical event+subscription within 2 s —
+  except the interaction events (`widget-message`, `avatar-clicked`, `media-clicked`, `media-closed`,
+  `INTERACTION_EVENTS`): each of those is a distinct user action (the next card, the next click) and
+  always fires. One that arrives while the same subscription's handler is still running is dropped
+  (no queue), which the SDK docs tell the character to plan for.
 - `setInterest` is called whenever the subscription set changes (union of event names + always `time`
   handled in core).
 
@@ -209,7 +216,10 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   integration — see `docs/spec/system.md`), `files` (home `<userData>/characters/<encoded
   ref>/home`, path guard like assets, 5 MB per file, 200 files, `open` via `shell.openPath`),
   `messaging` (discord/slack/generic JSON POST, telegram GET/POST `text`, `command` template; 10 s
-  timeout; `channels()` from settings), `system.clipboardRead`.
+  timeout; `channels()` from settings), `system.clipboardRead`. The `media` handler (`MediaManager`,
+  `emit` dep) raises `media-clicked` from the overlay's `clicked` event and `media-closed` with the
+  reason from the overlay's `closed` detail, the page (`click`/`timeout`/`ended`/`error`) or its own
+  close (`api`); `ShowImageOptions.closeOnClick` is forwarded to the page.
 - **IPC**: `characters.status`, `events.list/remove`, `senses.snapshot`, `packs.inspect`, and the new
   `InstalledPackView` fields; forward the new chat events.
 - **Settings defaults**: extend `defaultTemplates` for all new templates (Hyprland-aware).

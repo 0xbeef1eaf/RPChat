@@ -54,7 +54,9 @@ export type HostEventName =
   | 'widget-message'     // data: { widgetId, message }
   | 'avatar-clicked'     // data: {}
   | 'routine-changed'    // data: { from, to, label? }
-  | 'browser-navigated'; // data: { tabId, url, title }   a browser tab finished loading a page (needs the browser extension)
+  | 'browser-navigated'  // data: { tabId, url, title }   a browser tab finished loading a page (needs the browser extension)
+  | 'media-clicked'      // data: { mediaId, asset, packId, kind }          the user clicked a shown image/video overlay
+  | 'media-closed';      // data: { mediaId, asset, packId, kind, reason }  a media item went away (reason: MediaCloseReason)
 
 /** Subscribable event names: host events plus character-raised `custom:<name>` events. */
 export type EventName = HostEventName | `custom:${string}`;

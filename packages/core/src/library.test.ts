@@ -261,8 +261,12 @@ describe('sdk.lib through the engine', () => {
     await t.engine.packs.install(path.join(EXAMPLES_DIR, 'makima'));
     const makima = await t.engine.sessions.create({ characterRef: 'com.example.makima/makima' });
     const glance = (await invoke(ctxOf('com.example.makima', 'makima', makima.id), 'list')) as { value: LibFunctionInfo[] };
-    expect(glance.value.map((f) => [f.name, f.description])).toEqual([['glance', 'show a random portrait of Makima for five seconds and return its path']]);
-    expect(await t.engine.library.preludeFor('com.example.makima', 'makima')).toMatch(/^const lib = Object\.freeze\(\{\n  "glance": \(async \(\) => \{/);
+    expect(glance.value.find((f) => f.name === 'glance')).toMatchObject({ description: 'show a random portrait of Makima for five seconds and return its path' });
+    // the mini games and their helpers ship alongside it (examples/packs/makima/README.md)
+    expect(glance.value.map((f) => f.name)).toEqual(['endGame', 'gameLost', 'gameSetup', 'glance', 'memoryGame', 'molePop', 'punish', 'quitGame', 'reactionTest', 'reward', 'simonSays', 'slidingPuzzle', 'whackAMole', 'writeLines']);
+    const prelude = await t.engine.library.preludeFor('com.example.makima', 'makima');
+    expect(prelude).toMatch(/^const lib = Object\.freeze\(\{\n  "endGame": \(async \(/);
+    expect(prelude).toContain('\n  "glance": (async () => {');
   });
 
   it('migrates functions still stored in character state into files on start and on install', async () => {

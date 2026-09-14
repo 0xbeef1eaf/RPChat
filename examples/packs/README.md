@@ -247,7 +247,24 @@ async () => {
 
 The file name is the function name (a JavaScript identifier, at most 64
 characters, no reserved words). A function may use `sdk` and its sibling `lib`
-functions but closes over nothing else. A file that is not one function
+functions but closes over nothing else.
+
+Library functions are the right place for anything that outlives one action:
+the Makima pack ships six desktop **mini games** (`memoryGame`, `simonSays`,
+`writeLines`, `whackAMole`, `reactionTest`, `slidingPuzzle`) built on
+`sdk.widgets` and `sdk.media`. They show the pattern for long-running,
+event-driven library code (see `makima/README.md`, "Mini games"):
+
+- a starter takes its options — including callbacks **by library-function
+  name**, `{ onLose: "punish", onWin?: "reward" }` — stores everything it needs
+  in `sdk.state.session` (key `game`) and subscribes `sdk.events.on` handlers;
+- handlers run later in a fresh isolate, so they close over nothing: they read
+  the record back from session state and call `lib.gameLost(info)` /
+  `lib.endGame(info)`, which invoke `lib[onLose]` / `lib[onWin]` with
+  `{ game, event | result, attempt, mistakes, …details }`;
+- pack images inside widget HTML use `{{asset:media/images/x.png}}` placeholders,
+  which the host turns into loadable URLs; clicks on images shown with
+  `sdk.media.showImage` arrive as `media-clicked` / `media-closed` events. A file that is not one function
 expression is skipped with a warning; the caps — 50 files, 16 KiB per file,
 128 KiB in total — are errors. Anything in `lib/` that is not a `.ts` file
 (a README, say) is ignored. The pack editor's **Scripts** tab edits this folder.

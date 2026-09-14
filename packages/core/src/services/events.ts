@@ -8,7 +8,13 @@ import type { Clock, EngineEmitter, Logger } from '../types.js';
 export const HOST_EVENT_NAMES: readonly HostEventName[] = [
   'user-idle', 'user-back', 'window-changed', 'app-launched', 'file-added', 'battery-low', 'screen-locked',
   'screen-unlocked', 'song-changed', 'time', 'widget-message', 'avatar-clicked', 'routine-changed', 'browser-navigated',
+  'media-clicked', 'media-closed',
 ];
+/**
+ * Discrete user interactions: every one of them is meaningful (a second click, the next widget
+ * message), so they are never debounced — unlike sensor events, which hosts tend to repeat.
+ */
+export const INTERACTION_EVENTS: ReadonlySet<string> = new Set(['widget-message', 'avatar-clicked', 'media-clicked', 'media-closed']);
 export const SUBSCRIPTIONS_PER_SESSION = 30;
 export const SUBSCRIPTION_CODE_MAX_BYTES = 16 * 1024;
 export const EVENT_DEBOUNCE_MS = 2000;
@@ -351,6 +357,7 @@ export class EventService {
   }
 
   private debounced(sub: EventSubscription, event: HostEvent): boolean {
+    if (INTERACTION_EVENTS.has(event.name)) return false;
     const key = `${sub.id}:${event.name}`;
     const nowMs = this.o.now().getTime();
     const last = this.lastFired.get(key);

@@ -81,6 +81,11 @@ interface ShowImageOptions extends OverlayOptions {
   durationMs?: number;
   /** Caption rendered under the image. */
   caption?: string;
+  /**
+   * Whether a click closes the image. Default: true, except for a timed image (durationMs), which
+   * closes by itself. Either way a click raises the 'media-clicked' host event.
+   */
+  closeOnClick?: boolean;
 }
 
 interface PlayVideoOptions extends OverlayOptions {
@@ -251,7 +256,10 @@ interface CalendarEvent {
  * 'screen-unlocked' {}; 'song-changed' NowPlaying; 'time' { hour, minute, weekday, iso }
  * (filter { hour?, minute?, weekday? }, checked every minute); 'widget-message' { widgetId, message };
  * 'avatar-clicked' {}; 'routine-changed' { from, to, label? }; 'browser-navigated' { tabId, url, title }
- * (a browser tab finished loading; filter { url?, title? } substrings; needs the browser extension).
+ * (a browser tab finished loading; filter { url?, title? } substrings; needs the browser extension);
+ * 'media-clicked' { mediaId, asset, packId, kind } (the user clicked an image/video you showed;
+ * filter { mediaId? } or { asset? }); 'media-closed' { mediaId, asset, packId, kind, reason } (an item
+ * went away: reason 'click' | 'timeout' | 'ended' | 'api' | 'error'; filter { mediaId?, asset?, reason? }).
  */
 type HostEventName =
   | 'user-idle'
@@ -267,7 +275,9 @@ type HostEventName =
   | 'widget-message'
   | 'avatar-clicked'
   | 'routine-changed'
-  | 'browser-navigated';
+  | 'browser-navigated'
+  | 'media-clicked'
+  | 'media-closed';
 
 /** A host event or one of your own custom events ('custom:<name>', raised with sdk.events.emit()). */
 type EventName = HostEventName | \`custom:\${string}\`;

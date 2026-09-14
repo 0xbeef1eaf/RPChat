@@ -6,6 +6,7 @@
 import type {
   DrawShape,
   Json,
+  MediaCloseReason,
   MediaCommand,
   MediaItemId,
   MediaWindowEvent,
@@ -39,8 +40,10 @@ export interface MediaState {
 }
 
 export type MediaLocalEvent =
-  /** The user dismissed the item (click) or its `durationMs` elapsed. */
-  | { type: 'dismiss'; id: MediaItemId }
+  /** The item goes away: the user dismissed it (`click`, the default) or its `durationMs` elapsed (`timeout`). */
+  | { type: 'dismiss'; id: MediaItemId; reason?: MediaCloseReason }
+  /** The user clicked an image/video (reported whether or not the click also dismisses it). */
+  | { type: 'click'; id: MediaItemId }
   /** Playback reached the end. */
   | { type: 'ended'; id: MediaItemId }
   /** The media element failed to load/play. */
@@ -76,7 +79,7 @@ export function openIds(state: MediaState): MediaItemId[] {
   return [...state.items.map((i) => i.id), ...(state.avatar ? [state.avatar.id] : []), ...state.widgets.map((w) => w.id), ...state.draws.map((d) => d.id)];
 }
 
-function closeAny(state: MediaState, id: MediaItemId): MediaTransition {
+function closeAny(state: MediaState, id: MediaItemId, reason: MediaCloseReason): MediaTransition {
   if (!openIds(state).includes(id)) return { state, reports: [] };
   const next: MediaState = {
     items: state.items.filter((i) => i.id !== id),
@@ -84,7 +87,7 @@ function closeAny(state: MediaState, id: MediaItemId): MediaTransition {
     widgets: state.widgets.filter((w) => w.id !== id),
     draws: state.draws.filter((d) => d.id !== id),
   };
-  return { state: next, reports: [{ type: 'closed', id }] };
+  return { state: next, reports: [{ type: 'closed', id, reason }] };
 }
 
 function entryFromCommand(command: MediaCommand): MediaEntry | null {
@@ -122,12 +125,15 @@ export function applyUpdate(entry: MediaEntry, patch: OverlayUpdate): MediaEntry
 /**
  * Whether clicking an overlay dismisses it. A timed image closes itself when `durationMs` elapses,
  * and a click landing on it in the meantime is far more likely to be the user getting on with their
- * work than asking for it to go — so a duration takes click-to-close off. Click-through overlays
- * take no clicks at all, and audio has its own stop button.
+ * work than asking for it to go — so a duration takes click-to-close off. An explicit
+ * `closeOnClick` on an image overrides both defaults (a game can keep a target up after a click, or
+ * let a timed one go on a hit). Click-through overlays take no clicks at all, and audio has its own
+ * stop button. Every click on an image/video is reported as `clicked` regardless.
  */
 export function closesOnClick(entry: MediaEntry): boolean {
   if (entry.kind === 'audio') return false;
   if (entry.options.clickThrough) return false;
+  if (entry.kind === 'image' && typeof entry.options.closeOnClick === 'boolean') return entry.options.closeOnClick;
   // Same condition as the auto-close timer in MediaItemView, so the two cannot disagree.
   return !(entry.kind === 'image' && Boolean(entry.options.durationMs));
 }
@@ -152,7 +158,7 @@ export function applyMediaCommand(state: MediaState, command: MediaCommand): Med
   if (isAvatarCommand(command)) {
     const { avatar, closed } = applyAvatarCommand(state.avatar, command);
     if (avatar === state.avatar) return { state, reports: [] };
-    return { state: { ...state, avatar }, reports: closed ? [{ type: 'closed', id: command.id }] : [] };
+    return { state: { ...state, avatar }, reports: closed ? [{ type: 'closed', id: command.id, reason: 'api' }] : [] };
   }
   if (isWidgetCommand(command)) {
     const widgets = applyWidgetCommand(state.widgets, command);
@@ -160,9 +166,9 @@ export function applyMediaCommand(state: MediaState, command: MediaCommand): Med
   }
   switch (command.type) {
     case 'close':
-      return closeAny(state, command.id);
+      return closeAny(state, command.id, 'api');
     case 'close-all':
-      return { state: INITIAL_MEDIA_STATE, reports: openIds(state).map((id) => ({ type: 'closed', id })) };
+      return { state: INITIAL_MEDIA_STATE, reports: openIds(state).map((id) => ({ type: 'closed', id, reason: 'api' })) };
     case 'update': {
       if (state.widgets.some((w) => w.id === command.id)) {
         const widgets = state.widgets.map((w) => (w.id === command.id ? { ...w, options: { ...w.options, ...visualSubset(command.options) } } : w));
@@ -239,16 +245,19 @@ export function applyMediaLocalEvent(state: MediaState, event: MediaLocalEvent):
   const entry = state.items.find((i) => i.id === event.id);
   if (!entry) {
     // Avatars and widgets can be dismissed locally too (Escape / close button).
-    if (event.type === 'dismiss') return closeAny(state, event.id);
+    if (event.type === 'dismiss') return closeAny(state, event.id, event.reason ?? 'click');
     return { state, reports: [] };
   }
   switch (event.type) {
+    case 'click':
+      if (entry.kind === 'audio' || entry.options.clickThrough) return { state, reports: [] };
+      return { state, reports: [{ type: 'clicked', id: event.id }] };
     case 'dismiss':
-      return { state: without(state, event.id), reports: [{ type: 'closed', id: event.id }] };
+      return { state: without(state, event.id), reports: [{ type: 'closed', id: event.id, reason: event.reason ?? 'click' }] };
     case 'ended': {
       const reports: MediaWindowEvent[] = [{ type: 'ended', id: event.id }];
       if (!closesOnEnd(entry)) return { state, reports };
-      reports.push({ type: 'closed', id: event.id });
+      reports.push({ type: 'closed', id: event.id, reason: 'ended' });
       return { state: without(state, event.id), reports };
     }
     case 'error':
@@ -256,7 +265,7 @@ export function applyMediaLocalEvent(state: MediaState, event: MediaLocalEvent):
         state: without(state, event.id),
         reports: [
           { type: 'error', id: event.id, message: event.message },
-          { type: 'closed', id: event.id },
+          { type: 'closed', id: event.id, reason: 'error' },
         ],
       };
     default:

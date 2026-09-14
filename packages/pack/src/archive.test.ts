@@ -55,15 +55,19 @@ describe('packDirectory → extractPack', () => {
     }
   });
 
-  it('carries the character library files (makima ships lib/glance.ts)', async () => {
+  it('carries the character library files (makima ships lib/glance.ts and the mini games)', async () => {
     const tmp = await temp();
     const archive = path.join(tmp, 'makima.rppack');
     await packDirectory(MAKIMA_DIR, archive);
     const dest = path.join(tmp, 'extracted');
     const pack = await extractPack(archive, dest);
-    expect(await listFiles(dest)).toContain('characters/makima/lib/glance.ts');
-    expect(Object.keys(pack.character.library)).toEqual(['glance']);
+    const files = await listFiles(dest);
+    expect(files).toContain('characters/makima/lib/glance.ts');
+    expect(files).toContain('characters/makima/lib/memoryGame.ts');
+    expect(files).toContain('media/images/cards/red-circle.png');
+    expect(Object.keys(pack.character.library)).toEqual(['endGame', 'gameLost', 'gameSetup', 'glance', 'memoryGame', 'molePop', 'punish', 'quitGame', 'reactionTest', 'reward', 'simonSays', 'slidingPuzzle', 'whackAMole', 'writeLines']);
     expect(pack.character.library['glance']!.description).toContain('portrait');
+    expect(pack.character.library['memoryGame']!.description).toContain('lib[onLose]');
   });
 
   it('is deterministic and skips dotfiles, node_modules and the destination file', async () => {

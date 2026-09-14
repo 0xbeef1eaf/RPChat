@@ -4,8 +4,8 @@
  * loads media.html from the loopback server; commands after the initial one
  * reach the page through the `js` op (`window.__rpMediaCommand(json)`).
  */
-import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo, OverlayLayer, OverlayUpdate } from '@rp/shared';
-import type { BackendLogger, DisplayBackend, OverlayEvent, OverlayEventListener, OverlayHandle, OverlaySpec, ResolvedOverlayOptions } from './backend.js';
+import type { DisplayBackendInfo, MediaCloseReason, MediaCommand, MediaWindowEvent, MonitorInfo, OverlayLayer, OverlayUpdate } from '@rp/shared';
+import type { BackendLogger, DisplayBackend, OverlayClosedDetail, OverlayEvent, OverlayEventListener, OverlayHandle, OverlaySpec, ResolvedOverlayOptions } from './backend.js';
 import { applyOverlayUpdate, visualPatch } from './backend.js';
 import { OverlayEvents, showCommand } from './electron.js';
 import type { HelperEvent, HelperProcess, HelperReady } from './helper-process.js';
@@ -84,14 +84,14 @@ class HelperOverlay implements OverlayHandle {
     if (Object.keys(visual).length > 0) await this.backend.runScript(this.id, { type: 'update', id: this.id, options: visual });
   }
 
-  async close(): Promise<void> {
+  async close(reason: MediaCloseReason = 'api'): Promise<void> {
     if (this.closed) return;
     try {
       await this.backend.helper.request('close', { id: this.id });
     } catch (err) {
       this.backend.log.debug?.(`[display:hyprland] close ${this.id} failed`, err);
     }
-    this.finish();
+    this.finish(reason);
   }
 
   on(event: OverlayEvent, listener: OverlayEventListener): () => void {
@@ -103,11 +103,12 @@ class HelperOverlay implements OverlayHandle {
     await this.backend.runScript(this.id, command);
   }
 
-  finish(): void {
+  finish(reason: MediaCloseReason = 'api'): void {
     if (this.closed) return;
     this.closed = true;
     this.backend.forget(this);
-    this.events.emit('closed');
+    const detail: OverlayClosedDetail = { reason };
+    this.events.emit('closed', detail);
     this.events.clear();
   }
 
@@ -124,7 +125,10 @@ class HelperOverlay implements OverlayHandle {
         return;
       case 'closed':
         // The page removed the item; tear the surface down too.
-        void this.close();
+        void this.close(payload.reason ?? 'api');
+        return;
+      case 'clicked':
+        this.events.emit('clicked');
         return;
       case 'avatar-clicked':
         this.events.emit('avatar-clicked');
@@ -140,6 +144,11 @@ class HelperOverlay implements OverlayHandle {
 
 export class HelperBackend implements DisplayBackend {
   readonly name = 'hyprland';
+
+  /** The helper's WebKit views cannot use `rp-asset://`: widget HTML gets loopback URLs instead. */
+  pageAssetUrl(assetUrl: string): string {
+    return this.loopback.rewriteAssetUrl(assetUrl);
+  }
   readonly helper: HelperProcess;
   readonly log: BackendLogger;
   private readonly loopback: LoopbackServerLike;

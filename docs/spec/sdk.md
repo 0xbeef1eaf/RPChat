@@ -95,7 +95,7 @@ lib (trusted) — the character's own function library, one file per function in
 - `LibFunctionInfo { name; description?; bytes; updatedAt }` is declared in the module typings. A library function may be async and may use `sdk` and `lib` (its siblings) but nothing else from the defining action's scope; redefining a name replaces it. Every later run (action, timer handler, event handler, behaviour hook) sees `lib.<name>(...)`; the prompt lists the library under `<library>`. Docs example: `await sdk.lib.define("cheer", async (mood: string) => { … }, { description: "show a picture for a mood" })`, then `await lib.cheer("happy")`.
 
 media (pack)
-- `showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>`
+- `showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>` — `ShowImageOptions` adds `closeOnClick?: boolean` (default true; false keeps the image up after a click; a timed image only closes on click when it is set to true). Clicks raise the `media-clicked` host event and every close `media-closed` `{ mediaId, asset, packId, kind, reason }` (`docs/spec/living.md` §3.3), so a character can build clickable things with `sdk.events.on`.
 - `playVideo(asset: AssetRef | string, options?: PlayVideoOptions): Promise<MediaHandle>`
 - `playAudio(asset: AssetRef | string, options?: PlayAudioOptions): Promise<MediaHandle>`
 - `close(handle: MediaHandle | string): Promise<void>`
@@ -126,6 +126,8 @@ system (pack; was `prompt` before per-call prompts were dropped) — every metho
 - `readFile(path: string, maxBytes?: number): Promise<string>`
 - `writeFile(path: string, text: string): Promise<void>`
 - `clipboardWrite(text: string): Promise<void>`
+
+widgets (pack; docs/spec/living.md §1) — `show`, `update`, `close`, `closeAll`, `list`. Widget HTML may embed pack images as `{{asset:<pack-relative path>}}` placeholders (img src, CSS url); the host substitutes the loadable URL and rejects a path that is not a pack asset with INVALID_ARGUMENT (docs/spec/overlay.md §5).
 
 ## Docs for the LLM
 

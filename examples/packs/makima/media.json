@@ -9,6 +9,7 @@
     "office": "An indoor office scene",
     "ring": "The yellow ringed-eye motif",
     "portrait": "An abstract stand-in for Makima's face (placeholder art)",
+    "card": "A small solid-colour tile with one shape; the faces of the mini games (memory, Simon says, whack-a-mole)",
     "expression": "Avatar expression frame used by the avatarSet",
     "attention": "Sound played once before making a request of the user",
     "acknowledge": "Sound for a small acknowledgement",
@@ -27,6 +28,7 @@
     { "match": "media/images/wallpapers/red-dusk.png", "tags": ["control", "dusk"], "description": "Red-tinted city dusk with a low sun; for control scenes and calling in promises." },
     { "match": "media/images/wallpapers/dim-office.png", "tags": ["work", "office"], "description": "A dim office with blinds and evening light; for working hours." },
     { "match": "media/images/wallpapers/ring-motif.png", "tags": ["quiet", "ring"], "description": "Thin yellow rings on near-black with a red vignette; for late, quiet talk." },
+    { "match": "media/images/cards/**", "tags": ["card"], "description": "64x64 game tile: one flat colour with a white shape." },
     { "match": "media/audio/attention.wav", "tags": ["attention", "low"], "description": "Low two-tone chime, under a second; play once before a request." },
     { "match": "media/audio/click.wav", "tags": ["acknowledge", "soft"], "description": "A soft click; a small acknowledgement." },
     { "match": "media/video/ring-pulse.webm", "tags": ["ring", "pulse"], "description": "Two-second slow ring pulse, 256x256; decorative, e.g. behind windows at low opacity." }

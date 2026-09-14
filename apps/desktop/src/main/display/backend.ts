@@ -18,6 +18,7 @@ import type {
   PlayVideoOptions,
   ShowImageOptions,
   MediaCommand,
+  MediaCloseReason,
   WidgetSpec,
 } from '@rp/shared';
 import type { Bounds } from './placement.js';
@@ -73,8 +74,17 @@ export interface OverlaySpec {
   widget?: WidgetSpec;
 }
 
-export type OverlayEvent = 'ended' | 'closed' | 'error' | 'content-size' | 'avatar-clicked' | 'widget-message';
+/**
+ * What an overlay reports: `clicked` (the user clicked an image/video), `closed` (detail
+ * `{ reason: MediaCloseReason }` — `api` when the backend or the app closed it), `ended`, `error`
+ * (detail: message), `content-size`, `avatar-clicked`, `widget-message` (detail: the message).
+ */
+export type OverlayEvent = 'ended' | 'closed' | 'error' | 'content-size' | 'avatar-clicked' | 'widget-message' | 'clicked';
 export type OverlayEventListener = (detail?: unknown) => void;
+/** Detail of a `closed` overlay event. */
+export interface OverlayClosedDetail {
+  reason: MediaCloseReason;
+}
 
 export interface OverlayHandle {
   readonly id: string;
@@ -93,6 +103,11 @@ export interface DisplayBackend {
   createOverlay(spec: OverlaySpec): Promise<OverlayHandle>;
   closeAll(): Promise<void>;
   dispose(): Promise<void>;
+  /**
+   * The URL under which this backend's media pages can load an `rp-asset://` URL (widget HTML
+   * embeds such URLs for `{{asset:…}}` placeholders). Omitted: the pages load `rp-asset://` as is.
+   */
+  pageAssetUrl?(assetUrl: string): string;
 }
 
 /** What the Electron backend manipulates: a BrowserWindow that hosts media.html, behind an interface (fakeable in tests). */
