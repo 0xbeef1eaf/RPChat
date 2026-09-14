@@ -729,8 +729,13 @@ export async function verifyMedia(logger: Logger, mediaList: () => unknown[]): P
     }
   }
 
+  // Widgets are windows of the same backend as the image: on a native backend the compositor capture
+  // verifies them (wlr-smoke.sh checks the top-left region), so only an Electron-owned image makes a
+  // missing widget window a failure.
   const widgetWin = overlayWindowFor('widget-smoke-widget');
-  if (!widgetWin) logger.error('[smoke] verify widget: FAIL (no window for widget "smoke-widget" — see the action result for the sdk.widgets.show error)');
+  const electronOwned = image !== undefined && overlayWindowFor(image.id) !== undefined;
+  if (!widgetWin && !electronOwned) logger.info('[smoke] verify widget: EXTERNAL (overlay is not an Electron window — a native backend owns it; verify from a compositor capture)');
+  else if (!widgetWin) logger.error('[smoke] verify widget: FAIL (no window for widget "smoke-widget" — see the action result for the sdk.widgets.show error)');
   else {
     const st = await captureStats(widgetWin, [0x2a, 0x9d, 0x8f]);
     const ok = st.opaque > 5000 && st.match > 0.25;

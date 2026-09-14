@@ -63,7 +63,13 @@ grep -q "\[smoke\] action ok" "$OUT/app.log" || { echo "FAIL: mock action did no
 grep -qiE "typeerror|unhandled" "$OUT/app.log" && { echo "FAIL: TypeError/unhandled in app log"; STATUS=1; }
 grep -qE "\[smoke\] verify [a-z]+: FAIL" "$OUT/app.log" && { echo "FAIL: in-app verification failed"; STATUS=1; }
 
-# Pixel checks on the compositor capture. Image: bottom-right, anchored 24 px from the edges, 320 wide.
+# Pixel checks on the compositor capture. Widget: top-left, anchored 24 px from the edges, 300 wide,
+# a 280x200 teal image inside a white page through a {{asset:…}} placeholder (loopback URL on the helper).
+wteal="$(convert "$OUT/00-compositor-a.png" -crop 300x270+24+24 +repage -fuzz 18% -fill white -opaque '#2a9d8f' -fill black +opaque white -format '%[fx:mean]' info:)"
+echo "widget: teal fraction in top-left region = $wteal"
+awk -v t="$wteal" 'BEGIN{exit !(t>0.25)}' || { echo "FAIL: widget did not render the pack image top-left (fraction $wteal)"; STATUS=1; }
+
+# Image: bottom-right, anchored 24 px from the edges, 320 wide.
 teal="$(convert "$OUT/00-compositor-a.png" -crop 320x300+1256+676 +repage -fuzz 18% -fill white -opaque '#2a9d8f' -fill black +opaque white -format '%[fx:mean]' info:)"
 echo "image: teal fraction in bottom-right region = $teal"
 awk -v t="$teal" 'BEGIN{exit !(t>0.25)}' || { echo "FAIL: teal image not visible bottom-right (fraction $teal)"; STATUS=1; }
