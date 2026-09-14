@@ -101,9 +101,11 @@ async function main(): Promise<void> {
     },
   });
 
+  // Running `rp-code` while it is already up (e.g. after an autostart with --hidden) shows it.
   app.on('second-instance', () => {
     const win = windows.getMainWindow() ?? windows.createMainWindow();
     if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
     win.focus();
   });
 
