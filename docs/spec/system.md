@@ -140,8 +140,12 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   cached + fresh discovery), write changed files, `-Q -K` then `-r -K`, state to
   `/etc/rp-code/guard-state.json` (`GuardState { mode, hash, loaded, users, sockets, appliedAt,
   lastError }`); returns `GuardInfo { available (securityfs present), mode, loaded, users, residual,
-  pamConfigured (pam_apparmor.so line in system-login/common-session), shell, compositor,
-  appliedAt, lastError }`. Runs at daemon start, every ~5 s when the policy file's stamp changed,
+  pamConfigured (pam_apparmor.so line in system-login/common-session), warnings, shell, compositor,
+  appliedAt, lastError }`; `warnings` carries unconfined login helpers and a **second
+  `pam_apparmor.so` line** (`pam_duplicate_warning`), which hangs every login. Discovery drops
+  the globs in `NEVER_GUARD` (Wayland/X11 display sockets, the session and system bus, PipeWire
+  and PulseAudio) before they reach a profile or the cache: a compositor listens on more than its
+  control socket, and guarding the display socket would cut the session off under `enforce`. Runs at daemon start, every ~5 s when the policy file's stamp changed,
   and on `guard-apply`; `rp-coded --guard-apply|--guard-off` do one engage from the CLI (the
   installer calls them). **Audit tail**: once engaged, a thread runs `journalctl -f -o json -n 0
   _TRANSPORT=kernel + _TRANSPORT=audit` (fallback `/dev/kmsg`), `parse_audit_message` keeps
@@ -190,7 +194,10 @@ exists), `--system-install`/`--no-system-install` (default: yes when `--app-bin`
 session guard` — inserted as the last session line of `/etc/pam.d/system-login` (Arch; after
 `session required pam_env.so`, else after `-session optional pam_systemd.so`, else after the
 last session line, else appended) or `common-session` (Debian/Ubuntu), idempotent through the
-marker, replaced when stale, removed by `--no-guard`/`--uninstall`; then `rp-coded --guard-apply`
+marker, replaced when stale, and **every other `pam_apparmor.so` session line is collapsed into
+it** (two lines make PAM call `change_hat()` twice with different magic tokens; the kernel refuses
+the second and leaves the login process with no permissions, so every login hangs silently),
+removed by `--no-guard`/`--uninstall` — which warns when a line it did not add is left behind; then `rp-coded --guard-apply`
 / `--guard-off` from the installed binary, skipped under `--prefix`. Alone: only that step; with
 install flags: forced; without either flag a full install engages when the policy file's
 `guard.mode` is not `off`. Warns when `/sys/kernel/security/apparmor` or `pam_apparmor.so` is

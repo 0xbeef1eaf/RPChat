@@ -446,7 +446,14 @@ Every rule below was checked against the sources named, not guessed.
   per-launch parts to `*` (`hypr/0c9c…_42/` → `hypr/*/`, `noctalia-wayland-1.sock` →
   `noctalia-wayland-*.sock`) and caches them in `/etc/rp-code/guard-state.json`, so a socket the
   table does not know is still covered from the next engage on (the app sends `guard-apply`
-  after writing a policy; `rp-coded --guard-apply` does it by hand).
+  after writing a policy; `rp-coded --guard-apply` does it by hand). Discovery finds every
+  *listening* socket the process owns, and a compositor owns more than its control socket:
+  Hyprland also listens on the Wayland display socket and, for XWayland, on `/tmp/.X11-unix/X<n>`.
+  Those — plus the session bus, the system bus and the PipeWire/PulseAudio sockets — are on a
+  never-guard list (`NEVER_GUARD` in `guard.rs`) and are dropped before they reach a profile or
+  the state cache: guarding the display socket would cut every client in the session off from
+  its compositor the moment the mode became `enforce`. Only `extraDenySockets` can name them,
+  and only deliberately.
 - **Exec transitions.** Named transitions take globs: `rp-code-shell` and `rp-code-compositor`
   send every child back with `/** px -> rp-code-session` (a terminal opened by a keybind, a
   script run by the launcher), while `/opt/rp-code/current/rp-code px -> rp-code-app` and the
@@ -508,7 +515,20 @@ nothing from the distro, so a machine with every distro profile parked in
 file); `sudo rp-coded --guard-off` or `sudo apparmor_parser -R /etc/apparmor.d/rp-code-*` does it
 without the daemon; `sudo install.sh --no-guard` also removes the PAM line. A confined root shell
 can do all of this (the session profile allows `capability mac_admin`), so a TTY login as the
-listed user plus `sudo` is enough. The input-lock emergency key is unaffected.
+listed user plus `sudo` is enough. The input-lock emergency key is unaffected. If no login works
+at all, boot with `apparmor=0` (or a kernel without the LSM) and fix it from there.
+
+> **A login that hangs with no message — check for two `pam_apparmor.so` lines.** `pam_apparmor`
+> enters the hat with a magic token and remembers it. A second `pam_apparmor.so` session line in
+> the stack — hand-added, or left behind by another tool — calls `change_hat()` again with a
+> *different* token; the kernel refuses the switch and leaves the login process in a profile
+> that permits nothing, so `login` cannot even write the failure to the terminal. `optional`
+> does not help: the damage is done inside the kernel, not in the PAM return code. It hangs for
+> every user, whether or not they are in `app.users`, and in `audit` mode too — complain mode
+> softens rule violations, not a failed `change_hat`. Check with
+> `grep -c pam_apparmor /etc/pam.d/system-login` (Arch) or `common-session` (Debian/Ubuntu); the
+> answer must be `1`. `install.sh --guard` collapses extra lines into its own marked one and
+> says so.
 
 ## Uninstalling
 

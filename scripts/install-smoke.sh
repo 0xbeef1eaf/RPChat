@@ -171,6 +171,14 @@ check "profile load skipped under --prefix" grep -q "profile load (no daemon bin
 "$INSTALL" --prefix "$PREFIX" --guard > "$WORK/guard-2.log" 2>&1 || { cat "$WORK/guard-2.log"; fail "guard 2"; }
 check "second run is a no-op" grep -q "already has the pam_apparmor line" "$WORK/guard-2.log"
 check "still one line" test "$(grep -c 'pam_apparmor' "$PAMD/system-login")" = 1
+# A second pam_apparmor line — hand-added, or left by another tool — hangs every login
+# (the second change_hat fails the magic-token check): collapse it into ours.
+printf 'session    optional   pam_apparmor.so      order=user,group,default\n' >> "$PAMD/system-login"
+"$INSTALL" --prefix "$PREFIX" --guard > "$WORK/guard-dup.log" 2>&1 || { cat "$WORK/guard-dup.log"; fail "guard dup"; }
+check "duplicate reported" grep -q "pam_apparmor session lines, which hangs every login" "$WORK/guard-dup.log"
+check "one pam_apparmor line left" test "$(grep -c 'pam_apparmor' "$PAMD/system-login")" = 1
+check "the one left is ours" grep -q "order=user,group,default # rp-code session guard" "$PAMD/system-login"
+check "still after pam_env" test "$(tail -n 2 "$PAMD/system-login" | head -n 1)" = "session    required   pam_env.so"
 # A stale marked line (older wording) is replaced in place.
 sed -i 's|^session    optional   pam_apparmor.so.*$|session optional pam_apparmor.so order=group,default # rp-code session guard|' "$PAMD/system-login"
 "$INSTALL" --prefix "$PREFIX" --guard > "$WORK/guard-3.log" 2>&1 || { cat "$WORK/guard-3.log"; fail "guard 3"; }

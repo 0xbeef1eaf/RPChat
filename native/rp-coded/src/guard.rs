@@ -327,6 +327,9 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         }
     }
     for d in &ctx.discovered {
+        if never_guard(&d.glob) {
+            continue;
+        }
         match d.owner {
             Owner::Shell if rules.wallpaper && ctx.shell.is_some_and(|s| s.id == d.entry) => {
                 shell_sockets.insert(d.glob.clone());
@@ -556,6 +559,9 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     if compositor_profile {
         residual.push("compositor plugins run inside the compositor and are not confined; only its child processes are".to_string());
     }
+    residual.push(
+        "the display sockets (Wayland, X11), the session bus and the audio sockets are never guarded: the session could not run without them".to_string(),
+    );
     residual.push(
         "processes the character launches through rp-code run with the app's rights".to_string(),
     );
@@ -889,6 +895,56 @@ fn generalise_component(comp: &str) -> String {
     out
 }
 
+/// Socket globs the guard must never take away from the session, whoever listens on them.
+/// Discovery finds every *listening* filesystem socket a table process owns, and a compositor
+/// owns more than its control socket: Hyprland listens on the Wayland display socket and (for
+/// XWayland) on `/tmp/.X11-unix/X<n>`. Guarding those cuts every client in the session off
+/// from its display server — harmless in audit mode, fatal the moment the mode is `enforce`.
+/// Patterns are matched against the *generalised* glob (see [`generalise_socket_path`]); `*`
+/// here stands for one path component or part of one, so `@{run}/user/*/…` also matches the
+/// `[0-9]*` that generalisation produces for the uid.
+pub const NEVER_GUARD: [&str; 8] = [
+    "@{run}/user/*/wayland-*",     // the Wayland display socket
+    "/tmp/.X*-unix/*",             // X11 / XWayland
+    "@{run}/user/*/X*-unix/*",     // the same under XDG_RUNTIME_DIR
+    "@{run}/user/*/bus",           // the session bus
+    "/run/dbus/system_bus_socket", // the system bus
+    "@{run}/user/*/pipewire-*",    // audio/video
+    "@{run}/user/*/pulse/*",       // audio
+    "@{run}/user/*/systemd/*",     // the user manager's private socket
+];
+
+/// Does `candidate` match `pattern`, where the pattern's `*` stands for any run of characters
+/// inside one path component? The candidate is compared literally, so a `*` or `[0-9]*` left
+/// by generalisation is just text a pattern `*` can cover.
+pub fn glob_match(pattern: &str, candidate: &str) -> bool {
+    fn go(p: &[u8], c: &[u8]) -> bool {
+        match p.first() {
+            None => c.is_empty(),
+            Some(b'*') => {
+                // `*` eats zero or more characters, never crossing a path separator.
+                let mut i = 0;
+                loop {
+                    if go(&p[1..], &c[i..]) {
+                        return true;
+                    }
+                    if i == c.len() || c[i] == b'/' {
+                        return false;
+                    }
+                    i += 1;
+                }
+            }
+            Some(&ch) => !c.is_empty() && c[0] == ch && go(&p[1..], &c[1..]),
+        }
+    }
+    go(pattern.as_bytes(), candidate.as_bytes())
+}
+
+/// A discovered socket the guard refuses to touch ([`NEVER_GUARD`]).
+pub fn never_guard(glob: &str) -> bool {
+    NEVER_GUARD.iter().any(|p| glob_match(p, glob))
+}
+
 // ---------------------------------------------------------------------------
 // State file and status
 // ---------------------------------------------------------------------------
@@ -1036,18 +1092,44 @@ fn write_state(hooks: &GuardHooks, paths: &GuardPaths, state: &GuardState) -> Re
         .map_err(|e| format!("cannot write {}: {e}", paths.state_file.display()))
 }
 
-/// Whether a PAM file carries the `pam_apparmor.so` session line: `Some(true/false)` from
-/// the first of [`PAM_FILES`] that exists, `None` when neither does.
-pub fn pam_configured(hooks: &GuardHooks) -> Option<bool> {
+/// The first of [`PAM_FILES`] that exists and how many uncommented `pam_apparmor.so` session
+/// lines it carries; `None` when neither file exists.
+pub fn pam_lines(hooks: &GuardHooks) -> Option<(&'static str, usize)> {
     for f in PAM_FILES {
         if let Some(text) = (hooks.read_file)(Path::new(f)) {
-            return Some(text.lines().any(|l| {
-                let l = l.trim();
-                !l.starts_with('#') && l.contains("pam_apparmor.so")
-            }));
+            let n = text
+                .lines()
+                .filter(|l| {
+                    let l = l.trim();
+                    !l.starts_with('#') && l.contains("pam_apparmor.so")
+                })
+                .count();
+            return Some((f, n));
         }
     }
     None
+}
+
+/// Whether a PAM file carries the `pam_apparmor.so` session line: `Some(true/false)` from
+/// the first of [`PAM_FILES`] that exists, `None` when neither does.
+pub fn pam_configured(hooks: &GuardHooks) -> Option<bool> {
+    pam_lines(hooks).map(|(_, n)| n > 0)
+}
+
+/// More than one `pam_apparmor.so` line hangs every login on this machine, so say so wherever
+/// the guard reports its state. pam_apparmor enters the hat with a magic token and remembers
+/// it; the second line calls `change_hat()` again with a different token, the kernel refuses
+/// the switch and leaves the login process in a profile that permits nothing — it cannot even
+/// write the failure to the terminal. `optional` does not help (the PAM return code is not
+/// where the damage is) and neither does `audit` mode (complain softens rule violations, not a
+/// failed `change_hat`).
+pub fn pam_duplicate_warning(hooks: &GuardHooks) -> Option<String> {
+    match pam_lines(hooks) {
+        Some((file, n)) if n > 1 => Some(format!(
+            "{file} has {n} pam_apparmor.so session lines: the second change_hat() fails and every login hangs with no message. Keep one (sudo install.sh --guard collapses them) before logging out."
+        )),
+        _ => None,
+    }
 }
 
 /// Resolve the context: which helpers, shell and compositors exist; merge discovery with the
@@ -1078,6 +1160,9 @@ pub fn resolve_context(
         .collect();
     let mut discovered: BTreeSet<DiscoveredSocket> = cached.iter().cloned().collect();
     discovered.extend((hooks.discover)(users));
+    // Drop the session's lifelines before they reach the profiles or the state cache; an
+    // older cache may still carry them (see NEVER_GUARD).
+    discovered.retain(|d| !never_guard(&d.glob));
     GuardContext {
         users: users.to_vec(),
         app_exec: paths.app_exec.clone(),
@@ -1196,6 +1281,7 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
         Ok(()) => {
             info.loaded = plan.files.iter().map(|f| f.name.to_string()).collect();
             info.warnings = helper_warnings(&(hooks.unconfined_helpers)(&ctx.login_helpers));
+            info.warnings.extend(pam_duplicate_warning(hooks));
             state.mode = rules.mode;
             state.hash = plan.hash.clone();
             state.loaded = info.loaded.clone();
@@ -1274,6 +1360,7 @@ pub fn current_info(
         };
         info.warnings = helper_warnings(&(hooks.unconfined_helpers)(&helpers));
     }
+    info.warnings.extend(pam_duplicate_warning(hooks));
     info
 }
 
@@ -1675,6 +1762,105 @@ pub mod tests {
         assert_eq!(generalise_socket_path("/x"), "/x");
         assert_eq!(normalise_glob("~/.config/x"), "@{HOME}/.config/x");
         assert_eq!(normalise_glob("/etc/x"), "/etc/x");
+    }
+
+    #[test]
+    fn a_second_pam_apparmor_line_is_reported_as_a_warning() {
+        let os = Arc::new(FakeOs::default());
+        let hooks = os.hooks();
+        let one = "session    optional   pam_apparmor.so      order=user,group,default # rp-code session guard\n";
+        assert_eq!(pam_lines(&hooks), None, "no PAM file");
+        assert_eq!(pam_configured(&hooks), None);
+        assert!(pam_duplicate_warning(&hooks).is_none());
+
+        let f = PathBuf::from("/etc/pam.d/system-login");
+        let base = "session    required   pam_env.so\n";
+        os.files.lock().unwrap().insert(f.clone(), base.into());
+        assert_eq!(pam_lines(&hooks), Some(("/etc/pam.d/system-login", 0)));
+        assert_eq!(pam_configured(&hooks), Some(false));
+        assert!(pam_duplicate_warning(&hooks).is_none());
+
+        os.files
+            .lock()
+            .unwrap()
+            .insert(f.clone(), format!("{base}{one}"));
+        assert_eq!(pam_configured(&hooks), Some(true));
+        assert!(pam_duplicate_warning(&hooks).is_none(), "one line is right");
+
+        // A commented-out line does not count; a second live one does.
+        os.files
+            .lock()
+            .unwrap()
+            .insert(f.clone(), format!("{base}{one}# {one}"));
+        assert!(pam_duplicate_warning(&hooks).is_none(), "comments ignored");
+        os.files
+            .lock()
+            .unwrap()
+            .insert(f, format!("{base}{one}session optional pam_apparmor.so\n"));
+        let w = pam_duplicate_warning(&hooks).expect("warned");
+        assert!(w.contains("2 pam_apparmor.so session lines"), "{w}");
+        assert!(w.contains("every login hangs"), "{w}");
+    }
+
+    #[test]
+    fn the_sessions_lifelines_are_never_guarded() {
+        // Hyprland listens on all of these, so discovery attributes them to the compositor;
+        // guarding them would cut every client off from its display server under `enforce`.
+        for path in [
+            "/run/user/1000/wayland-1",
+            "/run/user/1000/wayland-0",
+            "/tmp/.X11-unix/X1",
+            "/run/user/1000/bus",
+            "/run/user/1000/pipewire-0",
+            "/run/user/1000/pulse/native",
+        ] {
+            let glob = generalise_socket_path(path);
+            assert!(never_guard(&glob), "{path} -> {glob} should be exempt");
+        }
+        // The control sockets the guard exists for are not exempt.
+        for path in [
+            "/run/user/1000/hypr/0c9c_1757_42/.socket.sock",
+            "/run/user/1000/hypr/0c9c_1757_42/.socket2.sock",
+            "/run/user/1000/noctalia-wayland-1.sock",
+            "/run/user/1000/sway-ipc.1000.42.sock",
+            "/tmp/swww/wayland-1.sock",
+        ] {
+            let glob = generalise_socket_path(path);
+            assert!(!never_guard(&glob), "{path} -> {glob} should be guarded");
+        }
+        assert!(glob_match("/a/*/c", "/a/b/c"));
+        assert!(!glob_match("/a/*/c", "/a/b/x/c"), "* stops at a separator");
+        assert!(glob_match("@{run}/user/*/bus", "@{run}/user/[0-9]*/bus"));
+    }
+
+    #[test]
+    fn discovery_never_puts_a_display_socket_into_the_profiles() {
+        let mut ctx = noctalia_hyprland_ctx(&["work"]);
+        ctx.discovered = vec![
+            DiscoveredSocket {
+                glob: generalise_socket_path("/run/user/1000/wayland-1"),
+                owner: Owner::Compositor,
+                entry: "hyprland".into(),
+            },
+            DiscoveredSocket {
+                glob: generalise_socket_path("/tmp/.X11-unix/X1"),
+                owner: Owner::Compositor,
+                entry: "hyprland".into(),
+            },
+            DiscoveredSocket {
+                glob: generalise_socket_path("/run/user/1000/hypr/0c9c_1757_42/.socket2.sock"),
+                owner: Owner::Compositor,
+                entry: "hyprland".into(),
+            },
+        ];
+        let r = rules(
+            serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":"enforce"}}),
+        );
+        let plan = render(&r, &ctx);
+        let session = text_of(&plan, "rp-code-session");
+        assert!(!session.contains("wayland-*"), "{session}");
+        assert!(!session.contains("-unix"), "{session}");
+        assert!(session.contains("audit deny @{run}/user/[0-9]*/hypr/*/.socket*.sock rw"));
     }
 
     #[test]

@@ -461,29 +461,34 @@ pam_file() { local f; for f in $PAM_FILES; do if [ -f "$f" ]; then echo "$f"; re
 # pam_apparmor must run after pam_systemd_home (via the system-auth include) and pam_systemd:
 # insert the marked line as the LAST session line — after `session required pam_env.so` when
 # present, else after `-session optional pam_systemd.so`, else after the last session line,
-# else at the end. Idempotent: an existing marked line is kept when identical, replaced when not.
+# else at the end. Idempotent, and it collapses every other pam_apparmor session line into this
+# one: with two lines PAM calls change_hat twice, the second call fails the magic-token check
+# and the kernel leaves the login process in a profile that permits nothing — the login hangs
+# with no message (docs/system-integration.md "Session guard", recovery).
 pam_insert() { # pam_insert <file>
-  local f="$1" tmp
-  if grep -qF -- "$PAM_MARK" "$f"; then
-    if grep -qxF -- "$PAM_LINE" "$f"; then skip "$f already has the pam_apparmor line"; return 0; fi
-    if $DRY_RUN; then note "+ replace the marked line in $f"; ok "would update $f"; return 0; fi
-    tmp="$(mktemp "$f.XXXX")"
-    awk -v mark="$PAM_MARK" -v line="$PAM_LINE" 'index($0, mark) { print line; next } { print }' "$f" > "$tmp" && chmod --reference="$f" "$tmp" && mv -f "$tmp" "$f"
-    ok "updated the pam_apparmor line in $f"; return 0
+  local f="$1" tmp count
+  count="$(grep -E '^[[:space:]]*-?session[[:space:]]' "$f" | grep -c 'pam_apparmor\.so' || true)"
+  if [ "$count" = 1 ] && grep -qxF -- "$PAM_LINE" "$f"; then skip "$f already has the pam_apparmor line"; return 0; fi
+  if $DRY_RUN; then
+    if [ "$count" -gt 0 ]; then note "+ replace the $count pam_apparmor session line(s) in $f with: $PAM_LINE"
+    else note "+ add to $f: $PAM_LINE"; fi
+    ok "would update the pam_apparmor line in $f"; return 0
   fi
-  if $DRY_RUN; then note "+ add to $f: $PAM_LINE"; ok "would add the pam_apparmor line to $f"; return 0; fi
   tmp="$(mktemp "$f.XXXX")"
   awk -v line="$PAM_LINE" '
-    { lines[NR] = $0 }
-    $1 == "session" && $2 == "required" && $3 == "pam_env.so" { env = NR }
-    ($1 == "-session" || $1 == "session") && $3 == "pam_systemd.so" { systemd = NR }
-    $1 == "session" || $1 == "-session" { last = NR }
+    /^[[:space:]]*-?session[[:space:]]/ && /pam_apparmor\.so/ { next }
+    { lines[++n] = $0 }
+    $1 == "session" && $2 == "required" && $3 == "pam_env.so" { env = n }
+    ($1 == "-session" || $1 == "session") && $3 == "pam_systemd.so" { systemd = n }
+    $1 == "session" || $1 == "-session" { last = n }
     END {
-      at = env ? env : (systemd ? systemd : (last ? last : NR))
-      for (i = 1; i <= NR; i++) { print lines[i]; if (i == at) print line }
-      if (NR == 0) print line
+      at = env ? env : (systemd ? systemd : (last ? last : n))
+      for (i = 1; i <= n; i++) { print lines[i]; if (i == at) print line }
+      if (n == 0) print line
     }' "$f" > "$tmp" && chmod --reference="$f" "$tmp" && mv -f "$tmp" "$f"
-  ok "added the pam_apparmor line to $f (last session line)"
+  if [ "$count" -gt 1 ]; then warn "$f had $count pam_apparmor session lines, which hangs every login; collapsed them into one"
+  elif [ "$count" = 1 ]; then ok "updated the pam_apparmor line in $f"
+  else ok "added the pam_apparmor line to $f (last session line)"; fi
 }
 
 pam_remove() { # pam_remove <file>
@@ -493,6 +498,11 @@ pam_remove() { # pam_remove <file>
   tmp="$(mktemp "$f.XXXX")"
   awk -v mark="$PAM_MARK" 'index($0, mark) { next } { print }' "$f" > "$tmp" && chmod --reference="$f" "$tmp" && mv -f "$tmp" "$f"
   ok "removed the pam_apparmor line from $f"
+  # Only rp-code's own line goes; say so if another one is left, since one alone is harmless
+  # but a second one alongside a future --guard hangs every login.
+  local left; left="$(grep -E '^[[:space:]]*-?session[[:space:]]' "$f" | grep -c 'pam_apparmor\.so' || true)"
+  if [ "$left" -gt 0 ]; then warn "$f still has $left pam_apparmor session line(s) rp-code did not add; remove them by hand unless you put them there deliberately"; fi
+  return 0
 }
 
 # Where the pam_apparmor module would be (Arch: the apparmor package; Debian/Ubuntu: libpam-apparmor).
