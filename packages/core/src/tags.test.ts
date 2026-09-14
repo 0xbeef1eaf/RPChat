@@ -157,7 +157,8 @@ describe('Luna media.json (loader-dependent)', () => {
     expect(loaded.assets.some((a) => (a.tags ?? []).length > 0)).toBe(true);
     expect(loaded.tagDescriptions).toEqual(manifest.tags ?? {});
     for (const entry of manifest.entries) {
-      const tagged = loaded.assets.filter((a) => (entry.tags ?? []).every((tag) => (a.tags ?? []).includes(tag.toLowerCase())));
+      // Avatar/expression frames are indexed but never listed by sdk.pack.
+      const tagged = loaded.assets.filter((a) => a.role === undefined && (entry.tags ?? []).every((tag) => (a.tags ?? []).includes(tag.toLowerCase())));
       if ((entry.tags ?? []).length > 0) {
         expect(tagged.length).toBeGreaterThan(0);
         const found = (await invoke('findAssets', { tags: entry.tags })) as { ok: true; value: Array<{ path: string; tags: string[] }> };

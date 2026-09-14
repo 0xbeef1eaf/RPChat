@@ -15,7 +15,7 @@ import type {
   Storage,
 } from '@rp/shared';
 import { LIB_NAME_PATTERN, PACK_FILE_EXTENSION, RpError, assetUrl, characterRef, parseCharacterRef } from '@rp/shared';
-import { summariseTags } from '../assets.js';
+import { showableAssets, summariseTags } from '../assets.js';
 import { characterScope } from '../handlers/state.js';
 import { LIB_STATE_KEY } from './library.js';
 import type { TimerService } from './timers.js';
@@ -258,7 +258,7 @@ export class PackService {
       ...record,
       manifest: pack.manifest,
       characters: this.characters().filter((c) => c.packId === record.packId),
-      assetTags: summariseTags(pack.assets, pack.tagDescriptions ?? {}),
+      assetTags: summariseTags(showableAssets(pack.assets), pack.tagDescriptions ?? {}),
       assetCounts: countByKind(pack),
     };
     if (pack.readme !== undefined) view.readme = pack.readme;
@@ -376,7 +376,7 @@ export class PackService {
           return entry;
         }),
         assetCounts,
-        assetTags: summariseTags(pack.assets, pack.tagDescriptions ?? {}),
+        assetTags: summariseTags(showableAssets(pack.assets), pack.tagDescriptions ?? {}),
       };
       if (pack.readme !== undefined) inspection.readme = pack.readme;
       return inspection;

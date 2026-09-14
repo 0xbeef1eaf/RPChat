@@ -86,6 +86,12 @@ export interface AssetEntry {
   tags: string[];
   /** Author-written one-liner from `media.json`, if any. */
   description?: string;
+  /**
+   * `avatar` for a character's card avatar and `avatarSet` expression frames. They stay resolvable by
+   * path (the avatar overlay and the editor need them) but `sdk.pack` listings, searches and tag
+   * summaries leave them out: they are the character's face, not media to show.
+   */
+  role?: 'avatar';
 }
 
 export const MEDIA_MANIFEST_FILENAME = 'media.json';

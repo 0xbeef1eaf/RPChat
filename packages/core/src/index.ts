@@ -22,7 +22,7 @@ export type { BehaviourRunnerOptions, BehaviourRunOptions } from './behaviours.j
 export { TypedEmitter } from './emitter.js';
 export type { Unsubscribe } from './emitter.js';
 export { defaultSettings, mergeSettings } from './defaults.js';
-export { resolvePackAsset, coerceAssetArg, toAssetRef, findAssets, summariseTags, tagsOf, FIND_ASSETS_DEFAULT_LIMIT, FIND_ASSETS_MAX_LIMIT } from './assets.js';
+export { resolvePackAsset, coerceAssetArg, toAssetRef, findAssets, showableAssets, summariseTags, tagsOf, FIND_ASSETS_DEFAULT_LIMIT, FIND_ASSETS_MAX_LIMIT } from './assets.js';
 export type { AssetRef, FindAssetsQuery } from './assets.js';
 export { assetLine } from './prompt.js';
 export type { Logger, Clock, EngineEvents, EngineEmitter, BehaviourHooks, BehaviourInput, SensesProvider } from './types.js';

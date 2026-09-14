@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import type { ActionContext, AssetKind, CapabilityHandler, Json, LoadedPack } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import { DEFAULT_MEDIA_ROOT, normalizeRelativePath, resolveAssetPath } from '@rp/pack';
-import { findAssets, resolvePackAsset, summariseTags, toAssetRef } from '../assets.js';
+import { findAssets, resolvePackAsset, showableAssets, summariseTags, toAssetRef } from '../assets.js';
 import type { FindAssetsQuery } from '../assets.js';
 
 const READ_TEXT_DEFAULT_BYTES = 64 * 1024;
@@ -25,10 +25,10 @@ export class PackHandler implements CapabilityHandler {
       case 'findAssets': {
         const q = args[0];
         if (q !== undefined && q !== null && (typeof q !== 'object' || Array.isArray(q))) throw new RpError('INVALID_ARGUMENT', 'query must be an object');
-        return findAssets(pack.assets, (q ?? {}) as FindAssetsQuery) as unknown as Json;
+        return findAssets(showableAssets(pack.assets), (q ?? {}) as FindAssetsQuery) as unknown as Json;
       }
       case 'tags':
-        return summariseTags(pack.assets, pack.tagDescriptions ?? {}) as unknown as Json;
+        return summariseTags(showableAssets(pack.assets), pack.tagDescriptions ?? {}) as unknown as Json;
       case 'readText':
         return this.readText(pack, args[0], args[1]);
       case 'info': {
@@ -69,7 +69,7 @@ export class PackHandler implements CapabilityHandler {
       }
       kind = kindArg as AssetKind;
     }
-    return pack.assets
+    return showableAssets(pack.assets)
       .filter((a) => kind === undefined || a.kind === kind)
       .filter((a) => prefixes.length === 0 || prefixes.some((p) => a.path === p || a.path.startsWith(`${p}/`)))
       .map(toAssetRef);

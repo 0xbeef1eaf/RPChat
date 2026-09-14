@@ -80,7 +80,7 @@ state (trusted)
 
 pack (trusted)
 - `asset(path: string): Promise<AssetRef>` — validate & describe a file; throws NOT_FOUND / PATH_ESCAPE.
-- `listAssets(prefix?: string, kind?: AssetRef['kind']): Promise<AssetRef[]>`
+- `listAssets(prefix?: string, kind?: AssetRef['kind']): Promise<AssetRef[]>` — like `findAssets`/`tags`, skips entries with `role: 'avatar'` (the character's avatar and expression frames); `asset(path)` still resolves them.
 - `readText(path: string, maxBytes?: number): Promise<string>` — text assets only, default max 64 KiB.
 - `info(): Promise<{ id: string; name: string; version: string; description?: string; characterId: string; characterName: string }>`
 

@@ -46,7 +46,9 @@ describe('indexAssets', () => {
     ]);
     for (const a of assets) expect(a.bytes).toBeGreaterThan(0);
     expect(assets.find((a) => a.path === 'media/audio/chime.wav')).toMatchObject({ kind: 'audio', mime: 'audio/wav' });
-    expect(assets.find((a) => a.path === 'characters/luna/avatar.png')).toMatchObject({ kind: 'image', mime: 'image/png' });
+    expect(assets.find((a) => a.path === 'characters/luna/avatar.png')).toMatchObject({ kind: 'image', mime: 'image/png', role: 'avatar' });
+    // Media files carry no role; only the avatar and expression frames are marked.
+    expect(assets.filter((a) => a.role !== undefined).map((a) => a.path)).toEqual(['characters/luna/avatar.png']);
   });
 
   it('returns an empty index when there is no media directory and no avatar', async () => {

@@ -23,7 +23,8 @@ interface PackApi {
   asset(path: string): Promise<AssetRef>;
   /**
    * List assets, optionally restricted to a directory prefix and/or kind.
-   * Sorted by path. Use it to pick from a folder without hardcoding names.
+   * Sorted by path. Use it to pick from a folder without hardcoding names. Your own avatar and
+   * expression frames are not listed here (or by findAssets/tags): they belong to sdk.avatar.
    * @param prefix Only paths starting with this, e.g. "media/audio/". Omit for all.
    * @param kind Only assets of this kind ('image' | 'video' | 'audio' | 'text' | 'other').
    * @example const songs = await sdk.pack.listAssets("media/audio", "audio");

@@ -18,6 +18,11 @@ export function tagsOf(entry: Pick<AssetEntry, 'tags'>): string[] {
   return Array.isArray(entry.tags) ? entry.tags : [];
 }
 
+/** The assets a character may list, search and browse: everything but its own avatar/expression frames. */
+export function showableAssets<T extends Pick<AssetEntry, 'role'>>(assets: readonly T[]): T[] {
+  return assets.filter((a) => a.role === undefined);
+}
+
 export function toAssetRef(entry: AssetEntry): AssetRef {
   const ref: AssetRef = { path: entry.path, kind: entry.kind, mime: entry.mime, bytes: entry.bytes, tags: tagsOf(entry) };
   if (entry.description !== undefined) ref.description = entry.description;

@@ -11,7 +11,7 @@ export function validateManifest(json: unknown): PackManifest;       // throws R
 export function validateCharacter(json: unknown): CharacterDefinition;
 export function loadPack(root: string): Promise<LoadedPack>;          // reads pack.json, the one character dir (persona.md, behaviour scripts, lib/*.ts), README.md, indexes assets; `pack.character` is `pack.characters[0]`
 export function validatePack(root: string): Promise<{ ok: boolean; problems: string[] }>;  // never throws for content errors
-export function indexAssets(root: string, mediaRoot?: string): Promise<AssetEntry[]>;      // recursive; includes character avatars; kind by extension; mime by extension table
+export function indexAssets(root: string, mediaRoot?: string): Promise<AssetEntry[]>;      // recursive; includes character avatars and expression frames marked `role: 'avatar'` (resolvable by path, hidden from sdk.pack listings/searches/tags); kind by extension; mime by extension table
 export function resolveAssetPath(root: string, relative: string): string;  // normalises, rejects absolute/`..`/backslash tricks, returns absolute path; throws RpError('PATH_ESCAPE'); must also realpath-check that the resolved file stays under root (symlink escape)
 export function packDirectory(root: string, destinationFile: string): Promise<void>;       // validates first; writes .rppack (zip, deflate) with paths relative to root; skips dotfiles, node_modules
 export function extractPack(file: string, destinationDir: string): Promise<LoadedPack>;    // zip-slip safe, rejects absolute/`..` entries; then loadPack

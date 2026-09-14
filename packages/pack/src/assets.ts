@@ -204,8 +204,8 @@ async function discoverAvatarPaths(rootAbs: string): Promise<string[]> {
 }
 
 /**
- * Indexes every file under `mediaRoot` (recursively) plus each character's avatar,
- * then assigns tags from folder names and `media.json`. A missing media directory
+ * Indexes every file under `mediaRoot` (recursively) plus each character's avatar and
+ * expression frames (marked `role: 'avatar'`), then assigns tags from folder names and `media.json`. A missing media directory
  * yields no media entries (a pack may have no media). Entries are sorted by path.
  *
  * `manifest`: the validated `media.json`; `undefined` reads it from the pack root
@@ -228,16 +228,23 @@ export async function indexAssets(
     }
   }
 
+  // Avatars and expression frames are indexed (resolvable by path) but marked, so listings can skip them
+  // even when an author keeps them under the media root.
   for (const avatar of await discoverAvatarPaths(rootAbs)) {
     const n = normalizeRelativePath(avatar);
-    if (!n.ok || byPath.has(n.path)) continue;
+    if (!n.ok) continue;
+    const existing = byPath.get(n.path);
+    if (existing) {
+      existing.role = 'avatar';
+      continue;
+    }
     try {
       resolveAssetPath(rootAbs, n.path);
     } catch {
       continue;
     }
     const entry = await entryFor(rootAbs, n.path);
-    if (entry) byPath.set(entry.path, entry);
+    if (entry) byPath.set(entry.path, { ...entry, role: 'avatar' });
   }
 
   const resolvedManifest = manifest === undefined ? await discoverMediaManifest(rootAbs) : manifest;
