@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "managedBy": "Everything on: the app cannot be quit, the session is guarded (replace \"alice\" with your user name)",
+  "settings": {
+    "permissions": { "moduleAllow": {} },
+    "updates": { "enabled": true, "automatic": true, "allowDowngrade": false }
+  },
+  "inputLock": {
+    "enabled": true,
+    "maxDurationMs": 300000,
+    "emergencyKey": "esc",
+    "emergencyHoldMs": 5000
+  },
+  "app": {
+    "allowQuit": false,
+    "users": ["alice"]
+  },
+  "guard": {
+    "mode": "enforce",
+    "protectApp": true,
+    "wallpaper": true,
+    "compositorIpc": "shell-only",
+    "shell": "auto",
+    "extraDenyPaths": [],
+    "extraDenySockets": [],
+    "allowBinaries": []
+  }
+}

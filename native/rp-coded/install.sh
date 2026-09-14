@@ -657,7 +657,7 @@ if $REFRESH_DAEMON; then
   [ -n "$DAEMON_BIN" ] || die "rp-coded binary not found next to $SCRIPT_DIR"
   note "daemon binary: $DAEMON_BIN"
   install_file "$DAEMON_BIN" "$DAEMON_DST" 0755 || true
-  for f in README.md POLICY.md policy.example.json; do
+  for f in README.md POLICY.md policy.example.json policy.all-on.json; do
     src="$SCRIPT_DIR/$f"; [ -f "$src" ] || src="$DIST/$f"
     [ -f "$src" ] && install_file "$src" "$LIBEXEC/$f" 0644 || true
   done
@@ -772,7 +772,7 @@ fi
 # 2. daemon + systemd unit -------------------------------------------------------------------------
 daemon_changed=false
 install_file "$DAEMON_BIN" "$DAEMON_DST" 0755 && daemon_changed=true || true
-for f in README.md POLICY.md policy.example.json; do
+for f in README.md POLICY.md policy.example.json policy.all-on.json; do
   src="$SCRIPT_DIR/$f"; [ -f "$src" ] || src="$DIST/$f"
   [ -f "$src" ] && install_file "$src" "$LIBEXEC/$f" 0644 || true
 done

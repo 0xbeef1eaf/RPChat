@@ -629,10 +629,14 @@ describe('SystemIntegration.createPolicy', () => {
 
   it('policyTemplate seeds a valid policy from the current settings', () => {
     const settings: AppSettings = { ...base, maxInputLockMs: 42_000, displayBackend: 'electron', web: { ...base.web, allowlist: ['a.example'] }, permissions: { moduleAllow: { desktop: false } }, updates: { automatic: false, checkIntervalHours: 6 } };
-    const text = policyTemplate(settings);
+    const text = policyTemplate(settings, 'alice');
     expect(text.endsWith('}\n')).toBe(true);
     const json = JSON.parse(text) as Record<string, unknown>;
     expect(json).toMatchObject({ version: 1, managedBy: '', inputLock: { enabled: true, maxDurationMs: 42_000, emergencyKey: 'esc', emergencyHoldMs: 5000 } });
+    // The quit/relaunch and session-guard sections are present but off, with the user pre-filled.
+    expect(json.app).toEqual({ allowQuit: true, users: ['alice'] });
+    expect(json.guard).toMatchObject({ mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', shell: 'auto' });
+    expect(JSON.parse(policyTemplate(settings)).app).toEqual({ allowQuit: true });
     expect(json.settings).toMatchObject({ maxInputLockMs: 42_000, autonomy: base.autonomy, permissions: { moduleAllow: { desktop: false } }, web: { allowlist: ['a.example'] }, desktop: { launchAllowlist: [] }, memory: base.memory, displayBackend: 'electron', updates: { enabled: true, automatic: false } });
     expect((json.settings as { senses: object }).senses).toEqual({ includeInPrompt: base.senses.includeInPrompt, watchDirs: base.senses.watchDirs, calendarSources: base.senses.calendarSources });
     // Round-trips through the app's parser without problems, with every key managed.

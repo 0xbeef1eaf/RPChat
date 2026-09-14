@@ -379,7 +379,7 @@ Full field reference: `native/rp-coded/dist/POLICY.md`.
 2. Put the `guard` block into `/etc/rp-code/policy.json` (Settings → System → *Create policy…*
    when no file exists, `sudoedit` otherwise) with `mode: "audit"` and the users in `app.users`.
 3. Run the installer once with `--guard` (Settings → System → *Install system integration…* passes
-   it whenever the policy has `guard.mode` other than `off`, or `sudo install.sh --guard`). It
+   it whenever the policy has `guard.mode` other than `off`, or `sudo install.sh --guard`; a ready-made everything-on policy is `native/rp-coded/dist/policy.all-on.json`, installed as `/usr/local/libexec/rp-code/policy.all-on.json`). It
    adds the PAM line and runs `rp-coded --guard-apply`.
 4. Log out and back in: only sessions opened after the PAM line is in place are confined.
 5. Watch Settings → System → Session guard → *Audit log…* (or `journalctl -k -g apparmor=`)

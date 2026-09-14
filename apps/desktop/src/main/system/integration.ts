@@ -116,7 +116,7 @@ export function autostartDesktopEntry(appBin: string): string {
  * Pure: a policy seeded from the user's current settings, so a new policy starts from what
  * they already have (pretty JSON, ready to edit). `managedBy` is left for them to fill in.
  */
-export function policyTemplate(settings: AppSettings): string {
+export function policyTemplate(settings: AppSettings, userName?: string): string {
   const policy: PolicyFile = {
     version: 1,
     managedBy: '',
@@ -133,6 +133,9 @@ export function policyTemplate(settings: AppSettings): string {
       browser: { allowBlocking: settings.browser.allowBlocking, allowEval: settings.browser.allowEval, allowHistory: settings.browser.allowHistory, homePage: settings.browser.homePage },
     },
     inputLock: { enabled: true, maxDurationMs: settings.maxInputLockMs, emergencyKey: 'esc', emergencyHoldMs: 5000 },
+    // Off by default so a freshly created policy changes nothing; every key is present to edit.
+    app: userName ? { allowQuit: true, users: [userName] } : { allowQuit: true },
+    guard: { mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', shell: 'auto', extraDenyPaths: [], extraDenySockets: [], allowBinaries: [] },
   };
   return `${JSON.stringify(policy, null, 2)}\n`;
 }
@@ -419,7 +422,7 @@ export class SystemIntegration {
 
   /** `policyTemplate()` for the given settings (see the pure function). */
   policyTemplate(settings: AppSettings): string {
-    return policyTemplate(settings);
+    return policyTemplate(settings, this.userName());
   }
 
   /**

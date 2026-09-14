@@ -97,6 +97,14 @@ the app comes back through the user's autostart at their next login. `systemctl 
 switches the guard off entirely, and `kill` from a root shell followed by removing the policy
 line lets the app be quit normally again (the app re-reads the file within a minute).
 
+## Templates
+
+- `policy.example.json` — every key with its default: nothing changes until you edit it.
+- `policy.all-on.json` — the "everything on" policy: the app cannot be quit and is relaunched
+  for the listed user, and the session guard runs in **enforce** mode. Replace `alice` with your
+  user name. For a first run set `"guard": { "mode": "audit" }`, log in, read the audit log under
+  Settings → System, then switch to `enforce`.
+
 ## `guard` — the session guard (AppArmor)
 
 Confines the login sessions of the users in `app.users` so that their own terminals, keybind
