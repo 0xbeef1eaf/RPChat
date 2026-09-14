@@ -35,6 +35,7 @@ for whoever set the machine up; the values in `settings` override everyone's own
 | `managedBy` | string (≤ 500 chars) | Free text shown in Settings → System ("Managed by …"). |
 | `settings` | object | Forced app settings, see below. |
 | `inputLock` | object | Daemon-enforced lock limits, see below. |
+| `app` | object | How the app itself may behave (`allowQuit`, `users`), see below. |
 
 ## `settings` — forced app settings
 
@@ -75,7 +76,33 @@ Notes:
 - The daemon logs every lock with the requesting uid/pid to the journal
   (`journalctl -u rp-coded`).
 
+## `app` — keeping the app running
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `allowQuit` | boolean | `true` | `false` removes every way to quit from the app (no *Quit* in the tray, closing the window only hides it, Ctrl+Q and SIGTERM/SIGINT/SIGHUP are ignored) and makes the daemon **relaunch** the app when its process dies anyway (`kill -9`, a crash) — for the users below only. Update restarts still work. |
+| `users` | non-empty array of unix user names | none | Who the daemon relaunches the app for. The relaunch also requires that this user currently owns the **active graphical session** (logind: an active `wayland`/`x11` session on a seat). Without this list nothing is relaunched, even with `allowQuit: false` (logged once). Not a settings key: it is shown in Settings → System, not as a managed setting. |
+
+How the relaunch works: the running app registers with the daemon on a long-lived connection
+(`register`: executable, arguments, working directory and a whitelist of session variables such
+as `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, `HOME`). When
+that connection drops without an `unregister` — the app was killed or crashed — the daemon
+re-reads the policy, checks the user list and the active session, waits 1.5 s, confirms the
+process is really gone and starts it again as that user (never as root) with exactly the
+registered environment. Crash loops back off (1.5 s → 3 → 6 → 12 → 30 s) and stop after 10
+relaunches in 10 minutes (`journalctl -u rp-coded` says so); five minutes of uptime reset the
+counters. If another user becomes the active session in the meantime the relaunch is dropped;
+the app comes back through the user's autostart at their next login. `systemctl stop rp-coded`
+switches the guard off entirely, and `kill` from a root shell followed by removing the policy
+line lets the app be quit normally again (the app re-reads the file within a minute).
+
 ## Minimal examples
+
+Keep the app running for `alice` (no quit in the UI, relaunched after a kill or crash):
+
+```json
+{ "version": 1, "managedBy": "family PC", "app": { "allowQuit": false, "users": ["alice"] } }
+```
 
 Disable locking entirely, keep everything else at the user's choice:
 

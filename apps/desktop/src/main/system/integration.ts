@@ -221,7 +221,14 @@ export class SystemIntegration {
       this.autostartStatus(),
       this.installerPath(),
     ]);
-    const policy: SystemIntegrationStatus['policy'] = { present: policyState.present, canCreate: daemon.connected && !policyState.present, path: policyState.path, managed: policyState.managed };
+    const policy: SystemIntegrationStatus['policy'] = {
+      present: policyState.present,
+      canCreate: daemon.connected && !policyState.present,
+      path: policyState.path,
+      managed: policyState.managed,
+      allowQuit: policyState.app.allowQuit,
+      users: policyState.app.users,
+    };
     if (policyState.managedBy) policy.managedBy = policyState.managedBy;
     if (policyState.error) policy.error = policyState.error;
     return {

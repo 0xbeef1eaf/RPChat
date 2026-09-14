@@ -63,10 +63,12 @@ mod logging {
 
 mod devices;
 mod inject;
+mod keepalive;
 mod lock;
 mod policy;
 mod protocol;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -79,6 +81,9 @@ use std::thread;
 use std::time::Instant;
 
 use inject::Injector;
+use keepalive::{
+    CommandSpec, Decision, Keepalive, Peer, RegisterRequest, Registration, DEFAULT_SESSIONS_DIR,
+};
 use lock::{DeviceSource, LockEngine, UnlockCause, TICK_INTERVAL};
 use logging::Level;
 use policy::{CreateError, PolicyStore, DEFAULT_POLICY_PATH};
@@ -104,6 +109,9 @@ OPTIONS:
     --socket <path>     Unix socket to listen on (default /run/rp-code/daemon.sock,
                         env RP_CODED_SOCKET)
     --policy <path>     Policy file (default /etc/rp-code/policy.json, env RP_CODED_POLICY)
+    --sessions-dir <p>  logind session state files used to find the active graphical user
+                        for app relaunches (default /run/systemd/sessions, env
+                        RP_CODED_SESSIONS_DIR; `loginctl` is the fallback)
     --no-uinput         Do not create the uinput virtual device (injection reports NO_DEVICES)
     --check-devices     Print which input devices and /dev/uinput can be opened, then exit 0
     --log-level <lvl>   stderr verbosity (default info)
@@ -114,6 +122,7 @@ Runs as root under rp-coded.service. Members of the `rp-code` group may connect.
 struct Args {
     socket: PathBuf,
     policy: PathBuf,
+    sessions_dir: PathBuf,
     no_uinput: bool,
     check_devices: bool,
     log_level: Level,
@@ -129,6 +138,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         policy: std::env::var_os("RP_CODED_POLICY")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_POLICY_PATH)),
+        sessions_dir: std::env::var_os("RP_CODED_SESSIONS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_SESSIONS_DIR)),
         no_uinput: false,
         check_devices: false,
         log_level: Level::Info,
@@ -144,6 +156,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--version" | "-V" => args.version = true,
             "--socket" => args.socket = PathBuf::from(iter.next().ok_or("--socket needs a path")?),
             "--policy" => args.policy = PathBuf::from(iter.next().ok_or("--policy needs a path")?),
+            "--sessions-dir" => {
+                args.sessions_dir = PathBuf::from(iter.next().ok_or("--sessions-dir needs a path")?)
+            }
             "--log-level" => {
                 let v = iter.next().ok_or("--log-level needs a value")?;
                 args.log_level =
@@ -159,11 +174,65 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
 // Request handling
 // ---------------------------------------------------------------------------
 
+/// The OS-touching parts of the keepalive feature, injectable so the pipeline is testable:
+/// which uids own an active graphical session, whether a registered process still runs, the
+/// peer uid's user name, and the spawn itself.
+pub struct KeepaliveHooks {
+    pub active_uids: Box<dyn Fn() -> Vec<u32> + Send + Sync>,
+    pub process_alive: Box<dyn Fn(i32, Option<u64>) -> bool + Send + Sync>,
+    pub user_name: Box<dyn Fn(u32) -> Option<String> + Send + Sync>,
+    pub is_executable: Box<dyn Fn(&Path) -> bool + Send + Sync>,
+    pub proc_start: Box<dyn Fn(i32) -> Option<u64> + Send + Sync>,
+    /// Spawn the command; returns the child's pid.
+    pub spawn: Spawner,
+}
+
+pub type Spawner = Box<dyn Fn(&CommandSpec) -> io::Result<u32> + Send + Sync>;
+
+impl KeepaliveHooks {
+    /// The real thing: logind state files (or `loginctl`), `/proc`, getpwuid, `Command::spawn`.
+    pub fn real(sessions_dir: PathBuf) -> KeepaliveHooks {
+        KeepaliveHooks {
+            active_uids: Box::new(move || os::active_graphical_uids(&sessions_dir)),
+            process_alive: Box::new(os::process_alive),
+            user_name: Box::new(os::user_name),
+            is_executable: Box::new(os::is_executable),
+            proc_start: Box::new(os::proc_start),
+            spawn: Box::new(os::spawn_relaunch),
+        }
+    }
+}
+
+/// Per-connection state: the peer's credentials (for the audit log and registrations) and
+/// the keepalive registration this connection holds, if any.
+pub struct ConnCtx {
+    pub peer: Peer,
+    pub label: String,
+    pub registration: Option<Registration>,
+}
+
+impl ConnCtx {
+    pub fn new(peer: Peer) -> ConnCtx {
+        ConnCtx {
+            label: format!("uid {} pid {}", peer.uid, peer.pid),
+            peer,
+            registration: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn test(uid: u32, pid: i32) -> ConnCtx {
+        ConnCtx::new(Peer { uid, gid: uid, pid })
+    }
+}
+
 /// Everything the connection threads share.
 pub struct Daemon {
     engine: Mutex<LockEngine>,
     injector: Mutex<Box<dyn Injector>>,
     policy: Mutex<PolicyStore>,
+    keepalive: Mutex<Keepalive>,
+    hooks: KeepaliveHooks,
     shutting_down: AtomicBool,
 }
 
@@ -177,14 +246,25 @@ impl Daemon {
             engine: Mutex::new(LockEngine::new(source)),
             injector: Mutex::new(injector),
             policy: Mutex::new(PolicyStore::new(policy_path)),
+            keepalive: Mutex::new(Keepalive::default()),
+            hooks: KeepaliveHooks::real(PathBuf::from(DEFAULT_SESSIONS_DIR)),
             shutting_down: AtomicBool::new(false),
         }
+    }
+
+    pub fn with_keepalive_hooks(mut self, hooks: KeepaliveHooks) -> Self {
+        self.hooks = hooks;
+        self
     }
 
     #[cfg(test)]
     fn with_engine(mut self, engine: LockEngine) -> Self {
         self.engine = Mutex::new(engine);
         self
+    }
+
+    fn keepalive(&self) -> std::sync::MutexGuard<'_, Keepalive> {
+        self.keepalive.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn engine(&self) -> std::sync::MutexGuard<'_, LockEngine> {
@@ -204,6 +284,107 @@ impl Daemon {
         if let Some(cause) = self.engine().tick(Instant::now()) {
             log_info!("lock ended: {cause}");
         }
+        self.keepalive_tick(Instant::now());
+    }
+
+    /// Fire pending relaunches whose delay is up, re-checking the gate first (policy re-read,
+    /// active session, process really gone).
+    pub fn keepalive_tick(&self, now: Instant) {
+        let due = self.keepalive().due(now);
+        for pending in due {
+            let reg = pending.registration;
+            let rules = self.policy().app_rules();
+            let active = (self.hooks.active_uids)();
+            let alive = (self.hooks.process_alive)(reg.pid, reg.proc_start);
+            if let Err(skip) = keepalive::relaunch_gate(&rules, &reg, &active, Some(alive)) {
+                log_info!(
+                    "relaunch for {} (uid {}) cancelled: {skip}",
+                    reg.user,
+                    reg.uid
+                );
+                continue;
+            }
+            let spec = keepalive::command_spec(&reg, Path::new(&reg.cwd).is_dir());
+            match (self.hooks.spawn)(&spec) {
+                Ok(pid) => {
+                    self.keepalive().relaunched(reg.uid, now);
+                    log_info!(
+                        "relaunched {} as {} (uid {} gid {}) pid {pid} in {} (attempt {}, after {} ms)",
+                        reg.command_line(),
+                        reg.user,
+                        spec.uid,
+                        spec.gid,
+                        spec.cwd,
+                        pending.attempt,
+                        pending.delay.as_millis()
+                    );
+                }
+                Err(e) => {
+                    // Counts as a relaunch for the backoff so a broken exec cannot spin.
+                    self.keepalive().relaunched(reg.uid, now);
+                    log_error!(
+                        "relaunch of {} for {} failed: {e}",
+                        reg.command_line(),
+                        reg.user
+                    );
+                }
+            }
+        }
+    }
+
+    /// A connection with a registration went away without `unregister`: treat it as a crash
+    /// and, when the policy and the session say so, schedule a relaunch with backoff.
+    pub fn connection_lost(&self, ctx: &mut ConnCtx, now: Instant) {
+        let Some(reg) = ctx.registration.take() else {
+            return;
+        };
+        self.keepalive().forget(reg.uid);
+        let rules = self.policy().app_rules();
+        let active = (self.hooks.active_uids)();
+        match keepalive::relaunch_gate(&rules, &reg, &active, None) {
+            Ok(()) => {}
+            Err(skip @ keepalive::Skip::NoUsersListed) => {
+                if self.keepalive().warn_no_users_once() {
+                    log_warn!(
+                        "{} dropped its registration but app.allowQuit is false without app.users: {skip} (logged once)",
+                        ctx.label
+                    );
+                }
+                return;
+            }
+            Err(skip @ keepalive::Skip::QuitAllowed) => {
+                log_debug!(
+                    "{} dropped its registration; no relaunch: {skip}",
+                    ctx.label
+                );
+                return;
+            }
+            Err(skip) => {
+                log_info!(
+                    "{} dropped its registration; no relaunch: {skip}",
+                    ctx.label
+                );
+                return;
+            }
+        }
+        match self.keepalive().schedule(reg.clone(), now) {
+            Decision::Relaunch { delay, attempt } => log_warn!(
+                "app of {} (uid {} pid {}) went away without unregistering; relaunching {} in {} ms (attempt {attempt})",
+                reg.user,
+                reg.uid,
+                reg.pid,
+                reg.command_line(),
+                delay.as_millis()
+            ),
+            Decision::GiveUp {
+                relaunches_in_window,
+            } => log_error!(
+                "giving up on relaunching the app of {} (uid {}): {relaunches_in_window} relaunches in the last {} minutes; start it by hand (autostart brings it back at the next login)",
+                reg.user,
+                reg.uid,
+                keepalive::GIVE_UP_WINDOW.as_secs() / 60
+            ),
+        }
     }
 
     /// Release the lock and stop accepting requests.
@@ -216,22 +397,23 @@ impl Daemon {
         self.shutting_down.load(Ordering::SeqCst)
     }
 
-    /// Handle one request. `peer` is only used for logging.
-    pub fn handle(&self, req: Request, peer: &str) -> Response {
+    /// Handle one request on a connection (`ctx` carries the peer credentials and registration).
+    pub fn handle(&self, req: Request, ctx: &mut ConnCtx) -> Response {
         if self.is_shutting_down() {
             return Response::err(ErrorCode::Refused, "daemon is shutting down");
         }
         let op = req.op();
-        match self.dispatch(req, peer) {
+        match self.dispatch(req, ctx) {
             Ok(payload) => Response::ok(payload),
             Err(e) => {
-                log_debug!("{op} from {peer} failed: {e}");
+                log_debug!("{op} from {} failed: {e}", ctx.label);
                 Response::from(e)
             }
         }
     }
 
-    fn dispatch(&self, req: Request, peer: &str) -> DaemonResult<OkPayload> {
+    fn dispatch(&self, req: Request, ctx: &mut ConnCtx) -> DaemonResult<OkPayload> {
+        let peer = ctx.label.as_str();
         match req {
             Request::Hello { version } => {
                 if version != PROTOCOL_VERSION {
@@ -248,9 +430,13 @@ impl Daemon {
                     devices: devices::counts(&devices, uinput),
                 })
             }
-            Request::Status => Ok(OkPayload::Status {
-                locked: self.engine().status(Instant::now()),
-            }),
+            Request::Status => {
+                let allow_quit = self.policy().app_rules().allow_quit;
+                Ok(OkPayload::Status {
+                    locked: self.engine().status(Instant::now()),
+                    keepalive: self.keepalive().info(allow_quit),
+                })
+            }
             Request::Policy => {
                 let mut store = self.policy();
                 let path = store.path().to_string_lossy().into_owned();
@@ -363,7 +549,191 @@ impl Daemon {
                     }
                 }
             }
+            Request::Register {
+                exec,
+                args,
+                cwd,
+                env,
+            } => self.register(ctx, exec, args, cwd, env),
+            Request::Unregister => {
+                if let Some(reg) = ctx.registration.take() {
+                    self.keepalive().forget(reg.uid);
+                    log_info!("unregister from {peer} ({})", reg.user);
+                }
+                Ok(OkPayload::Unregister)
+            }
         }
+    }
+
+    fn register(
+        &self,
+        ctx: &mut ConnCtx,
+        exec: String,
+        args: Vec<String>,
+        cwd: String,
+        env: BTreeMap<String, String>,
+    ) -> DaemonResult<OkPayload> {
+        let peer = ctx.peer;
+        if peer.uid == 0 {
+            return Err(DaemonError::new(
+                ErrorCode::Refused,
+                "root may not register for relaunch",
+            ));
+        }
+        let user = (self.hooks.user_name)(peer.uid);
+        let proc_start = (self.hooks.proc_start)(peer.pid);
+        let reg = keepalive::validate_registration(
+            RegisterRequest {
+                exec: &exec,
+                args: &args,
+                cwd: &cwd,
+                env: &env,
+            },
+            peer,
+            user.as_deref(),
+            proc_start,
+            &*self.hooks.is_executable,
+        )
+        .map_err(DaemonError::invalid)?;
+        let replacing = ctx.registration.is_some();
+        let cancelled = self.keepalive().register(reg.uid, replacing);
+        if let Some(p) = cancelled {
+            log_info!(
+                "pending relaunch for {} (uid {}) cancelled: the app registered again on its own",
+                p.registration.user,
+                p.registration.uid
+            );
+        }
+        let rules = self.policy().app_rules();
+        log_info!(
+            "register from {} ({}): {}{}",
+            ctx.label,
+            reg.user,
+            reg.command_line(),
+            if replacing {
+                " (replaces the previous registration)"
+            } else {
+                ""
+            }
+        );
+        if !rules.allow_quit && !rules.users.iter().any(|u| u == &reg.user) {
+            log_warn!(
+                "app.allowQuit is false but app.users does not list {} ({}); the app of {} will not be relaunched",
+                reg.user,
+                if rules.users.is_empty() { "the list is empty".to_string() } else { format!("listed: {}", rules.users.join(", ")) },
+                reg.user
+            );
+        }
+        ctx.registration = Some(reg);
+        Ok(OkPayload::Register)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keepalive OS glue (the only code that reads /proc, logind state and spawns)
+// ---------------------------------------------------------------------------
+
+mod os {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Uids owning an active graphical session: logind's state files first, `loginctl` when
+    /// the directory is unreadable or empty. No logind at all → nobody (no relaunch).
+    pub fn active_graphical_uids(sessions_dir: &Path) -> Vec<u32> {
+        let mut sessions = Vec::new();
+        if let Ok(entries) = fs::read_dir(sessions_dir) {
+            for entry in entries.flatten() {
+                let id = entry.file_name().to_string_lossy().into_owned();
+                if let Ok(text) = fs::read_to_string(entry.path()) {
+                    sessions.push(keepalive::parse_session_file(&id, &text));
+                }
+            }
+        }
+        if sessions.is_empty() {
+            sessions = loginctl_sessions();
+        }
+        keepalive::active_graphical_uids(&sessions)
+    }
+
+    fn loginctl_sessions() -> Vec<keepalive::SessionInfo> {
+        let list = std::process::Command::new("loginctl")
+            .args(["list-sessions", "--no-legend"])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .output();
+        let Ok(list) = list else { return Vec::new() };
+        let mut out = Vec::new();
+        for (id, _, _) in keepalive::parse_loginctl_list(&String::from_utf8_lossy(&list.stdout)) {
+            let show = std::process::Command::new("loginctl")
+                .args([
+                    "show-session",
+                    &id,
+                    "-p",
+                    "Active",
+                    "-p",
+                    "Name",
+                    "-p",
+                    "Type",
+                    "-p",
+                    "Seat",
+                    "-p",
+                    "User",
+                ])
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .output();
+            if let Ok(show) = show {
+                out.push(keepalive::parse_loginctl_show(
+                    &id,
+                    &String::from_utf8_lossy(&show.stdout),
+                ));
+            }
+        }
+        out
+    }
+
+    pub fn proc_start(pid: i32) -> Option<u64> {
+        fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|t| keepalive::parse_proc_stat_starttime(&t))
+    }
+
+    /// `/proc/<pid>` still there and, when the start time is known, still the same process.
+    pub fn process_alive(pid: i32, start: Option<u64>) -> bool {
+        match (proc_start(pid), start) {
+            (None, _) => false,
+            (Some(_), None) => true,
+            (Some(now), Some(then)) => now == then,
+        }
+    }
+
+    pub fn user_name(uid: u32) -> Option<String> {
+        nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+            .ok()
+            .flatten()
+            .map(|u| u.name)
+    }
+
+    pub fn is_executable(path: &Path) -> bool {
+        fs::metadata(path)
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+
+    /// Spawn the relaunch (see `keepalive::build_command`) and reap it on a thread so it never
+    /// lingers as a zombie; its exit is logged.
+    pub fn spawn_relaunch(spec: &CommandSpec) -> io::Result<u32> {
+        let mut child = keepalive::build_command(spec).spawn()?;
+        let pid = child.id();
+        let what = spec.program.clone();
+        thread::Builder::new()
+            .name("rp-coded-reap".into())
+            .spawn(move || match child.wait() {
+                Ok(status) => log_info!("relaunched app pid {pid} ({what}) exited: {status}"),
+                Err(e) => log_warn!("waiting for relaunched app pid {pid} failed: {e}"),
+            })
+            .ok();
+        Ok(pid)
     }
 }
 
@@ -371,19 +741,27 @@ impl Daemon {
 // Socket server
 // ---------------------------------------------------------------------------
 
-/// Serve one connection: one JSON request per line, one response line each.
+/// Serve one connection: one JSON request per line, one response line each. When it ends
+/// (EOF or error) a registration it still holds is handed to the keepalive logic.
 fn serve_connection(stream: UnixStream, daemon: &Daemon) -> io::Result<()> {
-    let peer = peer_label(&stream);
-    log_debug!("connection from {peer}");
+    let mut ctx = ConnCtx::new(peer_creds(&stream));
+    log_debug!("connection from {}", ctx.label);
+    let result = serve_lines(stream, daemon, &mut ctx);
+    log_debug!("{} disconnected", ctx.label);
+    daemon.connection_lost(&mut ctx, Instant::now());
+    result
+}
+
+fn serve_lines(stream: UnixStream, daemon: &Daemon, ctx: &mut ConnCtx) -> io::Result<()> {
     let mut writer = stream.try_clone()?;
     let reader = BufReader::new(stream);
     for line in reader.lines() {
         let line = line?;
         let response = match protocol::parse_line(&line) {
             Ok(None) => continue,
-            Ok(Some(req)) => daemon.handle(req, &peer),
+            Ok(Some(req)) => daemon.handle(req, ctx),
             Err(e) => {
-                log_warn!("{peer}: {e}: {}", truncate(&line, 200));
+                log_warn!("{}: {e}: {}", ctx.label, truncate(&line, 200));
                 Response::err(ErrorCode::Invalid, e)
             }
         };
@@ -391,7 +769,6 @@ fn serve_connection(stream: UnixStream, daemon: &Daemon) -> io::Result<()> {
         writer.write_all(b"\n")?;
         writer.flush()?;
     }
-    log_debug!("{peer} disconnected");
     Ok(())
 }
 
@@ -403,11 +780,20 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// `uid:pid` of the peer from SO_PEERCRED, for the audit log.
-fn peer_label(stream: &UnixStream) -> String {
+/// SO_PEERCRED of the peer (audit log, registrations). Unknown → uid/gid `u32::MAX`, pid 0,
+/// which no registration check accepts as a real user.
+fn peer_creds(stream: &UnixStream) -> Peer {
     match nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::PeerCredentials) {
-        Ok(c) => format!("uid {} pid {}", c.uid(), c.pid()),
-        Err(_) => "unknown peer".to_string(),
+        Ok(c) => Peer {
+            uid: c.uid(),
+            gid: c.gid(),
+            pid: c.pid(),
+        },
+        Err(_) => Peer {
+            uid: u32::MAX,
+            gid: u32::MAX,
+            pid: 0,
+        },
     }
 }
 
@@ -529,6 +915,23 @@ fn run(args: Args) -> ExitCode {
         "rp-coded {VERSION} starting; policy {}: {policy_note}",
         args.policy.display()
     );
+    match PolicyStore::new(&args.policy).load() {
+        Ok(Some(p)) if !p.app_rules().allow_quit => {
+            let rules = p.app_rules();
+            if rules.users.is_empty() {
+                log_warn!(
+                    "app.allowQuit is false but app.users is empty: the app is never relaunched"
+                );
+            } else {
+                log_info!(
+                    "app.allowQuit is false: relaunching the app for {} (sessions from {})",
+                    rules.users.join(", "),
+                    args.sessions_dir.display()
+                );
+            }
+        }
+        _ => {}
+    }
 
     let screen = devices::screen_size();
     let injector: Box<dyn Injector> = if args.no_uinput {
@@ -549,11 +952,14 @@ fn run(args: Args) -> ExitCode {
             }
         }
     };
-    let daemon = Arc::new(Daemon::new(
-        Box::new(devices::EvdevSource::new()),
-        injector,
-        args.policy.clone(),
-    ));
+    let daemon = Arc::new(
+        Daemon::new(
+            Box::new(devices::EvdevSource::new()),
+            injector,
+            args.policy.clone(),
+        )
+        .with_keepalive_hooks(KeepaliveHooks::real(args.sessions_dir.clone())),
+    );
     {
         let devs = daemon.engine().list_devices();
         let c = devices::counts(&devs, daemon.injector().available());
@@ -706,7 +1112,7 @@ mod tests {
 
         assert_eq!(
             c.send(json!({"op":"status"})),
-            json!({"ok":true,"op":"status","locked":null})
+            json!({"ok":true,"op":"status","locked":null,"keepalive":{"registered":false,"relaunches":0,"allowQuit":true}})
         );
 
         let lock = c.send(json!({"op":"lock","durationMs":30000,"reason":"surprise"}));
@@ -718,8 +1124,8 @@ mod tests {
 
         let status = c.send(json!({"op":"status"}));
         assert_eq!(
-            status,
-            json!({"ok":true,"op":"status","locked":{"until":"2023-11-14T22:13:50.000Z","reason":"surprise","devices":"both"}})
+            status["locked"],
+            json!({"until":"2023-11-14T22:13:50.000Z","reason":"surprise","devices":"both"})
         );
 
         // Injection works while locked (uinput is not grabbed).
@@ -753,10 +1159,7 @@ mod tests {
             json!({"ok":true,"op":"unlock"})
         );
         assert!(!server.daemon.engine().is_locked());
-        assert_eq!(
-            c.send(json!({"op":"status"})),
-            json!({"ok":true,"op":"status","locked":null})
-        );
+        assert_eq!(c.send(json!({"op":"status"}))["locked"], Value::Null);
         assert_eq!(
             c.send(json!({"op":"unlock"})),
             json!({"ok":true,"op":"unlock"}),
@@ -779,10 +1182,7 @@ mod tests {
         );
         // The ticker releases it once the second elapses.
         thread::sleep(std::time::Duration::from_millis(1300));
-        assert_eq!(
-            c.send(json!({"op":"status"})),
-            json!({"ok":true,"op":"status","locked":null})
-        );
+        assert_eq!(c.send(json!({"op":"status"}))["locked"], Value::Null);
         assert!(!server.daemon.engine().is_locked());
     }
 
@@ -985,11 +1385,12 @@ mod tests {
             Box::new(FakeInjector::default()),
             &nested,
         );
+        let mut ctx = ConnCtx::test(1000, 42);
         let res = daemon.handle(
             Request::SetPolicy {
                 policy: json!({"version":1}),
             },
-            "uid 1000 pid 42",
+            &mut ctx,
         );
         assert!(res.is_ok(), "{res:?}");
         assert_eq!(
@@ -1007,7 +1408,7 @@ mod tests {
                 Request::SetPolicy {
                     policy: json!({"version":1}),
                 },
-                "uid 1000 pid 42",
+                &mut ctx,
             ),
             Response::Err(ref e) if e.code == ErrorCode::Exists
         ));
@@ -1104,6 +1505,385 @@ mod tests {
         drop(l2);
     }
 
+    /// Fake OS hooks: who is active, whether the process lives, what was spawned.
+    struct FakeOs {
+        active: Arc<Mutex<Vec<u32>>>,
+        alive: Arc<AtomicBool>,
+        spawned: Arc<Mutex<Vec<CommandSpec>>>,
+        fail_spawn: Arc<AtomicBool>,
+    }
+
+    impl FakeOs {
+        fn new(active: Vec<u32>) -> FakeOs {
+            FakeOs {
+                active: Arc::new(Mutex::new(active)),
+                alive: Arc::new(AtomicBool::new(false)),
+                spawned: Arc::new(Mutex::new(Vec::new())),
+                fail_spawn: Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        fn hooks(&self) -> KeepaliveHooks {
+            let active = self.active.clone();
+            let alive = self.alive.clone();
+            let spawned = self.spawned.clone();
+            let fail = self.fail_spawn.clone();
+            KeepaliveHooks {
+                active_uids: Box::new(move || active.lock().unwrap().clone()),
+                process_alive: Box::new(move |_, _| alive.load(Ordering::SeqCst)),
+                user_name: Box::new(|uid| match uid {
+                    1000 => Some("alice".into()),
+                    1001 => Some("bob".into()),
+                    0 => Some("root".into()),
+                    _ => None,
+                }),
+                is_executable: Box::new(|p| p.to_str() != Some("/missing")),
+                proc_start: Box::new(|pid| Some(pid as u64 * 10)),
+                spawn: Box::new(move |spec| {
+                    if fail.load(Ordering::SeqCst) {
+                        return Err(io::Error::other("no such file"));
+                    }
+                    spawned.lock().unwrap().push(spec.clone());
+                    Ok(4242)
+                }),
+            }
+        }
+
+        fn spawned(&self) -> Vec<CommandSpec> {
+            self.spawned.lock().unwrap().clone()
+        }
+    }
+
+    fn register_req(exec: &str) -> Request {
+        Request::Register {
+            exec: exec.into(),
+            args: vec!["--hidden".into()],
+            cwd: "/nonexistent/cwd".into(),
+            env: [("HOME", "/home/alice"), ("WAYLAND_DISPLAY", "wayland-1")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+
+    fn ms(n: u64) -> std::time::Duration {
+        std::time::Duration::from_millis(n)
+    }
+
+    #[test]
+    fn relaunch_pipeline_with_fake_os() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy_path = dir.path().join("policy.json");
+        fs::write(
+            &policy_path,
+            r#"{"version":1,"app":{"allowQuit":false,"users":["alice"]}}"#,
+        )
+        .unwrap();
+        let os = FakeOs::new(vec![1000]);
+        let daemon = Daemon::new(
+            Box::new(fake_devices()),
+            Box::new(FakeInjector::default()),
+            &policy_path,
+        )
+        .with_keepalive_hooks(os.hooks());
+        let t0 = Instant::now();
+
+        // Validation errors and the root refusal come back as INVALID / REFUSED.
+        let mut root = ConnCtx::test(0, 1);
+        assert!(matches!(
+            daemon.handle(register_req("/usr/bin/rp-code"), &mut root),
+            Response::Err(ref e) if e.code == ErrorCode::Refused
+        ));
+        let mut alice = ConnCtx::test(1000, 7);
+        assert!(matches!(
+            daemon.handle(register_req("/missing"), &mut alice),
+            Response::Err(ref e) if e.code == ErrorCode::Invalid && e.error.contains("executable")
+        ));
+        assert!(matches!(
+            daemon.handle(register_req("relative"), &mut alice),
+            Response::Err(ref e) if e.code == ErrorCode::Invalid
+        ));
+        let mut nobody = ConnCtx::test(5555, 9);
+        assert!(matches!(
+            daemon.handle(register_req("/usr/bin/rp-code"), &mut nobody),
+            Response::Err(ref e) if e.code == ErrorCode::Invalid && e.error.contains("no user name")
+        ));
+        assert!(alice.registration.is_none());
+
+        // Registered: status shows it, with allowQuit from the policy.
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .is_ok());
+        let reg = alice
+            .registration
+            .clone()
+            .expect("registration kept on the connection");
+        assert_eq!(
+            (reg.uid, reg.pid, reg.user.as_str(), reg.proc_start),
+            (1000, 7, "alice", Some(70))
+        );
+        let status = serde_json::to_value(daemon.handle(Request::Status, &mut alice)).unwrap();
+        assert_eq!(
+            status["keepalive"],
+            json!({"registered":true,"relaunches":0,"allowQuit":false})
+        );
+        // A second register on the same connection replaces the first.
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .is_ok());
+
+        // The connection drops without unregister: relaunch scheduled 1.5 s later, then spawned
+        // as alice with exactly the registered env and HOME as cwd (the registered cwd is gone).
+        daemon.connection_lost(&mut alice, t0);
+        assert!(alice.registration.is_none());
+        assert!(daemon.keepalive().pending_for(1000).is_some());
+        daemon.keepalive_tick(t0 + ms(1400));
+        assert!(os.spawned().is_empty(), "not before the delay");
+        daemon.keepalive_tick(t0 + ms(1500));
+        let spawned = os.spawned();
+        assert_eq!(spawned.len(), 1);
+        let spec = &spawned[0];
+        assert_eq!(spec.program, "/usr/bin/rp-code");
+        assert_eq!(spec.args, vec!["--hidden"]);
+        assert_eq!(spec.cwd, "/home/alice");
+        assert_eq!(
+            (spec.uid, spec.gid, spec.user.as_str()),
+            (1000, 1000, "alice")
+        );
+        assert_eq!(
+            spec.env.keys().cloned().collect::<Vec<_>>(),
+            vec!["HOME", "WAYLAND_DISPLAY"]
+        );
+        let status = serde_json::to_value(daemon.handle(Request::Status, &mut alice)).unwrap();
+        assert_eq!(
+            status["keepalive"],
+            json!({"registered":false,"relaunches":1,"allowQuit":false})
+        );
+
+        // Unregister first: an intended exit, nothing scheduled.
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .is_ok());
+        assert!(daemon.handle(Request::Unregister, &mut alice).is_ok());
+        daemon.connection_lost(&mut alice, t0 + ms(2000));
+        assert!(daemon.keepalive().pending_for(1000).is_none());
+
+        // The app comes back (new registration) before the delay is up: pending cancelled.
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .is_ok());
+        daemon.connection_lost(&mut alice, t0 + ms(3000));
+        assert!(daemon.keepalive().pending_for(1000).is_some());
+        let mut alice2 = ConnCtx::test(1000, 8);
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice2)
+            .is_ok());
+        assert!(daemon.keepalive().pending_for(1000).is_none());
+        daemon.keepalive_tick(t0 + ms(60_000));
+        assert_eq!(os.spawned().len(), 1, "nothing new");
+        assert!(daemon.handle(Request::Unregister, &mut alice2).is_ok());
+
+        // Process still alive at fire time (the socket merely dropped): cancelled.
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .is_ok());
+        daemon.connection_lost(&mut alice, t0 + ms(70_000));
+        os.alive.store(true, Ordering::SeqCst);
+        daemon.keepalive_tick(t0 + ms(80_000));
+        assert_eq!(os.spawned().len(), 1);
+        assert!(daemon.keepalive().pending_for(1000).is_none());
+        os.alive.store(false, Ordering::SeqCst);
+
+        // The active graphical user changed (user switching) before the delay was up: cancelled.
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .is_ok());
+        daemon.connection_lost(&mut alice, t0 + ms(200_000));
+        *os.active.lock().unwrap() = vec![1001];
+        daemon.keepalive_tick(t0 + ms(210_000));
+        assert_eq!(os.spawned().len(), 1);
+        // Nobody active at all (no logind): nothing scheduled either.
+        *os.active.lock().unwrap() = vec![];
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .is_ok());
+        daemon.connection_lost(&mut alice, t0 + ms(300_000));
+        assert!(daemon.keepalive().pending_for(1000).is_none());
+        *os.active.lock().unwrap() = vec![1000, 1001];
+
+        // bob is not in app.users: registered fine, never relaunched.
+        let mut bob = ConnCtx::test(1001, 11);
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut bob)
+            .is_ok());
+        daemon.connection_lost(&mut bob, t0 + ms(400_000));
+        assert!(daemon.keepalive().pending_for(1001).is_none());
+
+        // The policy flips to allowQuit while a relaunch is pending: cancelled at fire time.
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .is_ok());
+        daemon.connection_lost(&mut alice, t0 + ms(500_000));
+        fs::write(
+            &policy_path,
+            r#"{"version":1,"app":{"allowQuit":true,"users":["alice"]}}"#,
+        )
+        .unwrap();
+        daemon.keepalive_tick(t0 + ms(510_000));
+        assert_eq!(os.spawned().len(), 1);
+        // And with allowQuit true a drop schedules nothing at all.
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .is_ok());
+        daemon.connection_lost(&mut alice, t0 + ms(520_000));
+        assert!(daemon.keepalive().pending_for(1000).is_none());
+        assert_eq!(
+            serde_json::to_value(daemon.handle(Request::Status, &mut alice)).unwrap()["keepalive"]
+                ["allowQuit"],
+            true
+        );
+        // allowQuit false without a users list: nothing is relaunched (warned once).
+        fs::write(&policy_path, r#"{"version":1,"app":{"allowQuit":false}}"#).unwrap();
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .is_ok());
+        daemon.connection_lost(&mut alice, t0 + ms(530_000));
+        assert!(daemon.keepalive().pending_for(1000).is_none());
+    }
+
+    #[test]
+    fn relaunch_backoff_and_give_up_through_the_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy_path = dir.path().join("policy.json");
+        fs::write(
+            &policy_path,
+            r#"{"version":1,"app":{"allowQuit":false,"users":["alice"]}}"#,
+        )
+        .unwrap();
+        let os = FakeOs::new(vec![1000]);
+        let daemon = Daemon::new(
+            Box::new(fake_devices()),
+            Box::new(FakeInjector::default()),
+            &policy_path,
+        )
+        .with_keepalive_hooks(os.hooks());
+        let t0 = Instant::now();
+        let mut now = t0;
+        let mut alice = ConnCtx::test(1000, 7);
+        let mut delays = Vec::new();
+        // Crash loop: each relaunch dies 1 s later. Delays climb 1.5 → 3 → 6 → 12 → 30 → 30…
+        // and after 10 relaunches inside 10 minutes the daemon gives up.
+        for i in 1..=11 {
+            assert!(daemon
+                .handle(register_req("/usr/bin/rp-code"), &mut alice)
+                .is_ok());
+            daemon.connection_lost(&mut alice, now);
+            let Some(p) = daemon.keepalive().pending_for(1000).cloned() else {
+                assert_eq!(i, 11, "gave up at the 11th death");
+                break;
+            };
+            delays.push(p.delay.as_millis() as u64);
+            now = p.due;
+            daemon.keepalive_tick(now);
+            assert_eq!(os.spawned().len(), i);
+            now += ms(1000);
+        }
+        assert_eq!(
+            delays,
+            vec![1500, 3000, 6000, 12_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000]
+        );
+        assert_eq!(os.spawned().len(), 10);
+        // A failed spawn is counted like a relaunch (so a broken exec backs off too).
+        now += std::time::Duration::from_secs(11 * 60);
+        os.fail_spawn.store(true, Ordering::SeqCst);
+        assert!(daemon
+            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .is_ok());
+        daemon.connection_lost(&mut alice, now);
+        let p = daemon
+            .keepalive()
+            .pending_for(1000)
+            .cloned()
+            .expect("window slid: tries again");
+        assert_eq!(p.delay, ms(1500));
+        daemon.keepalive_tick(p.due);
+        assert_eq!(os.spawned().len(), 10);
+        assert_eq!(
+            serde_json::to_value(daemon.handle(Request::Status, &mut alice)).unwrap()["keepalive"]
+                ["relaunches"],
+            11
+        );
+    }
+
+    #[test]
+    fn register_over_the_socket_uses_peer_credentials() {
+        let os = FakeOs::new(vec![]);
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("daemon.sock");
+        let policy_path = dir.path().join("policy.json");
+        let engine =
+            LockEngine::new(Box::new(fake_devices())).with_wall_clock(|| 1_700_000_000_000);
+        let daemon = Arc::new(
+            Daemon::new(
+                Box::new(fake_devices()),
+                Box::new(FakeInjector::default()),
+                &policy_path,
+            )
+            .with_engine(engine)
+            .with_keepalive_hooks(KeepaliveHooks {
+                user_name: Box::new(|_| Some("tester".into())),
+                ..os.hooks()
+            }),
+        );
+        let listener = bind_socket(&socket).unwrap();
+        let d = daemon.clone();
+        thread::spawn(move || accept_loop(listener, d));
+        let server = TestServer {
+            socket,
+            daemon,
+            _dir: dir,
+        };
+        let mut c = server.connect();
+        let res = c.send(json!({"op":"register","exec":"/usr/bin/rp-code","args":[],"cwd":"/","env":{"HOME":"/h"}}));
+        if nix::unistd::getuid().is_root() {
+            // The test process is root: SO_PEERCRED says uid 0, which may not register.
+            assert_eq!(res["code"], "REFUSED");
+        } else {
+            assert_eq!(res, json!({"ok":true,"op":"register"}));
+            assert_eq!(
+                c.send(json!({"op":"status"}))["keepalive"]["registered"],
+                true
+            );
+            assert_eq!(
+                c.send(json!({"op":"unregister"})),
+                json!({"ok":true,"op":"unregister"})
+            );
+            assert_eq!(
+                c.send(json!({"op":"status"}))["keepalive"]["registered"],
+                false
+            );
+        }
+        assert_eq!(
+            c.send(json!({"op":"register","exec":"rp-code","args":[],"cwd":"/","env":{}}))["ok"],
+            false
+        );
+        assert_eq!(
+            c.send(json!({"op":"register","exec":"/usr/bin/rp-code","args":[],"cwd":"/","env":{"LD_PRELOAD":"x"}}))["ok"],
+            false
+        );
+        assert_eq!(
+            c.send(json!({"op":"unregister"})),
+            json!({"ok":true,"op":"unregister"}),
+            "idempotent"
+        );
+        drop(c);
+        thread::sleep(ms(100));
+        assert!(
+            os.spawned().is_empty(),
+            "no policy: a drop relaunches nothing"
+        );
+    }
+
     #[test]
     fn args_parse() {
         let a = parse_args(&[
@@ -1118,6 +1898,14 @@ mod tests {
         assert_eq!(a.socket, PathBuf::from("/tmp/s"));
         assert_eq!(a.policy, PathBuf::from("/tmp/p"));
         assert_eq!(a.log_level, Level::Debug);
+        assert_eq!(a.sessions_dir, PathBuf::from(DEFAULT_SESSIONS_DIR));
+        assert_eq!(
+            parse_args(&["--sessions-dir".into(), "/tmp/sess".into()])
+                .unwrap()
+                .sessions_dir,
+            PathBuf::from("/tmp/sess")
+        );
+        assert!(parse_args(&["--sessions-dir".into()]).is_err());
         assert!(
             parse_args(&["--check-devices".into()])
                 .unwrap()

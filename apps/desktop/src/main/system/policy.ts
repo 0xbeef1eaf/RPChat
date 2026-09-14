@@ -3,7 +3,7 @@
  * is pure; `PolicyWatcher` re-reads the file whenever its mtime changes.
  */
 import * as fs from 'node:fs/promises';
-import type { AppSettings, ManagedSettingsPaths, PolicyFile } from '@rp/shared';
+import type { AppPolicy, AppSettings, ManagedSettingsPaths, PolicyFile } from '@rp/shared';
 import { POLICY_FILE_PATH, RpError } from '@rp/shared';
 
 const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTimersPerSession', 'minRepeatIntervalMs', 'minDelayMs'] as const;
@@ -143,8 +143,29 @@ export function parsePolicy(json: unknown): PolicyFile {
     }
     out.inputLock = lock;
   }
+  if (raw.app !== undefined) {
+    if (!raw.app || typeof raw.app !== 'object' || Array.isArray(raw.app)) problems.push('app must be an object');
+    else {
+      const a = raw.app as Record<string, unknown>;
+      const appBlock: NonNullable<PolicyFile['app']> = {};
+      if (a.allowQuit !== undefined) {
+        if (typeof a.allowQuit === 'boolean') appBlock.allowQuit = a.allowQuit;
+        else problems.push('app.allowQuit must be a boolean');
+      }
+      if (a.users !== undefined) {
+        if (Array.isArray(a.users) && a.users.length > 0 && a.users.every((u) => typeof u === 'string' && u.trim().length > 0)) appBlock.users = (a.users as string[]).map((u) => u.trim());
+        else problems.push('app.users must be a non-empty array of user names');
+      }
+      out.app = appBlock;
+    }
+  }
   if (problems.length > 0) throw new RpError('INVALID_ARGUMENT', `Invalid policy file:\n${problems.join('\n')}`, { problems });
   return out;
+}
+
+/** Pure: the effective `app` block — `allowQuit` is true unless a policy says `false`; `users` empty unless listed. */
+export function appPolicy(policy: PolicyFile | null | undefined): AppPolicy {
+  return { allowQuit: policy?.app?.allowQuit !== false, users: [...(policy?.app?.users ?? [])] };
 }
 
 /** Dotted settings paths forced by `policy` (sorted, deduplicated). */
@@ -231,6 +252,8 @@ export interface PolicyState {
   path: string;
   policy: PolicyFile | null;
   managed: ManagedSettingsPaths;
+  /** `appPolicy(policy)`: defaults (quit allowed, nobody listed) without a file or with a broken one. */
+  app: AppPolicy;
   managedBy?: string;
   error?: string;
 }
@@ -241,16 +264,16 @@ export async function loadPolicy(path: string = POLICY_FILE_PATH): Promise<Polic
   try {
     text = await fs.readFile(path, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { present: false, path, policy: null, managed: [] };
-    return { present: true, path, policy: null, managed: [], error: `cannot read ${path}: ${(err as Error).message}` };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { present: false, path, policy: null, managed: [], app: appPolicy(null) };
+    return { present: true, path, policy: null, managed: [], app: appPolicy(null), error: `cannot read ${path}: ${(err as Error).message}` };
   }
   try {
     const policy = parsePolicy(JSON.parse(text));
-    const state: PolicyState = { present: true, path, policy, managed: managedPaths(policy) };
+    const state: PolicyState = { present: true, path, policy, managed: managedPaths(policy), app: appPolicy(policy) };
     if (policy.managedBy) state.managedBy = policy.managedBy;
     return state;
   } catch (err) {
-    return { present: true, path, policy: null, managed: [], error: (err as Error).message };
+    return { present: true, path, policy: null, managed: [], app: appPolicy(null), error: (err as Error).message };
   }
 }
 
@@ -287,7 +310,7 @@ export class PolicyWatcher {
         this.state = state;
         this.stamp = stamp;
         if (state.error) this.logger?.warn?.(`[policy] ${state.error}`);
-        else if (state.present) this.logger?.info?.(`[policy] ${changed ? 'reloaded' : 'loaded'} ${this.path}: ${state.managed.length} managed setting(s)${state.managedBy ? ` (managed by ${state.managedBy})` : ''}`);
+        else if (state.present) this.logger?.info?.(`[policy] ${changed ? 'reloaded' : 'loaded'} ${this.path}: ${state.managed.length} managed setting(s)${state.app.allowQuit ? '' : `, quitting disabled for ${state.app.users.length > 0 ? state.app.users.join(', ') : 'nobody (app.users is empty)'}`}${state.managedBy ? ` (managed by ${state.managedBy})` : ''}`);
         return state;
       })
       .finally(() => {

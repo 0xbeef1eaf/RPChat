@@ -73,6 +73,45 @@ pub struct InputLockPolicy {
     pub enabled: Option<bool>,
 }
 
+/// `PolicyFile.app`: how the app itself may behave. `allowQuit: false` makes the app hide every
+/// way to quit and makes this daemon relaunch it when its process dies — for the unix users in
+/// `users` only, and only while one of them owns the active graphical session.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_quit: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub users: Option<Vec<String>>,
+}
+
+/// Effective `app` rules with defaults: quitting allowed, nobody listed.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AppRules {
+    pub allow_quit: bool,
+    pub users: Vec<String>,
+}
+
+impl AppRules {
+    pub fn from_policy(app: Option<&AppPolicy>) -> AppRules {
+        let Some(app) = app else {
+            return AppRules {
+                allow_quit: true,
+                users: Vec::new(),
+            };
+        };
+        AppRules {
+            allow_quit: app.allow_quit.unwrap_or(true),
+            users: app.users.clone().unwrap_or_default(),
+        }
+    }
+
+    /// Whether the daemon should keep the app alive for `user` (by name).
+    pub fn keeps_alive(&self, user: &str) -> bool {
+        !self.allow_quit && self.users.iter().any(|u| u == user)
+    }
+}
+
 /// `PolicyFile` from `@rp/shared/system.ts`. `settings` is passed through as JSON; only its
 /// top-level shape (an object with known keys) is validated here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -85,6 +124,8 @@ pub struct PolicyFile {
     pub input_lock: Option<InputLockPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<AppPolicy>,
 }
 
 /// Keys allowed under `settings` (documented in `docs/spec/system.md`).
@@ -203,12 +244,33 @@ impl PolicyFile {
                 return Err("managedBy is longer than 500 characters".into());
             }
         }
+        if let Some(app) = &self.app {
+            if let Some(users) = &app.users {
+                if users.is_empty() {
+                    return Err("app.users must be a non-empty array of user names".into());
+                }
+                for u in users {
+                    if u.trim().is_empty() || u.chars().count() > 256 {
+                        return Err("app.users must be a non-empty array of user names".into());
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
     /// The `inputLock` limits with defaults and clamping applied.
     pub fn lock_limits(&self) -> LockLimits {
         LockLimits::from_policy(self.input_lock.as_ref())
+    }
+
+    /// The `app` rules with defaults applied (user names trimmed).
+    pub fn app_rules(&self) -> AppRules {
+        let mut rules = AppRules::from_policy(self.app.as_ref());
+        for u in &mut rules.users {
+            *u = u.trim().to_string();
+        }
+        rules
     }
 }
 
@@ -435,6 +497,15 @@ impl PolicyStore {
         Ok(self.load()?.map(|p| p.lock_limits()).unwrap_or_default())
     }
 
+    /// Effective `app` rules: defaults (quit allowed) without a file; a broken file also means
+    /// "quit allowed" — the daemon must not relaunch on the strength of a policy it cannot read.
+    pub fn app_rules(&mut self) -> AppRules {
+        match self.load() {
+            Ok(Some(p)) => p.app_rules(),
+            _ => AppRules::from_policy(None),
+        }
+    }
+
     /// Validate `value` and create the policy file once (see [`create_policy_file`]). The
     /// cache is dropped so the next `load` reads the new file.
     pub fn create(&mut self, value: Value) -> Result<PolicyFile, CreateError> {
@@ -529,6 +600,14 @@ mod tests {
             json!({"version": 1, "inputLock": {"maxDurationMs": -5}}),
             json!({"version": 1, "inputLock": {"foo": 1}}),
             json!({"version": 1, "inputLock": {"enabled": "no"}}),
+            json!({"version": 1, "app": "no"}),
+            json!({"version": 1, "app": {"allowQuit": "no"}}),
+            json!({"version": 1, "app": {"allowQuit": 0}}),
+            json!({"version": 1, "app": {"users": []}}),
+            json!({"version": 1, "app": {"users": "alice"}}),
+            json!({"version": 1, "app": {"users": ["alice", 3]}}),
+            json!({"version": 1, "app": {"users": [" "]}}),
+            json!({"version": 1, "app": {"theme": "dark"}}),
         ];
         for v in bad {
             assert!(
@@ -582,6 +661,61 @@ mod tests {
             .lock_limits();
         assert!(!limits.enabled);
         assert_eq!(limits.max_duration_ms, DEFAULT_MAX_LOCK_MS);
+    }
+
+    #[test]
+    fn app_rules_default_to_quit_allowed_and_nobody_listed() {
+        let none = policy(json!({"version":1})).unwrap().app_rules();
+        assert_eq!(
+            none,
+            AppRules {
+                allow_quit: true,
+                users: vec![]
+            }
+        );
+        assert!(!none.keeps_alive("alice"));
+        let empty = policy(json!({"version":1,"app":{}})).unwrap().app_rules();
+        assert!(empty.allow_quit && empty.users.is_empty());
+        let only_flag = policy(json!({"version":1,"app":{"allowQuit":false}}))
+            .unwrap()
+            .app_rules();
+        assert!(!only_flag.allow_quit);
+        assert!(only_flag.users.is_empty(), "no list: nobody is relaunched");
+        assert!(!only_flag.keeps_alive("alice"));
+        let full = policy(json!({"version":1,"app":{"allowQuit":false,"users":["alice"," bob "]}}))
+            .unwrap()
+            .app_rules();
+        assert_eq!(full.users, vec!["alice", "bob"]);
+        assert!(full.keeps_alive("alice") && full.keeps_alive("bob"));
+        assert!(!full.keeps_alive("carol"));
+        let allowed = policy(json!({"version":1,"app":{"allowQuit":true,"users":["alice"]}}))
+            .unwrap()
+            .app_rules();
+        assert!(
+            !allowed.keeps_alive("alice"),
+            "allowQuit true wins over the list"
+        );
+        // Round trip keeps the block verbatim; a broken store yields the defaults.
+        let p = policy(json!({"version":1,"app":{"allowQuit":false,"users":["alice"]}})).unwrap();
+        assert_eq!(
+            serde_json::to_value(&p).unwrap()["app"],
+            json!({"allowQuit":false,"users":["alice"]})
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.json");
+        let mut store = PolicyStore::new(&path);
+        assert_eq!(store.app_rules(), AppRules::from_policy(None));
+        fs::write(
+            &path,
+            r#"{"version":1,"app":{"allowQuit":false,"users":["alice"]}}"#,
+        )
+        .unwrap();
+        assert!(store.app_rules().keeps_alive("alice"));
+        fs::write(&path, "{broken").unwrap();
+        assert!(
+            store.app_rules().allow_quit,
+            "a broken file never relaunches"
+        );
     }
 
     #[test]

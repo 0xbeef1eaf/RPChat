@@ -15,6 +15,7 @@ import type { AppServices } from './engine.js';
 import { isBrowserSmokeRun, isSmokeRun, runBrowserSmoke, runSmokeTurn, smokeEnableModelTraffic, smokeLoadPlugin } from './dev-mode.js';
 import { registerIpc } from './ipc.js';
 import { createLogger } from './logger.js';
+import { trayMenuTemplate } from './quit-guard.js';
 import { WindowManager } from './windows.js';
 
 const logger = createLogger();
@@ -27,6 +28,8 @@ const START_HIDDEN = process.argv.includes('--hidden');
 let tray: Tray | undefined;
 /** Set by the tray's Quit (and before-quit) so the close-to-tray handler lets the window close. */
 let quitting = false;
+/** How often the policy file is re-checked for `app.allowQuit` while the app idles (a stat; the watcher caches on mtime). */
+const QUIT_POLICY_REFRESH_MS = 60_000;
 
 /** `app.getVersion()` is Electron's own version when launched as `electron out/main/index.js`; prefer our package.json. */
 function resolveAppVersion(): string {
@@ -105,8 +108,9 @@ async function main(): Promise<void> {
   });
 
   app.on('window-all-closed', () => {
-    // With a tray icon the app keeps running in the background; without one (tray unavailable) closing quits.
-    if (process.platform !== 'darwin' && !tray) app.quit();
+    // With a tray icon the app keeps running in the background; without one (tray unavailable)
+    // closing quits — unless the policy forbids quitting, in which case the app stays up without a window.
+    if (process.platform !== 'darwin' && !tray && (services?.quitGuard.allowQuit ?? true)) app.quit();
   });
 
   app.on('activate', () => {
@@ -120,8 +124,18 @@ async function main(): Promise<void> {
     await services?.stop();
   };
   app.on('before-quit', (event) => {
+    if (stopping || !services) {
+      quitting = true;
+      return;
+    }
+    // `app.allowQuit: false`: every quit (Ctrl+Q from the default menu, `app.quit()` from anywhere)
+    // is cancelled unless it was authorised internally (update restart) — see quit-guard.ts.
+    if (services.quitGuard.beforeQuit() === 'block') {
+      event.preventDefault();
+      quitting = false;
+      return;
+    }
     quitting = true;
-    if (stopping || !services) return;
     event.preventDefault();
     void shutdown().finally(() => app.quit());
   });
@@ -142,6 +156,21 @@ async function main(): Promise<void> {
   const active = services;
   protocol.handle(ASSET_PROTOCOL, (request) => handleAssetRequest(request, { packRootFor: (packId) => active.packRootFor(packId), logger }));
 
+  // `app.allowQuit` from the policy: applied now (before the tray exists so its menu is right from
+  // the start), on every window show/close, and periodically so an edited policy file is noticed.
+  const refreshQuitPolicy = (): Promise<void> =>
+    active.policy
+      .current()
+      .then((state) => {
+        active.quitGuard.apply(state.policy);
+      })
+      .catch(() => undefined);
+  await refreshQuitPolicy();
+  setInterval(() => void refreshQuitPolicy(), QUIT_POLICY_REFRESH_MS).unref();
+  // Tell the daemon how to bring this launch back (Linux only: that is where rp-coded runs). The
+  // daemon acts on it only while the policy says `app.allowQuit: false` for this user.
+  if (process.platform === 'linux') active.keepalive.start();
+
   // Which conversation the user is actually looking at: the UI reports it, and an unprompted
   // message is announced unless it lands in that one.
   let visibleSession: string | null = null;
@@ -150,6 +179,7 @@ async function main(): Promise<void> {
   // The tray is always there (not only for --hidden): it is how the app stays alive for timers,
   // self-wakes and the browser bridge while the window is closed, and how you quit.
   tray = createTray(windows, active, () => {
+    if (!active.quitGuard.mayQuit) return;
     quitting = true;
     void shutdown().finally(() => app.quit());
   });
@@ -278,20 +308,35 @@ let closeToTray = true;
 
 /**
  * Closing the main window hides it to the tray when `settings.closeToTray` is on and a tray
- * exists; the tray menu's Quit (or any app quit) really closes it. Applied to every main window.
+ * exists; the tray menu's Quit (or any app quit) really closes it. While the policy forbids
+ * quitting the window always hides — with or without a tray, whatever `closeToTray` says —
+ * because letting it close would end the app. Applied to every main window.
  */
 function installCloseToTray(win: BrowserWindow, services: AppServices): void {
   const refresh = (): void => {
+    // Reading the settings goes through the policy watcher, so this also notices policy edits.
     void services.engine.settings
       .get()
       .then((settings) => {
         closeToTray = settings.closeToTray !== false;
+        return services.policy.current();
+      })
+      .then((state) => {
+        services.quitGuard.apply(state.policy);
       })
       .catch(() => undefined);
   };
   refresh();
   win.on('close', (event) => {
-    if (quitting || !tray || !closeToTray) return;
+    if (quitting) return;
+    if (!services.quitGuard.allowQuit) {
+      event.preventDefault();
+      win.hide();
+      logger.info('[main] window hidden instead of closed: quitting is disabled by policy');
+      refresh();
+      return;
+    }
+    if (!tray || !closeToTray) return;
     event.preventDefault();
     win.hide();
     refresh();
@@ -299,7 +344,7 @@ function installCloseToTray(win: BrowserWindow, services: AppServices): void {
   win.on('show', refresh);
 }
 
-/** Tray icon with Show/Hide / Check for updates / Quit; present on every launch. */
+/** Tray icon with Show/Hide / Check for updates / Quit (no Quit while the policy forbids quitting); present on every launch. */
 function createTray(windows: WindowManager, services: AppServices, quit: () => void): Tray | undefined {
   try {
     const iconFile = [path.join(APP_ROOT, 'resources', 'tray.png'), path.join(process.resourcesPath ?? '', 'tray.png')].find((f) => fs.existsSync(f));
@@ -332,15 +377,14 @@ function createTray(windows: WindowManager, services: AppServices, quit: () => v
           show();
         });
     };
-    t.setContextMenu(
-      Menu.buildFromTemplate([
-        { label: 'Show rp-code', click: show },
-        { label: 'Hide window', click: () => windows.getMainWindow()?.hide() },
-        { label: 'Check for updates…', click: checkForUpdates },
-        { type: 'separator' },
-        { label: 'Quit', click: quit },
-      ]),
-    );
+    const actions: Record<'show' | 'hide' | 'check-updates' | 'quit', () => void> = { show, hide: () => windows.getMainWindow()?.hide(), 'check-updates': checkForUpdates, quit };
+    const buildMenu = (): Menu => Menu.buildFromTemplate(trayMenuTemplate(services.quitGuard.allowQuit).map((item) => ('type' in item ? item : { label: item.label, click: actions[item.id] })));
+    t.setContextMenu(buildMenu());
+    // The policy can change while running (root edits the file): rebuild so Quit appears/disappears.
+    services.quitGuard.onChange((policy) => {
+      t.setContextMenu(buildMenu());
+      logger.info(`[main] tray menu rebuilt: quitting ${policy.allowQuit ? 'allowed' : 'disabled by policy'}`);
+    });
     t.on('click', toggle);
     logger.info(`[main] tray icon created (${iconFile ? path.basename(iconFile) : 'no icon file'})`);
     return t;

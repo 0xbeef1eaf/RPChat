@@ -44,13 +44,41 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   position are unreliable on Wayland; use an ABS-capable virtual device with the primary screen size
   read from `/sys/class/drm/*/modes` or fallback 1920x1080, documented) then presses BTN_LEFT/RIGHT/
   MIDDLE, `move` only moves.
-- `hello` reports version, protocol 1 and device counts; `status` reports the lock; errors use the
-  codes in `DaemonResponse` (`REFUSED`, `POLICY`, `NO_DEVICES`, `BUSY`, `INVALID`, `INTERNAL`, `EXISTS`).
-- Layout: `src/main.rs` (socket server, signals), `src/protocol.rs` (serde types + tests),
-  `src/policy.rs` (load/validate/clamp + tests), `src/lock.rs` (grab/emergency/timer behind a
-  `DeviceSource` trait so tests use fakes), `src/inject.rs` (keymap + combo parsing, tested purely),
-  `src/devices.rs`. `cargo test` must pass here without devices; `--check-devices` flag prints what it
-  can open (used by the installer).
+- `hello` reports version, protocol 1 and device counts; `status` reports the lock and
+  `keepalive: { registered, relaunches, allowQuit }`; errors use the codes in `DaemonResponse`
+  (`REFUSED`, `POLICY`, `NO_DEVICES`, `BUSY`, `INVALID`, `INTERNAL`, `EXISTS`).
+- **Keepalive** (`app.allowQuit: false`): `{ op: 'register', exec, args, cwd, env }` →
+  `{ ok, op: 'register' }` records on the *connection* how to relaunch the app, together with the
+  peer's uid/gid/pid (SO_PEERCRED) and the `/proc/<pid>/stat` start time. Validation (`INVALID`):
+  `exec` absolute, existing and executable; `args` ≤ 32 entries; `cwd` absolute; `env` keys from
+  `KEEPALIVE_ENV_KEYS` only, values ≤ 4 KiB; a uid without a passwd entry; uid 0 → `REFUSED`. A
+  second `register` on the same connection replaces the first. `{ op: 'unregister' }` →
+  `{ ok, op: 'unregister' }` forgets it (idempotent). When a registered connection closes without
+  `unregister` the daemon re-reads the policy and runs the gate: `app.allowQuit === false`, the
+  peer's user name ∈ `app.users` (empty/absent → nobody, warned once), that uid owns an active
+  graphical logind session (`/run/systemd/sessions/*` with `ACTIVE=1`, `TYPE=wayland|x11` and a
+  `SEAT`; `loginctl list-sessions` + `show-session` as fallback; `--sessions-dir`/`RP_CODED_SESSIONS_DIR`
+  for tests). It then schedules a relaunch (1.5 s; ladder 1.5 → 3 → 6 → 12 → 30 s for deaths
+  within 60 s of the previous relaunch; give up after 10 relaunches in 10 minutes, logged; reset
+  after 5 minutes of uptime). The ticker fires it: gate again (policy re-read, active user, and
+  the process must be gone — `/proc/<pid>` missing or a different start time), then
+  `Command::spawn` of `exec args…` with `env_clear()` + exactly the registered env, cwd as
+  registered (fallback `$HOME`, then `/`), stdio `/dev/null`, `pre_exec`: `setsid`, `setgid`,
+  `initgroups`, `setuid` (never root); a reaper thread waits for the child and logs its exit. A new
+  registration for the same uid cancels a pending relaunch. `src/keepalive.rs` is pure and
+  tested (validation, gate, `RelaunchTracker` backoff, session-file/`loginctl` parsing,
+  `command_spec`/`build_command`); `main.rs` holds the OS glue behind `KeepaliveHooks` (injected
+  fakes in the daemon-level tests). At registration the daemon warns when `allowQuit` is false
+  but the user is not listed. The unit file gives up `ProtectHome`, `PrivateTmp`, the syscall
+  filter, `MemoryDenyWriteExecute`, `RestrictNamespaces` and the device policy (a relaunched
+  Electron app inherits them) and adds `CAP_SETUID`/`CAP_SETGID`, `AF_INET*`/`AF_NETLINK` and
+  `KillMode=process`.
+- Layout: `src/main.rs` (socket server, signals, keepalive OS glue), `src/protocol.rs` (serde
+  types + tests), `src/policy.rs` (load/validate/clamp + tests, `app` rules), `src/keepalive.rs`
+  (relaunch decisions, pure), `src/lock.rs` (grab/emergency/timer behind a `DeviceSource` trait
+  so tests use fakes), `src/inject.rs` (keymap + combo parsing, tested purely), `src/devices.rs`.
+  `cargo test` must pass here without devices; `--check-devices` flag prints what it can open
+  (used by the installer).
 - `native/rp-coded/dist/`: `rp-coded.service`, `70-rp-code.rules`
   (`KERNEL=="uinput", GROUP="rp-code", MODE="0660", OPTIONS+="static_node=uinput"` — lets
   `rp-code` group members use `/dev/uinput` directly; the daemon itself needs no rule), `modules-load.d/rp-code.conf`
@@ -90,8 +118,11 @@ with `pkexec` for the current user.
   socket server. `rpErrorCodeFor`/`toRpError` map daemon codes for every caller: `REFUSED`/`POLICY` →
   `PERMISSION_DENIED`, `INVALID`/`EXISTS` → `INVALID_ARGUMENT` (`details.daemonCode` keeps the
   original), others → `CAPABILITY_FAILED`.
-- `src/main/system/policy.ts`: `loadPolicy(path)` → `{ policy, managed: ManagedSettingsPaths }`;
-  `applyPolicy(settings, policy)` (pure, tested) forces the listed keys. `SettingsService` results
+- `src/main/system/policy.ts`: `loadPolicy(path)` → `{ policy, managed: ManagedSettingsPaths, app }`;
+  `applyPolicy(settings, policy)` (pure, tested) forces the listed keys; `appPolicy(policy)` →
+  `{ allowQuit, users }` with defaults (`app.allowQuit` is not a settings key: it is reported as
+  `SystemIntegrationStatus.policy.allowQuit`/`.users`, never in `managed`). `parsePolicy` accepts
+  `app.allowQuit` (boolean) and `app.users` (non-empty string array), ignores unknown `app` keys. `SettingsService` results
   and every `settings.get()` go through `applyPolicy`; `settings.update` ignores managed paths and
   the response carries the forced values. Policy file is re-read when its mtime changes
   (`PolicyWatcher.invalidate()` forces the next read).
@@ -114,12 +145,31 @@ with `pkexec` for the current user.
   wrote to `daemon.setPolicy` (so the daemon's stricter unknown-key check applies), `policy.invalidate()`,
   returns `status()`.
 - App flag `--hidden`: start minimized to tray (add a tray icon with Show/Quit) so autostart is quiet.
+- **`app.allowQuit: false`** (`src/main/quit-guard.ts`, pure + tested; wired in `index.ts`):
+  `trayMenuTemplate(allowQuit)` omits Quit; the window `close` handler always hides (tray or
+  not); `window-all-closed` does not quit; `before-quit` is cancelled unless `QuitGuard.allowQuitOnce()`
+  was called (the update restart does, through `UpdateServiceDeps.beforeRestart`); SIGINT/SIGTERM/SIGHUP
+  handlers are installed only while forbidden (no-op with a log line; removed again when allowed).
+  The guard is applied from the policy watcher at startup, on every window show/close and every
+  60 s. `launchSpec()` builds the registration (`APPIMAGE` as exec with no args, else `execPath` +
+  `argv.slice(1)`; env from `keepaliveEnv()` = the `KEEPALIVE_ENV_KEYS` whitelist);
+  `src/main/system/keepalive-link.ts` (`KeepaliveLink`, tested with a fake socket) keeps a dedicated
+  connection open: `hello` → `register`, reconnect with backoff (1 s doubling to 30 s) whenever it
+  drops, `unregister()` before an intended exit (update restart, `stop()`). Started on Linux only.
+  The single-instance lock (already present) makes a duplicate relaunch exit at once.
 - Bundling: `resources/bin/rp-coded` (built by `scripts/build-native.mjs` alongside the helper) and
   `resources/system/{install.sh,rp-coded.service,70-rp-code.rules,...}`; electron-builder
   `extraResources` + `deb.afterInstall` script that calls the installer.
 - IPC `system.*` (`status`, `install`, `setAutostart`, `installerPath`, `createPolicy(text)`,
   `policyTemplate()` — the latter reads the current settings in main), `settings.managed` and
   `updates.*` (the update service reads `settings.updates` from the same policy state).
+
+### Policy `app` block
+
+| Key | Type | Effect |
+|---|---|---|
+| `app.allowQuit` | boolean, default `true` | `false`: no Quit in the tray, close hides, Ctrl+Q/`app.quit()`/signals ignored; the daemon relaunches the app for the listed users. |
+| `app.users` | non-empty `string[]` of unix user names | Who the daemon relaunches (must also own the active graphical session). Absent/empty → nobody. Shown in Settings → System ("Quitting is disabled by policy … for: alice, bob"). |
 
 ### Policy `settings` keys
 
@@ -141,7 +191,8 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
 ## Renderer
 
 - Settings → **System** tab: daemon status card (connected/version/devices/locked), policy card
-  (managed-by text, list of forced settings; without a file and with `policy.canCreate`: **Create
+  (managed-by text, list of forced settings, a warning line "Quitting is disabled by policy
+  (managed by …) for: alice, bob" when `policy.allowQuit` is false — `quitDisabledLine()`; without a file and with `policy.canCreate`: **Create
   policy…** → modal with the write-once explanation, a monospace textarea prefilled from
   `system.policyTemplate()`, "Reset to current settings", an "I understand this cannot be undone
   without root" checkbox gating **Write policy**, validation problems in a danger callout; on success

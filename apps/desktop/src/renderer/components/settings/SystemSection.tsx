@@ -162,36 +162,43 @@ export function SystemSection() {
             <span className={policy.present ? 'badge badge-accent' : 'badge'}>{policy.present ? 'policy file present' : 'no policy file'}</span>
           </div>
           {policy.present ? (
-            <dl className="kv small">
-              {policy.path ? (
-                <>
-                  <dt>File</dt>
-                  <dd className="mono">{policy.path}</dd>
-                </>
+            <>
+              {!policy.allowQuit ? (
+                <div className="callout callout-warning small" style={{ marginBottom: 8 }}>
+                  {quitDisabledLine(policy)}
+                </div>
               ) : null}
-              <dt>Managed by</dt>
-              <dd>{policy.managedBy || <span className="muted">not stated</span>}</dd>
-              <dt>Forced settings</dt>
-              <dd>
-                {policy.managed.length === 0 ? (
-                  <span className="muted">none</span>
-                ) : (
-                  <span className="chips">
-                    {policy.managed.map((m) => (
-                      <span key={m} className="chip mono">
-                        {m}
-                      </span>
-                    ))}
-                  </span>
-                )}
-              </dd>
-              {policy.error ? (
-                <>
-                  <dt>Error</dt>
-                  <dd className="msg-error">{policy.error}</dd>
-                </>
-              ) : null}
-            </dl>
+              <dl className="kv small">
+                {policy.path ? (
+                  <>
+                    <dt>File</dt>
+                    <dd className="mono">{policy.path}</dd>
+                  </>
+                ) : null}
+                <dt>Managed by</dt>
+                <dd>{policy.managedBy || <span className="muted">not stated</span>}</dd>
+                <dt>Forced settings</dt>
+                <dd>
+                  {policy.managed.length === 0 ? (
+                    <span className="muted">none</span>
+                  ) : (
+                    <span className="chips">
+                      {policy.managed.map((m) => (
+                        <span key={m} className="chip mono">
+                          {m}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </dd>
+                {policy.error ? (
+                  <>
+                    <dt>Error</dt>
+                    <dd className="msg-error">{policy.error}</dd>
+                  </>
+                ) : null}
+              </dl>
+            </>
           ) : (
             <div className="stack" style={{ gap: 8 }}>
               <p className="muted small">Administrators can force settings and input-lock limits from a root-owned file. Nothing is forced on this machine.</p>
@@ -329,6 +336,16 @@ export function SystemSection() {
       ) : null}
     </div>
   );
+}
+
+/**
+ * Pure: the Settings → System line for `app.allowQuit: false` — who manages it and which users the
+ * daemon relaunches the app for (nobody when the list is empty: then a killed app stays down).
+ */
+export function quitDisabledLine(policy: Pick<SystemIntegrationStatus['policy'], 'managedBy' | 'users'>): string {
+  const by = policy.managedBy ? ` (managed by ${policy.managedBy})` : '';
+  const who = policy.users.length > 0 ? ` for: ${policy.users.join(', ')}` : '; no users are listed in app.users, so the daemon relaunches nobody';
+  return `Quitting is disabled by policy${by}${who}. Closing the window hides it; Ctrl+Q and the tray do not quit.`;
 }
 
 /** Validation problems from a `createPolicy` error: the message lists one problem per line after "Invalid policy file:". */

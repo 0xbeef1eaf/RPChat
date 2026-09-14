@@ -105,6 +105,16 @@ pub enum Request {
     SetPolicy {
         policy: serde_json::Value,
     },
+    /// Keepalive registration: how to relaunch the app in the requester's session when this
+    /// connection drops without `unregister` while the policy says `app.allowQuit: false`.
+    Register {
+        exec: String,
+        args: Vec<String>,
+        cwd: String,
+        env: std::collections::BTreeMap<String, String>,
+    },
+    /// Forget this connection's registration (an intended exit follows).
+    Unregister,
 }
 
 impl Request {
@@ -121,6 +131,8 @@ impl Request {
             Request::Click { .. } => "click",
             Request::Move { .. } => "move",
             Request::SetPolicy { .. } => "set-policy",
+            Request::Register { .. } => "register",
+            Request::Unregister => "unregister",
         }
     }
 }
@@ -191,6 +203,18 @@ pub struct LockInfo {
     pub devices: LockDevices,
 }
 
+/// `status.keepalive` (`KeepaliveInfo` in `@rp/shared`): relaunch registration state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeepaliveInfo {
+    /// Whether any connection currently holds a registration.
+    pub registered: bool,
+    /// Relaunches performed since the daemon started.
+    pub relaunches: u32,
+    /// `app.allowQuit` from the policy (true without a policy).
+    pub allow_quit: bool,
+}
+
 /// Payload of a successful response; the `op` tag names the request it answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
@@ -202,6 +226,7 @@ pub enum Ok {
     },
     Status {
         locked: Option<LockInfo>,
+        keepalive: KeepaliveInfo,
     },
     Policy {
         policy: Option<PolicyFile>,
@@ -227,6 +252,8 @@ pub enum Ok {
     SetPolicy {
         path: String,
     },
+    Register,
+    Unregister,
 }
 
 /// Marker that serialises as the JSON literal `true` and refuses anything else.
@@ -484,6 +511,36 @@ mod tests {
             parse_line(r#"{"op":"setpolicy","policy":{}}"#).is_err(),
             "the op is kebab-case on the wire"
         );
+        let reg = round_trip_request(
+            json!({"op":"register","exec":"/usr/bin/rp-code","args":["--hidden"],"cwd":"/home/a","env":{"HOME":"/home/a","DISPLAY":":0"}}),
+        );
+        assert_eq!(
+            reg,
+            Request::Register {
+                exec: "/usr/bin/rp-code".into(),
+                args: vec!["--hidden".into()],
+                cwd: "/home/a".into(),
+                env: [("DISPLAY", ":0"), ("HOME", "/home/a")]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            }
+        );
+        assert!(
+            parse_line(r#"{"op":"register","exec":"/x"}"#).is_err(),
+            "args/cwd/env required"
+        );
+        assert!(
+            parse_line(r#"{"op":"register","exec":"/x","args":"no","cwd":"/","env":{}}"#).is_err()
+        );
+        assert!(
+            parse_line(r#"{"op":"register","exec":"/x","args":[],"cwd":"/","env":{"A":1}}"#)
+                .is_err()
+        );
+        assert_eq!(
+            round_trip_request(json!({"op":"unregister"})),
+            Request::Unregister
+        );
     }
 
     #[test]
@@ -499,6 +556,11 @@ mod tests {
             (json!({"op":"click","x":0,"y":0}), "click"),
             (json!({"op":"move","x":0,"y":0}), "move"),
             (json!({"op":"set-policy","policy":{}}), "set-policy"),
+            (
+                json!({"op":"register","exec":"/x","args":[],"cwd":"/","env":{}}),
+                "register",
+            ),
+            (json!({"op":"unregister"}), "unregister"),
         ] {
             let req: Request = serde_json::from_value(v).unwrap();
             assert_eq!(req.op(), name);
@@ -546,9 +608,18 @@ mod tests {
             }),
             json!({"ok":true,"op":"hello","version":"0.1.0","protocol":1,"devices":{"keyboards":1,"pointers":2,"uinput":true}}),
         );
+        let ka = KeepaliveInfo {
+            registered: false,
+            relaunches: 0,
+            allow_quit: true,
+        };
+        let ka_json = json!({"registered":false,"relaunches":0,"allowQuit":true});
         round_trip_response(
-            &Response::ok(Ok::Status { locked: None }),
-            json!({"ok":true,"op":"status","locked":null}),
+            &Response::ok(Ok::Status {
+                locked: None,
+                keepalive: ka,
+            }),
+            json!({"ok":true,"op":"status","locked":null,"keepalive":ka_json}),
         );
         round_trip_response(
             &Response::ok(Ok::Status {
@@ -557,8 +628,13 @@ mod tests {
                     reason: Some("r".into()),
                     devices: LockDevices::Both,
                 }),
+                keepalive: KeepaliveInfo {
+                    registered: true,
+                    relaunches: 3,
+                    allow_quit: false,
+                },
             }),
-            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","reason":"r","devices":"both"}}),
+            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","reason":"r","devices":"both"},"keepalive":{"registered":true,"relaunches":3,"allowQuit":false}}),
         );
         round_trip_response(
             &Response::ok(Ok::Status {
@@ -567,8 +643,17 @@ mod tests {
                     reason: None,
                     devices: LockDevices::Mouse,
                 }),
+                keepalive: ka,
             }),
-            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","devices":"mouse"}}),
+            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","devices":"mouse"},"keepalive":ka_json}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::Register),
+            json!({"ok":true,"op":"register"}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::Unregister),
+            json!({"ok":true,"op":"unregister"}),
         );
         round_trip_response(
             &Response::ok(Ok::Policy {

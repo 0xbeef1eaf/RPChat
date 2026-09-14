@@ -14,13 +14,19 @@ RestartSec=2
 KillSignal=SIGTERM
 TimeoutStopSec=10
 
-# Runs as root: EVIOCGRAB on /dev/input/event* and /dev/uinput need it. Everything else is
-# locked down.
+# Runs as root: EVIOCGRAB on /dev/input/event* and /dev/uinput need it. The daemon itself is
+# locked down, but it also relaunches the desktop app as the user when the policy says
+# `app.allowQuit: false` (see README "Keepalive"), and a child inherits every sandbox option of
+# this unit. So the options that would break a desktop application are left out on purpose:
+# ProtectHome / PrivateTmp (the app needs $HOME, /tmp/.X11-unix and the AppImage FUSE mount),
+# ProtectSystem=strict (the app writes under ~/.config), MemoryDenyWriteExecute (V8 JIT),
+# RestrictNamespaces (Chromium's sandbox), SystemCallFilter and DevicePolicy=closed (GPU, audio).
+# What stays: no-new-privileges, read-only /usr and /etc (except /etc/rp-code), kernel/cgroup
+# protection, a capability bounding set of just chown + setuid/setgid, and only the address
+# families the app needs. Relaunched apps keep running when the daemon stops (KillMode=process).
 User=root
 NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
+ProtectSystem=full
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
@@ -29,29 +35,22 @@ ProtectClock=yes
 ProtectHostname=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
-RestrictNamespaces=yes
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @resources
-# chown is in @privileged; the daemon needs it to hand the socket to the rp-code group.
-SystemCallFilter=@chown
-CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
-RestrictAddressFamilies=AF_UNIX
+# CAP_CHOWN/CAP_FOWNER/CAP_DAC_OVERRIDE: hand the socket to the rp-code group. CAP_SETUID/
+# CAP_SETGID: drop to the user (setgid, initgroups, setuid) before exec'ing a relaunched app.
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID
+# AF_UNIX for the daemon; the rest for the relaunched app (Chromium needs netlink too).
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+KillMode=process
 # Socket directory: created 0750 and chowned root:rp-code by the daemon. /etc/rp-code is the
-# only other writable path: the daemon creates policy.json there once (`set-policy`, write-once)
-# and never modifies or removes it. The directory is created by install.sh before the service
-# starts ("-": ignored when missing, so the unit still starts without it).
+# only writable path under /etc: the daemon creates policy.json there once (`set-policy`,
+# write-once) and never modifies or removes it. The directory is created by install.sh before
+# the service starts ("-": ignored when missing, so the unit still starts without it).
 RuntimeDirectory=rp-code
 RuntimeDirectoryMode=0750
 ReadWritePaths=/run/rp-code
 ReadWritePaths=-/etc/rp-code
-# Input devices (char major 13 = "input", covers hot-plugged ones) and /dev/uinput (misc).
-DevicePolicy=closed
-DeviceAllow=char-input rw
-DeviceAllow=/dev/input/* rw
-DeviceAllow=/dev/uinput rw
 
 [Install]
 WantedBy=multi-user.target

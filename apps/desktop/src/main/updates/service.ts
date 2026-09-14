@@ -91,6 +91,12 @@ export interface UpdateServiceDeps {
   /** Override for tests (root can write anywhere, so a real `fs.access` proves nothing there). */
   isWritable?: (target: string) => Promise<boolean>;
   initialDelayMs?: number;
+  /**
+   * Runs right before `quitAndInstall`: the restart is an authorised quit even when the policy
+   * forbids quitting, and the daemon's keepalive registration is dropped so it does not relaunch
+   * the old binary while the updater starts the new one. A failure is logged, not fatal.
+   */
+  beforeRestart?: () => Promise<void>;
 }
 
 type InternalState = Extract<UpdateState, 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error'>;
@@ -284,6 +290,7 @@ export class UpdateService {
     await this.assertAllowed();
     if (this.state !== 'ready') throw new RpError('INVALID_ARGUMENT', 'No downloaded update to install.');
     this.deps.logger.info(`[updates] installing ${this.latestVersion ?? 'update'} and restarting`);
+    if (this.deps.beforeRestart) await this.deps.beforeRestart().catch((err: unknown) => this.deps.logger.warn('[updates] pre-restart hook failed', err));
     this.deps.updater.quitAndInstall(false, true);
   }
 

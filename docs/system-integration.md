@@ -8,12 +8,14 @@ itself would mean any pack — or any bug — could hold your input indefinitely
 set in Settings could be changed by the same app that is being limited.
 
 So the privileged part lives in a tiny separate program, **`rp-coded`**, that runs as root under
-systemd and does exactly four things:
+systemd and does exactly five things:
 
 1. Lock input (grab keyboards/pointers) for at most the time a **root-owned policy file** allows.
 2. Release it on a timer, on request, when you hold the **emergency key**, or when it stops.
 3. Inject keystrokes, key combos, clicks and pointer moves through one virtual device.
 4. Tell the app what the policy says so the Settings UI can show which values are managed.
+5. When the policy says the app may not be quit, **relaunch it** in the user's session if its
+   process is killed anyway (see [Keeping the app running](#keeping-the-app-running-appallowquit)).
 
 The app talks to it over a unix socket that only members of the `rp-code` group can open.
 Nothing else in rp-code needs elevated rights. `sdk.input` is **daemon-only**: there is no
@@ -155,6 +157,60 @@ Points worth knowing:
 - `settings.updates` controls the in-app updater: `{ "enabled": false }` switches update checks
   off on this machine (Settings → Updates shows "disabled by policy" and hides the token field),
   `{ "automatic": false }` only pins the "check automatically" toggle so users still update by hand.
+- `app.allowQuit: false` with `app.users: ["alice"]` keeps the app running for those users: no
+  way to quit in the UI and a relaunch by the daemon after a kill or crash. Details below.
+
+### Keeping the app running (`app.allowQuit`)
+
+```json
+{ "version": 1, "managedBy": "family PC", "app": { "allowQuit": false, "users": ["alice"] } }
+```
+
+**In the app** (as soon as the policy file says so; it is re-read within a minute): the tray menu
+has no *Quit* item (Show/Hide and *Check for updates* stay), closing the window always hides it to
+the tray — also when the tray is unavailable or *close to tray* is off — Ctrl+Q and `app.quit()`
+are cancelled, and `SIGINT`/`SIGTERM`/`SIGHUP` are ignored with a log line. Settings → System says
+"Quitting is disabled by policy (managed by …) for: alice". `SIGKILL` cannot be caught, and a
+crash is a crash — that is what the daemon is for. Update restarts still work: the updater
+authorises its own quit and tells the daemon first.
+
+**In the daemon**: at startup the app opens a dedicated long-lived connection to `rp-coded` and
+registers how it was started — the executable (the `.AppImage` itself for an AppImage), its
+arguments, working directory and a fixed whitelist of session variables (`DISPLAY`,
+`WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, `HOME`, `PATH`, …; nothing else,
+and nothing from the daemon's own environment). Registering is always done; the daemon only acts
+on it when **all** of these hold once that connection drops without an `unregister`:
+
+1. the policy file (re-read at that moment) says `app.allowQuit: false`;
+2. the user who registered (uid from the socket, resolved to a name) is in `app.users` — an
+   absent or empty list means nobody is relaunched, which the journal says once;
+3. that user owns the **active graphical session** according to logind (`/run/systemd/sessions`,
+   `loginctl` as fallback): an active `wayland`/`x11` session on a seat. After user switching the
+   other user is active, so the relaunch is dropped; when the listed user comes back nothing
+   happens until the app registers again — their autostart entry does that at the next login;
+4. after a 1.5 s delay the process is really gone (`/proc/<pid>` missing or a different process).
+
+Then it starts `exec args…` as that user — `setgid`, supplementary groups, `setuid`, never root —
+detached in its own session, with exactly the registered environment and working directory
+(`$HOME` when that is gone), output to `/dev/null`. Every registration, unregistration, relaunch
+and give-up is in `journalctl -u rp-coded` with uid/pid. The relaunched app finds its single-instance
+lock free (the old process is dead) and comes back to the tray.
+
+**Crash loops** back off: a death within 60 s of the previous relaunch waits 3 s, then 6, 12 and
+30 s (the cap); after 10 relaunches in 10 minutes the daemon gives up and logs it; five minutes
+of uptime reset the counters. An app that comes back on its own before the delay is up (the
+updater restarting it) cancels the pending relaunch.
+
+**What it is not**: a security boundary against root or against the user themselves.
+`sudo systemctl stop rp-coded` switches the guard off (the app is then just an app that hides its
+Quit item; `kill` ends it for good), `sudo rm /etc/rp-code/policy.json` or editing `app.allowQuit`
+back to `true` restores the Quit item within a minute, and `install.sh --uninstall` removes the
+daemon (the policy file stays, so reinstalling re-arms the guard). A user who is not in
+`app.users`, or who is not the active session, is never relaunched. The relaunched process is a
+child of the daemon's service, so the unit is less sandboxed than a pure device daemon would be
+(no `ProtectHome`, `PrivateTmp`, syscall filter or device policy; see the comments in
+`rp-coded.service`), and it runs with *no new privileges*, so Chromium uses its user-namespace
+sandbox (which the AppImage does anyway).
 
 ### Creating the policy from the app (write once)
 
@@ -195,7 +251,9 @@ sudo native/rp-coded/install.sh --uninstall --user "$USER"
 `install.sh --uninstall` stops and disables the service, removes the unit, the binary
 directory, the udev rule, the modules-load entry, your autostart entry, your group membership,
 the `rp-code` group and any browser policy files (`rp-code.json`) the installer wrote. It **keeps `/etc/rp-code/policy.json`** and prints how to remove it
-(`sudo rm -r /etc/rp-code`). The packaged app ships the script at
+(`sudo rm -r /etc/rp-code`). Stopping the daemon also ends the relaunch guard of
+`app.allowQuit: false`; the running app keeps hiding its Quit item until the policy file is
+removed or changed (it re-reads the file within a minute). The packaged app ships the script at
 `<resources>/system/install.sh` (Settings → System shows the exact path with a copy button).
 
 ## Security notes
@@ -225,3 +283,8 @@ the `rp-code` group and any browser policy files (`rp-code.json`) the installer 
   `rp-coded virtual input` device.
 - **Without the daemon** there is no input locking or injection at all: `sdk.input` calls fail
   with `CAPABILITY_FAILED` until the system integration is installed and connected.
+- **Relaunching runs the user's own program as the user.** A registration is only accepted from
+  a non-root uid, for an existing executable, with at most 32 arguments and a fixed whitelist of
+  environment variables (values ≤ 4 KiB); the daemon adds nothing of its own, drops root before
+  `exec` and only relaunches for users listed in `app.users` who own the active session. Root can
+  always stop it (`systemctl stop rp-coded`).

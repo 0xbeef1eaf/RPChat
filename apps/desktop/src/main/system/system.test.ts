@@ -8,16 +8,25 @@ import { defaultSettings } from '@rp/core';
 import { RpError } from '@rp/shared';
 import { DaemonClient, DaemonError, rpErrorCodeFor } from './daemon-client.js';
 import { SystemIntegration, autostartDesktopEntry, policyTemplate } from './integration.js';
-import { PolicyWatcher, applyPolicy, loadPolicy, managedPaths, parsePolicy, stripManagedPatch } from './policy.js';
+import { KeepaliveLink, reconnectDelay } from './keepalive-link.js';
+import { PolicyWatcher, appPolicy, applyPolicy, loadPolicy, managedPaths, parsePolicy, stripManagedPatch } from './policy.js';
 
 /** Fake rp-coded: answers the protocol from an in-memory lock state. */
 function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: string } = {}) {
   let locked: { until: string; reason?: string; devices: 'keyboard' | 'mouse' | 'both' } | null = null;
   const seen: DaemonRequest[] = [];
   const conns = new Set<net.Socket>();
+  /** Like rp-coded: a registration lives on its connection; `unregister` clears it, a drop without it counts as a crash. */
+  const registrations = new Map<net.Socket, Extract<DaemonRequest, { op: 'register' }>>();
+  const crashed: Array<Extract<DaemonRequest, { op: 'register' }>> = [];
   const server = net.createServer((conn) => {
     conns.add(conn);
-    conn.on('close', () => conns.delete(conn));
+    conn.on('close', () => {
+      conns.delete(conn);
+      const reg = registrations.get(conn);
+      if (reg) crashed.push(reg);
+      registrations.delete(conn);
+    });
     let buf = '';
     conn.on('data', (chunk) => {
       buf += chunk.toString();
@@ -50,6 +59,17 @@ function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: str
           case 'key':
             res = req.combo === 'bad' ? { ok: false, error: 'unknown key', code: 'INVALID' } : { ok: true, op: 'key' };
             break;
+          case 'register':
+            if (!req.exec.startsWith('/') || Object.keys(req.env).some((k) => k === 'LD_PRELOAD')) res = { ok: false, error: 'bad registration', code: 'INVALID' };
+            else {
+              registrations.set(conn, req);
+              res = { ok: true, op: 'register' };
+            }
+            break;
+          case 'unregister':
+            registrations.delete(conn);
+            res = { ok: true, op: 'unregister' };
+            break;
           case 'set-policy': {
             // Like rp-coded: strict validation (unknown keys), write once, 0644 pretty JSON.
             const file = opts.policyPath ?? '/nonexistent/policy.json';
@@ -72,6 +92,8 @@ function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: str
   return {
     server,
     seen,
+    crashed,
+    registered: () => [...registrations.values()],
     listen: () => new Promise<void>((r) => server.listen(socketPath, r)),
     close: () =>
       new Promise<void>((r) => {
@@ -130,8 +152,111 @@ describe('DaemonClient', () => {
   });
 });
 
+describe('KeepaliveLink', () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rpk-'));
+  });
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const registration = { exec: '/usr/bin/rp-code', args: ['--hidden'], cwd: '/home/alice', env: { HOME: '/home/alice', DISPLAY: ':0' } };
+  const until = async (cond: () => boolean, ms = 3000): Promise<void> => {
+    const t0 = Date.now();
+    while (!cond()) {
+      if (Date.now() - t0 > ms) throw new Error('condition not met in time');
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  };
+
+  it('backoff doubles from the initial delay up to the cap', () => {
+    const b = { initial: 1000, max: 30_000 };
+    expect([1, 2, 3, 4, 5, 6, 7].map((n) => reconnectDelay(n, b))).toEqual([1000, 2000, 4000, 8000, 16_000, 30_000, 30_000]);
+    expect(reconnectDelay(0, b)).toBe(1000);
+    expect(reconnectDelay(200, b)).toBe(30_000);
+  });
+
+  it('registers after hello, re-registers after the daemon restarts, and unregisters on an intended exit', async () => {
+    const sock = path.join(tmp, 'k.sock');
+    const daemon = fakeDaemon(sock);
+    await daemon.listen();
+    const link = new KeepaliveLink({ socketPath: sock, registration, backoffMs: { initial: 20, max: 100 }, timeoutMs: 1000 });
+    expect(link.state).toBe('idle');
+    link.start();
+    await until(() => link.registered);
+    expect(daemon.seen.map((r) => r.op)).toEqual(['hello', 'register']);
+    expect(daemon.registered()).toEqual([{ op: 'register', ...registration }]);
+    expect(link.registrationCount).toBe(1);
+    expect(link.attempts).toBe(0);
+    // The daemon goes away: the link drops (the daemon sees a "crash") and reconnects with backoff.
+    await daemon.close();
+    await until(() => !link.registered);
+    expect(daemon.crashed).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(link.state).toBe('waiting');
+    expect(link.attempts).toBeGreaterThanOrEqual(2);
+    const again = fakeDaemon(sock);
+    await again.listen();
+    await until(() => link.registered);
+    expect(again.seen.map((r) => r.op)).toEqual(['hello', 'register']);
+    expect(link.registrationCount).toBe(2);
+    expect(link.attempts).toBe(0);
+    // An intended exit unregisters first; the daemon then has nothing to relaunch.
+    await link.unregister();
+    expect(link.state).toBe('stopped');
+    expect(again.seen.map((r) => r.op)).toEqual(['hello', 'register', 'unregister']);
+    await until(() => again.registered().length === 0);
+    expect(again.crashed).toHaveLength(0);
+    await again.close();
+    // Once stopped it stays stopped.
+    link.start();
+    expect(link.state).toBe('stopped');
+  });
+
+  it('keeps retrying while no daemon is listening and resolves unregister immediately', async () => {
+    const sock = path.join(tmp, 'none.sock');
+    const link = new KeepaliveLink({ socketPath: sock, registration, backoffMs: { initial: 10, max: 40 }, timeoutMs: 500 });
+    link.start();
+    await until(() => link.attempts >= 3, 2000);
+    expect(link.registered).toBe(false);
+    await link.unregister();
+    expect(link.state).toBe('stopped');
+    // A refused registration is retried too (bad exec → INVALID), and close() drops without unregistering.
+    const sock2 = path.join(tmp, 'refuse.sock');
+    const daemon = fakeDaemon(sock2);
+    await daemon.listen();
+    const refused = new KeepaliveLink({ socketPath: sock2, registration: { ...registration, exec: 'relative' }, backoffMs: { initial: 10, max: 20 }, timeoutMs: 500 });
+    refused.start();
+    await until(() => daemon.seen.filter((r) => r.op === 'register').length >= 2, 2000);
+    expect(refused.registered).toBe(false);
+    refused.close();
+    expect(daemon.registered()).toEqual([]);
+    await daemon.close();
+  });
+});
+
 describe('policy', () => {
   const base: AppSettings = defaultSettings();
+
+  it('parses app.allowQuit and app.users, ignores unknown app keys, rejects wrong types', () => {
+    expect(parsePolicy({ version: 1 }).app).toBeUndefined();
+    expect(appPolicy(parsePolicy({ version: 1 }))).toEqual({ allowQuit: true, users: [] });
+    expect(appPolicy(null)).toEqual({ allowQuit: true, users: [] });
+    const p = parsePolicy({ version: 1, app: { allowQuit: false, users: ['alice', ' bob '], theme: 'x' } });
+    expect(p.app).toEqual({ allowQuit: false, users: ['alice', 'bob'] });
+    expect(appPolicy(p)).toEqual({ allowQuit: false, users: ['alice', 'bob'] });
+    expect(parsePolicy({ version: 1, app: {} }).app).toEqual({});
+    expect(appPolicy(parsePolicy({ version: 1, app: { allowQuit: true } }))).toEqual({ allowQuit: true, users: [] });
+    // app.allowQuit is not a settings key: it never shows up as a managed path.
+    expect(managedPaths(p)).toEqual([]);
+    expect(applyPolicy(base, p).settings).toEqual(base);
+    expect(() => parsePolicy({ version: 1, app: { allowQuit: 'no' } })).toThrow(/app.allowQuit must be a boolean/);
+    expect(() => parsePolicy({ version: 1, app: { allowQuit: 0 } })).toThrow(/app.allowQuit must be a boolean/);
+    expect(() => parsePolicy({ version: 1, app: { users: [] } })).toThrow(/app.users must be a non-empty array/);
+    expect(() => parsePolicy({ version: 1, app: { users: 'alice' } })).toThrow(/app.users/);
+    expect(() => parsePolicy({ version: 1, app: { users: ['alice', 3] } })).toThrow(/app.users/);
+    expect(() => parsePolicy({ version: 1, app: { users: [''] } })).toThrow(/app.users/);
+    expect(() => parsePolicy({ version: 1, app: 'no' })).toThrow(/app must be an object/);
+    expect(() => parsePolicy({ version: 1, app: [] })).toThrow(/app must be an object/);
+  });
 
   it('parses and validates the policy file', () => {
     const policy = parsePolicy({ version: 1, managedBy: 'IT', settings: { autonomy: { maxSelfWakesPerHour: 5 }, maxInputLockMs: 20_000, permissions: { moduleAllow: { system: false } }, web: { allowlist: ['a.example'] } }, inputLock: { maxDurationMs: 10_000, enabled: true } });
@@ -192,13 +317,16 @@ describe('policy', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-policy-'));
     const file = path.join(tmp, 'policy.json');
     const watcher = new PolicyWatcher(file);
-    expect(await watcher.current()).toMatchObject({ present: false, policy: null, managed: [] });
+    expect(await watcher.current()).toMatchObject({ present: false, policy: null, managed: [], app: { allowQuit: true, users: [] } });
     expect((await loadPolicy(file)).present).toBe(false);
     fs.writeFileSync(file, JSON.stringify({ version: 1, managedBy: 'IT', settings: { maxInputLockMs: 5000 } }));
     fs.utimesSync(file, new Date(Date.now() - 10_000), new Date(Date.now() - 10_000));
     expect(await watcher.current()).toMatchObject({ present: true, managedBy: 'IT', managed: ['maxInputLockMs'] });
     fs.writeFileSync(file, JSON.stringify({ version: 1, settings: { displayBackend: 'electron' } }));
     expect((await watcher.current()).managed).toEqual(['displayBackend']);
+    fs.writeFileSync(file, JSON.stringify({ version: 1, app: { allowQuit: false, users: ['alice'] } }));
+    fs.utimesSync(file, new Date(), new Date(Date.now() + 2000));
+    expect((await watcher.current()).app).toEqual({ allowQuit: false, users: ['alice'] });
     fs.writeFileSync(file, '{bad');
     fs.utimesSync(file, new Date(), new Date(Date.now() + 5000));
     const broken = await watcher.current();
@@ -307,7 +435,7 @@ describe('SystemIntegration', () => {
       logger: { info: () => undefined, warn: () => undefined, debug: () => undefined },
     });
     const status = await integration.status();
-    expect(status).toMatchObject({ platform: 'linux', daemon: { connected: false }, policy: { present: false, canCreate: false, managed: [] }, udev: { rulePresent: false, inGroup: true, groupName: 'rp-code' }, autostart: { enabled: false, method: 'none' }, installerAvailable: true });
+    expect(status).toMatchObject({ platform: 'linux', daemon: { connected: false }, policy: { present: false, canCreate: false, managed: [], allowQuit: true, users: [] }, udev: { rulePresent: false, inGroup: true, groupName: 'rp-code' }, autostart: { enabled: false, method: 'none' }, installerAvailable: true });
     expect(await integration.installerPath()).toBe(path.join(resources, 'system', 'install.sh'));
     const enabled = await integration.setAutostart(true);
     expect(enabled.autostart).toEqual({ enabled: true, method: 'xdg', path: path.join(tmp, 'home', '.config', 'autostart', 'rp-code.desktop') });

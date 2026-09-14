@@ -43,5 +43,9 @@
     "maxDurationMs": 120000,
     "emergencyKey": "esc",
     "emergencyHoldMs": 5000
+  },
+  "app": {
+    "allowQuit": true,
+    "users": ["alice"]
   }
 }

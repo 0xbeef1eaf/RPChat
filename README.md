@@ -218,7 +218,10 @@ sudo resources/system/install.sh          # or native/rp-coded/install.sh from a
 It creates the `rp-code` group, installs the udev rule and service, sets the app
 to start on login, and prepares `/etc/rp-code` for `policy.json`, a root-owned file that
 can cap lock durations, pin settings the user cannot change and disable modules
-outright. The app shows the daemon and policy state under **Settings → System**,
+outright. With `"app": { "allowQuit": false, "users": ["alice"] }` the policy also keeps
+the app running for those users: no Quit in the tray or Ctrl+Q, closing hides to the
+tray, and the daemon relaunches the app in their session if it is killed or crashes
+(`native/rp-coded/dist/POLICY.md`). The app shows the daemon and policy state under **Settings → System**,
 where you can also create the policy once without a root password (afterwards only
 root can change it).
 See [docs/system-integration.md](docs/system-integration.md).

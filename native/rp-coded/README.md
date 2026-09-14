@@ -4,7 +4,9 @@ Small root daemon for the rp desktop app on Linux. It owns the two things an unp
 desktop process cannot do safely — **grabbing the user's input devices** (`EVIOCGRAB` on
 `/dev/input/event*`) for a bounded time and **injecting keystrokes / pointer events** through
 one uinput virtual device — and enforces a root-owned **policy file** so the limits cannot be
-loosened from the app. The app talks to it over a group-restricted unix socket.
+loosened from the app. When that policy says the app may not be quit (`app.allowQuit: false`)
+it also **relaunches the app** in the user's session after a kill or crash. The app talks to it
+over a group-restricted unix socket.
 
 Spec: `docs/spec/system.md`. User guide: `docs/system-integration.md`. Wire contract:
 `packages/shared/src/system.ts` (`DaemonRequest` / `DaemonResponse` / `PolicyFile`).
@@ -13,7 +15,7 @@ Spec: `docs/spec/system.md`. User guide: `docs/system-integration.md`. Wire cont
 
 ```sh
 cargo build --release          # → target/release/rp-coded (no system libraries needed)
-cargo test                     # 57 tests, all run without /dev/input or /dev/uinput
+cargo test                     # 69 tests, all run without /dev/input or /dev/uinput
 cargo clippy --all-targets
 pnpm run build:daemon          # same build, from the monorepo root
 ./target/release/rp-coded --check-devices
@@ -41,7 +43,7 @@ run `sudo squashfs-root/resources/system/install.sh --app-bin "$(readlink -f rp-
 ## CLI
 
 ```
-rp-coded [--socket <path>] [--policy <path>] [--no-uinput] [--log-level error|warn|info|debug]
+rp-coded [--socket <path>] [--policy <path>] [--sessions-dir <path>] [--no-uinput] [--log-level error|warn|info|debug]
 rp-coded --check-devices
 rp-coded --help | --version
 ```
@@ -50,6 +52,9 @@ rp-coded --help | --version
   is created `0750 root:rp-code`, the socket `0660 root:rp-code`; without the group only root
   can connect (a warning is logged).
 - `--policy` (env `RP_CODED_POLICY`): default `/etc/rp-code/policy.json`.
+- `--sessions-dir` (env `RP_CODED_SESSIONS_DIR`): logind session state files used to find the
+  active graphical user before relaunching the app; default `/run/systemd/sessions`, with
+  `loginctl` as the fallback. Meant for tests (point it at a directory with a fake session file).
 - `--check-devices`: lists the keyboards/pointers it can open, whether `/dev/uinput` is
   writable, and the screen size it would use. Exit 0 even with no devices.
 - Logs go to stderr (`rp-coded [level] message`), i.e. the journal under systemd. Every lock
@@ -77,6 +82,10 @@ created it. Unknown fields in requests are ignored; a malformed line gets
 | `{ "op": "click", "x", "y", "button"? }` | `{ "ok": true, "op": "click" }` |
 | `{ "op": "move", "x", "y" }` | `{ "ok": true, "op": "move" }` |
 | `{ "op": "set-policy", "policy": PolicyFile }` | `{ "ok": true, "op": "set-policy", "path" }` — creates the policy file **once** (see below) |
+| `{ "op": "register", "exec", "args", "cwd", "env" }` | `{ "ok": true, "op": "register" }` — keepalive registration on this connection (see below) |
+| `{ "op": "unregister" }` | `{ "ok": true, "op": "unregister" }` — forget it (also when nothing was registered) |
+
+`status` also carries `"keepalive": { "registered", "relaunches", "allowQuit" }`.
 
 `until` is RFC 3339 UTC with milliseconds (`2026-01-02T03:04:05.678Z`), the same shape as
 `Date.prototype.toISOString()`. `devices` is `"keyboard"`, `"mouse"` or `"both"` (default).
@@ -85,11 +94,11 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 
 | Code | When |
 |---|---|
-| `REFUSED` | `hello` with a version other than 1; any request while the daemon shuts down |
+| `REFUSED` | `hello` with a version other than 1; any request while the daemon shuts down; `register` from uid 0 |
 | `POLICY` | `lock` while `inputLock.enabled` is `false`; `policy`/`lock` while the policy file is unreadable or invalid (fail closed) |
 | `NO_DEVICES` | `lock` found no device of the requested class; injection without a uinput device |
 | `BUSY` | every matching device is `EVIOCGRAB`bed by another process (EBUSY); uinput write would block |
-| `INVALID` | malformed JSON / unknown op / wrong field types; `durationMs` ≤ 0 or non-finite; empty or > 2000-char `text`; unparsable `combo`; non-finite coordinates |
+| `INVALID` | malformed JSON / unknown op / wrong field types; `durationMs` ≤ 0 or non-finite; empty or > 2000-char `text`; unparsable `combo`; non-finite coordinates; a `register` whose `exec` is not an absolute existing executable, with > 32 `args`, a relative `cwd`, an env key outside the whitelist or a value > 4 KiB, or from a uid without a passwd entry |
 | `INTERNAL` | unexpected I/O failure (details in `error` and the journal) |
 | `EXISTS` | `set-policy` while something (file, symlink, directory) already exists at the policy path; only root can change it |
 
@@ -125,6 +134,25 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   request reads the new file. Any member of `rp-code` can do this once for the whole machine;
   afterwards only root can edit or delete the file (`ProtectSystem=strict` leaves
   `/etc/rp-code` writable for exactly this).
+- **`register` / `unregister`** (keepalive, `app.allowQuit: false`): the registration belongs
+  to the connection that sent it (a second `register` replaces it) and is remembered together
+  with the peer's uid/gid/pid from `SO_PEERCRED` and the process start time from
+  `/proc/<pid>/stat`. `env` may only contain `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`,
+  `XDG_SESSION_TYPE`, `XDG_SESSION_ID`, `XDG_CURRENT_DESKTOP`, `DBUS_SESSION_BUS_ADDRESS`,
+  `HYPRLAND_INSTANCE_SIGNATURE`, `SWAYSOCK`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `LANG`,
+  `LC_ALL`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XAUTHORITY`, `APPIMAGE`,
+  `APPDIR`, `ELECTRON_OZONE_PLATFORM_HINT`. When the connection closes without `unregister` the
+  daemon re-reads the policy and relaunches only if `app.allowQuit` is `false`, the peer's user
+  name is in `app.users` (an empty list relaunches nobody; warned once), that uid owns the active
+  graphical logind session (`/run/systemd/sessions/*`: `ACTIVE=1`, `TYPE=wayland|x11`, a
+  `SEAT`; `loginctl` fallback) and — after the delay — the process is gone. Delay 1.5 s;
+  deaths within 60 s of the previous relaunch climb 3 → 6 → 12 → 30 s; 10 relaunches in 10
+  minutes → give up (logged); 5 minutes of uptime reset everything; a new registration for the
+  same uid cancels a pending relaunch; a changed active user drops it. The relaunch is
+  `exec args…` with exactly the registered environment, cwd as registered (else `$HOME`),
+  stdio to `/dev/null`, in a new session (`setsid`), as the user (`setgid`, `initgroups`,
+  `setuid`; never root); its exit status is logged. Every register/unregister/relaunch/give-up
+  line carries the uid and pid.
 - **`click` / `move`**: absolute coordinates in the primary screen's pixel space. The virtual
   device's ABS_X/ABS_Y range is `0..W-1` / `0..H-1` where `W×H` is the first connected DRM
   connector's preferred mode (`/sys/class/drm/*/modes`), fallback 1920×1080; coordinates are
@@ -138,9 +166,10 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 
 | File | Contents |
 |---|---|
-| `src/main.rs` | CLI, socket server (one thread per connection), ticker thread, signal thread, socket-level tests with fakes |
+| `src/main.rs` | CLI, socket server (one thread per connection, `ConnCtx` with peer credentials and registration), ticker thread (lock timers + due relaunches), signal thread, keepalive OS glue behind `KeepaliveHooks` (`/proc`, logind, getpwuid, `Command::spawn` + reaper), socket-level and pipeline tests with fakes |
 | `src/protocol.rs` | serde types mirroring `DaemonRequest`/`DaemonResponse`, `iso_millis`, round-trip tests for every op and error code |
-| `src/policy.rs` | `PolicyFile` parsing/validation, `LockLimits` defaults and clamping, mtime/size-cached `PolicyStore` |
+| `src/policy.rs` | `PolicyFile` parsing/validation, `LockLimits` defaults and clamping, `AppRules` (`app.allowQuit`/`users`), mtime/size-cached `PolicyStore` |
+| `src/keepalive.rs` | Pure relaunch logic: registration validation, the gate (policy, users, active session, process), `RelaunchTracker` backoff/give-up, logind session-file and `loginctl` parsing, `command_spec`/`build_command`; all tested |
 | `src/lock.rs` | `LockEngine` state machine (grab, timer, emergency chord, hot-plug, device classes) behind `DeviceSource`/`GrabbedDevice`; fakes and tests |
 | `src/inject.rs` | US keymap, `plan_text`, `parse_combo`, `ScreenSize` clamping, `Injector` trait, `NullInjector`, `FakeInjector` |
 | `src/devices.rs` | evdev `DeviceSource`, capability classification, DRM screen size, uinput `Injector`, `--check-devices` report |
@@ -157,6 +186,13 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   inspected. No request can change an existing policy: `set-policy` only ever creates the file
   when none exists (write once), so the first member of the group to do it seeds the policy for
   everyone; edits and removal need root.
-- The systemd unit runs with a closed device policy (only `char-input` and `/dev/uinput`),
-  `ProtectSystem=strict`, `NoNewPrivileges`, a system-call allow-list and only the capabilities
-  needed to chown the socket.
+- Relaunching (`app.allowQuit: false`) only ever runs what a non-root client registered, as
+  that client's uid/gid with its own whitelisted environment; the daemon never keeps root in
+  the child and only relaunches users listed in `app.users` who own the active session.
+- The systemd unit runs with `NoNewPrivileges`, read-only `/usr` and `/etc` (except
+  `/etc/rp-code`), kernel/cgroup protection and a capability bounding set of chown +
+  setuid/setgid. Because a relaunched app is a child of the service and inherits its sandbox,
+  the unit does **not** use `ProtectHome`, `PrivateTmp`, a system-call filter,
+  `MemoryDenyWriteExecute`, `RestrictNamespaces` or a closed device policy (a desktop app needs
+  `$HOME`, `/tmp/.X11-unix`, JIT, Chromium's namespace sandbox, GPU and audio devices), and it
+  uses `KillMode=process` so stopping the daemon leaves a relaunched app running.

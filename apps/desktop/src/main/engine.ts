@@ -34,6 +34,8 @@ import { PluginService } from './plugins/service.js';
 import { DaemonClient } from './system/daemon-client.js';
 import { SystemIntegration } from './system/integration.js';
 import { PolicyWatcher, applyPolicy, stripManagedPatch } from './system/policy.js';
+import { KeepaliveLink } from './system/keepalive-link.js';
+import { QuitGuard, launchSpec } from './quit-guard.js';
 import { UpdateService } from './updates/service.js';
 import { createHyprTransport } from './display/hyprland.js';
 import type { HyprTransport } from './display/hyprland.js';
@@ -68,6 +70,10 @@ export interface AppServices {
   updates: UpdateService;
   policy: PolicyWatcher;
   daemon: DaemonClient;
+  /** `app.allowQuit` enforcement: tray/close/before-quit decisions and the signal handlers (quit-guard.ts). */
+  quitGuard: QuitGuard;
+  /** The long-lived relaunch registration with rp-coded (unregistered before an authorised quit). */
+  keepalive: KeepaliveLink;
   commands: CommandRunner;
   permissionPrompts: PendingPrompts<PermissionDecision>;
   uiPrompts: PendingPrompts<UiPromptAnswer>;
@@ -371,6 +377,19 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     appBin: env.APPIMAGE ?? process.execPath,
     logger,
   });
+  // `app.allowQuit`: the guard mirrors the policy (index.ts applies it on every policy read) and the
+  // keepalive link tells the daemon how to bring this launch back (AppImage or bare executable).
+  const quitGuard = new QuitGuard({ logger, onAllowedSignal: () => app.quit() });
+  const keepalive = new KeepaliveLink({
+    ...(env.RP_DAEMON_SOCKET ? { socketPath: env.RP_DAEMON_SOCKET } : {}),
+    registration: launchSpec({ execPath: process.execPath, argv: process.argv, appImage: env.APPIMAGE, cwd: process.cwd(), env }),
+    logger,
+  });
+  /** An update restart is an authorised quit: let it through and make sure the daemon does not race the updater's relaunch. */
+  const beforeRestart = async (): Promise<void> => {
+    quitGuard.allowQuitOnce();
+    await keepalive.unregister();
+  };
 
   // ---- in-place updates (AppImage from the private GitHub releases) ---------------
   autoUpdater.logger = {
@@ -391,6 +410,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     policy,
     safeStorage,
     logger,
+    beforeRestart,
   });
 
   await engine.start();
@@ -444,6 +464,8 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     updates,
     policy,
     daemon,
+    quitGuard,
+    keepalive,
     commands,
     permissionPrompts,
     uiPrompts,
@@ -480,6 +502,9 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       uiPrompts.rejectAll();
       await senses.dispose().catch((err: unknown) => logger.warn('[senses] dispose failed', err));
       await plugins.dispose().catch((err: unknown) => logger.warn('[plugins] dispose failed', err));
+      // An ordinary stop is an intended exit: unregister so the daemon does not relaunch us.
+      await keepalive.unregister();
+      quitGuard.dispose();
       daemon.close();
       browser.close();
       await engine.stop().catch((err: unknown) => logger.warn('[engine] stop failed', err));
