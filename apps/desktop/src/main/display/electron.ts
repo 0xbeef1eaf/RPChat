@@ -250,7 +250,7 @@ export class ElectronOverlay implements OverlayHandle {
    */
   desiredSize(): Size {
     const width = this.contentSize ? Math.min(this.options.width, this.contentSize.width) : this.options.width;
-    const height = this.options.height ?? this.contentSize?.height ?? this.options.maxHeight ?? DEFAULT_OVERLAY_HEIGHT;
+    const height = this.options.height ?? this.contentSize?.height ?? (this.options.maxHeight !== undefined ? this.options.maxHeight + PAGE_PADDING_PX : DEFAULT_OVERLAY_HEIGHT);
     return { width, height };
   }
 

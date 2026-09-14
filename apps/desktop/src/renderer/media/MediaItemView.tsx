@@ -60,23 +60,35 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
   const fitted = boxWidth !== undefined && natural ? fitMedia(natural, { width: boxWidth, height: boxHeight }) : undefined;
   const width = fitted?.width ?? boxWidth;
   const height = fitted?.height ?? boxHeight;
-  const mediaStyle: CSSProperties | undefined = fitted ? { width: fitted.width, height: fitted.height } : height ? { maxHeight: height } : undefined;
-  // Report the rendered size once the content is known (and again if the fitted size changes).
+  // Only the width is pinned (the fit already honours the height cap); height stays auto so the picture can never be squeezed.
+  const mediaStyle: CSSProperties | undefined = fitted ? { width: fitted.width } : height ? { maxHeight: height } : undefined;
+  // Report the rendered size once the content is known, and again whenever the box changes (the
+  // window is resized to what we report, which can re-flow the caption; the observer converges it).
   useLayoutEffect(() => {
     if (!contentReady) return;
     const el = containerRef.current;
     if (!el) return;
-    const rect = el.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      onEvent({ type: 'content-size', id: entry.id, width: Math.ceil(rect.width), height: Math.ceil(rect.height) });
-    }
+    let last: { width: number; height: number } | undefined;
+    const report = () => {
+      const rect = el.getBoundingClientRect();
+      const size = { width: Math.ceil(rect.width), height: Math.ceil(rect.height) };
+      if (size.width <= 0 || size.height <= 0) return;
+      if (last && last.width === size.width && last.height === size.height) return;
+      last = size;
+      onEvent({ type: 'content-size', id: entry.id, ...size });
+    };
+    report();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contentReady, entry.id, width, height]);
 
   const cls = `media-item ${entry.kind}${leaving ? ' leaving' : ''}${clickThrough ? ' click-through' : ''}${clickCloses ? ' click-closes' : ''}`;
+  // No max-height on the container: it must grow around the caption, and its measured height sizes the window.
   const style: CSSProperties = {
     width,
-    maxHeight: height,
     opacity: entry.kind === 'audio' ? 1 : effectiveOpacity(entry.options.opacity),
     pointerEvents: clickThrough ? 'none' : undefined,
     margin: 0,
