@@ -29,7 +29,8 @@
     "displayBackend": "auto",
     "updates": {
       "automatic": true,
-      "enabled": true
+      "enabled": true,
+      "allowDowngrade": false
     },
     "browser": {
       "allowBlocking": true,

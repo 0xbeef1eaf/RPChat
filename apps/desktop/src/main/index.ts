@@ -226,7 +226,10 @@ function watchUpdateReady(services: AppServices, windows: WindowManager): void {
           type: 'info',
           title: 'Update ready',
           message: `Update to ${version} is ready`,
-          detail: `rp-code ${version} has been downloaded. Restart now to apply it, or later from Settings → Updates (it is also applied when you quit).`,
+          detail:
+            status.packaging === 'system'
+              ? `rp-code ${version} has been downloaded. Restart now to have the system service install it (the previous version is kept), or later from Settings → Updates.`
+              : `rp-code ${version} has been downloaded. Restart now to apply it, or later from Settings → Updates (it is also applied when you quit).`,
           buttons: ['Restart now', 'Later'],
           defaultId: 0,
           cancelId: 1,

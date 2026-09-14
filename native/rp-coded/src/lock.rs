@@ -157,7 +157,7 @@ impl LockEngine {
         self
     }
 
-    #[cfg(test)]
+    /// Whether a lock is active (regardless of expiry; the ticker releases expired ones).
     pub fn is_locked(&self) -> bool {
         self.active.is_some()
     }

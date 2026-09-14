@@ -6,8 +6,11 @@
  * - The per-user GitHub token lives in `<userData>/update-token.bin`, encrypted through the
  *   OS keyring (`safeStorage`) when available and otherwise as a 0600 plaintext file. It is
  *   never logged and never part of the settings JSON.
- * - AppImage in a writable location → download and swap in place; `.deb` and other layouts →
- *   check only, the UI links to the release page. Development runs never touch the updater.
+ * - AppImage in a writable location → download and swap in place; system install
+ *   (`/opt/rp-code/current`, docs/system-integration.md) → download, then the `rp-coded` daemon
+ *   verifies and swaps the tree in (`apply-update`) and the app relaunches; `.deb` and other
+ *   layouts → check only, the UI links to the release page. Development runs never touch the
+ *   updater.
  * - `settings.updates` (automatic checks, interval) and the policy file (`updates.enabled`,
  *   `updates.automatic`) decide whether background checks run; a manual check is always
  *   allowed when a token exists and policy has not disabled updates.
@@ -37,6 +40,22 @@ export interface UpdateInfoLike {
   releaseNotes?: string | Array<{ version: string; note: string | null }> | null;
   releaseDate?: string;
   releaseName?: string | null;
+  /** `latest-linux.yml` `files`: the per-file checksum (base64 SHA-512) the daemon verifies against. */
+  files?: Array<{ url: string; sha512: string; size?: number }>;
+  /** Deprecated top-level checksum of the first file (older manifests). */
+  sha512?: string;
+}
+
+/** `update-downloaded` payload: the update info plus where the file landed. */
+export interface UpdateDownloadedLike extends UpdateInfoLike {
+  downloadedFile?: string;
+}
+
+/** What the daemon needs to apply a downloaded update. */
+export interface DownloadedUpdate {
+  file: string;
+  version: string;
+  sha512: string;
 }
 
 export interface ProgressLike {
@@ -63,7 +82,8 @@ export interface UpdaterLike {
   downloadUpdate(): Promise<string[]>;
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
   on(event: 'checking-for-update', listener: () => void): unknown;
-  on(event: 'update-available' | 'update-not-available' | 'update-downloaded', listener: (info: UpdateInfoLike) => void): unknown;
+  on(event: 'update-available' | 'update-not-available', listener: (info: UpdateInfoLike) => void): unknown;
+  on(event: 'update-downloaded', listener: (info: UpdateDownloadedLike) => void): unknown;
   on(event: 'download-progress', listener: (progress: ProgressLike) => void): unknown;
   on(event: 'error', listener: (error: Error) => void): unknown;
 }
@@ -74,8 +94,37 @@ export interface SafeStorageLike {
   decryptString(encrypted: Buffer): string;
 }
 
+/** What a system install's daemon reports when asked whether it can apply updates. */
+export interface SystemInstallAvailability {
+  daemonConnected: boolean;
+  /** The daemon answers `status.install` (knows `apply-update`); false for an older daemon. */
+  daemonSupportsUpdates: boolean;
+  current?: string;
+  previous?: string;
+}
+
+/**
+ * The system install's side of updating (engine.ts wires it to the `DaemonClient` and Electron):
+ * present only when the app runs from `/opt/rp-code/current`.
+ */
+export interface SystemInstallDeps {
+  /** The unpacked app directory (`/opt/rp-code/current`). */
+  dir: string;
+  available(): Promise<SystemInstallAvailability>;
+  applyUpdate(input: DownloadedUpdate): Promise<{ version: string; restartDaemon: boolean }>;
+  /** Wait for the daemon to answer `hello` again after it restarted itself; resolves with whether it did in time. */
+  waitForDaemon(timeoutMs: number): Promise<boolean>;
+  /** `app.relaunch({ execPath: <dir>/rp-code })` + quit (through the authorised-quit path). */
+  relaunch(): void;
+}
+
+/** How long to wait for the daemon after it restarted itself before relaunching anyway. */
+export const DAEMON_RESTART_WAIT_MS = 30_000;
+
 export interface UpdateServiceDeps {
   updater: UpdaterLike;
+  /** Present when running from the system install: updates are applied by the daemon. */
+  systemInstall?: SystemInstallDeps;
   appVersion: string;
   /** `app.isPackaged`; false → `unsupported`, the updater is never touched. */
   isPackaged: boolean;
@@ -99,7 +148,7 @@ export interface UpdateServiceDeps {
   beforeRestart?: () => Promise<void>;
 }
 
-type InternalState = Extract<UpdateState, 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error'>;
+type InternalState = Extract<UpdateState, 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'installing' | 'error'>;
 
 interface TokenRecord {
   token: string;
@@ -117,13 +166,31 @@ async function defaultIsWritable(target: string): Promise<boolean> {
   }
 }
 
-/** Pure: how the running binary was installed. */
-export function detectPackaging(deps: Pick<UpdateServiceDeps, 'isPackaged' | 'appImagePath' | 'execPath'>): UpdatePackaging {
+/** Pure: how the running binary was installed (`system` when the system-install deps are wired, i.e. the executable runs from `/opt/rp-code/current`). */
+export function detectPackaging(deps: Pick<UpdateServiceDeps, 'isPackaged' | 'appImagePath' | 'execPath' | 'systemInstall'>): UpdatePackaging {
   if (!deps.isPackaged) return 'dev';
+  if (deps.systemInstall) return 'system';
   if (deps.appImagePath) return 'appimage';
   const exec = deps.execPath.replace(/\\/g, '/');
   if (exec.startsWith('/opt/') || exec.startsWith('/usr/')) return 'deb';
   return 'other';
+}
+
+/**
+ * Pure: the checksum of the AppImage in an update manifest — the `files` entry whose URL ends in
+ * `.AppImage`, else the first file, else the deprecated top-level `sha512`. Empty when none.
+ */
+export function appImageSha512(info: Pick<UpdateInfoLike, 'files' | 'sha512'>): string {
+  const files = info.files ?? [];
+  const appImage = files.find((f) => /\.appimage$/i.test(f.url));
+  return (appImage ?? files[0])?.sha512 ?? info.sha512 ?? '';
+}
+
+/** Pure: the record `install()` hands to the daemon, or null when the event lacks the file or checksum. */
+export function downloadedUpdate(info: UpdateDownloadedLike): DownloadedUpdate | null {
+  const sha512 = appImageSha512(info);
+  if (!info.downloadedFile || !sha512 || !info.version) return null;
+  return { file: info.downloadedFile, version: info.version, sha512 };
 }
 
 /** Pure: release notes as plain text (the GitHub provider hands over HTML or a per-version list). */
@@ -168,6 +235,8 @@ export class UpdateService {
   private error: string | undefined;
   private checkedAt: string | undefined;
   private canInstall: boolean | undefined;
+  /** System install: what `update-downloaded` reported, for `install()`. */
+  private downloaded: DownloadedUpdate | null = null;
   private token: TokenRecord | null | undefined;
   private feedToken: string | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -205,7 +274,8 @@ export class UpdateService {
   }
 
   private async resolveStatus(snap: Snapshot): Promise<UpdateStatus> {
-    const [policyState, token, canInstallInPlace] = await Promise.all([this.deps.policy.current(), this.loadToken(), this.canInstallInPlace()]);
+    const [policyState, token, system] = await Promise.all([this.deps.policy.current(), this.loadToken(), this.systemAvailability()]);
+    const canInstallInPlace = system ? system.daemonConnected && system.daemonSupportsUpdates : await this.canInstallInPlace();
     const policy = policyState.policy?.settings?.updates;
     const managed = Boolean(policy && (policy.enabled !== undefined || policy.automatic !== undefined));
     const status: UpdateStatus = {
@@ -217,6 +287,11 @@ export class UpdateService {
       tokenStorage: token?.storage ?? 'none',
       managed,
     };
+    if (system && this.deps.systemInstall) {
+      status.systemInstall = { dir: this.deps.systemInstall.dir, daemonConnected: system.daemonConnected, daemonSupportsUpdates: system.daemonSupportsUpdates };
+      if (system.current !== undefined) status.systemInstall.current = system.current;
+      if (system.previous !== undefined) status.systemInstall.previous = system.previous;
+    }
     if (snap.latestVersion !== undefined) status.latestVersion = snap.latestVersion;
     if (snap.releaseNotes !== undefined) status.releaseNotes = snap.releaseNotes;
     if (snap.releaseDate !== undefined) status.releaseDate = snap.releaseDate;
@@ -232,6 +307,10 @@ export class UpdateService {
     } else if (token === null) {
       status.state = 'no-token';
       status.reason = 'Add a GitHub token to read the private release feed.';
+    } else if (this.packaging === 'system') {
+      if (!system?.daemonConnected) status.reason = 'Updates are applied by the rp-code system service (rp-coded), which is not connected right now.';
+      else if (!system.daemonSupportsUpdates) status.reason = 'The installed rp-code system service is too old to apply updates; run the installer once more (Settings → System → Install system integration…).';
+      else status.reason = 'Updates are applied by the rp-code system service: no password prompt, and the previous version is kept for rollback.';
     } else if (this.packaging === 'deb') {
       status.reason = 'Installed from a package: new releases are announced here; install the .deb from the release page.';
     } else if (this.packaging === 'other') {
@@ -271,13 +350,14 @@ export class UpdateService {
     return this.inflightCheck;
   }
 
-  /** Explicit download of an available update (AppImage in a writable location only). */
+  /** Explicit download of an available update (AppImage in a writable location, or a system install with its daemon connected). */
   async download(): Promise<UpdateStatus> {
     await this.assertAllowed();
     if (!(await this.canInstallInPlace())) {
+      if (this.packaging === 'system') throw new RpError('CAPABILITY_FAILED', 'The rp-code system service (rp-coded) is not connected or cannot apply updates; it installs updates for a system install.');
       throw new RpError('CAPABILITY_FAILED', this.packaging === 'deb' ? 'Package installs are notified only: download the .deb from the release page.' : 'This build cannot replace itself; download the AppImage from the release page.');
     }
-    if (this.state === 'downloading' || this.state === 'ready') return this.status();
+    if (this.state === 'downloading' || this.state === 'ready' || this.state === 'installing') return this.status();
     if (this.state !== 'available') throw new RpError('INVALID_ARGUMENT', 'No update is available to download; check for updates first.');
     this.setState('downloading', { progressPercent: 0 });
     // Progress and completion arrive as updater events; a rejection lands in `fail`.
@@ -285,13 +365,45 @@ export class UpdateService {
     return this.status();
   }
 
-  /** Quit and relaunch into the downloaded update. */
+  /**
+   * Quit and relaunch into the downloaded update. AppImage: `quitAndInstall`. System install:
+   * the daemon verifies and swaps the downloaded file in (`apply-update`), the app waits for the
+   * daemon when it restarted itself, then relaunches from `/opt/rp-code/current`. A failure
+   * leaves the update `ready` with the error shown, so it can be retried.
+   */
   async install(): Promise<void> {
     await this.assertAllowed();
+    if (this.state === 'installing') return;
     if (this.state !== 'ready') throw new RpError('INVALID_ARGUMENT', 'No downloaded update to install.');
+    if (this.packaging === 'system' && this.deps.systemInstall) return this.installThroughDaemon(this.deps.systemInstall);
     this.deps.logger.info(`[updates] installing ${this.latestVersion ?? 'update'} and restarting`);
     if (this.deps.beforeRestart) await this.deps.beforeRestart().catch((err: unknown) => this.deps.logger.warn('[updates] pre-restart hook failed', err));
     this.deps.updater.quitAndInstall(false, true);
+  }
+
+  private async installThroughDaemon(system: SystemInstallDeps): Promise<void> {
+    const update = this.downloaded;
+    if (!update) throw new RpError('CAPABILITY_FAILED', 'The downloaded update has no file path or checksum to hand to the system service; check for updates again.');
+    this.setState('installing', { error: undefined });
+    this.deps.logger.info(`[updates] asking rp-coded to install ${update.version} from ${update.file}`);
+    let result: { version: string; restartDaemon: boolean };
+    try {
+      result = await system.applyUpdate(update);
+    } catch (err) {
+      const text = `Applying the update failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500);
+      this.deps.logger.warn(`[updates] ${text}`);
+      this.setState('ready', { error: text });
+      throw err instanceof RpError ? err : new RpError('CAPABILITY_FAILED', text);
+    }
+    this.deps.logger.info(`[updates] rp-coded installed ${result.version}${result.restartDaemon ? '; the daemon restarts itself' : ''}`);
+    if (result.restartDaemon) {
+      const back = await system.waitForDaemon(DAEMON_RESTART_WAIT_MS);
+      if (back) this.deps.logger.info('[updates] rp-coded is back after its restart');
+      else this.deps.logger.warn(`[updates] rp-coded did not come back within ${DAEMON_RESTART_WAIT_MS / 1000} s; relaunching anyway`);
+    }
+    if (this.deps.beforeRestart) await this.deps.beforeRestart().catch((err: unknown) => this.deps.logger.warn('[updates] pre-restart hook failed', err));
+    this.deps.logger.info(`[updates] relaunching from ${system.dir}`);
+    system.relaunch();
   }
 
   /** Store (`string`) or remove (`null`) the GitHub token. Never logged. */
@@ -348,6 +460,8 @@ export class UpdateService {
       this.setState('downloading', { progressPercent: percent });
     });
     u.on('update-downloaded', (info) => {
+      this.downloaded = downloadedUpdate(info);
+      if (this.packaging === 'system' && !this.downloaded) this.deps.logger.warn(`[updates] ${info.version} downloaded but the event carries no file path or checksum; the system service cannot apply it`);
       this.setState('ready', { latestVersion: info.version ?? this.latestVersion, progressPercent: 100, error: undefined });
       this.deps.logger.info(`[updates] ${info.version} downloaded; restart to install`);
     });
@@ -419,7 +533,7 @@ export class UpdateService {
       intervalMs = Math.max(MIN_INTERVAL_MS, (Number.isFinite(hours) && hours > 0 ? hours : 6) * 3_600_000);
       const policy = policyState.policy?.settings?.updates;
       const automatic = policy?.enabled !== false && (policy?.automatic ?? settings.updates.automatic);
-      if (automatic && token && this.state !== 'downloading' && this.state !== 'ready') {
+      if (automatic && token && this.state !== 'downloading' && this.state !== 'ready' && this.state !== 'installing') {
         this.deps.logger.debug('[updates] scheduled check');
         await this.check();
       }
@@ -429,7 +543,22 @@ export class UpdateService {
     this.arm(intervalMs);
   }
 
+  /** System install only: whether the daemon can apply updates right now (never cached: the daemon comes and goes). */
+  private async systemAvailability(): Promise<SystemInstallAvailability | null> {
+    if (this.packaging !== 'system' || !this.deps.systemInstall) return null;
+    try {
+      return await this.deps.systemInstall.available();
+    } catch (err) {
+      this.deps.logger.warn('[updates] cannot query the system service', err);
+      return { daemonConnected: false, daemonSupportsUpdates: false };
+    }
+  }
+
   private async canInstallInPlace(): Promise<boolean> {
+    if (this.packaging === 'system') {
+      const system = await this.systemAvailability();
+      return Boolean(system && system.daemonConnected && system.daemonSupportsUpdates);
+    }
     if (this.canInstall !== undefined) return this.canInstall;
     if (this.packaging !== 'appimage' || !this.deps.appImagePath) {
       this.canInstall = false;

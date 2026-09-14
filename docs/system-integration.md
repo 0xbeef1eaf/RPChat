@@ -50,11 +50,14 @@ sudo squashfs-root/resources/system/install.sh --user "$USER" --app-bin "$(readl
 rm -r squashfs-root
 ```
 
-Always pass `--app-bin` with the **`.AppImage` itself**. The `rp-code` binary inside
-`squashfs-root` only runs while the whole extraction is around (it loads `libffmpeg.so` and its
-resources from next to itself), so a launcher pointing there breaks as soon as the folder is
-removed. The installer refuses to auto-pick such a path, and looks for an `rp-code*.AppImage` in
-`~/Applications`, `~/.local/bin`, `~/Downloads` and `~` when no `--app-bin` is given.
+Always pass `--app-bin` with the **`.AppImage` itself**. With an AppImage the installer does a
+[system install](#system-install) by default: it unpacks the AppImage to `/opt/rp-code/current`
+and points every launcher there (pass `--no-system-install` to keep launching the AppImage). The
+`rp-code` binary inside a hand-made `squashfs-root` only runs while the whole extraction is around
+(it loads `libffmpeg.so` and its resources from next to itself), so a launcher pointing there
+breaks as soon as the folder is removed. The installer refuses to auto-pick such a path; without
+`--app-bin` it takes an existing `/opt/rp-code/current/rp-code`, then looks for an
+`rp-code*.AppImage` in `~/Applications`, `~/.local/bin`, `~/Downloads` and `~`.
 
 The `.deb` package runs `install.sh --autostart none` on installation, which does the
 system-wide steps (group, daemon, udev rule, policy directory) and leaves group membership and
@@ -65,8 +68,13 @@ Flags: `--user <name>` (default: the user behind `sudo`/`pkexec`), `--app-bin <p
 executable or AppImage the autostart and menu entries should launch), `--autostart xdg|systemd|none`
 (default `xdg`), `--menu-entry yes|no` (default `yes`: an application menu entry and icon under
 `/usr/local/share`, so an AppImage shows up in launchers; the `.deb` passes `no` because the
-package ships its own), `--policy-template` (write the example policy if none exists), `--dry-run`
-(print the steps without changing anything), `--uninstall`.
+package ships its own), `--policy-template` (write the example policy if none exists),
+`--system-install` / `--no-system-install` (unpack the AppImage to `/opt/rp-code`; the default is
+yes for an AppImage, see below), `--dry-run` (print the steps without changing anything),
+`--uninstall`. System-install maintenance: `--rollback` (swap the previous version back),
+`--remove` (delete the system install, keep the daemon), `--refresh-daemon-files` (what the
+daemon runs after updating itself). `--prefix <dir>` relocates every system path under `<dir>`
+and skips groups, services and udev — for tests (`scripts/install-smoke.sh`).
 
 Browser extension flags (see [docs/browser-extension.md](browser-extension.md)):
 `--browser-extension <id>` with `--browser-update-url <url>` (and optionally `--browser-port <n>`,
@@ -87,13 +95,93 @@ re-running is safe.
 | 2 | Installs the daemon to `/usr/local/libexec/rp-code/rp-coded` (plus `README.md`, `POLICY.md`, `policy.example.json`), the unit `/etc/systemd/system/rp-coded.service`, creates `/etc/rp-code` (`0755`, the one path under `/etc` the hardened service may write to) and runs `systemctl enable --now rp-coded`. |
 | 3 | Installs `/etc/udev/rules.d/70-rp-code.rules` (makes `/dev/uinput` group-writable for `rp-code` so group members can use it directly; the daemon itself is root and does not need it), `/etc/modules-load.d/rp-code.conf` (`uinput` at boot), loads the module now and reloads udev. |
 | 4 | Policy file: **nothing is written by default** — the file is write-once and you can create it from the app afterwards (below). With `--policy-template`, writes `/etc/rp-code/policy.json` from the example **only if it does not exist**; an existing file is never modified (its ownership is corrected to `root:root 0644` if needed). |
-| 5 | Application menu entry `/usr/local/share/applications/rp-code.desktop` (`Exec=<app> %U`) and icon `/usr/local/share/icons/hicolor/512x512/apps/rp-code.png`, refreshed with `update-desktop-database`/`gtk-update-icon-cache` when present. Skipped with `--menu-entry no` (the `.deb` does this, it ships its own entry). |
-| 6 | Autostart for your user: `~/.config/autostart/rp-code.desktop` (`Exec=<app> --hidden`, XDG) or `~/.config/systemd/user/rp-code.service` (enabled with `systemctl --user` when a session bus is reachable, otherwise it prints the command). Switching methods removes the other entry. It also prints the Hyprland `exec-once = <app> --hidden` line for people who prefer that. |
-| 7 | Browser policy, only with `--browser-extension`: `rp-code.json` in `/etc/chromium/policies/managed` and `/etc/opt/chrome/policies/managed` (always) and in the Brave, Edge, Vivaldi and Opera policy directories when that browser looks installed (binary on `PATH` or its `/etc` config directory present). `--dry-run` lists every file it would write. |
-| 8 | Runs `rp-coded --check-devices` and prints what the daemon can see. |
+| 5 | **System install** (AppImage only, unless `--no-system-install`): unpacks the AppImage into `/opt/rp-code/current` (root-owned), keeps the old tree as `/opt/rp-code/previous`, writes `/opt/rp-code/versions.json` and links `/usr/local/bin/rp-code`. Every launcher below then points at `/opt/rp-code/current/rp-code`. See [System install](#system-install). |
+| 6 | Application menu entry `/usr/local/share/applications/rp-code.desktop` (`Exec=<app> %U`) and icon `/usr/local/share/icons/hicolor/512x512/apps/rp-code.png`, refreshed with `update-desktop-database`/`gtk-update-icon-cache` when present. Skipped with `--menu-entry no` (the `.deb` does this, it ships its own entry). |
+| 7 | Autostart for your user: `~/.config/autostart/rp-code.desktop` (`Exec=<app> --hidden`, XDG) or `~/.config/systemd/user/rp-code.service` (enabled with `systemctl --user` when a session bus is reachable, otherwise it prints the command). Switching methods removes the other entry. It also prints the Hyprland `exec-once = <app> --hidden` line for people who prefer that. |
+| 8 | Browser policy, only with `--browser-extension`: `rp-code.json` in `/etc/chromium/policies/managed` and `/etc/opt/chrome/policies/managed` (always) and in the Brave, Edge, Vivaldi and Opera policy directories when that browser looks installed (binary on `PATH` or its `/etc` config directory present). `--dry-run` lists every file it would write. |
+| 9 | Runs `rp-coded --check-devices` and prints what the daemon can see. |
 
 The daemon creates `/run/rp-code/` (`0750 root:rp-code`) and the socket
 `/run/rp-code/daemon.sock` (`0660 root:rp-code`) when it starts. Logs: `journalctl -u rp-coded`.
+
+## System install
+
+An AppImage that updates itself must live in a folder you can write to, and every update
+rewrites the file you launch. The system install puts the app where the daemon can maintain it
+instead, so updates are applied by `rp-coded` — no `pkexec` prompt, and the previous version stays
+around for a rollback. `install.sh` does it by default when `--app-bin` is an AppImage (the
+Settings → System installer ticks *Install the app to /opt/rp-code* by default; untick it or pass
+`--no-system-install` to keep launching the AppImage).
+
+### Layout
+
+| Path | Contents |
+|---|---|
+| `/opt/rp-code/current/` | The unpacked app — what `./rp-code-*.AppImage --appimage-extract` produces: `rp-code` (the Electron binary), `libffmpeg.so`, `resources/`, … |
+| `/opt/rp-code/previous/` | The version that was current before the last update; the rollback target. |
+| `/opt/rp-code/versions.json` | `{ "current": { "version", "installedAt", "source" }, "previous"?: { … } }` — `source` is the AppImage the tree came from. |
+| `/usr/local/bin/rp-code` | Symlink to `/opt/rp-code/current/rp-code`. |
+
+Everything under `/opt/rp-code` is `root:root`, directories `0755`, files `0755`/`0644`, never
+group- or user-writable. That is deliberate: the path is what the daemon relaunches
+(`app.allowQuit: false`) and what future AppArmor profiles key on, so nothing a user can change
+runs from it. The menu entry, the autostart entry and the daemon's relaunch registration all
+use `/opt/rp-code/current/rp-code`, so a swap takes effect at the next start. The `.deb` package
+uses `/opt/rp-code/rp-code` and is unrelated; the two do not share files.
+
+Settings → System shows "System install: /opt/rp-code/current (v1.2.3), previous v1.2.2" while
+the app runs from there and the daemon is connected; Settings → Updates then says updates are
+applied by the system service.
+
+### How an update is applied
+
+1. The app checks GitHub as before and downloads the release AppImage into
+   `~/.cache/rp-code-updater/pending/` (electron-updater; a full download, since there is no old
+   AppImage to diff against).
+2. *Apply update and restart* sends `apply-update` to the daemon with the file path, the version
+   and the `sha512` from the release manifest (`latest-linux.yml`). The request may take a
+   minute; the app waits up to five.
+3. The daemon refuses unless the peer is a non-root user and the file is a regular file that user
+   owns, under their home, at most 1 GiB, opened without following symlinks. It copies the file
+   while hashing it and stops on a checksum mismatch. The version must be semver and not older
+   than the installed one unless the policy says `settings.updates.allowDowngrade: true`.
+4. The copy is extracted (`--appimage-extract`) **as the requesting user** in
+   `/opt/rp-code/.staging-<uid>` (`0700`, owned by that user) — untrusted archive contents are never
+   unpacked by root. The tree must contain `rp-code`, `libffmpeg.so` and `resources/app.asar`,
+   and no setuid/setgid bits, hard links or symlinks pointing outside it; then it is chowned to
+   `root:root` and normalised to `0755`/`0644`.
+5. Atomic swap: `previous` is removed, `current` becomes `previous`, the new tree becomes
+   `current`; `versions.json` is rewritten. Any failure before the swap leaves the install
+   untouched; a failed final rename puts the old `current` back.
+6. If the bundle ships a newer `rp-coded` (`resources/bin/rp-coded --version`), the daemon runs
+   the bundle's `install.sh --refresh-daemon-files` as root — the binary (`.new` + rename), the
+   unit, the udev rule, the module list, docs, menu entry and icon — answers `restartDaemon: true`
+   and restarts itself once no input lock is active (`systemctl restart rp-coded` under systemd,
+   a re-exec otherwise). Every step is in `journalctl -u rp-coded`.
+7. The app waits for the daemon to answer again (up to 30 s), unregisters its keepalive
+   registration, and relaunches `/opt/rp-code/current/rp-code`.
+
+Errors come back as `REFUSED` (not a system install, root, foreign or unreadable file,
+downgrade), `INVALID` (checksum mismatch, bad version, a tree that fails the checks) or
+`INTERNAL` (extraction or I/O failure), and Settings → Updates shows them; the download stays
+ready so you can retry.
+
+The daemon that is already installed must know `apply-update` (rp-coded 0.2 and later). The
+**first** update from an older daemon still needs the installer once: Settings → System →
+*Install system integration…* (pkexec) puts the new daemon in place; after that the daemon
+updates itself along with the app.
+
+### Rollback and removal
+
+```sh
+sudo /opt/rp-code/current/resources/system/install.sh --rollback   # previous ⇄ current, versions.json swapped
+sudo /opt/rp-code/current/resources/system/install.sh --remove     # delete /opt/rp-code/{current,previous,versions.json} and the symlink
+```
+
+`--rollback` is the manual escape hatch when a new version misbehaves: restart the app
+afterwards; the next update goes forward again (an older version is only refused by
+`apply-update`, never by the installer). `--uninstall` removes the system install together with
+the daemon.
 
 ## How a lock works
 
@@ -156,7 +244,9 @@ Points worth knowing:
   settings.
 - `settings.updates` controls the in-app updater: `{ "enabled": false }` switches update checks
   off on this machine (Settings → Updates shows "disabled by policy" and hides the token field),
-  `{ "automatic": false }` only pins the "check automatically" toggle so users still update by hand.
+  `{ "automatic": false }` only pins the "check automatically" toggle so users still update by hand,
+  and `{ "allowDowngrade": true }` lets the daemon install an older version over a system install
+  (refused by default).
 - `app.allowQuit: false` with `app.users: ["alice"]` keeps the app running for those users: no
   way to quit in the UI and a relaunch by the daemon after a kill or crash. Details below.
 
@@ -249,8 +339,10 @@ sudo native/rp-coded/install.sh --uninstall --user "$USER"
 ```
 
 `install.sh --uninstall` stops and disables the service, removes the unit, the binary
-directory, the udev rule, the modules-load entry, your autostart entry, your group membership,
-the `rp-code` group and any browser policy files (`rp-code.json`) the installer wrote. It **keeps `/etc/rp-code/policy.json`** and prints how to remove it
+directory, the udev rule, the modules-load entry, the [system install](#system-install)
+(`/opt/rp-code/{current,previous,versions.json}` and `/usr/local/bin/rp-code`), your autostart
+entry, your group membership, the `rp-code` group and any browser policy files (`rp-code.json`)
+the installer wrote. It **keeps `/etc/rp-code/policy.json`** and prints how to remove it
 (`sudo rm -r /etc/rp-code`). Stopping the daemon also ends the relaunch guard of
 `app.allowQuit: false`; the running app keeps hiding its Quit item until the policy file is
 removed or changed (it re-reads the file within a minute). The packaged app ships the script at
@@ -283,6 +375,14 @@ removed or changed (it re-reads the file within a minute). The packaged app ship
   `rp-coded virtual input` device.
 - **Without the daemon** there is no input locking or injection at all: `sdk.input` calls fail
   with `CAPABILITY_FAILED` until the system integration is installed and connected.
+- **Updates are verified, extracted as the user and installed as root.** `apply-update` only
+  accepts a file the requesting user owns under their home, hashes exactly the bytes it later
+  extracts (SHA-512 from the release manifest; release signing is not implemented yet, so the
+  manifest fetched over HTTPS with the user's token is the root of trust), unpacks it with that
+  user's privileges, refuses trees with setuid bits, hard links or escaping symlinks, and only
+  then takes ownership. A member of `rp-code` can therefore install any *genuine release* into
+  `/opt/rp-code` — including an older one when the policy allows downgrades — but never
+  arbitrary files.
 - **Relaunching runs the user's own program as the user.** A registration is only accepted from
   a non-root uid, for an existing executable, with at most 32 arguments and a fixed whitelist of
   environment variables (values ≤ 4 KiB); the daemon adds nothing of its own, drops root before

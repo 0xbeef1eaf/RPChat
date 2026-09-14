@@ -9,7 +9,9 @@ import { POLICY_FILE_PATH, RpError } from '@rp/shared';
 const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTimersPerSession', 'minRepeatIntervalMs', 'minDelayMs'] as const;
 const MEMORY_KEYS = ['enabled', 'consolidateEveryTurns', 'maxEntriesPerCharacter', 'promptBudgetTokens'] as const;
 const SENSES_KEYS = ['includeInPrompt', 'watchDirs', 'calendarSources'] as const;
-const UPDATES_KEYS = ['automatic', 'enabled'] as const;
+const UPDATES_KEYS = ['automatic', 'enabled', 'allowDowngrade'] as const;
+/** `updates.enabled` and `updates.allowDowngrade` are updater/daemon rules, not settings the UI pins. */
+const UPDATES_MANAGED_KEYS = ['automatic', 'enabled'] as const;
 const BROWSER_KEYS = ['allowBlocking', 'allowEval', 'allowHistory', 'homePage'] as const;
 const BACKENDS = new Set(['auto', 'electron', 'hyprland']);
 
@@ -181,7 +183,7 @@ export function managedPaths(policy: PolicyFile | null | undefined): ManagedSett
   for (const k of MEMORY_KEYS) if (s.memory?.[k] !== undefined) out.add(`memory.${k}`);
   for (const k of SENSES_KEYS) if (s.senses?.[k] !== undefined) out.add(`senses.${k}`);
   if (s.displayBackend !== undefined) out.add('displayBackend');
-  for (const k of UPDATES_KEYS) if (s.updates?.[k] !== undefined) out.add(`updates.${k}`);
+  for (const k of UPDATES_MANAGED_KEYS) if (s.updates?.[k] !== undefined) out.add(`updates.${k}`);
   for (const k of BROWSER_KEYS) if (s.browser?.[k] !== undefined) out.add(`browser.${k}`);
   return [...out].sort();
 }

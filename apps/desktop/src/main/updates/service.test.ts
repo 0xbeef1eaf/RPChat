@@ -6,10 +6,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettings, PolicyFile, UpdateStatus } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import { defaultSettings, mergeSettings } from '@rp/core';
-import { DEFAULT_INITIAL_DELAY_MS, TOKEN_FILENAME, TOKEN_REJECTED_MESSAGE, UpdateService, describeUpdateError, detectPackaging, plainReleaseNotes } from './service.js';
-import type { SafeStorageLike, UpdateInfoLike, UpdateServiceDeps, UpdaterLike } from './service.js';
+import { DAEMON_RESTART_WAIT_MS, DEFAULT_INITIAL_DELAY_MS, TOKEN_FILENAME, TOKEN_REJECTED_MESSAGE, UpdateService, appImageSha512, describeUpdateError, detectPackaging, downloadedUpdate, plainReleaseNotes } from './service.js';
+import type { DownloadedUpdate, SafeStorageLike, SystemInstallAvailability, SystemInstallDeps, UpdateInfoLike, UpdateServiceDeps, UpdaterLike } from './service.js';
 
-const INFO: UpdateInfoLike = { version: '0.1.42', releaseNotes: '<p>Fixes &amp; <b>features</b></p><ul><li>one</li></ul>', releaseDate: '2026-09-01T00:00:00.000Z' };
+const SHA = 'EV5qw9s6myz4qOYqpSdkdnAXgkGaE6sY6WbkRk4UN8uKUmeuHFDiSvQmFBB1/Wl/KOkcyWALmn53p4t5fr1ByQ==';
+const INFO: UpdateInfoLike = {
+  version: '0.1.42',
+  releaseNotes: '<p>Fixes &amp; <b>features</b></p><ul><li>one</li></ul>',
+  releaseDate: '2026-09-01T00:00:00.000Z',
+  files: [{ url: 'rp-code-0.1.42-linux-x86_64.AppImage', sha512: SHA, size: 142018248 }],
+  sha512: SHA,
+};
 
 /** electron-updater stand-in: same methods/events, scripted outcome. */
 class FakeUpdater extends EventEmitter implements UpdaterLike {
@@ -49,8 +56,8 @@ class FakeUpdater extends EventEmitter implements UpdaterLike {
     await new Promise((r) => setTimeout(r, 1));
     this.emit('download-progress', { percent: 40, transferred: 40, total: 100 });
     await Promise.resolve();
-    this.emit('update-downloaded', { ...INFO, downloadedFile: '/tmp/rp-code.AppImage' });
-    return ['/tmp/rp-code.AppImage'];
+    this.emit('update-downloaded', { ...INFO, downloadedFile: '/home/alice/.cache/rp-code-updater/pending/rp-code-0.1.42-linux-x86_64.AppImage' });
+    return ['/home/alice/.cache/rp-code-updater/pending/rp-code-0.1.42-linux-x86_64.AppImage'];
   }
 
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void {
@@ -360,6 +367,8 @@ describe('UpdateService', () => {
 
   it('detects packaging and normalises release notes', () => {
     expect(detectPackaging({ isPackaged: false, execPath: '/x' })).toBe('dev');
+    expect(detectPackaging({ isPackaged: true, execPath: '/opt/rp-code/current/rp-code', systemInstall: fakeSystemInstall().deps })).toBe('system');
+    expect(detectPackaging({ isPackaged: false, execPath: '/opt/rp-code/current/rp-code', systemInstall: fakeSystemInstall().deps })).toBe('dev');
     expect(detectPackaging({ isPackaged: true, appImagePath: '/a/b.AppImage', execPath: '/tmp/.mount_x/rp-code' })).toBe('appimage');
     expect(detectPackaging({ isPackaged: true, execPath: '/opt/rp-code/rp-code' })).toBe('deb');
     expect(detectPackaging({ isPackaged: true, execPath: '/usr/lib/rp-code/rp-code' })).toBe('deb');
@@ -369,5 +378,141 @@ describe('UpdateService', () => {
     expect(plainReleaseNotes([{ version: '1.2.0', note: 'a<br>b' }, { version: '1.1.0', note: null }])).toBe('1.2.0: a\nb\n1.1.0:');
     expect(mergeSettings({ providers: [] }).updates).toEqual({ automatic: true, checkIntervalHours: 6 });
     expect(mergeSettings({ updates: { automatic: false } } as Partial<AppSettings>).updates).toEqual({ automatic: false, checkIntervalHours: 6 });
+  });
+});
+
+/** The system install's daemon side, scripted. */
+function fakeSystemInstall(script: { availability?: SystemInstallAvailability; applyError?: Error; restartDaemon?: boolean; daemonBack?: boolean } = {}) {
+  const applied: DownloadedUpdate[] = [];
+  const events: string[] = [];
+  const deps: SystemInstallDeps = {
+    dir: '/opt/rp-code/current',
+    available: async () => script.availability ?? { daemonConnected: true, daemonSupportsUpdates: true, current: '0.1.7', previous: '0.1.6' },
+    applyUpdate: async (input) => {
+      events.push('apply');
+      applied.push(input);
+      if (script.applyError) throw script.applyError;
+      return { version: input.version, restartDaemon: script.restartDaemon ?? false };
+    },
+    waitForDaemon: async (timeoutMs) => {
+      events.push(`wait:${timeoutMs}`);
+      return script.daemonBack ?? true;
+    },
+    relaunch: () => {
+      events.push('relaunch');
+    },
+  };
+  return { deps, applied, events };
+}
+
+describe('UpdateService (system install)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  it('extracts the AppImage checksum and the downloaded record from the updater events', () => {
+    expect(appImageSha512(INFO)).toBe(SHA);
+    expect(appImageSha512({ files: [{ url: 'x.deb', sha512: 'd' }, { url: 'y.AppImage', sha512: 'a' }] })).toBe('a');
+    expect(appImageSha512({ files: [{ url: 'x.deb', sha512: 'd' }] })).toBe('d');
+    expect(appImageSha512({ sha512: 'legacy' })).toBe('legacy');
+    expect(appImageSha512({})).toBe('');
+    expect(downloadedUpdate({ ...INFO, downloadedFile: '/home/a/x.AppImage' })).toEqual({ file: '/home/a/x.AppImage', version: '0.1.42', sha512: SHA });
+    expect(downloadedUpdate({ ...INFO })).toBeNull();
+    expect(downloadedUpdate({ version: '1.0.0', downloadedFile: '/x' })).toBeNull();
+  });
+
+  it('reports the system install, downloads, hands the file to the daemon, waits for its restart and relaunches', async () => {
+    const system = fakeSystemInstall({ restartDaemon: true });
+    const beforeRestart: string[] = [];
+    const h = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: system.deps, settings: { automatic: false }, beforeRestart: async () => void beforeRestart.push('before') }));
+    expect(h.service.packaging).toBe('system');
+    await h.service.setToken('tok');
+    const idle = await h.service.status();
+    expect(idle).toMatchObject({ packaging: 'system', canInstallInPlace: true, systemInstall: { dir: '/opt/rp-code/current', daemonConnected: true, daemonSupportsUpdates: true, current: '0.1.7', previous: '0.1.6' } });
+    expect(idle.reason).toMatch(/applied by the rp-code system service/);
+    h.updater.outcome = { available: true };
+    expect((await h.service.check()).state).toBe('available');
+    await expect(h.service.install()).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect((await h.service.download()).state).toBe('downloading');
+    await settle();
+    expect((await h.service.status()).state).toBe('ready');
+    h.statuses.length = 0;
+    await h.service.install();
+    expect(system.applied).toEqual([{ file: '/home/alice/.cache/rp-code-updater/pending/rp-code-0.1.42-linux-x86_64.AppImage', version: '0.1.42', sha512: SHA }]);
+    expect(system.events).toEqual(['apply', `wait:${DAEMON_RESTART_WAIT_MS}`, 'relaunch']);
+    expect(beforeRestart).toEqual(['before']);
+    expect(h.updater.installs).toEqual([]);
+    await settle();
+    expect(h.statuses.map((s) => s.state)).toEqual(['installing']);
+    expect(h.logs.some((l) => /rp-coded installed 0.1.42; the daemon restarts itself/.test(l))).toBe(true);
+    expect(h.logs.some((l) => /rp-coded is back/.test(l))).toBe(true);
+    // A second install while installing is a no-op.
+    await h.service.install();
+    expect(system.applied).toHaveLength(1);
+  });
+
+  it('does not wait for the daemon when it did not restart, and relaunches even when it does not come back', async () => {
+    const quick = fakeSystemInstall({ restartDaemon: false });
+    const h1 = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: quick.deps, settings: { automatic: true } }));
+    await h1.service.setToken('tok');
+    h1.updater.outcome = { available: true };
+    await h1.service.check();
+    await settle();
+    expect((await h1.service.status()).state).toBe('ready');
+    await h1.service.install();
+    expect(quick.events).toEqual(['apply', 'relaunch']);
+
+    const slow = fakeSystemInstall({ restartDaemon: true, daemonBack: false });
+    const h2 = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: slow.deps, settings: { automatic: true } }));
+    await h2.service.setToken('tok');
+    h2.updater.outcome = { available: true };
+    await h2.service.check();
+    await settle();
+    await h2.service.install();
+    expect(slow.events).toEqual(['apply', `wait:${DAEMON_RESTART_WAIT_MS}`, 'relaunch']);
+    expect(h2.logs.some((l) => /did not come back within 30 s; relaunching anyway/.test(l))).toBe(true);
+  });
+
+  it('surfaces a daemon failure, keeps the download ready for a retry and never relaunches', async () => {
+    const system = fakeSystemInstall({ applyError: new RpError('INVALID_ARGUMENT', 'rp-coded refused apply-update: sha512 mismatch') });
+    const h = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: system.deps, settings: { automatic: true } }));
+    await h.service.setToken('tok');
+    h.updater.outcome = { available: true };
+    await h.service.check();
+    await settle();
+    await expect(h.service.install()).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', message: /sha512 mismatch/ });
+    expect(system.events).toEqual(['apply']);
+    const after = await h.service.status();
+    expect(after).toMatchObject({ state: 'ready', error: 'Applying the update failed: rp-coded refused apply-update: sha512 mismatch' });
+    // Retry works once the daemon accepts.
+    system.deps.applyUpdate = async (input) => {
+      system.events.push('apply-ok');
+      return { version: input.version, restartDaemon: false };
+    };
+    await h.service.install();
+    expect(system.events).toEqual(['apply', 'apply-ok', 'relaunch']);
+    expect((await h.service.status()).error).toBeUndefined();
+  });
+
+  it('cannot download or install while the daemon is missing or too old, and says why', async () => {
+    const offline = fakeSystemInstall({ availability: { daemonConnected: false, daemonSupportsUpdates: false } });
+    const h = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: offline.deps, settings: { automatic: true } }));
+    await h.service.setToken('tok');
+    h.updater.outcome = { available: true };
+    const status = await h.service.check();
+    expect(h.updater.autoDownload).toBe(false);
+    expect(status).toMatchObject({ state: 'available', packaging: 'system', canInstallInPlace: false, systemInstall: { daemonConnected: false } });
+    expect(status.reason).toMatch(/not connected/);
+    await expect(h.service.download()).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: /system service/ });
+    const old = fakeSystemInstall({ availability: { daemonConnected: true, daemonSupportsUpdates: false } });
+    const h2 = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: old.deps }));
+    await h2.service.setToken('tok');
+    const s2 = await h2.service.status();
+    expect(s2.canInstallInPlace).toBe(false);
+    expect(s2.reason).toMatch(/too old/);
   });
 });

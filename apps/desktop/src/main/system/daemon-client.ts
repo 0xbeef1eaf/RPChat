@@ -1,7 +1,7 @@
 /**
  * Client for the `rp-coded` root daemon (docs/spec/system.md): JSON lines over a unix
  * socket, connect on demand, `hello` handshake, one request in flight at a time with a
- * 10 s timeout, reconnect on the next request after the socket drops.
+ * 10 s timeout (`apply-update`: 5 min), reconnect on the next request after the socket drops.
  */
 import * as net from 'node:net';
 import type { DaemonRequest, DaemonResponse, DaemonStatus, PolicyFile, RpErrorCode } from '@rp/shared';
@@ -10,6 +10,10 @@ import { DAEMON_SOCKET_PATH, RpError } from '@rp/shared';
 export type HelloResponse = Extract<DaemonResponse, { op: 'hello' }>;
 export type StatusResponse = Extract<DaemonResponse, { op: 'status' }>;
 export type SetPolicyResponse = Extract<DaemonResponse, { op: 'set-policy' }>;
+export type ApplyUpdateResponse = Extract<DaemonResponse, { op: 'apply-update' }>;
+
+/** `apply-update` extracts a few hundred MB and may copy the daemon: give it minutes, not seconds. */
+export const APPLY_UPDATE_TIMEOUT_MS = 5 * 60_000;
 export type DaemonErrorResponse = Extract<DaemonResponse, { ok: false }>;
 
 /** Thrown for `{ ok: false }` answers; `code` is the daemon's code. */
@@ -47,6 +51,8 @@ export interface DaemonClientOptions {
   socketPath?: string;
   /** Per-request timeout. Default 10 000. */
   timeoutMs?: number;
+  /** Timeout for `apply-update`. Default `APPLY_UPDATE_TIMEOUT_MS`. */
+  applyTimeoutMs?: number;
   /** How long a failed connection attempt is remembered before `isAvailable` retries. Default 5000. */
   retryDelayMs?: number;
   logger?: Pick<Console, 'debug' | 'warn'>;
@@ -63,6 +69,7 @@ interface Pending {
 export class DaemonClient {
   readonly socketPath: string;
   private readonly timeoutMs: number;
+  private readonly applyTimeoutMs: number;
   private readonly retryDelayMs: number;
   private readonly logger: DaemonClientOptions['logger'];
   private readonly connectImpl: (socketPath: string) => net.Socket;
@@ -77,6 +84,7 @@ export class DaemonClient {
   constructor(opts: DaemonClientOptions = {}) {
     this.socketPath = opts.socketPath ?? DAEMON_SOCKET_PATH;
     this.timeoutMs = opts.timeoutMs ?? 10_000;
+    this.applyTimeoutMs = opts.applyTimeoutMs ?? APPLY_UPDATE_TIMEOUT_MS;
     this.retryDelayMs = opts.retryDelayMs ?? 5000;
     this.logger = opts.logger;
     this.connectImpl = opts.connect ?? ((p) => net.connect(p));
@@ -111,7 +119,7 @@ export class DaemonClient {
   /** Send a request; connects and performs `hello` first when needed. Rejects with `DaemonError` for `{ ok: false }`. */
   async request<R extends DaemonResponse = DaemonResponse>(req: DaemonRequest): Promise<Extract<R, { ok: true }>> {
     if (req.op !== 'hello') await this.ensureHello(this.timeoutMs);
-    const res = await this.send(req, this.timeoutMs);
+    const res = await this.send(req, req.op === 'apply-update' ? this.applyTimeoutMs : this.timeoutMs);
     if (!res.ok) throw new DaemonError(res.code, res.error);
     return res as Extract<R, { ok: true }>;
   }
@@ -120,9 +128,52 @@ export class DaemonClient {
     try {
       const hello = await this.ensureHello(this.timeoutMs);
       const status = await this.request<StatusResponse>({ op: 'status' });
-      return { connected: true, version: hello.version, socketPath: this.socketPath, devices: hello.devices, locked: status.locked };
+      const out: DaemonStatus = { connected: true, version: hello.version, socketPath: this.socketPath, devices: hello.devices, locked: status.locked };
+      if (status.keepalive) out.keepalive = status.keepalive;
+      if (status.install) out.install = status.install;
+      return out;
     } catch (err) {
       return { connected: false, socketPath: this.socketPath, error: (err as Error).message };
+    }
+  }
+
+  /**
+   * System install: have the daemon verify, extract and swap in a downloaded AppImage. Resolves
+   * with the installed version and whether the daemon restarts itself afterwards. Daemon errors
+   * come back as `RpError` (`REFUSED` → `PERMISSION_DENIED`, `INVALID` → `INVALID_ARGUMENT`,
+   * `INTERNAL`/`BUSY` → `CAPABILITY_FAILED`, `details.daemonCode` keeps the original).
+   */
+  async applyUpdate(input: { file: string; version: string; sha512: string }): Promise<{ version: string; restartDaemon: boolean }> {
+    try {
+      const res = await this.request<ApplyUpdateResponse>({ op: 'apply-update', file: input.file, version: input.version, sha512: input.sha512 });
+      return { version: res.version, restartDaemon: res.restartDaemon };
+    } catch (err) {
+      throw toRpError(err, 'apply-update');
+    }
+  }
+
+  /**
+   * Wait until `hello` succeeds (the daemon restarted after updating itself): retries with a
+   * growing delay (`initialDelayMs` doubling up to 5 s) until `timeoutMs` is up. Resolves with
+   * whether it is reachable; never rejects.
+   */
+  async waitForHello(timeoutMs: number, initialDelayMs = 500): Promise<boolean> {
+    // A fresh handshake, not the cached one: the point is to prove the daemon answers *now*.
+    this.dropSocket(new Error('waiting for rp-coded to come back'));
+    const deadline = Date.now() + timeoutMs;
+    let delay = initialDelayMs;
+    for (;;) {
+      try {
+        await this.ensureHello(Math.min(this.timeoutMs, 2000));
+        this.lastFailureAt = 0;
+        return true;
+      } catch (err) {
+        this.lastError = (err as Error).message;
+      }
+      const left = deadline - Date.now();
+      if (left <= 0) return false;
+      await new Promise((r) => setTimeout(r, Math.min(delay, left)));
+      delay = Math.min(delay * 2, 5000);
     }
   }
 

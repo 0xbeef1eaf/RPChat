@@ -12,6 +12,7 @@ export function SystemSection() {
   const [installerPath, setInstallerPath] = useState<string | null>(null);
   const [installDialog, setInstallDialog] = useState(false);
   const [autostartWanted, setAutostartWanted] = useState(true);
+  const [systemInstallWanted, setSystemInstallWanted] = useState(true);
   const [running, setRunning] = useState(false);
   const [output, setOutput] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -37,7 +38,7 @@ export function SystemSection() {
     setRunning(true);
     setOutput(null);
     try {
-      const r = await api().system.install({ autostart: autostartWanted });
+      const r = await api().system.install({ autostart: autostartWanted, systemInstall: systemInstallWanted });
       setOutput({ ok: r.ok, text: r.output || (r.ok ? 'Done.' : 'The installer reported a failure without output.') });
       toast(r.ok ? 'success' : 'error', r.ok ? 'System integration installed' : 'Installer failed');
       await Promise.all([load(), refreshSettings().catch(() => undefined)]);
@@ -91,7 +92,7 @@ export function SystemSection() {
   }
 
   const linux = status.platform === 'linux';
-  const { daemon, policy, udev, autostart } = status;
+  const { daemon, policy, udev, autostart, install: appInstall } = status;
   const reloginHint = udev.rulePresent && !udev.inGroup;
 
   return (
@@ -154,6 +155,21 @@ export function SystemSection() {
               </>
             ) : null}
           </dl>
+        </div>
+
+        <div className="card">
+          <div className="row" style={{ marginBottom: 6 }}>
+            <h3 className="grow">App install</h3>
+            <span className={appInstall.systemInstall ? 'badge badge-success' : 'badge'}>
+              {appInstall.systemInstall ? 'system install' : appInstall.execInDir ? 'system install (daemon offline)' : appInstall.canSystemInstall ? 'AppImage' : 'not a system install'}
+            </span>
+          </div>
+          <p className="muted small">{systemInstallLine(appInstall)}</p>
+          {appInstall.systemInstall && !appInstall.daemonSupportsUpdates ? (
+            <div className="callout callout-warning small" style={{ marginTop: 8 }}>
+              The installed daemon is too old to apply updates by itself; run the installer below once to update it.
+            </div>
+          ) : null}
         </div>
 
         <div className="card">
@@ -257,7 +273,10 @@ export function SystemSection() {
         <div className="row wrap">
           <div className="item-text grow">
             <span className="item-title">Install system integration</span>
-            <span className="item-sub">Creates the group and udev rule and installs the root daemon service; asks for your password (pkexec).</span>
+            <span className="item-sub">
+              Creates the group and udev rule and installs the root daemon service{appInstall.canSystemInstall ? `; unpacks the AppImage to ${appInstall.dir} so updates need no password` : ''}; asks for your
+              password (pkexec).
+            </span>
           </div>
           <button type="button" className="btn btn-primary btn-sm" onClick={() => setInstallDialog(true)} disabled={!linux || !status.installerAvailable || running}>
             {running ? 'Running…' : 'Install system integration…'}
@@ -318,11 +337,23 @@ export function SystemSection() {
               creates <code>/etc/rp-code</code> for the policy file (nothing is written there; you can create the policy from this tab afterwards)
             </li>
             <li>optionally registers the app to start on login</li>
+            {appInstall.canSystemInstall ? (
+              <li>
+                optionally unpacks this AppImage to <code>{appInstall.dir}</code> (root-owned) and points the menu and autostart entries at it, so later updates
+                are installed by the daemon without a password and the previous version is kept for rollback
+              </li>
+            ) : null}
           </ul>
           <label className="check">
             <input type="checkbox" checked={autostartWanted} onChange={(e) => setAutostartWanted(e.target.checked)} />
             Also start rp-code on login
           </label>
+          {appInstall.canSystemInstall ? (
+            <label className="check">
+              <input type="checkbox" checked={systemInstallWanted} onChange={(e) => setSystemInstallWanted(e.target.checked)} />
+              Install the app to <code>{appInstall.dir}</code> (system install; recommended)
+            </label>
+          ) : null}
           <p className="muted small">You will need to log out and back in for the group membership to apply.</p>
           <div className="form-actions">
             <button type="button" className="btn" onClick={() => setInstallDialog(false)}>
@@ -336,6 +367,15 @@ export function SystemSection() {
       ) : null}
     </div>
   );
+}
+
+/** Pure: the Settings → System "App install" line (docs/system-integration.md "System install"). */
+export function systemInstallLine(install: SystemIntegrationStatus['install']): string {
+  const versions = `${install.dir}${install.current ? ` (v${install.current})` : ''}${install.previous ? `, previous v${install.previous}` : ''}`;
+  if (install.systemInstall) return `System install: ${versions}. Updates are applied by the system service.`;
+  if (install.execInDir) return `System install: ${install.dir}. The daemon is not connected, so updates cannot be applied until it is.`;
+  if (install.canSystemInstall) return `Running as an AppImage. The installer below can unpack it to ${install.dir} so updates are applied by the daemon without a password prompt.`;
+  return `Not a system install (the app does not run from ${install.dir}).`;
 }
 
 /**

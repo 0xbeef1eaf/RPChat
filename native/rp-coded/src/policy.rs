@@ -182,7 +182,7 @@ impl PolicyFile {
             }
             if let Some(updates) = map.get("updates").and_then(Value::as_object) {
                 for (key, value) in updates {
-                    if !matches!(key.as_str(), "automatic" | "enabled") {
+                    if !matches!(key.as_str(), "automatic" | "enabled" | "allowDowngrade") {
                         return Err(format!("settings.updates.{key} is not a managed setting"));
                     }
                     if !value.is_boolean() {
@@ -262,6 +262,17 @@ impl PolicyFile {
     /// The `inputLock` limits with defaults and clamping applied.
     pub fn lock_limits(&self) -> LockLimits {
         LockLimits::from_policy(self.input_lock.as_ref())
+    }
+
+    /// `settings.updates.allowDowngrade`: whether `apply-update` may install a version older
+    /// than the current one (default false).
+    pub fn allow_downgrade(&self) -> bool {
+        self.settings
+            .as_ref()
+            .and_then(|s| s.get("updates"))
+            .and_then(|u| u.get("allowDowngrade"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     }
 
     /// The `app` rules with defaults applied (user names trimmed).
@@ -506,6 +517,11 @@ impl PolicyStore {
         }
     }
 
+    /// `settings.updates.allowDowngrade`; false without a (readable) file.
+    pub fn allow_downgrade(&mut self) -> bool {
+        matches!(self.load(), Ok(Some(p)) if p.allow_downgrade())
+    }
+
     /// Validate `value` and create the policy file once (see [`create_policy_file`]). The
     /// cache is dropped so the next `load` reads the new file.
     pub fn create(&mut self, value: Value) -> Result<PolicyFile, CreateError> {
@@ -555,13 +571,20 @@ mod tests {
                 "memory": {},
                 "senses": {"includeInPrompt": false},
                 "displayBackend": "electron",
-                "updates": {"automatic": false, "enabled": true},
+                "updates": {"automatic": false, "enabled": true, "allowDowngrade": true},
                 "browser": {"allowBlocking": false, "allowEval": true, "allowHistory": false, "homePage": "https://example.com/"}
             },
             "inputLock": {"maxDurationMs": 60000, "emergencyKey": "f12", "emergencyHoldMs": 2000, "enabled": true}
         }))
         .unwrap();
         assert_eq!(p.managed_by.as_deref(), Some("IT department"));
+        assert!(p.allow_downgrade());
+        assert!(!policy(json!({"version": 1})).unwrap().allow_downgrade());
+        assert!(
+            !policy(json!({"version": 1, "settings": {"updates": {"enabled": false}}}))
+                .unwrap()
+                .allow_downgrade()
+        );
         assert_eq!(
             p.lock_limits(),
             LockLimits {

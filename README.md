@@ -216,7 +216,9 @@ sudo resources/system/install.sh          # or native/rp-coded/install.sh from a
 ```
 
 It creates the `rp-code` group, installs the udev rule and service, sets the app
-to start on login, and prepares `/etc/rp-code` for `policy.json`, a root-owned file that
+to start on login, unpacks an AppImage into `/opt/rp-code/current` (the *system install*:
+root-owned, updated by the daemon without a password, previous version kept for
+`install.sh --rollback`; `--no-system-install` keeps the AppImage), and prepares `/etc/rp-code` for `policy.json`, a root-owned file that
 can cap lock durations, pin settings the user cannot change and disable modules
 outright. With `"app": { "allowQuit": false, "users": ["alice"] }` the policy also keeps
 the app running for those users: no Quit in the tray or Ctrl+Q, closing hides to the
@@ -258,7 +260,12 @@ never in the settings JSON or the binary. The **AppImage** checks about 30 s
 after launch and every 6 hours (configurable, or switch automatic checks off),
 downloads the new release in the background when the AppImage lives in a
 folder you can write to, and offers *Restart now / Later*; a downloaded update
-is also applied on quit. The **`.deb`** install is notified only: the app
+is also applied on quit. A **system install** (`/opt/rp-code/current`, what the
+system-integration installer makes of an AppImage) downloads the same way and then
+hands the file to the `rp-coded` daemon, which verifies the checksum, unpacks it as
+your user, swaps it in as root, keeps the old version under `/opt/rp-code/previous`
+and updates itself from the bundle when needed — no password prompt (see
+[docs/system-integration.md](docs/system-integration.md#system-install)). The **`.deb`** install is notified only: the app
 announces new releases and links to the release page, where you install the
 package as usual. Development runs never check. Administrators can pin the
 "check automatically" toggle or switch update checks off entirely with the

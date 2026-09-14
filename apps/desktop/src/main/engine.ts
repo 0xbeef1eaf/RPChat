@@ -10,6 +10,7 @@ import { createStandardRegistry } from '@rp/sdk';
 import { QuickJsRunner } from '@rp/sandbox';
 import { createProvider } from '@rp/llm';
 import type { AppSettings, LoadedPack, PermissionDecision, PermissionRequest, Storage, UiPromptAnswer, UiPromptRequest } from '@rp/shared';
+import { SYSTEM_INSTALL_DIR } from '@rp/shared';
 import { IPC_EVENT_CHANNELS, RpError, assetUrl, parseCharacterRef } from '@rp/shared';
 import { defaultSettings, mergeSettings } from '@rp/core';
 import { hasExecutable } from './commands.js';
@@ -37,6 +38,9 @@ import { PolicyWatcher, applyPolicy, stripManagedPatch } from './system/policy.j
 import { KeepaliveLink } from './system/keepalive-link.js';
 import { QuitGuard, launchSpec } from './quit-guard.js';
 import { UpdateService } from './updates/service.js';
+import type { SystemInstallDeps, UpdaterLike } from './updates/service.js';
+import { SystemInstallUpdater } from './updates/system-updater.js';
+import { isSystemInstallExec } from './system/integration.js';
 import { createHyprTransport } from './display/hyprland.js';
 import type { HyprTransport } from './display/hyprland.js';
 import { detectWindowSystem, isHyprland } from './display/layers.js';
@@ -369,12 +373,26 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     await rawUpdate(stripManagedPatch(patch ?? {}, state.managed));
     return engine.settings.get();
   };
+  // System install (docs/system-integration.md): the executable runs from /opt/rp-code/current
+  // (realpath, so a launch through the /usr/local/bin symlink counts) and the daemon applies updates.
+  const execPathReal = ((): string => {
+    try {
+      return fs.realpathSync(process.execPath);
+    } catch {
+      return process.execPath;
+    }
+  })();
+  const systemInstallDir = env.RP_SYSTEM_INSTALL_DIR ?? SYSTEM_INSTALL_DIR;
+  const systemInstalled = process.platform === 'linux' && app.isPackaged && isSystemInstallExec(execPathReal, systemInstallDir);
   const system = new SystemIntegration({
     platform: process.platform,
     daemon,
     policy,
     resourcesDirs,
     appBin: env.APPIMAGE ?? process.execPath,
+    appImage: Boolean(env.APPIMAGE),
+    execPath: execPathReal,
+    systemInstallDir,
     logger,
   });
   // `app.allowQuit`: the guard mirrors the policy (index.ts applies it on every policy read) and the
@@ -392,19 +410,45 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   };
 
   // ---- in-place updates (AppImage from the private GitHub releases) ---------------
-  autoUpdater.logger = {
+  // A system install downloads through its own updater (no APPIMAGE env, no delta) and hands the
+  // file to the daemon; the AppImage keeps electron-updater's swap-in-place (also on quit).
+  const updater: UpdaterLike = systemInstalled ? new SystemInstallUpdater() : autoUpdater;
+  updater.logger = {
     info: (m?: unknown) => logger.info(`[updater] ${String(m)}`),
     warn: (m?: unknown) => logger.warn(`[updater] ${String(m)}`),
     error: (m?: unknown) => logger.error(`[updater] ${String(m)}`),
     debug: (m: string) => logger.debug(`[updater] ${m}`),
   };
-  autoUpdater.autoInstallOnAppQuit = true;
+  if (!systemInstalled) updater.autoInstallOnAppQuit = true;
+  const systemInstall: SystemInstallDeps | undefined = systemInstalled
+    ? {
+        dir: systemInstallDir,
+        available: async () => {
+          if (!(await daemon.isAvailable())) return { daemonConnected: false, daemonSupportsUpdates: false };
+          const status = await daemon.status();
+          if (!status.connected) return { daemonConnected: false, daemonSupportsUpdates: false };
+          const info = status.install;
+          const out: Awaited<ReturnType<SystemInstallDeps['available']>> = { daemonConnected: true, daemonSupportsUpdates: info?.systemInstall === true };
+          if (info?.current !== undefined) out.current = info.current;
+          if (info?.previous !== undefined) out.previous = info.previous;
+          return out;
+        },
+        applyUpdate: (input) => daemon.applyUpdate(input),
+        waitForDaemon: (timeoutMs) => daemon.waitForHello(timeoutMs),
+        relaunch: () => {
+          // Explicit execPath: the running binary's /proc/self/exe now points into previous/.
+          app.relaunch({ execPath: path.join(systemInstallDir, 'rp-code'), args: process.argv.slice(1) });
+          app.quit();
+        },
+      }
+    : undefined;
   const updates = new UpdateService({
-    updater: autoUpdater,
+    updater,
+    ...(systemInstall ? { systemInstall } : {}),
     appVersion: opts.appVersion,
     isPackaged: app.isPackaged,
     ...(env.APPIMAGE ? { appImagePath: env.APPIMAGE } : {}),
-    execPath: process.execPath,
+    execPath: execPathReal,
     userDataDir: opts.userData,
     settings: { get: () => engine.settings.get() },
     policy,

@@ -51,7 +51,7 @@ Only these keys are accepted; each maps to a dotted settings path shown in the U
 | `memory` | object | Any field of the app's memory settings. |
 | `senses` | object | `includeInPrompt` (boolean), `watchDirs` (string[]), `calendarSources` (string[]). |
 | `displayBackend` | `"auto"` \| `"electron"` \| `"hyprland"` | Which overlay backend the app uses. |
-| `updates` | `{ "automatic": boolean, "enabled": boolean }` | In-place app updates. `enabled: false` switches update checks off entirely (the Updates tab shows "disabled by policy" and hides the token field); `automatic` pins the "check automatically" toggle. Both optional. |
+| `updates` | `{ "automatic": boolean, "enabled": boolean, "allowDowngrade": boolean }` | In-place app updates. `enabled: false` switches update checks off entirely (the Updates tab shows "disabled by policy" and hides the token field); `automatic` pins the "check automatically" toggle. `allowDowngrade: true` lets the daemon's `apply-update` (system install) install a version older than the current one; by default such requests are refused. All optional. |
 | `browser` | `{ "allowBlocking": boolean, "allowEval": boolean, "allowHistory": boolean, "homePage": string }` | What characters may do through the browser extension: block pages for a while (and for how long at most, ms), run JavaScript in pages, read the browser history, and the home page the extension opens in new tabs (an http(s) URL or `""`). All optional. |
 
 The daemon only validates that these are objects/numbers/strings of the right kind; the app

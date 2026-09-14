@@ -224,8 +224,12 @@ export interface IpcApi {
   /** System integration (Linux): root daemon for input lock/injection, policy file, udev, autostart. */
   system: {
     status(): Promise<SystemIntegrationStatus>;
-    /** Runs the bundled installer with elevated privileges (pkexec). Resolves with the installer's output. */
-    install(options?: { autostart?: boolean }): Promise<{ ok: boolean; output: string }>;
+    /**
+     * Runs the bundled installer with elevated privileges (pkexec). Resolves with the installer's
+     * output. `systemInstall: false` passes `--no-system-install` (keep launching the AppImage
+     * instead of unpacking it to `/opt/rp-code`; only meaningful for an AppImage launch).
+     */
+    install(options?: { autostart?: boolean; systemInstall?: boolean }): Promise<{ ok: boolean; output: string }>;
     setAutostart(enabled: boolean): Promise<SystemIntegrationStatus>;
     /** Path of the bundled installer script, for users who prefer to run it themselves. */
     installerPath(): Promise<string | null>;
@@ -268,7 +272,7 @@ export interface IpcApi {
     check(): Promise<UpdateStatus>;
     /** Start downloading the available update (AppImage in a writable location only). */
     download(): Promise<UpdateStatus>;
-    /** Quit and relaunch into the downloaded update. */
+    /** Quit and relaunch into the downloaded update (system install: the daemon applies it first, then the app relaunches). */
     install(): Promise<void>;
     /** Store (or with `null` remove) the per-user GitHub token used to read the private release feed. */
     setToken(token: string | null): Promise<UpdateStatus>;

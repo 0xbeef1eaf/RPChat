@@ -3,16 +3,16 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AppSettings, DaemonRequest, DaemonResponse } from '@rp/shared';
+import type { AppSettings, DaemonRequest, DaemonResponse, InstallInfo } from '@rp/shared';
 import { defaultSettings } from '@rp/core';
 import { RpError } from '@rp/shared';
-import { DaemonClient, DaemonError, rpErrorCodeFor } from './daemon-client.js';
-import { SystemIntegration, autostartDesktopEntry, policyTemplate } from './integration.js';
+import { APPLY_UPDATE_TIMEOUT_MS, DaemonClient, DaemonError, rpErrorCodeFor } from './daemon-client.js';
+import { SystemIntegration, autostartDesktopEntry, isSystemInstallExec, policyTemplate, systemInstallStatus } from './integration.js';
 import { KeepaliveLink, reconnectDelay } from './keepalive-link.js';
 import { PolicyWatcher, appPolicy, applyPolicy, loadPolicy, managedPaths, parsePolicy, stripManagedPatch } from './policy.js';
 
 /** Fake rp-coded: answers the protocol from an in-memory lock state. */
-function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: string } = {}) {
+function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: string; install?: InstallInfo; applyDelayMs?: number; restartDaemon?: boolean } = {}) {
   let locked: { until: string; reason?: string; devices: 'keyboard' | 'mouse' | 'both' } | null = null;
   const seen: DaemonRequest[] = [];
   const conns = new Set<net.Socket>();
@@ -44,8 +44,23 @@ function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: str
             res = { ok: true, op: 'hello', version: '0.1.0', protocol: 1, devices: { keyboards: 1, pointers: 2, uinput: true } };
             break;
           case 'status':
-            res = { ok: true, op: 'status', locked };
+            res = { ok: true, op: 'status', locked, ...(opts.install ? { install: opts.install } : {}) };
             break;
+          case 'apply-update': {
+            // Like rp-coded: a bad checksum is INVALID, root/foreign files REFUSED; success may take a while.
+            const answer = (): DaemonResponse =>
+              req.sha512 === 'bad'
+                ? { ok: false, error: 'sha512 mismatch for ' + req.file, code: 'INVALID' }
+                : !req.file.startsWith('/home/')
+                  ? { ok: false, error: 'file must be an absolute path under /home/alice', code: 'REFUSED' }
+                  : { ok: true, op: 'apply-update', version: req.version, restartDaemon: opts.restartDaemon ?? false };
+            if (opts.applyDelayMs) {
+              setTimeout(() => conn.write(`${JSON.stringify(answer())}\n`), opts.applyDelayMs);
+              continue;
+            }
+            res = answer();
+            break;
+          }
           case 'lock': {
             const durationMs = Math.min(req.durationMs, 60_000);
             locked = { until: new Date(Date.now() + durationMs).toISOString(), devices: req.devices ?? 'both', ...(req.reason ? { reason: req.reason } : {}) };
@@ -149,6 +164,62 @@ describe('DaemonClient', () => {
     const silent = new DaemonClient({ socketPath: sock, timeoutMs: 300 });
     await expect(silent.request({ op: 'status' })).rejects.toThrow(/within 300 ms/);
     await daemon.close();
+  });
+
+  it('applies updates with the long timeout, maps daemon refusals, reports install info and waits for a restarted daemon', async () => {
+    const sock = path.join(tmp, 'apply.sock');
+    const install: InstallInfo = { systemInstall: true, current: '0.1.9', previous: '0.1.8', daemonVersion: '0.2.0' };
+    const daemon = fakeDaemon(sock, { install, applyDelayMs: 400, restartDaemon: true });
+    await daemon.listen();
+    expect(APPLY_UPDATE_TIMEOUT_MS).toBe(5 * 60_000);
+    // A 150 ms request timeout would kill the 400 ms apply; the apply timeout is what counts.
+    const client = new DaemonClient({ socketPath: sock, timeoutMs: 150, applyTimeoutMs: 3000 });
+    expect(await client.status()).toMatchObject({ connected: true, install });
+    const update = { file: '/home/alice/.cache/rp-code-updater/pending/rp-code-0.2.0.AppImage', version: '0.2.0', sha512: 'ok' };
+    expect(await client.applyUpdate(update)).toEqual({ version: '0.2.0', restartDaemon: true });
+    expect(daemon.seen.at(-1)).toEqual({ op: 'apply-update', ...update });
+    await expect(client.applyUpdate({ ...update, sha512: 'bad' })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', message: /sha512 mismatch/, details: { daemonCode: 'INVALID' } });
+    await expect(client.applyUpdate({ ...update, file: '/tmp/x.AppImage' })).rejects.toMatchObject({ code: 'PERMISSION_DENIED', details: { daemonCode: 'REFUSED' } });
+    // An apply that outlives even the long timeout fails like any other request.
+    const impatient = new DaemonClient({ socketPath: sock, timeoutMs: 150, applyTimeoutMs: 100 });
+    await expect(impatient.applyUpdate(update)).rejects.toThrow(/apply-update.*within 100 ms/);
+    impatient.close();
+    // The daemon restarts: waitForHello keeps trying until it is back.
+    await daemon.close();
+    expect(await client.waitForHello(300, 50)).toBe(false);
+    const again = fakeDaemon(sock, { install });
+    const back = client.waitForHello(5000, 50);
+    setTimeout(() => void again.listen(), 200);
+    expect(await back).toBe(true);
+    expect(client.connected).toBe(true);
+    expect((await client.status()).install).toEqual(install);
+    client.close();
+    await again.close();
+  });
+});
+
+describe('system install detection', () => {
+  it('decides from the real executable path and what the daemon reports', () => {
+    expect(isSystemInstallExec('/opt/rp-code/current/rp-code')).toBe(true);
+    expect(isSystemInstallExec('/opt/rp-code/current/rp-code', '/opt/rp-code/current/')).toBe(true);
+    expect(isSystemInstallExec('/opt/rp-code/rp-code')).toBe(false);
+    expect(isSystemInstallExec('/opt/rp-code/previous/rp-code')).toBe(false);
+    expect(isSystemInstallExec('/opt/rp-code/currently/rp-code')).toBe(false);
+    expect(isSystemInstallExec('/tmp/.mount_rpXYZ/rp-code')).toBe(false);
+    expect(isSystemInstallExec('/x', '')).toBe(false);
+    const connected = { connected: true, install: { systemInstall: true, current: '0.1.9', previous: '0.1.8', daemonVersion: '0.2.0' } };
+    expect(systemInstallStatus({ execPath: '/opt/rp-code/current/rp-code', dir: '/opt/rp-code/current', appImage: false, daemon: connected })).toEqual({
+      systemInstall: true, dir: '/opt/rp-code/current', execInDir: true, daemonSupportsUpdates: true, canSystemInstall: false, current: '0.1.9', previous: '0.1.8', daemonVersion: '0.2.0',
+    });
+    // Running from the directory without the daemon: not a system install (nothing can apply updates).
+    expect(systemInstallStatus({ execPath: '/opt/rp-code/current/rp-code', dir: '/opt/rp-code/current', appImage: false, daemon: { connected: false } })).toEqual({
+      systemInstall: false, dir: '/opt/rp-code/current', execInDir: true, daemonSupportsUpdates: false, canSystemInstall: false,
+    });
+    // An old daemon (no `install` in status) is connected but cannot apply updates.
+    expect(systemInstallStatus({ execPath: '/opt/rp-code/current/rp-code', dir: '/opt/rp-code/current', appImage: false, daemon: { connected: true } })).toMatchObject({ systemInstall: true, daemonSupportsUpdates: false });
+    // An AppImage launch can become a system install through the installer.
+    expect(systemInstallStatus({ execPath: '/tmp/.mount_rp/rp-code', dir: '/opt/rp-code/current', appImage: true, daemon: connected })).toMatchObject({ systemInstall: false, execInDir: false, canSystemInstall: true, current: '0.1.9' });
+    expect(systemInstallStatus({ execPath: undefined, dir: '/opt/rp-code/current', appImage: false, daemon: { connected: false } }).execInDir).toBe(false);
   });
 });
 
@@ -268,6 +339,11 @@ describe('policy', () => {
     const updates = parsePolicy({ version: 1, settings: { updates: { enabled: false, automatic: true } } });
     expect(updates.settings?.updates).toEqual({ enabled: false, automatic: true });
     expect(managedPaths(updates)).toEqual(['updates.automatic', 'updates.enabled']);
+    // allowDowngrade is a daemon rule: accepted, kept, never a managed path.
+    const downgrade = parsePolicy({ version: 1, settings: { updates: { allowDowngrade: true } } });
+    expect(downgrade.settings?.updates).toEqual({ allowDowngrade: true });
+    expect(managedPaths(downgrade)).toEqual([]);
+    expect(() => parsePolicy({ version: 1, settings: { updates: { allowDowngrade: 'yes' } } })).toThrow(/allowDowngrade must be a boolean/);
     expect(managedPaths(parsePolicy({ version: 1, settings: { updates: {} } }))).toEqual([]);
     expect(() => parsePolicy({ version: 1, settings: { updates: { enabled: 'no' } } })).toThrow(/updates.enabled must be a boolean/);
   });
@@ -424,6 +500,8 @@ describe('SystemIntegration', () => {
       resourcesDirs: [path.join(tmp, 'nope'), resources],
       homeDir: path.join(tmp, 'home'),
       appBin: '/opt/rp code/rp-code',
+      appImage: true,
+      execPath: '/tmp/.mount_rp/rp-code',
       userName: 'alice',
       udevRulePath: path.join(tmp, '70-rp-code.rules'),
       run: async (file, args, onOutput) => {
@@ -436,6 +514,7 @@ describe('SystemIntegration', () => {
     });
     const status = await integration.status();
     expect(status).toMatchObject({ platform: 'linux', daemon: { connected: false }, policy: { present: false, canCreate: false, managed: [], allowQuit: true, users: [] }, udev: { rulePresent: false, inGroup: true, groupName: 'rp-code' }, autostart: { enabled: false, method: 'none' }, installerAvailable: true });
+    expect(status.install).toEqual({ systemInstall: false, dir: '/opt/rp-code/current', execInDir: false, daemonSupportsUpdates: false, canSystemInstall: true });
     expect(await integration.installerPath()).toBe(path.join(resources, 'system', 'install.sh'));
     const enabled = await integration.setAutostart(true);
     expect(enabled.autostart).toEqual({ enabled: true, method: 'xdg', path: path.join(tmp, 'home', '.config', 'autostart', 'rp-code.desktop') });
@@ -448,6 +527,8 @@ describe('SystemIntegration', () => {
     // The installer runs from a staged copy (an AppImage's FUSE mount is unreadable to root).
     const stage = path.join(tmp, 'home', '.cache', 'rp-code', 'system-install');
     expect(commands.at(-1)).toEqual(['pkexec', path.join(stage, 'install.sh'), '--app-bin', '/opt/rp code/rp-code', '--user', 'alice', '--autostart', 'none']);
+    await integration.install({ autostart: true, systemInstall: false });
+    expect(commands.at(-1)).toEqual(['pkexec', path.join(stage, 'install.sh'), '--app-bin', '/opt/rp code/rp-code', '--user', 'alice', '--autostart', 'xdg', '--no-system-install']);
     expect(fs.readdirSync(stage).sort()).toEqual(['install.sh', 'rp-coded', 'rp-coded.service']);
     expect(fs.statSync(path.join(stage, 'install.sh')).mode & 0o111).toBe(0o111);
     expect(fs.statSync(path.join(stage, 'rp-coded')).mode & 0o111).toBe(0o111);

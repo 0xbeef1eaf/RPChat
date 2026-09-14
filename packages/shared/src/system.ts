@@ -17,8 +17,13 @@ export interface PolicyFile {
     memory?: Partial<AppSettings['memory']>;
     senses?: Partial<Pick<AppSettings['senses'], 'includeInPrompt' | 'watchDirs' | 'calendarSources'>>;
     displayBackend?: AppSettings['displayBackend'];
-    /** `enabled: false` switches update checks off entirely; `automatic` pins the background check toggle. */
-    updates?: { automatic?: boolean; enabled?: boolean };
+    /**
+     * `enabled: false` switches update checks off entirely; `automatic` pins the background check
+     * toggle; `allowDowngrade` lets the daemon's `apply-update` install an older version than the
+     * current system install (refused by default). `enabled`/`allowDowngrade` are daemon/updater
+     * rules rather than user settings, so only `automatic` is reported as a managed path.
+     */
+    updates?: { automatic?: boolean; enabled?: boolean; allowDowngrade?: boolean };
     /** Browser extension limits: what characters may do in the browser and the block cap. */
     browser?: Partial<Pick<AppSettings['browser'], 'allowBlocking' | 'allowEval' | 'allowHistory' | 'homePage'>>;
   };
@@ -56,6 +61,23 @@ export interface KeepaliveInfo {
   allowQuit: boolean;
 }
 
+/**
+ * `status.install`: the system install (`/opt/rp-code`) as the daemon sees it. Absent in the
+ * answer of a daemon that predates `apply-update`.
+ */
+export interface InstallInfo {
+  /** `<root>/current/rp-code` exists and `versions.json` describes it. */
+  systemInstall: boolean;
+  current?: string;
+  previous?: string;
+  /** The running daemon's version. */
+  daemonVersion: string;
+}
+
+/** Default system install root and the unpacked app inside it (`install.sh --system-install`). */
+export const SYSTEM_INSTALL_ROOT = '/opt/rp-code';
+export const SYSTEM_INSTALL_DIR = `${SYSTEM_INSTALL_ROOT}/current`;
+
 /** Dotted settings paths the policy currently forces (e.g. `autonomy.maxSelfWakesPerHour`). */
 export type ManagedSettingsPaths = string[];
 
@@ -69,7 +91,26 @@ export interface DaemonStatus {
   locked?: { until: string; reason?: string; devices: LockDevices } | null;
   /** Relaunch registration state, when the daemon reports it (protocol 1 daemons from 0.2 on). */
   keepalive?: KeepaliveInfo;
+  /** System install state, when the daemon reports it (daemons with `apply-update`). */
+  install?: InstallInfo;
   error?: string;
+}
+
+/** `SystemIntegrationStatus.install`: whether this app runs from the system install and what the daemon knows about it. */
+export interface SystemInstallStatus {
+  /** Running from `dir` (realpath of the executable) *and* the daemon is connected. */
+  systemInstall: boolean;
+  /** `/opt/rp-code/current`. */
+  dir: string;
+  /** The executable runs from `dir` (whether or not the daemon is connected). */
+  execInDir: boolean;
+  /** The connected daemon answers `status.install` (knows `apply-update`); false for an older daemon or without one. */
+  daemonSupportsUpdates: boolean;
+  /** The launch is an AppImage, so the installer can unpack it into `dir` (`install.sh --system-install`). */
+  canSystemInstall: boolean;
+  current?: string;
+  previous?: string;
+  daemonVersion?: string;
 }
 
 export interface SystemIntegrationStatus {
@@ -96,6 +137,7 @@ export interface SystemIntegrationStatus {
   autostart: { enabled: boolean; method: 'xdg' | 'systemd-user' | 'none'; path?: string };
   /** Whether the bundled installer script is available to run with elevated privileges. */
   installerAvailable: boolean;
+  install: SystemInstallStatus;
 }
 
 /** Which input devices a lock covers. */
@@ -123,15 +165,25 @@ export type DaemonRequest =
    */
   | { op: 'register'; exec: string; args: string[]; cwd: string; env: Record<string, string> }
   /** Forget the registration on this connection (sent before an authorised quit such as an update restart). */
-  | { op: 'unregister' };
+  | { op: 'unregister' }
+  /**
+   * System install: verify `file` (an AppImage under the requesting user's home, owned by them)
+   * against `sha512` (base64, as `latest-linux.yml` gives it), extract it as that user, swap it
+   * into `/opt/rp-code/current` and update the daemon itself when the bundle ships a newer one.
+   * `version` must be semver and not older than the installed one unless the policy says
+   * `updates.allowDowngrade`. May take minutes; the client uses a long timeout.
+   */
+  | { op: 'apply-update'; file: string; version: string; sha512: string };
 
 export type DaemonResponse =
   | { ok: true; op: 'hello'; version: string; protocol: 1; devices: { keyboards: number; pointers: number; uinput: boolean } }
-  | { ok: true; op: 'status'; locked: { until: string; reason?: string; devices: LockDevices } | null; keepalive?: KeepaliveInfo }
+  | { ok: true; op: 'status'; locked: { until: string; reason?: string; devices: LockDevices } | null; keepalive?: KeepaliveInfo; install?: InstallInfo }
   | { ok: true; op: 'policy'; policy: PolicyFile | null; path: string }
   | { ok: true; op: 'lock'; until: string; durationMs: number; devices: LockDevices }
   | { ok: true; op: 'unlock' | 'type' | 'key' | 'click' | 'move' | 'register' | 'unregister' }
   | { ok: true; op: 'set-policy'; path: string }
+  /** `restartDaemon`: the daemon updated itself and restarts right after answering (wait for it before relaunching). */
+  | { ok: true; op: 'apply-update'; version: string; restartDaemon: boolean }
   | { ok: false; error: string; code: 'REFUSED' | 'POLICY' | 'NO_DEVICES' | 'BUSY' | 'INVALID' | 'INTERNAL' | 'EXISTS' };
 
 export const DAEMON_SOCKET_PATH = '/run/rp-code/daemon.sock';

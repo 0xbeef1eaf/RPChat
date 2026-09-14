@@ -6,8 +6,8 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { AppSettings, PolicyFile, SystemIntegrationStatus } from '@rp/shared';
-import { RpError, SYSTEM_GROUP } from '@rp/shared';
+import type { AppSettings, DaemonStatus, PolicyFile, SystemInstallStatus, SystemIntegrationStatus } from '@rp/shared';
+import { RpError, SYSTEM_GROUP, SYSTEM_INSTALL_DIR } from '@rp/shared';
 import type { DaemonClient } from './daemon-client.js';
 import type { PolicyWatcher } from './policy.js';
 import { parsePolicy } from './policy.js';
@@ -29,6 +29,12 @@ export interface SystemIntegrationDeps {
   homeDir?: string;
   /** `process.env.APPIMAGE ?? process.execPath`. */
   appBin: string;
+  /** Whether `appBin` is an AppImage (`process.env.APPIMAGE` set): the installer can unpack it into the system install. */
+  appImage?: boolean;
+  /** `realpath(process.execPath)`: decides whether this launch runs from the system install. */
+  execPath?: string;
+  /** The unpacked app directory of the system install. Default `/opt/rp-code/current`. */
+  systemInstallDir?: string;
   /**
    * Where the installer and daemon are copied before running them as root. Defaults to
    * `~/.cache/rp-code/system-install`. Needed because an AppImage is a FUSE mount under
@@ -82,6 +88,34 @@ export function policyTemplate(settings: AppSettings): string {
     inputLock: { enabled: true, maxDurationMs: settings.maxInputLockMs, emergencyKey: 'esc', emergencyHoldMs: 5000 },
   };
   return `${JSON.stringify(policy, null, 2)}\n`;
+}
+
+/** Pure: whether `execPath` (already realpath'd) lives inside the system install directory. */
+export function isSystemInstallExec(execPath: string, dir: string = SYSTEM_INSTALL_DIR): boolean {
+  const root = dir.replace(/\/+$/, '');
+  return root.length > 0 && execPath.startsWith(`${root}/`);
+}
+
+/**
+ * Pure: `SystemIntegrationStatus.install` from where the executable runs and what the daemon
+ * reports. "System install" means both: running from `dir` and a connected daemon (the one that
+ * applies updates); `daemonSupportsUpdates` is false for a daemon that predates `apply-update`,
+ * in which case the pkexec installer is needed once more.
+ */
+export function systemInstallStatus(input: { execPath: string | undefined; dir: string; appImage: boolean; daemon: DaemonStatus }): SystemInstallStatus {
+  const execInDir = input.execPath !== undefined && isSystemInstallExec(input.execPath, input.dir);
+  const info = input.daemon.connected ? input.daemon.install : undefined;
+  const out: SystemInstallStatus = {
+    systemInstall: execInDir && input.daemon.connected,
+    dir: input.dir,
+    execInDir,
+    daemonSupportsUpdates: info !== undefined,
+    canSystemInstall: input.appImage,
+  };
+  if (info?.current !== undefined) out.current = info.current;
+  if (info?.previous !== undefined) out.previous = info.previous;
+  if (info?.daemonVersion !== undefined) out.daemonVersion = info.daemonVersion;
+  return out;
 }
 
 /** Managed-policy directories a Chromium fork keeps outside the built-in list (`settings.browser.extraPolicyDirs`). */
@@ -238,14 +272,23 @@ export class SystemIntegration {
       udev: { rulePresent: this.deps.platform === 'linux' && (await exists(this.udevRulePath)), inGroup, groupName: SYSTEM_GROUP },
       autostart,
       installerAvailable: installer !== null,
+      install: systemInstallStatus({ execPath: this.deps.execPath, dir: this.systemInstallDir, appImage: this.deps.appImage === true, daemon }),
     };
   }
 
-  /** Run the bundled installer through pkexec (Linux only), streaming its output to the log. */
-  async install(options: { autostart?: boolean } = {}, onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
+  get systemInstallDir(): string {
+    return this.deps.systemInstallDir ?? SYSTEM_INSTALL_DIR;
+  }
+
+  /**
+   * Run the bundled installer through pkexec (Linux only), streaming its output to the log. An
+   * AppImage launch is unpacked into the system install unless `systemInstall: false`.
+   */
+  async install(options: { autostart?: boolean; systemInstall?: boolean } = {}, onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
     if (this.deps.platform !== 'linux') throw new RpError('CAPABILITY_FAILED', 'System integration is only available on Linux');
     const installer = await this.stageInstaller();
     const args = [installer, '--app-bin', this.deps.appBin, '--user', this.userName(), '--autostart', options.autostart === false ? 'none' : 'xdg'];
+    if (options.systemInstall === false) args.push('--no-system-install');
     this.deps.logger.info(`[system] pkexec ${args.join(' ')}`);
     let output = '';
     const collect = (chunk: string): void => {

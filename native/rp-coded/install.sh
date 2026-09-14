@@ -5,17 +5,25 @@
 # the udev rule / uinput module for fallback tools, the policy directory, an application menu
 # entry + icon for the app (AppImage users get one this way), an autostart entry for one user,
 # and optionally the Chromium browser policy that force-installs the rp-code browser extension
-# (docs/browser-extension.md). Idempotent: every step prints "[ok] ..." when it changed something
-# and "[skip] ..." when it was already done. Run as root (sudo or pkexec; the app runs it with
-# pkexec and passes --app-bin). See docs/system-integration.md.
+# (docs/browser-extension.md). With an AppImage as --app-bin it also does a "system install":
+# the AppImage is unpacked to /opt/rp-code/current (root-owned; /opt/rp-code/previous keeps the
+# last version, versions.json describes both, /usr/local/bin/rp-code points at it) so that later
+# updates are applied by the daemon without a password prompt. Idempotent: every step prints
+# "[ok] ..." when it changed something and "[skip] ..." when it was already done. Run as root
+# (sudo or pkexec; the app runs it with pkexec and passes --app-bin). See docs/system-integration.md.
 #
 # Usage:
 #   install.sh [--app-bin <path>] [--user <name>] [--autostart xdg|systemd|none]
 #              [--menu-entry yes|no] [--policy-template] [--daemon-bin <path>] [--dry-run]
+#              [--system-install | --no-system-install]
 #              [--browser-extension <id> --browser-update-url <url> [--browser-port <n>] [--browser-home <url>]
 #               [--browser-policy-dir <dir>]... [--browser-only]]
+#   install.sh --rollback [--dry-run]            swap /opt/rp-code/previous back to current
+#   install.sh --remove [--dry-run]              remove the system install (daemon stays)
+#   install.sh --refresh-daemon-files [--dry-run] reinstall the daemon binary/unit/udev files (no restart)
 #   install.sh --remove-browser-policy [--dry-run]
 #   install.sh --uninstall [--user <name>] [--dry-run]
+# Tests: --prefix <dir> relocates every system path under <dir> and skips groups/services.
 set -euo pipefail
 
 GROUP=rp-code
@@ -29,6 +37,9 @@ POLICY_DST="$POLICY_DIR/policy.json"
 RUN_DIR=/run/rp-code
 MENU_DST=/usr/local/share/applications/rp-code.desktop
 ICON_DST=/usr/local/share/icons/hicolor/512x512/apps/rp-code.png
+# System install: the unpacked app (docs/system-integration.md "System install").
+INSTALL_ROOT=/opt/rp-code
+BIN_LINK=/usr/local/bin/rp-code
 # Chromium-based browsers on Linux read managed policies from these directories (each browser its
 # own). Format: "<policy dir>|<config dir whose presence means the browser is installed>|<binaries on PATH>".
 BROWSER_POLICY_FILE=rp-code.json
@@ -60,9 +71,17 @@ BROWSER_HOME=""
 BROWSER_EXTRA_DIRS=""
 BROWSER_ONLY=false
 REMOVE_BROWSER_POLICY=false
+# auto: yes when --app-bin is an AppImage and the daemon is being installed.
+SYSTEM_INSTALL=auto
+ROLLBACK=false
+REMOVE_SYSTEM=false
+REFRESH_DAEMON=false
+PREFIX=""
+# false with --prefix: no groups, services, udev, module loading or menu caches (file layout only).
+SYSTEM_CMDS=true
 
 usage() {
-  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -88,12 +107,29 @@ while [ $# -gt 0 ]; do
 $2"; shift 2 ;;
     --browser-only) BROWSER_ONLY=true; shift ;;
     --remove-browser-policy) REMOVE_BROWSER_POLICY=true; shift ;;
+    --system-install) SYSTEM_INSTALL=yes; shift ;;
+    --no-system-install) SYSTEM_INSTALL=no; shift ;;
+    --rollback) ROLLBACK=true; shift ;;
+    --remove|--remove-system-install) REMOVE_SYSTEM=true; shift ;;
+    --refresh-daemon-files) REFRESH_DAEMON=true; shift ;;
+    --prefix)
+      PREFIX="${2:?--prefix needs a directory}"
+      case "$PREFIX" in /*) ;; *) echo "install.sh: --prefix must be an absolute path" >&2; exit 64 ;; esac
+      PREFIX="${PREFIX%/}"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "install.sh: unknown argument: $1" >&2; usage >&2; exit 64 ;;
   esac
 done
 case "$AUTOSTART" in xdg|systemd|none) ;; *) echo "install.sh: --autostart must be xdg, systemd or none" >&2; exit 64 ;; esac
+if [ -n "$PREFIX" ]; then
+  # Relocate every system path (tests run the real steps against a scratch directory).
+  LIBEXEC="$PREFIX$LIBEXEC"; DAEMON_DST="$LIBEXEC/rp-coded"; UNIT_DST="$PREFIX$UNIT_DST"
+  UDEV_DST="$PREFIX$UDEV_DST"; MODULES_DST="$PREFIX$MODULES_DST"; POLICY_DIR="$PREFIX$POLICY_DIR"
+  POLICY_DST="$POLICY_DIR/policy.json"; RUN_DIR="$PREFIX$RUN_DIR"; MENU_DST="$PREFIX$MENU_DST"
+  ICON_DST="$PREFIX$ICON_DST"; INSTALL_ROOT="$PREFIX$INSTALL_ROOT"; BIN_LINK="$PREFIX$BIN_LINK"
+  SYSTEM_CMDS=false
+fi
 case "$MENU_ENTRY" in yes|no) ;; *) echo "install.sh: --menu-entry must be yes or no" >&2; exit 64 ;; esac
 if [ -n "$BROWSER_EXT" ] || $BROWSER_ONLY; then
   case "$BROWSER_EXT" in
@@ -142,7 +178,7 @@ if [ -n "$TARGET_USER" ]; then
   entry="$(getent passwd "$TARGET_USER" || true)"
   [ -n "$entry" ] || die "user $TARGET_USER does not exist"
   USER_UID="$(echo "$entry" | cut -d: -f3)"
-  USER_HOME="$(echo "$entry" | cut -d: -f6)"
+  USER_HOME="$PREFIX$(echo "$entry" | cut -d: -f6)"
 fi
 
 # --- where the files come from ---------------------------------------------------------------
@@ -157,6 +193,10 @@ if [ -z "$DAEMON_BIN" ]; then
 fi
 APP_BIN_EXPLICIT=false
 [ -n "$APP_BIN" ] && APP_BIN_EXPLICIT=true
+if [ -z "$APP_BIN" ] && [ -x "$INSTALL_ROOT/current/rp-code" ]; then
+  # An existing system install is the app: nothing to look for.
+  APP_BIN="$INSTALL_ROOT/current/rp-code"
+fi
 if [ -z "$APP_BIN" ]; then
   # An AppImage next to the user's usual places wins over an extracted tree (see below).
   if [ -n "$USER_HOME" ]; then
@@ -174,6 +214,13 @@ fi
 # Refuse the Electron binary inside an `--appimage-extract` tree: it only runs while the whole
 # extraction (libffmpeg.so, resources, ...) stays around, and people delete that after installing.
 is_appimage() { case "$1" in *.AppImage|*.appimage) return 0 ;; esac; [ "$(dd if="$1" bs=1 skip=8 count=2 2>/dev/null)" = "AI" ]; }
+if [ "$SYSTEM_INSTALL" = auto ]; then
+  if [ -n "$APP_BIN" ] && is_appimage "$APP_BIN"; then SYSTEM_INSTALL=yes; else SYSTEM_INSTALL=no; fi
+elif [ "$SYSTEM_INSTALL" = yes ] && { [ -z "$APP_BIN" ] || ! is_appimage "$APP_BIN"; }; then
+  if ! $UNINSTALL && ! $REMOVE_SYSTEM && ! $ROLLBACK && ! $REFRESH_DAEMON && ! $BROWSER_ONLY && ! $REMOVE_BROWSER_POLICY; then
+    die "--system-install needs --app-bin <path to the .AppImage> (got ${APP_BIN:-nothing})"
+  fi
+fi
 if [ -n "$APP_BIN" ] && ! is_appimage "$APP_BIN"; then
   case "$APP_BIN" in
     */squashfs-root/*)
@@ -191,12 +238,16 @@ if [ -n "$APP_BIN" ] && ! is_appimage "$APP_BIN"; then
   esac
 fi
 APP_EXEC="${APP_BIN:-rp-code}"
+# With a system install every launcher points at the stable root-owned copy, never at the AppImage.
+if [ "$SYSTEM_INSTALL" = yes ]; then APP_EXEC="$INSTALL_ROOT/current/rp-code"; fi
 ICON_SRC=""
 for c in "$SCRIPT_DIR/rp-code.png" "$SCRIPT_DIR/../../apps/desktop/build/icon.png"; do
   if [ -f "$c" ]; then ICON_SRC="$c"; break; fi
 done
 
-# install <src> <dst> <mode>: copy only when content differs; prints ok/skip.
+# install <src> <dst> <mode>: copy only when content differs; prints ok/skip. The copy lands
+# next to the destination first and is renamed over it, so a running binary (the daemon
+# replacing itself) or a reader never sees a half-written file.
 install_file() {
   local src="$1" dst="$2" mode="$3"
   [ -f "$src" ] || die "missing $src"
@@ -204,13 +255,15 @@ install_file() {
     skip "$dst is up to date"
     return 1
   fi
-  run install -D -m "$mode" -o root -g root "$src" "$dst"
+  run install -D -m "$mode" -o root -g root "$src" "$dst.new"
+  run mv -f "$dst.new" "$dst"
   ok "installed $dst"
   return 0
 }
 
 # Refresh the desktop menu and icon caches when the tools exist (never fatal).
 refresh_menus() {
+  $SYSTEM_CMDS || return 0
   if have update-desktop-database; then run update-desktop-database "$(dirname "$MENU_DST")" 2>/dev/null || true; fi
   if have gtk-update-icon-cache; then run gtk-update-icon-cache -q -t /usr/local/share/icons/hicolor 2>/dev/null || true; fi
 }
@@ -218,6 +271,7 @@ refresh_menus() {
 # Run systemctl --user as the target user when a session bus exists; prints otherwise.
 user_systemctl() {
   local bus="/run/user/$USER_UID/bus"
+  $SYSTEM_CMDS || return 1
   if [ -S "$bus" ] && have runuser; then
     run runuser -u "$TARGET_USER" -- env "XDG_RUNTIME_DIR=/run/user/$USER_UID" "DBUS_SESSION_BUS_ADDRESS=unix:path=$bus" systemctl --user "$@"
     return 0
@@ -233,6 +287,154 @@ as_user_write() { # as_user_write <dst> <content...>
   chown -R "$TARGET_USER" "$(dirname "$dst")" 2>/dev/null || chown "$TARGET_USER" "$dst"
 }
 
+# --- system install helpers (/opt/rp-code) --------------------------------------------------
+# versions.json is written by this script and by the daemon (serde, pretty JSON, one key per
+# line), so a line-based reader is enough: json_field <file> <current|previous> <key>.
+json_field() {
+  [ -f "$1" ] || return 0
+  awk -v section="\"$2\":" -v key="\"$3\":" '
+    $1 == section { inside = 1; next }
+    inside && $1 ~ /^\}/ { inside = 0 }
+    inside && $1 == key { v = $0; sub(/^[^:]*:[ \t]*"/, "", v); sub(/",?[ \t]*$/, "", v); print v; exit }
+  ' "$1"
+}
+
+# write_versions <cur-version> <cur-at> <cur-source> [<prev-version> <prev-at> <prev-source>]
+write_versions() {
+  local f="$INSTALL_ROOT/versions.json"
+  if $DRY_RUN; then note "+ write $f (current $1${4:+, previous $4})"; return; fi
+  {
+    printf '{\n  "current": {\n    "version": "%s",\n    "installedAt": "%s",\n    "source": "%s"\n  }' "$1" "$2" "$3"
+    if [ -n "${4:-}" ]; then
+      printf ',\n  "previous": {\n    "version": "%s",\n    "installedAt": "%s",\n    "source": "%s"\n  }' "$4" "$5" "$6"
+    fi
+    printf '\n}\n'
+  } > "$f.tmp"
+  chmod 0644 "$f.tmp" && mv -f "$f.tmp" "$f"
+}
+
+# The version an unpacked tree carries (electron-builder writes X-AppImage-Version into the
+# desktop entry); falls back to the AppImage file name, then 0.0.0.
+tree_version() { # tree_version <tree> [<appimage path>]
+  local v=""
+  v="$(grep -h -m1 '^X-AppImage-Version=' "$1"/*.desktop 2>/dev/null | head -n 1 | cut -d= -f2- || true)"
+  if [ -z "$v" ] && [ -n "${2:-}" ]; then
+    v="$(basename "$2" | sed -nE 's/^rp-code-([0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.-]*)-.*$/\1/p')"
+  fi
+  printf '%s' "${v:-0.0.0}"
+}
+
+# Refuse a tree that must not become root-owned under /opt: required files present, no
+# setuid/setgid bits, no hard links, no symlinks leaving the tree, only files/dirs/symlinks.
+check_tree() { # check_tree <tree>
+  local t="$1" f target
+  for f in rp-code libffmpeg.so resources/app.asar; do
+    [ -f "$t/$f" ] || die "not an rp-code app tree: $f is missing in $t"
+  done
+  f="$(find "$t" -perm /6000 -print -quit)"; [ -z "$f" ] || die "refusing $t: $f has a setuid/setgid bit"
+  f="$(find "$t" -type f -links +1 -print -quit)"; [ -z "$f" ] || die "refusing $t: $f is a hard link"
+  f="$(find "$t" ! -type f ! -type d ! -type l -print -quit)"; [ -z "$f" ] || die "refusing $t: $f is not a file, directory or symlink"
+  while IFS= read -r f; do
+    target="$(readlink -f "$f" || true)"
+    case "$target" in "$t"/*) ;; *) die "refusing $t: symlink $f points outside the tree ($(readlink "$f"))" ;; esac
+  done < <(find "$t" -type l)
+}
+
+# The system install: unpack the AppImage into a staging directory, check it, take ownership,
+# swap it into current/ (the old one becomes previous/), record versions.json, link the binary.
+system_install_app() {
+  local staging="$INSTALL_ROOT/.staging" tree version prev_version prev_at prev_source now
+  local versions="$INSTALL_ROOT/versions.json"
+  if $DRY_RUN; then
+    note "+ $APP_BIN --appimage-extract  (in $staging)"
+    note "+ check, chown -R root:root, chmod 0755/0644, mv current previous, mv squashfs-root current"
+    note "+ write $versions; ln -s $INSTALL_ROOT/current/rp-code $BIN_LINK"
+    ok "would install $APP_BIN to $INSTALL_ROOT/current"
+    return
+  fi
+  [ -r "$APP_BIN" ] || die "cannot read $APP_BIN (an AppImage inside a running AppImage's mount is not readable by root; copy it out first)"
+  rm -rf "$staging"
+  install -d -m 0700 -o root -g root "$INSTALL_ROOT" 2>/dev/null || true
+  chmod 0755 "$INSTALL_ROOT"
+  install -d -m 0700 -o root -g root "$staging"
+  (cd "$staging" && "$APP_BIN" --appimage-extract >/dev/null) || { rm -rf "$staging"; die "$APP_BIN --appimage-extract failed"; }
+  tree="$staging/squashfs-root"
+  [ -d "$tree" ] || { rm -rf "$staging"; die "$APP_BIN did not produce squashfs-root"; }
+  # (subshell: check_tree dies with the reason; the staging area must still go)
+  ( check_tree "$tree" ) || { rm -rf "$staging"; exit 1; }
+  version="$(tree_version "$tree" "$APP_BIN")"
+  if [ -f "$INSTALL_ROOT/current/rp-code" ] && [ "$(json_field "$versions" current version)" = "$version" ] && [ "$(json_field "$versions" current source)" = "$APP_BIN" ]; then
+    rm -rf "$staging"
+    skip "$INSTALL_ROOT/current is already $version from $APP_BIN"
+  else
+    chown -R root:root "$tree"
+    chmod -R u=rwX,go=rX,a-s "$tree"
+    prev_version="$(json_field "$versions" current version)"
+    prev_at="$(json_field "$versions" current installedAt)"
+    prev_source="$(json_field "$versions" current source)"
+    rm -rf "$INSTALL_ROOT/previous" "$INSTALL_ROOT/.new"
+    mv "$tree" "$INSTALL_ROOT/.new"
+    rm -rf "$staging"
+    if [ -d "$INSTALL_ROOT/current" ]; then mv "$INSTALL_ROOT/current" "$INSTALL_ROOT/previous"; fi
+    mv "$INSTALL_ROOT/.new" "$INSTALL_ROOT/current"
+    now="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+    if [ -n "$prev_version" ] && [ -d "$INSTALL_ROOT/previous" ]; then
+      write_versions "$version" "$now" "$APP_BIN" "$prev_version" "${prev_at:-$now}" "${prev_source:-unknown}"
+    else
+      rm -rf "$INSTALL_ROOT/previous"
+      write_versions "$version" "$now" "$APP_BIN"
+    fi
+    ok "installed $APP_BIN ($version) to $INSTALL_ROOT/current${prev_version:+ (previous: $prev_version)}"
+  fi
+  if [ "$(readlink "$BIN_LINK" 2>/dev/null || true)" = "$INSTALL_ROOT/current/rp-code" ]; then
+    skip "$BIN_LINK → $INSTALL_ROOT/current/rp-code"
+  else
+    install -d -m 0755 "$(dirname "$BIN_LINK")"
+    ln -sfn "$INSTALL_ROOT/current/rp-code" "$BIN_LINK"
+    ok "linked $BIN_LINK → $INSTALL_ROOT/current/rp-code"
+  fi
+  note "the AppImage can be deleted now; launch rp-code from the menu or as $BIN_LINK"
+}
+
+remove_system_install() {
+  local d
+  if [ -L "$BIN_LINK" ] && [ "$(readlink "$BIN_LINK")" = "$INSTALL_ROOT/current/rp-code" ]; then
+    run rm -f "$BIN_LINK"; ok "removed $BIN_LINK"
+  else
+    skip "$BIN_LINK absent"
+  fi
+  if [ -d "$INSTALL_ROOT" ]; then
+    for d in "$INSTALL_ROOT"/current "$INSTALL_ROOT"/previous "$INSTALL_ROOT"/.new "$INSTALL_ROOT"/.staging*; do
+      if [ -e "$d" ]; then run rm -rf "$d"; ok "removed $d"; fi
+    done
+    if [ -e "$INSTALL_ROOT/versions.json" ]; then run rm -f "$INSTALL_ROOT/versions.json"; ok "removed $INSTALL_ROOT/versions.json"; fi
+    # The .deb keeps its own files in /opt/rp-code; only an empty directory goes.
+    if ! $DRY_RUN && [ -z "$(ls -A "$INSTALL_ROOT" 2>/dev/null)" ]; then rmdir "$INSTALL_ROOT" && ok "removed $INSTALL_ROOT"; fi
+  else
+    skip "$INSTALL_ROOT absent"
+  fi
+}
+
+rollback_system_install() {
+  local versions="$INSTALL_ROOT/versions.json" cv ca cs pv pa ps
+  [ -f "$INSTALL_ROOT/previous/rp-code" ] || die "nothing to roll back to: $INSTALL_ROOT/previous is missing"
+  [ -f "$INSTALL_ROOT/current/rp-code" ] || die "$INSTALL_ROOT/current is not an rp-code install"
+  cv="$(json_field "$versions" current version)"; ca="$(json_field "$versions" current installedAt)"; cs="$(json_field "$versions" current source)"
+  pv="$(json_field "$versions" previous version)"; pa="$(json_field "$versions" previous installedAt)"; ps="$(json_field "$versions" previous source)"
+  if $DRY_RUN; then
+    note "+ swap $INSTALL_ROOT/previous (${pv:-?}) and $INSTALL_ROOT/current (${cv:-?})"
+    ok "would roll back to ${pv:-the previous version}"
+    return
+  fi
+  rm -rf "$INSTALL_ROOT/.rollback"
+  mv "$INSTALL_ROOT/current" "$INSTALL_ROOT/.rollback"
+  mv "$INSTALL_ROOT/previous" "$INSTALL_ROOT/current"
+  mv "$INSTALL_ROOT/.rollback" "$INSTALL_ROOT/previous"
+  write_versions "${pv:-unknown}" "${pa:-unknown}" "${ps:-unknown}" "${cv:-unknown}" "${ca:-unknown}" "${cs:-unknown}"
+  ok "rolled back $INSTALL_ROOT/current to ${pv:-the previous version} (${cv:-the replaced version} is now previous)"
+  note "restart rp-code to run it; the next update goes forward again"
+}
+
 # --- browser policy helpers -----------------------------------------------------------------
 # Policy directories that should get (or lose) the file: the always-on ones plus every browser
 # that looks installed. Prints one directory per line.
@@ -246,7 +448,7 @@ browser_policy_targets() {
       for b in $bins; do if have "$b"; then echo "$dir"; break; fi; done
     done
     # Extra directories from --browser-policy-dir always get the file (the user named them on purpose).
-    echo "$BROWSER_EXTRA_DIRS" | while read -r dir; do [ -n "$dir" ] && echo "$dir"; done
+    echo "$BROWSER_EXTRA_DIRS" | while read -r dir; do if [ -n "$dir" ]; then echo "$dir"; fi; done
   } | awk '!seen[$0]++'
 }
 
@@ -286,8 +488,10 @@ install_browser_policy() {
 remove_browser_policy() {
   local line dir cfg bins dst removed=false
   {
-    echo "$BROWSER_POLICY_DIRS" | while IFS='|' read -r dir cfg bins; do [ -n "$dir" ] && echo "$dir"; done
-    echo "$BROWSER_EXTRA_DIRS" | while read -r dir; do [ -n "$dir" ] && echo "$dir"; done
+    # (`if`, not `&&`: with an empty list the last `[ -n ]` would make the loop, the group and —
+    # with pipefail — the whole pipeline exit 1, which `set -e` turned into a silent early exit)
+    echo "$BROWSER_POLICY_DIRS" | while IFS='|' read -r dir cfg bins; do if [ -n "$dir" ]; then echo "$dir"; fi; done
+    echo "$BROWSER_EXTRA_DIRS" | while read -r dir; do if [ -n "$dir" ]; then echo "$dir"; fi; done
   } | awk '!seen[$0]++' | while read -r dir; do
     dst="$dir/$BROWSER_POLICY_FILE"
     if [ -e "$dst" ]; then run rm -f "$dst"; ok "removed $dst"; else skip "$dst absent"; fi
@@ -308,12 +512,59 @@ if $BROWSER_ONLY; then
   exit 0
 fi
 
+if $ROLLBACK; then
+  echo "rp-code system install: rollback"
+  rollback_system_install
+  exit 0
+fi
+
+if $REMOVE_SYSTEM; then
+  echo "rp-code system install: remove"
+  remove_system_install
+  ok "system install removed"
+  exit 0
+fi
+
+# =============================================================================================
+# Refresh the daemon's own files (run by rp-coded after an update whose bundle ships a newer
+# daemon): binary, unit, udev rule, module list, docs, menu entry and icon — the same list as the
+# install below, no group/user/autostart/policy steps and no service restart (the daemon
+# restarts itself once the input lock is free).
+# =============================================================================================
+if $REFRESH_DAEMON; then
+  echo "rp-code system integration: refresh daemon files"
+  [ -n "$DAEMON_BIN" ] || die "rp-coded binary not found next to $SCRIPT_DIR"
+  note "daemon binary: $DAEMON_BIN"
+  install_file "$DAEMON_BIN" "$DAEMON_DST" 0755 || true
+  for f in README.md POLICY.md policy.example.json; do
+    src="$SCRIPT_DIR/$f"; [ -f "$src" ] || src="$DIST/$f"
+    [ -f "$src" ] && install_file "$src" "$LIBEXEC/$f" 0644 || true
+  done
+  install_file "$DIST/rp-coded.service" "$UNIT_DST" 0644 || true
+  udev_changed=false
+  install_file "$DIST/70-rp-code.rules" "$UDEV_DST" 0644 && udev_changed=true || true
+  install_file "$DIST/rp-code.conf" "$MODULES_DST" 0644 || true
+  if [ -f "$MENU_DST" ]; then
+    content="$(sed "s|^Exec=.*|Exec=$APP_EXEC %U|; s|^TryExec=.*|TryExec=$APP_EXEC|" "$DIST/rp-code.desktop")"
+    if [ "$(cat "$MENU_DST")" = "$content" ]; then skip "$MENU_DST is up to date"; else
+      if $DRY_RUN; then note "+ write $MENU_DST"; else printf '%s\n' "$content" > "$MENU_DST.new" && chmod 0644 "$MENU_DST.new" && mv -f "$MENU_DST.new" "$MENU_DST"; fi
+      ok "wrote $MENU_DST"
+    fi
+    [ -n "$ICON_SRC" ] && install_file "$ICON_SRC" "$ICON_DST" 0644 || true
+    refresh_menus
+  fi
+  if $SYSTEM_CMDS && have systemctl && [ -d /run/systemd/system ]; then run systemctl daemon-reload; fi
+  if $SYSTEM_CMDS && $udev_changed && have udevadm; then run udevadm control --reload || true; fi
+  ok "daemon files refreshed ($DAEMON_DST); restart rp-coded to run the new binary"
+  exit 0
+fi
+
 # =============================================================================================
 # Uninstall
 # =============================================================================================
 if $UNINSTALL; then
   echo "rp-code system integration: uninstall"
-  if have systemctl; then
+  if $SYSTEM_CMDS && have systemctl; then
     if systemctl is-enabled rp-coded >/dev/null 2>&1 || systemctl is-active rp-coded >/dev/null 2>&1; then
       run systemctl disable --now rp-coded; ok "stopped and disabled rp-coded.service"
     else
@@ -323,9 +574,10 @@ if $UNINSTALL; then
   for f in "$UNIT_DST" "$UDEV_DST" "$MODULES_DST"; do
     if [ -e "$f" ]; then run rm -f "$f"; ok "removed $f"; else skip "$f absent"; fi
   done
-  if have systemctl; then run systemctl daemon-reload 2>/dev/null || true; fi
-  if have udevadm; then run udevadm control --reload || true; fi
+  if $SYSTEM_CMDS && have systemctl; then run systemctl daemon-reload 2>/dev/null || true; fi
+  if $SYSTEM_CMDS && have udevadm; then run udevadm control --reload || true; fi
   if [ -d "$LIBEXEC" ]; then run rm -rf "$LIBEXEC"; ok "removed $LIBEXEC"; else skip "$LIBEXEC absent"; fi
+  remove_system_install
   for f in "$MENU_DST" "$ICON_DST"; do
     if [ -e "$f" ]; then run rm -f "$f"; ok "removed $f"; else skip "$f absent"; fi
   done
@@ -341,7 +593,9 @@ if $UNINSTALL; then
       skip "$unit absent"
     fi
     if [ -f "$xdg" ]; then run rm -f "$xdg"; ok "removed $xdg"; else skip "$xdg absent"; fi
-    if id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx "$GROUP"; then
+    if ! $SYSTEM_CMDS; then
+      skip "group membership (--prefix)"
+    elif id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx "$GROUP"; then
       run gpasswd -d "$TARGET_USER" "$GROUP" >/dev/null; ok "removed $TARGET_USER from group $GROUP (takes effect at next login)"
     else
       skip "$TARGET_USER not in group $GROUP"
@@ -349,7 +603,9 @@ if $UNINSTALL; then
   else
     note "no user given (--user); per-user autostart entries and group membership left alone"
   fi
-  if getent group "$GROUP" >/dev/null; then
+  if ! $SYSTEM_CMDS; then
+    skip "group $GROUP (--prefix)"
+  elif getent group "$GROUP" >/dev/null; then
     if run groupdel "$GROUP" 2>/dev/null; then ok "removed group $GROUP"; else warn "could not remove group $GROUP (still someone's primary group?)"; fi
   else
     skip "group $GROUP absent"
@@ -370,15 +626,19 @@ echo "rp-code system integration: install"
 note "daemon binary: $DAEMON_BIN"
 note "dist files:    $DIST"
 note "app binary:    ${APP_BIN:-not found (autostart entry will use plain 'rp-code'; pass --app-bin)}"
+if [ "$SYSTEM_INSTALL" = yes ]; then note "system install: $INSTALL_ROOT/current (from the AppImage; launchers use $APP_EXEC)"; else note "system install: no (--no-system-install, or --app-bin is not an AppImage)"; fi
 note "user:          ${TARGET_USER:-none (user steps skipped; pass --user)}"
+[ -z "$PREFIX" ] || note "prefix:        $PREFIX (files only; no groups, services or udev)"
 
 # 1. group ---------------------------------------------------------------------------------------
-if getent group "$GROUP" >/dev/null; then
+if ! $SYSTEM_CMDS; then
+  skip "group $GROUP (--prefix)"
+elif getent group "$GROUP" >/dev/null; then
   skip "group $GROUP exists"
 else
   run groupadd -f "$GROUP"; ok "created group $GROUP"
 fi
-if [ -n "$TARGET_USER" ]; then
+if [ -n "$TARGET_USER" ] && $SYSTEM_CMDS; then
   if id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx "$GROUP"; then
     skip "$TARGET_USER is in group $GROUP"
   else
@@ -399,7 +659,9 @@ install_file "$DIST/rp-coded.service" "$UNIT_DST" 0644 && unit_changed=true || t
 # The policy directory must exist before the unit starts: it is the one path under /etc the
 # hardened service may write to (write-once policy creation from the app, see POLICY.md).
 if [ -d "$POLICY_DIR" ]; then skip "$POLICY_DIR exists"; else run install -d -m 0755 -o root -g root "$POLICY_DIR"; ok "created $POLICY_DIR"; fi
-if have systemctl && [ -d /run/systemd/system ]; then
+if ! $SYSTEM_CMDS; then
+  skip "systemd service (--prefix)"
+elif have systemctl && [ -d /run/systemd/system ]; then
   run systemctl daemon-reload
   if systemctl is-enabled rp-coded >/dev/null 2>&1 && systemctl is-active rp-coded >/dev/null 2>&1; then
     if $daemon_changed || $unit_changed; then
@@ -418,12 +680,14 @@ fi
 udev_changed=false
 install_file "$DIST/70-rp-code.rules" "$UDEV_DST" 0644 && udev_changed=true || true
 install_file "$DIST/rp-code.conf" "$MODULES_DST" 0644 || true
-if [ -e /dev/uinput ]; then
+if ! $SYSTEM_CMDS; then
+  skip "uinput module / udev reload (--prefix)"
+elif [ -e /dev/uinput ]; then
   skip "uinput module loaded"
 elif have modprobe; then
   if run modprobe uinput; then ok "loaded uinput module"; else warn "modprobe uinput failed (kernel without uinput?)"; fi
 fi
-if have udevadm; then
+if $SYSTEM_CMDS && have udevadm; then
   if $udev_changed; then
     run udevadm control --reload && run udevadm trigger --subsystem-match=misc && ok "reloaded udev rules"
   else
@@ -443,14 +707,21 @@ else
   skip "no policy file (defaults apply; create one once from Settings → System, or --policy-template writes the example to $POLICY_DST, see $LIBEXEC/POLICY.md)"
 fi
 
-# 5. application menu entry and icon (system-wide, so AppImage users get a launcher) ----------------
+# 5. system install: the unpacked app under /opt/rp-code (AppImage only) ------------------------------
+if [ "$SYSTEM_INSTALL" = yes ]; then
+  system_install_app
+else
+  skip "system install (pass --app-bin <AppImage> to unpack the app to $INSTALL_ROOT/current; updates are then applied by the daemon)"
+fi
+
+# 6. application menu entry and icon (system-wide, so AppImage users get a launcher) ----------------
 if [ "$MENU_ENTRY" = yes ]; then
   content="$(sed "s|^Exec=.*|Exec=$APP_EXEC %U|; s|^TryExec=.*|TryExec=$APP_EXEC|" "$DIST/rp-code.desktop")"
   if [ -f "$MENU_DST" ] && [ "$(cat "$MENU_DST")" = "$content" ]; then
     skip "$MENU_DST is up to date"
     changed=false
   else
-    if $DRY_RUN; then note "+ write $MENU_DST"; else install -D -m 0644 -o root -g root /dev/null "$MENU_DST" && printf '%s\n' "$content" > "$MENU_DST"; fi
+    if $DRY_RUN; then note "+ write $MENU_DST"; else install -D -m 0644 -o root -g root /dev/null "$MENU_DST.new" && printf '%s\n' "$content" > "$MENU_DST.new" && mv -f "$MENU_DST.new" "$MENU_DST"; fi
     ok "wrote $MENU_DST"
     changed=true
   fi
@@ -464,7 +735,7 @@ else
   skip "application menu entry (--menu-entry no)"
 fi
 
-# 6. autostart for the user ------------------------------------------------------------------------
+# 7. autostart for the user ------------------------------------------------------------------------
 if [ -n "$TARGET_USER" ]; then
   xdg="$USER_HOME/.config/autostart/rp-code.desktop"
   unit="$USER_HOME/.config/systemd/user/rp-code.service"
@@ -504,15 +775,15 @@ else
   skip "autostart (no user)"
 fi
 
-# 7. browser extension policy (only with --browser-extension; the id is per user, so never from the deb) -----
+# 8. browser extension policy (only with --browser-extension; the id is per user, so never from the deb) -----
 if [ -n "$BROWSER_EXT" ]; then
   install_browser_policy
 else
   skip "browser extension policy (pass --browser-extension/--browser-update-url, or use Settings → Browser in the app)"
 fi
 
-# 8. device check ----------------------------------------------------------------------------------
-if [ -x "$DAEMON_DST" ] && ! $DRY_RUN; then
+# 9. device check ----------------------------------------------------------------------------------
+if [ -x "$DAEMON_DST" ] && ! $DRY_RUN && $SYSTEM_CMDS; then
   echo "device check ($DAEMON_DST --check-devices):"
   "$DAEMON_DST" --check-devices 2>&1 | sed 's/^/       /' || true
 elif [ -x "$DAEMON_BIN" ]; then
@@ -521,6 +792,9 @@ elif [ -x "$DAEMON_BIN" ]; then
 fi
 
 ok "install complete"
+if [ "$SYSTEM_INSTALL" = yes ] && [ -n "${APPIMAGE:-}" ]; then
+  note "the running app is still the AppImage; start $APP_EXEC (menu entry) to run the installed copy"
+fi
 if $NEED_RELOGIN; then
   note "$TARGET_USER must log out and back in for the $GROUP group membership to take effect"
   note "(until then the app cannot connect to $RUN_DIR/daemon.sock)."

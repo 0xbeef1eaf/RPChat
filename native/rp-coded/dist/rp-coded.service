@@ -51,6 +51,19 @@ RuntimeDirectory=rp-code
 RuntimeDirectoryMode=0750
 ReadWritePaths=/run/rp-code
 ReadWritePaths=-/etc/rp-code
+# System install (`apply-update`): the unpacked app under /opt/rp-code (current/, previous/,
+# versions.json, per-user staging), and — when the new bundle ships a newer daemon — the
+# daemon's own files: the binary directory, this unit, the udev rule, the module list and the
+# menu entry/icon, refreshed through the bundle's install.sh --refresh-daemon-files. All "-":
+# ignored when missing, so the unit starts on machines without a system install.
+ReadWritePaths=-/opt/rp-code
+ReadWritePaths=-/usr/local/libexec/rp-code
+ReadWritePaths=-/usr/local/bin
+ReadWritePaths=-/etc/systemd/system
+ReadWritePaths=-/etc/udev/rules.d
+ReadWritePaths=-/etc/modules-load.d
+ReadWritePaths=-/usr/local/share/applications
+ReadWritePaths=-/usr/local/share/icons
 
 [Install]
 WantedBy=multi-user.target

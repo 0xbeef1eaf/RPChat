@@ -5,7 +5,9 @@ desktop process cannot do safely — **grabbing the user's input devices** (`EVI
 `/dev/input/event*`) for a bounded time and **injecting keystrokes / pointer events** through
 one uinput virtual device — and enforces a root-owned **policy file** so the limits cannot be
 loosened from the app. When that policy says the app may not be quit (`app.allowQuit: false`)
-it also **relaunches the app** in the user's session after a kill or crash. The app talks to it
+it also **relaunches the app** in the user's session after a kill or crash, and for a **system
+install** (`/opt/rp-code`) it **applies app updates** the user downloaded — verified, extracted
+as the user, swapped in as root — and updates itself from the same bundle. The app talks to it
 over a group-restricted unix socket.
 
 Spec: `docs/spec/system.md`. User guide: `docs/system-integration.md`. Wire contract:
@@ -15,24 +17,34 @@ Spec: `docs/spec/system.md`. User guide: `docs/system-integration.md`. Wire cont
 
 ```sh
 cargo build --release          # → target/release/rp-coded (no system libraries needed)
-cargo test                     # 69 tests, all run without /dev/input or /dev/uinput
+cargo test                     # 76 tests, all run without /dev/input or /dev/uinput (the chown/swap
+                               # parts of the update tests need root and are skipped otherwise)
 cargo clippy --all-targets
 pnpm run build:daemon          # same build, from the monorepo root
 ./target/release/rp-coded --check-devices
 ```
 
 Rust 1.75+. Dependencies: `evdev` 0.13 (ioctls, uinput), `nix` 0.29 (signals, chown, peer
-credentials), `serde`/`serde_json`.
+credentials), `serde`/`serde_json`, `sha2`/`base64` (update checksums). `RP_CODED_VERSION=<semver>`
+at build time overrides the version the binary reports (test builds that must look newer than the
+running daemon).
 
 ## Install
 
 `install.sh` (run as root) does everything described in `docs/system-integration.md`:
 
 ```sh
-sudo native/rp-coded/install.sh --user "$USER" --app-bin /path/to/rp-code [--autostart xdg|systemd|none] [--policy-template]
+sudo native/rp-coded/install.sh --user "$USER" --app-bin /path/to/rp-code.AppImage [--autostart xdg|systemd|none] [--policy-template] [--no-system-install]
+sudo native/rp-coded/install.sh --rollback        # system install: previous ⇄ current
+sudo native/rp-coded/install.sh --remove          # system install: delete /opt/rp-code/{current,previous,versions.json}
 sudo native/rp-coded/install.sh --uninstall --user "$USER"
 ./install.sh --dry-run ...      # print what would happen, no root needed
+sudo scripts/install-smoke.sh   # the whole thing against a scratch --prefix with a fake AppImage
 ```
+
+With an AppImage as `--app-bin` the installer unpacks it to `/opt/rp-code/current` (the "system
+install"; `--no-system-install` keeps the AppImage as the launcher). From then on the app's
+updater hands downloaded releases to the daemon (`apply-update`) instead of asking for a password.
 
 The desktop app ships the script and `dist/` under `resources/system/` and runs it through
 `pkexec` from Settings → System, after copying everything to `~/.cache/rp-code/system-install/`
@@ -43,7 +55,8 @@ run `sudo squashfs-root/resources/system/install.sh --app-bin "$(readlink -f rp-
 ## CLI
 
 ```
-rp-coded [--socket <path>] [--policy <path>] [--sessions-dir <path>] [--no-uinput] [--log-level error|warn|info|debug]
+rp-coded [--socket <path>] [--policy <path>] [--sessions-dir <path>] [--install-root <path>]
+         [--system-prefix <path>] [--no-restart] [--no-uinput] [--log-level error|warn|info|debug]
 rp-coded --check-devices
 rp-coded --help | --version
 ```
@@ -55,6 +68,10 @@ rp-coded --help | --version
 - `--sessions-dir` (env `RP_CODED_SESSIONS_DIR`): logind session state files used to find the
   active graphical user before relaunching the app; default `/run/systemd/sessions`, with
   `loginctl` as the fallback. Meant for tests (point it at a directory with a fake session file).
+- `--install-root` (env `RP_CODED_INSTALL_ROOT`): the system install (`current/`, `previous/`,
+  `versions.json`); default `/opt/rp-code`. `--system-prefix` (env `RP_CODED_SYSTEM_PREFIX`) is
+  handed to `install.sh --prefix` when the daemon refreshes its own files after an update, and
+  `--no-restart` (env `RP_CODED_NO_RESTART=1`) makes it log instead of restarting — both for tests.
 - `--check-devices`: lists the keyboards/pointers it can open, whether `/dev/uinput` is
   writable, and the screen size it would use. Exit 0 even with no devices.
 - Logs go to stderr (`rp-coded [level] message`), i.e. the journal under systemd. Every lock
@@ -84,8 +101,10 @@ created it. Unknown fields in requests are ignored; a malformed line gets
 | `{ "op": "set-policy", "policy": PolicyFile }` | `{ "ok": true, "op": "set-policy", "path" }` — creates the policy file **once** (see below) |
 | `{ "op": "register", "exec", "args", "cwd", "env" }` | `{ "ok": true, "op": "register" }` — keepalive registration on this connection (see below) |
 | `{ "op": "unregister" }` | `{ "ok": true, "op": "unregister" }` — forget it (also when nothing was registered) |
+| `{ "op": "apply-update", "file", "version", "sha512" }` | `{ "ok": true, "op": "apply-update", "version", "restartDaemon" }` — system install: verify, extract as the user, swap in, self-update (see below; may take a minute) |
 
-`status` also carries `"keepalive": { "registered", "relaunches", "allowQuit" }`.
+`status` also carries `"keepalive": { "registered", "relaunches", "allowQuit" }` and
+`"install": { "systemInstall", "current"?, "previous"?, "daemonVersion" }`.
 
 `until` is RFC 3339 UTC with milliseconds (`2026-01-02T03:04:05.678Z`), the same shape as
 `Date.prototype.toISOString()`. `devices` is `"keyboard"`, `"mouse"` or `"both"` (default).
@@ -94,12 +113,12 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 
 | Code | When |
 |---|---|
-| `REFUSED` | `hello` with a version other than 1; any request while the daemon shuts down; `register` from uid 0 |
+| `REFUSED` | `hello` with a version other than 1; any request while the daemon shuts down; `register` from uid 0; `apply-update` from uid 0, without a system install, for a downgrade the policy does not allow, for a file that is not a regular file owned by the peer under their home (or not readable), or while a self-update restart is pending |
 | `POLICY` | `lock` while `inputLock.enabled` is `false`; `policy`/`lock` while the policy file is unreadable or invalid (fail closed) |
 | `NO_DEVICES` | `lock` found no device of the requested class; injection without a uinput device |
-| `BUSY` | every matching device is `EVIOCGRAB`bed by another process (EBUSY); uinput write would block |
-| `INVALID` | malformed JSON / unknown op / wrong field types; `durationMs` ≤ 0 or non-finite; empty or > 2000-char `text`; unparsable `combo`; non-finite coordinates; a `register` whose `exec` is not an absolute existing executable, with > 32 `args`, a relative `cwd`, an env key outside the whitelist or a value > 4 KiB, or from a uid without a passwd entry |
-| `INTERNAL` | unexpected I/O failure (details in `error` and the journal) |
+| `BUSY` | every matching device is `EVIOCGRAB`bed by another process (EBUSY); uinput write would block; a second `apply-update` while one is running |
+| `INVALID` | malformed JSON / unknown op / wrong field types; `durationMs` ≤ 0 or non-finite; empty or > 2000-char `text`; unparsable `combo`; non-finite coordinates; a `register` whose `exec` is not an absolute existing executable, with > 32 `args`, a relative `cwd`, an env key outside the whitelist or a value > 4 KiB, or from a uid without a passwd entry; an `apply-update` whose `version` is not semver, whose `sha512` is not a digest or does not match the file, or whose extracted tree fails the checks |
+| `INTERNAL` | unexpected I/O failure (details in `error` and the journal); `apply-update` extraction, ownership or swap failure (the old version is kept) |
 | `EXISTS` | `set-policy` while something (file, symlink, directory) already exists at the policy path; only root can change it |
 
 ### Semantics the app relies on
@@ -153,6 +172,26 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   stdio to `/dev/null`, in a new session (`setsid`), as the user (`setgid`, `initgroups`,
   `setuid`; never root); its exit status is logged. Every register/unregister/relaunch/give-up
   line carries the uid and pid.
+- **`apply-update`** (system install, `docs/system-integration.md` "System install"): the peer
+  must be a non-root user; `<install-root>/versions.json` and `current/rp-code` must exist;
+  `version` must be semver and not older than `versions.json.current.version` unless the policy
+  has `settings.updates.allowDowngrade: true` (equal is fine: a reinstall); `file` must be an
+  absolute path without `.`/`..` under the peer's home, opened `O_NOFOLLOW`, a regular file the
+  peer owns, 1 byte to 1 GiB. The file is copied into `<root>/.staging-<uid>` (`0700`, the peer's)
+  while hashed — the hashed bytes are the extracted bytes — and `sha512` (base64 as in
+  `latest-linux.yml`; hex accepted) must match. `<copy> --appimage-extract` then runs **as the
+  peer** (uid/gid, empty environment, 4-minute limit). The tree must contain `rp-code`,
+  `libffmpeg.so` and `resources/app.asar`, no setuid/setgid bit, no hard link, no device/fifo/socket
+  and no symlink leaving the tree; it is chowned `root:root` (`0755` dirs, `0755`/`0644` files) and
+  verified again. Swap: `previous` removed, `current` → `previous`, tree → `current` (a failed last
+  rename restores `current`); `versions.json` rewritten (`current: { version, installedAt, source:
+  file }`, `previous`: the old entry). Then, when `current/resources/bin/rp-coded --version` is
+  newer than the running daemon, `current/resources/system/install.sh --refresh-daemon-files` runs
+  as root and the answer says `restartDaemon: true`; once the reply is out and no input lock is
+  active the daemon restarts (`systemctl restart rp-coded` under systemd, else a re-exec of the
+  replaced binary with the same arguments). A failed refresh keeps the app update and answers
+  `false`. Everything is logged with the peer's uid/pid. The app relaunches from
+  `/opt/rp-code/current/rp-code` afterwards (waiting for the daemon first when it restarts).
 - **`click` / `move`**: absolute coordinates in the primary screen's pixel space. The virtual
   device's ABS_X/ABS_Y range is `0..W-1` / `0..H-1` where `W×H` is the first connected DRM
   connector's preferred mode (`/sys/class/drm/*/modes`), fallback 1920×1080; coordinates are
@@ -170,11 +209,12 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 | `src/protocol.rs` | serde types mirroring `DaemonRequest`/`DaemonResponse`, `iso_millis`, round-trip tests for every op and error code |
 | `src/policy.rs` | `PolicyFile` parsing/validation, `LockLimits` defaults and clamping, `AppRules` (`app.allowQuit`/`users`), mtime/size-cached `PolicyStore` |
 | `src/keepalive.rs` | Pure relaunch logic: registration validation, the gate (policy, users, active session, process), `RelaunchTracker` backoff/give-up, logind session-file and `loginctl` parsing, `command_spec`/`build_command`; all tested |
+| `src/sysinstall.rs` | System install: `versions.json`, semver + downgrade rule, SHA-512 decoding, tree checks/normalisation, atomic swap, `apply_update` behind injectable `ApplyHooks` (home lookup, extraction as the user, bundled daemon version, `install.sh --refresh-daemon-files`); tested on a temp root with a fake AppImage |
 | `src/lock.rs` | `LockEngine` state machine (grab, timer, emergency chord, hot-plug, device classes) behind `DeviceSource`/`GrabbedDevice`; fakes and tests |
 | `src/inject.rs` | US keymap, `plan_text`, `parse_combo`, `ScreenSize` clamping, `Injector` trait, `NullInjector`, `FakeInjector` |
 | `src/devices.rs` | evdev `DeviceSource`, capability classification, DRM screen size, uinput `Injector`, `--check-devices` report |
 | `dist/` | `rp-coded.service`, `70-rp-code.rules`, `rp-code.conf`, `policy.example.json`, `POLICY.md`, `rp-code-autostart.desktop`, `rp-code.service` (user unit) |
-| `install.sh` | Idempotent installer / uninstaller (see the docs) |
+| `install.sh` | Idempotent installer / uninstaller, system install (`--system-install`, `--rollback`, `--remove`), `--refresh-daemon-files`, `--prefix` for tests (see the docs; `scripts/install-smoke.sh`) |
 
 ## Security model
 
@@ -186,11 +226,18 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   inspected. No request can change an existing policy: `set-policy` only ever creates the file
   when none exists (write once), so the first member of the group to do it seeds the policy for
   everyone; edits and removal need root.
+- Updates (`apply-update`) install only files that match the release manifest's SHA-512, are
+  extracted with the requesting user's privileges (never root), pass the tree checks, and only
+  then become root-owned; the previous version is kept for `install.sh --rollback`. Release
+  signing is not implemented yet: the manifest fetched over HTTPS with the user's token is the
+  root of trust, and any `rp-code` member can install a genuine release (an older one only when
+  the policy allows downgrades).
 - Relaunching (`app.allowQuit: false`) only ever runs what a non-root client registered, as
   that client's uid/gid with its own whitelisted environment; the daemon never keeps root in
   the child and only relaunches users listed in `app.users` who own the active session.
 - The systemd unit runs with `NoNewPrivileges`, read-only `/usr` and `/etc` (except
-  `/etc/rp-code`), kernel/cgroup protection and a capability bounding set of chown +
+  `/etc/rp-code`, `/opt/rp-code` and the daemon's own file locations it refreshes after a
+  self-update), kernel/cgroup protection and a capability bounding set of chown +
   setuid/setgid. Because a relaunched app is a child of the service and inherits its sandbox,
   the unit does **not** use `ProtectHome`, `PrivateTmp`, a system-call filter,
   `MemoryDenyWriteExecute`, `RestrictNamespaces` or a closed device policy (a desktop app needs

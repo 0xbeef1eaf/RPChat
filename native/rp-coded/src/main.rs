@@ -67,6 +67,7 @@ mod keepalive;
 mod lock;
 mod policy;
 mod protocol;
+mod sysinstall;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -90,12 +91,18 @@ use policy::{CreateError, PolicyStore, DEFAULT_POLICY_PATH};
 use protocol::{
     DaemonError, DaemonResult, ErrorCode, Ok as OkPayload, Request, Response, PROTOCOL_VERSION,
 };
+use sysinstall::{ApplyHooks, ApplyRequest, DEFAULT_INSTALL_ROOT};
 
 /// `DAEMON_SOCKET_PATH` in `@rp/shared`.
 pub const DEFAULT_SOCKET_PATH: &str = "/run/rp-code/daemon.sock";
 /// `SYSTEM_GROUP` in `@rp/shared`: owner group of the socket directory and socket.
 pub const SYSTEM_GROUP: &str = "rp-code";
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The crate version; `RP_CODED_VERSION` at build time overrides it (test builds that must look
+/// newer than the running daemon to exercise the self-update path).
+pub const VERSION: &str = match option_env!("RP_CODED_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 const USAGE: &str = "\
 rp-coded — input lock / injection daemon for the rp desktop app
@@ -112,6 +119,12 @@ OPTIONS:
     --sessions-dir <p>  logind session state files used to find the active graphical user
                         for app relaunches (default /run/systemd/sessions, env
                         RP_CODED_SESSIONS_DIR; `loginctl` is the fallback)
+    --install-root <p>  System install root holding current/, previous/ and versions.json
+                        (default /opt/rp-code, env RP_CODED_INSTALL_ROOT)
+    --system-prefix <p> Prefix passed to `install.sh --prefix` when the daemon refreshes its
+                        own files after an update (tests; env RP_CODED_SYSTEM_PREFIX)
+    --no-restart        After a self-update only log that a restart is due instead of
+                        restarting (tests; env RP_CODED_NO_RESTART=1)
     --no-uinput         Do not create the uinput virtual device (injection reports NO_DEVICES)
     --check-devices     Print which input devices and /dev/uinput can be opened, then exit 0
     --log-level <lvl>   stderr verbosity (default info)
@@ -123,6 +136,9 @@ struct Args {
     socket: PathBuf,
     policy: PathBuf,
     sessions_dir: PathBuf,
+    install_root: PathBuf,
+    system_prefix: Option<PathBuf>,
+    no_restart: bool,
     no_uinput: bool,
     check_devices: bool,
     log_level: Level,
@@ -141,6 +157,13 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         sessions_dir: std::env::var_os("RP_CODED_SESSIONS_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_SESSIONS_DIR)),
+        install_root: std::env::var_os("RP_CODED_INSTALL_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_INSTALL_ROOT)),
+        system_prefix: std::env::var_os("RP_CODED_SYSTEM_PREFIX")
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from),
+        no_restart: std::env::var_os("RP_CODED_NO_RESTART").is_some_and(|v| v == "1"),
         no_uinput: false,
         check_devices: false,
         log_level: Level::Info,
@@ -159,6 +182,15 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--sessions-dir" => {
                 args.sessions_dir = PathBuf::from(iter.next().ok_or("--sessions-dir needs a path")?)
             }
+            "--install-root" => {
+                args.install_root = PathBuf::from(iter.next().ok_or("--install-root needs a path")?)
+            }
+            "--system-prefix" => {
+                args.system_prefix = Some(PathBuf::from(
+                    iter.next().ok_or("--system-prefix needs a path")?,
+                ))
+            }
+            "--no-restart" => args.no_restart = true,
             "--log-level" => {
                 let v = iter.next().ok_or("--log-level needs a value")?;
                 args.log_level =
@@ -226,6 +258,26 @@ impl ConnCtx {
     }
 }
 
+/// How the daemon restarts itself after a self-update (`apply-update`).
+pub struct RestartPlan {
+    /// The executable to re-exec (recorded at startup; the file is replaced in place later).
+    pub exe: PathBuf,
+    /// The original command line (without argv[0]).
+    pub argv: Vec<String>,
+    /// `--no-restart`: only log.
+    pub suppressed: bool,
+}
+
+impl RestartPlan {
+    pub fn from_process(suppressed: bool) -> RestartPlan {
+        RestartPlan {
+            exe: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/proc/self/exe")),
+            argv: std::env::args().skip(1).collect(),
+            suppressed,
+        }
+    }
+}
+
 /// Everything the connection threads share.
 pub struct Daemon {
     engine: Mutex<LockEngine>,
@@ -234,6 +286,15 @@ pub struct Daemon {
     keepalive: Mutex<Keepalive>,
     hooks: KeepaliveHooks,
     shutting_down: AtomicBool,
+    /// System install root (`/opt/rp-code`).
+    install_root: PathBuf,
+    apply_hooks: ApplyHooks,
+    /// Serialises `apply-update` (one at a time) and marks a pending restart.
+    apply_busy: AtomicBool,
+    restart_pending: AtomicBool,
+    /// Whether the restart thread was already started (only one).
+    restart_scheduled: AtomicBool,
+    restart: Mutex<RestartPlan>,
 }
 
 impl Daemon {
@@ -249,11 +310,25 @@ impl Daemon {
             keepalive: Mutex::new(Keepalive::default()),
             hooks: KeepaliveHooks::real(PathBuf::from(DEFAULT_SESSIONS_DIR)),
             shutting_down: AtomicBool::new(false),
+            install_root: PathBuf::from(DEFAULT_INSTALL_ROOT),
+            apply_hooks: os::apply_hooks(None),
+            apply_busy: AtomicBool::new(false),
+            restart_pending: AtomicBool::new(false),
+            restart_scheduled: AtomicBool::new(false),
+            restart: Mutex::new(RestartPlan::from_process(true)),
         }
     }
 
     pub fn with_keepalive_hooks(mut self, hooks: KeepaliveHooks) -> Self {
         self.hooks = hooks;
+        self
+    }
+
+    /// Where the system install lives and how the daemon restarts after updating itself.
+    pub fn with_install(mut self, root: PathBuf, hooks: ApplyHooks, restart: RestartPlan) -> Self {
+        self.install_root = root;
+        self.apply_hooks = hooks;
+        self.restart = Mutex::new(restart);
         self
     }
 
@@ -435,6 +510,7 @@ impl Daemon {
                 Ok(OkPayload::Status {
                     locked: self.engine().status(Instant::now()),
                     keepalive: self.keepalive().info(allow_quit),
+                    install: sysinstall::install_info(&self.install_root, VERSION),
                 })
             }
             Request::Policy => {
@@ -562,7 +638,136 @@ impl Daemon {
                 }
                 Ok(OkPayload::Unregister)
             }
+            Request::ApplyUpdate {
+                file,
+                version,
+                sha512,
+            } => self.apply_update(ctx, &file, &version, &sha512),
         }
+    }
+
+    /// `apply-update`: one at a time, refused while a restart is pending; the work itself is
+    /// `sysinstall::apply_update`. Every outcome is logged with the peer.
+    fn apply_update(
+        &self,
+        ctx: &ConnCtx,
+        file: &str,
+        version: &str,
+        sha512: &str,
+    ) -> DaemonResult<OkPayload> {
+        let peer = ctx.peer;
+        if self.restart_pending.load(Ordering::SeqCst) {
+            return Err(DaemonError::new(
+                ErrorCode::Refused,
+                "the daemon is about to restart after updating itself; retry in a moment",
+            ));
+        }
+        if self
+            .apply_busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(DaemonError::new(
+                ErrorCode::Busy,
+                "another update is being applied",
+            ));
+        }
+        let allow_downgrade = self.policy().allow_downgrade();
+        log_info!(
+            "apply-update {version} from {} ({file}){}",
+            ctx.label,
+            if allow_downgrade {
+                "; downgrades allowed by policy"
+            } else {
+                ""
+            }
+        );
+        let result = sysinstall::apply_update(
+            &self.install_root,
+            &ApplyRequest {
+                file,
+                version,
+                sha512,
+                uid: peer.uid,
+                gid: peer.gid,
+                allow_downgrade,
+                running_daemon: VERSION,
+            },
+            &self.apply_hooks,
+        );
+        self.apply_busy.store(false, Ordering::SeqCst);
+        match result {
+            Ok(outcome) => {
+                log_info!(
+                    "apply-update {} done for {} (replaced {}; daemon restart: {})",
+                    outcome.version,
+                    ctx.label,
+                    outcome.replaced.as_deref().unwrap_or("nothing"),
+                    outcome.restart_daemon
+                );
+                if outcome.restart_daemon {
+                    self.restart_pending.store(true, Ordering::SeqCst);
+                }
+                Ok(OkPayload::ApplyUpdate {
+                    version: outcome.version,
+                    restart_daemon: outcome.restart_daemon,
+                })
+            }
+            Err(e) => {
+                log_warn!("apply-update {version} from {} failed: {e}", ctx.label);
+                Err(e)
+            }
+        }
+    }
+
+    /// Whether `apply-update` asked for a restart that has not happened yet.
+    pub fn restart_pending(&self) -> bool {
+        self.restart_pending.load(Ordering::SeqCst)
+    }
+
+    /// Restart after a self-update once no input lock is active: under systemd through
+    /// `systemctl restart rp-coded` (the refreshed unit file applies), otherwise by re-exec'ing
+    /// the (replaced) binary with the original arguments. Runs on its own thread, started once
+    /// the reply to `apply-update` has been written, so that reply goes out first. `--no-restart`
+    /// only logs. Only one restart thread is ever started.
+    pub fn restart_when_idle(self: &Arc<Self>) {
+        if self
+            .restart_scheduled
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+        let daemon = self.clone();
+        thread::Builder::new()
+            .name("rp-coded-restart".into())
+            .spawn(move || {
+                thread::sleep(std::time::Duration::from_millis(500));
+                let mut waited = false;
+                while daemon.engine().is_locked() && !daemon.is_shutting_down() {
+                    if !waited {
+                        log_info!("restart deferred while an input lock is active");
+                        waited = true;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(500));
+                }
+                if daemon.is_shutting_down() {
+                    return;
+                }
+                let plan = daemon.restart.lock().unwrap_or_else(|e| e.into_inner());
+                if plan.suppressed {
+                    log_warn!(
+                        "self-update installed; restart suppressed (--no-restart): run `systemctl restart rp-coded` or re-exec {} {}",
+                        plan.exe.display(),
+                        plan.argv.join(" ")
+                    );
+                    daemon.restart_pending.store(false, Ordering::SeqCst);
+                    daemon.restart_scheduled.store(false, Ordering::SeqCst);
+                    return;
+                }
+                os::restart_daemon(&plan, &daemon);
+            })
+            .ok();
     }
 
     fn register(
@@ -720,6 +925,209 @@ mod os {
             .unwrap_or(false)
     }
 
+    /// Home directory of a uid from passwd.
+    pub fn home_of(uid: u32) -> Option<PathBuf> {
+        nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+            .ok()
+            .flatten()
+            .map(|u| u.dir)
+    }
+
+    /// The `apply-update` hooks for the real system: extraction as the user, `--version` of
+    /// the bundled daemon, `install.sh --refresh-daemon-files [--prefix <p>]` as root.
+    pub fn apply_hooks(system_prefix: Option<PathBuf>) -> ApplyHooks {
+        ApplyHooks {
+            home_of: Box::new(home_of),
+            extract: Box::new(extract_as_user),
+            daemon_version_of: Box::new(daemon_version_of),
+            refresh_daemon_files: Box::new(move |installer| {
+                refresh_daemon_files(installer, system_prefix.as_deref())
+            }),
+        }
+    }
+
+    /// Run `<appimage> --appimage-extract` as `uid`/`gid` in `cwd` (a directory that user
+    /// owns), with an empty environment and a 4-minute limit. Never as root: the archive is
+    /// untrusted until the extracted tree passed the checks.
+    pub fn extract_as_user(appimage: &Path, cwd: &Path, uid: u32, gid: u32) -> Result<(), String> {
+        use std::os::unix::process::CommandExt;
+        let user = user_name(uid).unwrap_or_else(|| uid.to_string());
+        let user_c = std::ffi::CString::new(user.as_str()).unwrap_or_default();
+        let mut cmd = std::process::Command::new(appimage);
+        cmd.arg("--appimage-extract")
+            .current_dir(cwd)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", cwd)
+            .env("TMPDIR", cwd)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: only async-signal-safe libc wrappers, no allocation after fork.
+        unsafe {
+            cmd.pre_exec(move || {
+                use nix::unistd::{initgroups, setgid, setgroups, setuid, Gid, Uid};
+                setgid(Gid::from_raw(gid)).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+                if initgroups(&user_c, Gid::from_raw(gid)).is_err() {
+                    setgroups(&[Gid::from_raw(gid)])
+                        .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+                }
+                setuid(Uid::from_raw(uid)).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+                Ok(())
+            });
+        }
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("cannot run {} as uid {uid}: {e}", appimage.display()))?;
+        let mut stderr = child.stderr.take();
+        let stderr_thread = thread::spawn(move || {
+            let mut buf = String::new();
+            if let Some(s) = stderr.as_mut() {
+                let _ = io::Read::read_to_string(s, &mut buf);
+            }
+            buf
+        });
+        let deadline = Instant::now() + std::time::Duration::from_secs(240);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(std::time::Duration::from_millis(100))
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("extraction took longer than 4 minutes; killed".into());
+                }
+                Err(e) => return Err(format!("waiting for the extraction failed: {e}")),
+            }
+        };
+        let err_text = stderr_thread.join().unwrap_or_default();
+        if status.success() {
+            Ok(())
+        } else {
+            let tail: String = err_text
+                .chars()
+                .rev()
+                .take(400)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            Err(format!(
+                "--appimage-extract exited with {status}: {}",
+                tail.trim()
+            ))
+        }
+    }
+
+    /// `<path> --version` → the version it prints (`rp-coded X.Y.Z (protocol N)`).
+    pub fn daemon_version_of(path: &Path) -> Option<sysinstall::Semver> {
+        let out = std::process::Command::new(path)
+            .arg("--version")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        sysinstall::parse_version_output(&String::from_utf8_lossy(&out.stdout))
+    }
+
+    /// `install.sh --refresh-daemon-files` from the freshly installed bundle, as root. Its
+    /// output goes to the log line by line.
+    pub fn refresh_daemon_files(installer: &Path, prefix: Option<&Path>) -> Result<(), String> {
+        let mut cmd = std::process::Command::new(installer);
+        cmd.arg("--refresh-daemon-files")
+            .env_clear()
+            .env(
+                "PATH",
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            )
+            .stdin(std::process::Stdio::null());
+        if let Some(p) = prefix {
+            cmd.arg("--prefix").arg(p);
+        }
+        let out = cmd
+            .output()
+            .map_err(|e| format!("cannot run {}: {e}", installer.display()))?;
+        for line in String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .chain(String::from_utf8_lossy(&out.stderr).lines())
+        {
+            if !line.trim().is_empty() {
+                log_info!("install.sh: {}", line.trim_end());
+            }
+        }
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "{} --refresh-daemon-files exited with {}",
+                installer.display(),
+                out.status
+            ))
+        }
+    }
+
+    /// Restart the daemon: `systemctl restart rp-coded` when running as a systemd service
+    /// (the unit stops us with SIGTERM, which releases the lock, and starts the new binary
+    /// with the refreshed unit file), otherwise re-exec the binary in place. Only returns on
+    /// failure (logged); the caller then keeps running the old version.
+    pub fn restart_daemon(plan: &RestartPlan, daemon: &Daemon) {
+        let under_systemd = std::env::var_os("INVOCATION_ID").is_some()
+            && Path::new("/run/systemd/system").is_dir();
+        if under_systemd {
+            log_info!("restarting through systemctl restart rp-coded (self-update)");
+            match std::process::Command::new("systemctl")
+                .args(["restart", "--no-block", "rp-coded"])
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+            {
+                Ok(s) if s.success() => return,
+                Ok(s) => {
+                    log_error!("systemctl restart rp-coded exited with {s}; re-exec'ing instead")
+                }
+                Err(e) => log_error!("cannot run systemctl ({e}); re-exec'ing instead"),
+            }
+        }
+        log_info!(
+            "re-exec'ing {} {} (self-update)",
+            plan.exe.display(),
+            plan.argv.join(" ")
+        );
+        daemon.shutdown();
+        let Ok(exe) = std::ffi::CString::new(plan.exe.as_os_str().as_encoded_bytes()) else {
+            log_error!("cannot re-exec: executable path contains a NUL byte");
+            return;
+        };
+        let mut argv: Vec<std::ffi::CString> = Vec::with_capacity(plan.argv.len() + 1);
+        argv.push(exe.clone());
+        for a in &plan.argv {
+            match std::ffi::CString::new(a.as_str()) {
+                Ok(c) => argv.push(c),
+                Err(_) => {
+                    log_error!("cannot re-exec: an argument contains a NUL byte");
+                    return;
+                }
+            }
+        }
+        // The listening socket is close-on-exec; the new process binds afresh and clients reconnect.
+        let e = nix::unistd::execv(&exe, &argv).unwrap_err();
+        log_error!(
+            "re-exec of {} failed: {e}; the old daemon keeps running (restart it by hand)",
+            plan.exe.display()
+        );
+        daemon.restart_pending.store(false, Ordering::SeqCst);
+        daemon.restart_scheduled.store(false, Ordering::SeqCst);
+    }
+
     /// Spawn the relaunch (see `keepalive::build_command`) and reap it on a thread so it never
     /// lingers as a zombie; its exit is logged.
     pub fn spawn_relaunch(spec: &CommandSpec) -> io::Result<u32> {
@@ -743,7 +1151,7 @@ mod os {
 
 /// Serve one connection: one JSON request per line, one response line each. When it ends
 /// (EOF or error) a registration it still holds is handed to the keepalive logic.
-fn serve_connection(stream: UnixStream, daemon: &Daemon) -> io::Result<()> {
+fn serve_connection(stream: UnixStream, daemon: &Arc<Daemon>) -> io::Result<()> {
     let mut ctx = ConnCtx::new(peer_creds(&stream));
     log_debug!("connection from {}", ctx.label);
     let result = serve_lines(stream, daemon, &mut ctx);
@@ -752,7 +1160,7 @@ fn serve_connection(stream: UnixStream, daemon: &Daemon) -> io::Result<()> {
     result
 }
 
-fn serve_lines(stream: UnixStream, daemon: &Daemon, ctx: &mut ConnCtx) -> io::Result<()> {
+fn serve_lines(stream: UnixStream, daemon: &Arc<Daemon>, ctx: &mut ConnCtx) -> io::Result<()> {
     let mut writer = stream.try_clone()?;
     let reader = BufReader::new(stream);
     for line in reader.lines() {
@@ -768,6 +1176,11 @@ fn serve_lines(stream: UnixStream, daemon: &Daemon, ctx: &mut ConnCtx) -> io::Re
         writer.write_all(response.to_line().as_bytes())?;
         writer.write_all(b"\n")?;
         writer.flush()?;
+        // A self-update asked for a restart: start it now that the reply is out (the app keeps
+        // its connection open, so waiting for the disconnect would wait forever).
+        if daemon.restart_pending() && !daemon.is_shutting_down() {
+            daemon.restart_when_idle();
+        }
     }
     Ok(())
 }
@@ -958,8 +1371,32 @@ fn run(args: Args) -> ExitCode {
             injector,
             args.policy.clone(),
         )
-        .with_keepalive_hooks(KeepaliveHooks::real(args.sessions_dir.clone())),
+        .with_keepalive_hooks(KeepaliveHooks::real(args.sessions_dir.clone()))
+        .with_install(
+            args.install_root.clone(),
+            os::apply_hooks(args.system_prefix.clone()),
+            RestartPlan::from_process(args.no_restart),
+        ),
     );
+    {
+        let info = sysinstall::install_info(&args.install_root, VERSION);
+        if info.system_install {
+            log_info!(
+                "system install at {}: current {}{}",
+                args.install_root.display(),
+                info.current.as_deref().unwrap_or("?"),
+                info.previous
+                    .as_deref()
+                    .map(|p| format!(", previous {p}"))
+                    .unwrap_or_default()
+            );
+        } else {
+            log_info!(
+                "no system install at {} (apply-update is refused until install.sh --system-install ran)",
+                args.install_root.display()
+            );
+        }
+    }
     {
         let devs = daemon.engine().list_devices();
         let c = devices::counts(&devs, daemon.injector().available());
@@ -1044,7 +1481,17 @@ mod tests {
             let engine =
                 LockEngine::new(Box::new(source.clone())).with_wall_clock(|| 1_700_000_000_000);
             let daemon = Arc::new(
-                Daemon::new(Box::new(source), Box::new(injector), &policy_path).with_engine(engine),
+                Daemon::new(Box::new(source), Box::new(injector), &policy_path)
+                    .with_engine(engine)
+                    .with_install(
+                        dir.path().join("opt"),
+                        sysinstall::tests::test_hooks(dir.path().to_path_buf(), Default::default()),
+                        RestartPlan {
+                            exe: PathBuf::from("/nonexistent"),
+                            argv: Vec::new(),
+                            suppressed: true,
+                        },
+                    ),
             );
             let listener = bind_socket(&socket).unwrap();
             let d = daemon.clone();
@@ -1112,7 +1559,7 @@ mod tests {
 
         assert_eq!(
             c.send(json!({"op":"status"})),
-            json!({"ok":true,"op":"status","locked":null,"keepalive":{"registered":false,"relaunches":0,"allowQuit":true}})
+            json!({"ok":true,"op":"status","locked":null,"keepalive":{"registered":false,"relaunches":0,"allowQuit":true},"install":{"systemInstall":false,"daemonVersion":VERSION}})
         );
 
         let lock = c.send(json!({"op":"lock","durationMs":30000,"reason":"surprise"}));
@@ -1885,6 +2332,149 @@ mod tests {
     }
 
     #[test]
+    fn apply_update_through_the_daemon() {
+        use crate::sysinstall::tests::{app_tree, fake_appimage, seed_install, sha512_b64};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("opt");
+        let home = dir.path().join("home");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        // The request must come from a non-root uid that owns the file; as root we stand in
+        // for uid 1000 and hand the file over, otherwise we are that user ourselves.
+        let root_run = nix::unistd::getuid().is_root();
+        let uid = if root_run {
+            1000
+        } else {
+            nix::unistd::getuid().as_raw()
+        };
+        let gid = if root_run {
+            1000
+        } else {
+            nix::unistd::getgid().as_raw()
+        };
+        let refreshed = Arc::new(Mutex::new(Vec::new()));
+        let policy_path = dir.path().join("policy.json");
+        let daemon = Daemon::new(
+            Box::new(fake_devices()),
+            Box::new(FakeInjector::default()),
+            &policy_path,
+        )
+        .with_install(
+            root.clone(),
+            sysinstall::tests::test_hooks(home.clone(), refreshed.clone()),
+            RestartPlan {
+                exe: PathBuf::from("/nonexistent"),
+                argv: Vec::new(),
+                suppressed: true,
+            },
+        );
+        let mut tree = app_tree("0.5.0");
+        tree.push((
+            "resources/bin/rp-coded",
+            b"rp-coded 99.0.0 (protocol 1)\n".to_vec(),
+        ));
+        tree.push(("resources/system/install.sh", b"#!/bin/sh\n".to_vec()));
+        let refs: Vec<(&str, &[u8])> = tree.iter().map(|(p, c)| (*p, c.as_slice())).collect();
+        let appimage = home.join("rp-code-0.5.0.AppImage");
+        fake_appimage(&appimage, &refs);
+        if root_run {
+            std::os::unix::fs::chown(&appimage, Some(uid), Some(gid)).unwrap();
+        }
+        let sha = sha512_b64(&appimage);
+        let req = |version: &str, sha512: &str| Request::ApplyUpdate {
+            file: appimage.to_string_lossy().into_owned(),
+            version: version.into(),
+            sha512: sha512.into(),
+        };
+
+        // Root is refused; no system install is refused; status says so.
+        let mut as_root = ConnCtx::test(0, 1);
+        assert!(matches!(
+            daemon.handle(req("0.5.0", &sha), &mut as_root),
+            Response::Err(ref e) if e.code == ErrorCode::Refused
+        ));
+        let mut user = ConnCtx::new(Peer { uid, gid, pid: 7 });
+        assert!(matches!(
+            daemon.handle(req("0.5.0", &sha), &mut user),
+            Response::Err(ref e) if e.code == ErrorCode::Refused && e.error.contains("no system install")
+        ));
+        let status = serde_json::to_value(daemon.handle(Request::Status, &mut user)).unwrap();
+        assert_eq!(
+            status["install"],
+            json!({"systemInstall":false,"daemonVersion":VERSION})
+        );
+
+        seed_install(&root, "0.4.0");
+        let status = serde_json::to_value(daemon.handle(Request::Status, &mut user)).unwrap();
+        assert_eq!(
+            status["install"],
+            json!({"systemInstall":true,"current":"0.4.0","daemonVersion":VERSION})
+        );
+        // Downgrade refused until the policy allows it.
+        assert!(matches!(
+            daemon.handle(req("0.3.9", &sha), &mut user),
+            Response::Err(ref e) if e.code == ErrorCode::Refused && e.error.contains("allowDowngrade")
+        ));
+        // Bad checksum → INVALID, nothing changed.
+        assert!(matches!(
+            daemon.handle(req("0.5.0", "AAAA"), &mut user),
+            Response::Err(ref e) if e.code == ErrorCode::Invalid
+        ));
+        assert_eq!(
+            fs::read_to_string(root.join("current/resources/app.asar")).unwrap(),
+            "asar 0.4.0"
+        );
+        if !root_run {
+            // Taking ownership of the tree needs root; the rest is covered in sysinstall.rs.
+            assert!(matches!(
+                daemon.handle(req("0.5.0", &sha), &mut user),
+                Response::Err(ref e) if e.code == ErrorCode::Internal
+            ));
+            assert!(!daemon.restart_pending());
+            return;
+        }
+        let res = serde_json::to_value(daemon.handle(req("0.5.0", &sha), &mut user)).unwrap();
+        assert_eq!(
+            res,
+            json!({"ok":true,"op":"apply-update","version":"0.5.0","restartDaemon":true})
+        );
+        assert!(daemon.restart_pending());
+        assert_eq!(refreshed.lock().unwrap().len(), 1);
+        let status = serde_json::to_value(daemon.handle(Request::Status, &mut user)).unwrap();
+        assert_eq!(
+            status["install"],
+            json!({"systemInstall":true,"current":"0.5.0","previous":"0.4.0","daemonVersion":VERSION})
+        );
+        // While the restart is pending further updates are refused.
+        assert!(matches!(
+            daemon.handle(req("0.5.0", &sha), &mut user),
+            Response::Err(ref e) if e.code == ErrorCode::Refused && e.error.contains("restart")
+        ));
+        // With the policy flag a downgrade goes through (the pending restart cleared first).
+        daemon.restart_pending.store(false, Ordering::SeqCst);
+        fs::write(
+            &policy_path,
+            r#"{"version":1,"settings":{"updates":{"allowDowngrade":true}}}"#,
+        )
+        .unwrap();
+        let res = serde_json::to_value(daemon.handle(req("0.3.9", &sha), &mut user)).unwrap();
+        assert_eq!(res["ok"], true);
+        assert_eq!(
+            res["restartDaemon"], true,
+            "the bundle's 99.0.0 daemon is newer again"
+        );
+        assert_eq!(
+            sysinstall::VersionsFile::load(&root)
+                .unwrap()
+                .unwrap()
+                .previous
+                .unwrap()
+                .version,
+            "0.5.0"
+        );
+    }
+
+    #[test]
     fn args_parse() {
         let a = parse_args(&[
             "--socket".into(),
@@ -1906,6 +2496,20 @@ mod tests {
             PathBuf::from("/tmp/sess")
         );
         assert!(parse_args(&["--sessions-dir".into()]).is_err());
+        assert_eq!(a.install_root, PathBuf::from(DEFAULT_INSTALL_ROOT));
+        assert!(a.system_prefix.is_none() && !a.no_restart);
+        let b = parse_args(&[
+            "--install-root".into(),
+            "/tmp/opt".into(),
+            "--system-prefix".into(),
+            "/tmp/prefix".into(),
+            "--no-restart".into(),
+        ])
+        .unwrap();
+        assert_eq!(b.install_root, PathBuf::from("/tmp/opt"));
+        assert_eq!(b.system_prefix, Some(PathBuf::from("/tmp/prefix")));
+        assert!(b.no_restart);
+        assert!(parse_args(&["--install-root".into()]).is_err());
         assert!(
             parse_args(&["--check-devices".into()])
                 .unwrap()

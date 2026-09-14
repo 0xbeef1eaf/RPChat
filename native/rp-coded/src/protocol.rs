@@ -115,6 +115,15 @@ pub enum Request {
     },
     /// Forget this connection's registration (an intended exit follows).
     Unregister,
+    /// System install: verify `file` (an AppImage the requesting user downloaded) against
+    /// `sha512`, extract it as that user, swap it into `<install-root>/current` and update the
+    /// daemon itself when the bundle ships a newer one.
+    #[serde(rename = "apply-update")]
+    ApplyUpdate {
+        file: String,
+        version: String,
+        sha512: String,
+    },
 }
 
 impl Request {
@@ -133,6 +142,7 @@ impl Request {
             Request::SetPolicy { .. } => "set-policy",
             Request::Register { .. } => "register",
             Request::Unregister => "unregister",
+            Request::ApplyUpdate { .. } => "apply-update",
         }
     }
 }
@@ -215,6 +225,20 @@ pub struct KeepaliveInfo {
     pub allow_quit: bool,
 }
 
+/// `status.install` (`InstallInfo` in `@rp/shared`): the system install as the daemon sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallInfo {
+    /// `<install-root>/current/rp-code` exists and `versions.json` describes it.
+    pub system_install: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<String>,
+    /// The running daemon's version (what `apply-update` compares the bundled one against).
+    pub daemon_version: String,
+}
+
 /// Payload of a successful response; the `op` tag names the request it answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
@@ -227,6 +251,7 @@ pub enum Ok {
     Status {
         locked: Option<LockInfo>,
         keepalive: KeepaliveInfo,
+        install: InstallInfo,
     },
     Policy {
         policy: Option<PolicyFile>,
@@ -254,6 +279,14 @@ pub enum Ok {
     },
     Register,
     Unregister,
+    /// The version now under `current`; `restartDaemon` says the daemon updated itself and is
+    /// about to restart (the app should wait for it before relaunching).
+    #[serde(rename = "apply-update")]
+    ApplyUpdate {
+        version: String,
+        #[serde(rename = "restartDaemon")]
+        restart_daemon: bool,
+    },
 }
 
 /// Marker that serialises as the JSON literal `true` and refuses anything else.
@@ -541,6 +574,23 @@ mod tests {
             round_trip_request(json!({"op":"unregister"})),
             Request::Unregister
         );
+        assert_eq!(
+            round_trip_request(
+                json!({"op":"apply-update","file":"/home/a/.cache/rp-code-updater/pending/x.AppImage","version":"0.1.9","sha512":"AAAA"})
+            ),
+            Request::ApplyUpdate {
+                file: "/home/a/.cache/rp-code-updater/pending/x.AppImage".into(),
+                version: "0.1.9".into(),
+                sha512: "AAAA".into(),
+            }
+        );
+        assert!(
+            parse_line(r#"{"op":"apply-update","file":"/x"}"#).is_err(),
+            "version and sha512 are required"
+        );
+        assert!(
+            parse_line(r#"{"op":"apply-update","file":"/x","version":1,"sha512":""}"#).is_err()
+        );
     }
 
     #[test]
@@ -561,6 +611,10 @@ mod tests {
                 "register",
             ),
             (json!({"op":"unregister"}), "unregister"),
+            (
+                json!({"op":"apply-update","file":"/x","version":"1.0.0","sha512":"a"}),
+                "apply-update",
+            ),
         ] {
             let req: Request = serde_json::from_value(v).unwrap();
             assert_eq!(req.op(), name);
@@ -614,12 +668,40 @@ mod tests {
             allow_quit: true,
         };
         let ka_json = json!({"registered":false,"relaunches":0,"allowQuit":true});
+        let install = InstallInfo {
+            system_install: false,
+            current: None,
+            previous: None,
+            daemon_version: "0.1.0".into(),
+        };
+        let install_json = json!({"systemInstall":false,"daemonVersion":"0.1.0"});
         round_trip_response(
             &Response::ok(Ok::Status {
                 locked: None,
                 keepalive: ka,
+                install: install.clone(),
             }),
-            json!({"ok":true,"op":"status","locked":null,"keepalive":ka_json}),
+            json!({"ok":true,"op":"status","locked":null,"keepalive":ka_json,"install":install_json}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::Status {
+                locked: None,
+                keepalive: ka,
+                install: InstallInfo {
+                    system_install: true,
+                    current: Some("0.1.9".into()),
+                    previous: Some("0.1.8".into()),
+                    daemon_version: "0.1.0".into(),
+                },
+            }),
+            json!({"ok":true,"op":"status","locked":null,"keepalive":ka_json,"install":{"systemInstall":true,"current":"0.1.9","previous":"0.1.8","daemonVersion":"0.1.0"}}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::ApplyUpdate {
+                version: "0.1.9".into(),
+                restart_daemon: true,
+            }),
+            json!({"ok":true,"op":"apply-update","version":"0.1.9","restartDaemon":true}),
         );
         round_trip_response(
             &Response::ok(Ok::Status {
@@ -633,8 +715,9 @@ mod tests {
                     relaunches: 3,
                     allow_quit: false,
                 },
+                install: install.clone(),
             }),
-            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","reason":"r","devices":"both"},"keepalive":{"registered":true,"relaunches":3,"allowQuit":false}}),
+            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","reason":"r","devices":"both"},"keepalive":{"registered":true,"relaunches":3,"allowQuit":false},"install":install_json}),
         );
         round_trip_response(
             &Response::ok(Ok::Status {
@@ -644,8 +727,9 @@ mod tests {
                     devices: LockDevices::Mouse,
                 }),
                 keepalive: ka,
+                install,
             }),
-            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","devices":"mouse"},"keepalive":ka_json}),
+            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","devices":"mouse"},"keepalive":ka_json,"install":install_json}),
         );
         round_trip_response(
             &Response::ok(Ok::Register),

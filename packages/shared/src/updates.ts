@@ -18,10 +18,15 @@ export type UpdateState =
   | 'downloading'
   /** Downloaded; `install()` restarts into the new version. */
   | 'ready'
+  /** System install: the daemon is applying the downloaded update (may take a minute). */
+  | 'installing'
   | 'error';
 
-/** How the running binary was installed; decides what "update" can mean. */
-export type UpdatePackaging = 'appimage' | 'deb' | 'dev' | 'other';
+/**
+ * How the running binary was installed; decides what "update" can mean. `system`: the unpacked
+ * app under `/opt/rp-code/current` (see docs/system-integration.md), updated by the daemon.
+ */
+export type UpdatePackaging = 'appimage' | 'deb' | 'dev' | 'other' | 'system';
 
 export interface UpdateStatus {
   state: UpdateState;
@@ -35,8 +40,10 @@ export interface UpdateStatus {
   /** ISO time of the last completed check (successful or not). */
   checkedAt?: string;
   packaging: UpdatePackaging;
-  /** AppImage in a writable location: the update can be downloaded and swapped in place. */
+  /** AppImage in a writable location, or a system install whose daemon can apply updates: the update can be downloaded and installed from here. */
   canInstallInPlace: boolean;
+  /** `packaging === 'system'`: what the daemon reports about the install. */
+  systemInstall?: { dir: string; daemonConnected: boolean; daemonSupportsUpdates: boolean; current?: string; previous?: string };
   tokenPresent: boolean;
   /** Where the token lives: encrypted through the OS keyring (`safeStorage`) or a 0600 plaintext file. */
   tokenStorage: 'keyring' | 'file' | 'none';

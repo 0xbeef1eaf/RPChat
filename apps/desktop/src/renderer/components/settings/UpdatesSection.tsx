@@ -38,7 +38,9 @@ function stateLabel(s: UpdateStatus): { text: string; badge: string } {
     case 'downloading':
       return { text: `Downloading ${s.latestVersion ?? ''}… ${s.progressPercent ?? 0}%`, badge: 'badge badge-accent' };
     case 'ready':
-      return { text: `${s.latestVersion ?? 'The update'} is downloaded — restart to install`, badge: 'badge badge-success' };
+      return { text: `${s.latestVersion ?? 'The update'} is downloaded — ${s.packaging === 'system' ? 'apply and restart' : 'restart to install'}`, badge: 'badge badge-success' };
+    case 'installing':
+      return { text: `Applying ${s.latestVersion ?? 'the update'}…`, badge: 'badge badge-accent' };
     case 'error':
       return { text: 'Check failed', badge: 'badge badge-danger' };
     default:
@@ -130,17 +132,20 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
   const label = stateLabel(status);
   const disabledByPolicy = status.state === 'disabled';
   const unsupported = status.state === 'unsupported';
-  const canCheck = !unsupported && !disabledByPolicy && status.tokenPresent && status.state !== 'checking' && status.state !== 'downloading';
+  const systemInstall = status.packaging === 'system';
+  const canCheck = !unsupported && !disabledByPolicy && status.tokenPresent && status.state !== 'checking' && status.state !== 'downloading' && status.state !== 'installing';
   const canDownload = status.state === 'available' && status.canInstallInPlace;
-  const canInstall = status.state === 'ready';
+  const canInstall = status.state === 'ready' && (!systemInstall || status.canInstallInPlace);
   const releaseUrl = status.latestVersion ? releasePageUrl(status.latestVersion) : `https://github.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases`;
   const showTokenField = !unsupported && !disabledByPolicy;
 
   return (
     <div className="stack" style={{ gap: 14 }}>
       <p className="muted small">
-        The app updates itself from the releases of <code>{`${UPDATE_REPO.owner}/${UPDATE_REPO.repo}`}</code>. The AppImage is replaced in place; package installs are
-        notified only.
+        The app updates itself from the releases of <code>{`${UPDATE_REPO.owner}/${UPDATE_REPO.repo}`}</code>.{' '}
+        {systemInstall
+          ? 'Updates are applied by the system service (rp-coded): no password prompt, and the previous version is kept for rollback.'
+          : 'The AppImage is replaced in place; package installs are notified only.'}
       </p>
 
       {unsupported ? <div className="callout small">Updates are only available in packaged builds.</div> : null}
@@ -169,9 +174,20 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
           ) : null}
           <dt>Packaging</dt>
           <dd>
-            {status.packaging === 'appimage' ? 'AppImage' : status.packaging === 'deb' ? 'Package (.deb)' : status.packaging === 'dev' ? 'Development' : 'Unpacked build'}
+            {status.packaging === 'appimage' ? 'AppImage' : status.packaging === 'deb' ? 'Package (.deb)' : status.packaging === 'dev' ? 'Development' : status.packaging === 'system' ? 'System install' : 'Unpacked build'}
             {status.packaging === 'appimage' ? (status.canInstallInPlace ? ' · updates in place' : ' · read-only location') : null}
+            {systemInstall ? (status.canInstallInPlace ? ' · applied by the system service' : ' · system service not available') : null}
           </dd>
+          {status.systemInstall ? (
+            <>
+              <dt>Install</dt>
+              <dd>
+                <span className="mono">{status.systemInstall.dir}</span>
+                {status.systemInstall.current ? ` (v${status.systemInstall.current})` : ''}
+                {status.systemInstall.previous ? `, previous v${status.systemInstall.previous}` : ''}
+              </dd>
+            </>
+          ) : null}
           {status.checkedAt ? (
             <>
               <dt>Last check</dt>
@@ -188,9 +204,14 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
         {status.state === 'downloading' ? (
           <progress value={status.progressPercent ?? 0} max={100} style={{ width: '100%', marginTop: 8 }} aria-label="Download progress" />
         ) : null}
-        {status.state === 'error' && status.error ? (
+        {status.error ? (
           <div className="callout callout-danger small" style={{ marginTop: 8 }}>
             {status.error}
+          </div>
+        ) : null}
+        {status.state === 'installing' ? (
+          <div className="row muted small" style={{ marginTop: 8 }}>
+            <span className="spinner" /> The system service is verifying and installing the update; the app restarts when it is done.
           </div>
         ) : null}
         {status.reason && !unsupported && !disabledByPolicy && status.state !== 'no-token' ? <p className="field-hint">{status.reason}</p> : null}
@@ -212,8 +233,8 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
             </button>
           ) : null}
           {canInstall ? (
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => run('Restart failed', () => api().updates.install())} disabled={busy}>
-              Restart to update
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => run(systemInstall ? 'Update failed' : 'Restart failed', () => api().updates.install())} disabled={busy}>
+              {systemInstall ? 'Apply update and restart' : 'Restart to update'}
             </button>
           ) : null}
           {(status.state === 'available' || status.state === 'ready' || status.state === 'downloading') && !status.canInstallInPlace ? (
@@ -283,7 +304,7 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
                 Check automatically
                 <ManagedBadge show={automaticManaged || disabledByPolicy} />
               </span>
-              <span className="item-sub">Checks shortly after launch and on the interval below; AppImage updates download in the background.</span>
+              <span className="item-sub">Checks shortly after launch and on the interval below; AppImage and system-install updates download in the background.</span>
             </div>
             <Toggle
               checked={settings.updates.automatic}
