@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import type { OverlaySpec } from './backend.js';
 import { resolveOverlayOptions } from './backend.js';
@@ -131,6 +131,53 @@ describe('HelperProcess', () => {
     await helper.start();
     expect(children).toHaveLength(2);
     expect(helper.isRunning).toBe(true);
+    await helper.dispose();
+  });
+
+  it('turns an EPIPE from a helper that died at spawn into a rejection, not an uncaught error', async () => {
+    // The real failure: the helper exits as it starts, the `hello` write reaches a closed pipe
+    // and libuv reports EPIPE a tick later. Node hands that to the write callback *and* emits
+    // `error` on the pipe; with nobody listening it became an uncaught exception in Electron's
+    // main process ("A JavaScript error occurred in the main process").
+    class DeadPipeChild extends EventEmitter implements HelperChildLike {
+      readonly stdin = new Writable({
+        write(_chunk, _enc, cb) {
+          setImmediate(() => cb(new Error('write EPIPE')));
+        },
+      });
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+      pid = 4322;
+      killed = false;
+      constructor() {
+        super();
+        // What the dynamic loader prints when a runtime library is missing.
+        this.stderr.write('rp-overlay-wlr: error while loading shared libraries: libgtk-layer-shell.so.0\n');
+      }
+      kill(): boolean {
+        this.killed = true;
+        return true;
+      }
+    }
+    const children: DeadPipeChild[] = [];
+    const helper = new HelperProcess({
+      binary: '/fake/rp-overlay-wlr',
+      spawnImpl: () => {
+        const child = new DeadPipeChild();
+        children.push(child);
+        return child;
+      },
+      helloTimeoutMs: 500,
+      requestTimeoutMs: 500,
+      restartBackoffMs: [0],
+    });
+    // The reason the caller logs before falling back names the real cause, not just EPIPE.
+    await expect(helper.start()).rejects.toThrow(/EPIPE.*libgtk-layer-shell\.so\.0/);
+    expect(helper.isRunning).toBe(false);
+    await expect(helper.request('monitors')).rejects.toThrow(/not running/);
+    // Still restartable: the pipe error goes through the same path as an unexpected exit.
+    await expect(helper.start()).rejects.toThrow(/EPIPE/);
+    expect(children).toHaveLength(2);
     await helper.dispose();
   });
 

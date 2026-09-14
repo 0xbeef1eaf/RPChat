@@ -91,6 +91,7 @@ export class HelperProcess extends EventEmitter {
   private seq = 0;
   private readonly pending = new Map<number, Pending>();
   private buffer = '';
+  private lastStderr = '';
   private crashes = 0;
   private lastCrashAt = 0;
   private disposed = false;
@@ -132,17 +133,39 @@ export class HelperProcess extends EventEmitter {
     const child = this.spawnImpl(this.binary, this.args);
     this.child = child;
     this.buffer = '';
+    this.lastStderr = '';
     child.on('error', (err) => {
       this.logger?.warn?.(`[overlay-helper] process error: ${err.message}`);
       this.onExit(child, null, null, err);
     });
     child.on('exit', (code, signal) => this.onExit(child, code, signal));
+    // A helper that dies as it starts (no compositor, no layer shell) leaves us writing into a
+    // closed pipe. Node reports that as an `error` on the pipe as well as to the write callback,
+    // and an `error` nobody listens for is an uncaught exception — in Electron's main process
+    // that is the "A JavaScript error occurred" dialog instead of the restart path below.
+    for (const pipe of [child.stdin, child.stdout, child.stderr]) {
+      pipe?.on('error', (err: Error) => {
+        this.logger?.debug?.(`[overlay-helper] pipe error: ${err.message}`);
+        this.onExit(child, null, null, err);
+      });
+    }
     child.stdout?.on('data', (chunk: Buffer | string) => this.onData(chunk.toString()));
     child.stderr?.on('data', (chunk: Buffer | string) => {
       const text = chunk.toString().trim();
-      if (text) this.logger?.debug?.(`[overlay-helper:stderr] ${text}`);
+      if (!text) return;
+      this.lastStderr = text.slice(0, 200);
+      this.logger?.debug?.(`[overlay-helper:stderr] ${text}`);
     });
-    const ready = (await this.request('hello', { version: HELPER_PROTOCOL_VERSION }, this.helloTimeoutMs)) as unknown as HelperReady;
+    // A handshake that fails says "write EPIPE" or "timed out" — useless on its own. The reason
+    // is on the helper's stderr (a missing libgtk-layer-shell.so.0, no compositor, …), so carry
+    // the last line into the error the caller logs before it falls back.
+    let ready: HelperReady;
+    try {
+      ready = (await this.request('hello', { version: HELPER_PROTOCOL_VERSION }, this.helloTimeoutMs)) as unknown as HelperReady;
+    } catch (err) {
+      const why = (err as Error).message;
+      throw new Error(this.lastStderr ? `${why} (helper said: ${this.lastStderr})` : why);
+    }
     if (ready.ev !== 'ready') throw new Error(`helper answered hello with "${ready.ev}"`);
     if (typeof ready.version !== 'number' || ready.version > HELPER_PROTOCOL_VERSION) {
       throw new Error(`helper protocol version ${String(ready.version)} is not supported (want ≤ ${HELPER_PROTOCOL_VERSION})`);
