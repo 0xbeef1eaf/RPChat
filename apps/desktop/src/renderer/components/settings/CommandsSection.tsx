@@ -24,7 +24,8 @@ const GROUPS: TemplateGroup[] = [
     title: 'Media & system',
     hint: 'wallpaper and browser',
     templates: [
-      { name: 'wallpaper', label: 'Set wallpaper', placeholders: '{file} {monitor}', help: '{file} is the absolute image path, {monitor} the monitor name or empty.' },
+      { name: 'wallpaper', label: 'Set wallpaper', placeholders: '{file} {monitor}', help: '{file} is the absolute image path, {monitor} the monitor name or empty (a lone {monitor} argument is dropped when empty).' },
+      { name: 'wallpaperGet', label: 'Read wallpaper', placeholders: '{monitor}', help: 'Prints the current wallpaper path; run once before the first change so sdk.wallpaper.restore() knows what to put back when no restore file is set.' },
       { name: 'browser', label: 'Open browser', placeholders: '{url}', help: 'Include {newWindow} where a new-window flag should go.' },
     ],
   },

@@ -8,7 +8,7 @@ import type { Clock, EngineEmitter, Logger } from '../types.js';
 export const HOST_EVENT_NAMES: readonly HostEventName[] = [
   'user-idle', 'user-back', 'window-changed', 'app-launched', 'file-added', 'battery-low', 'screen-locked',
   'screen-unlocked', 'song-changed', 'time', 'widget-message', 'avatar-clicked', 'routine-changed', 'browser-navigated',
-  'media-clicked', 'media-closed',
+  'media-clicked', 'media-closed', 'guard-attempt',
 ];
 /**
  * Discrete user interactions: every one of them is meaningful (a second click, the next widget
@@ -114,6 +114,10 @@ export function matchesFilter(event: string, data: Json, filter: Record<string, 
       }
       case 'widget-message:widgetId':
         if (field(data, 'widgetId') !== wanted) return false;
+        break;
+      case 'guard-attempt:target':
+      case 'guard-attempt:command':
+        if (!includesCi(field(data, key), wanted)) return false;
         break;
       case 'user-idle:idleMs':
       case 'battery-low:percent':

@@ -7,10 +7,15 @@
  * daemon an exit is intended (update restart, ordinary quit) so it does not relaunch anything.
  *
  * Registering is cheap and always done; the daemon decides from the policy whether it matters.
+ *
+ * The same connection carries the daemon's pushed events (`subscribe` after `register`): lines
+ * with an `ev` key instead of `ok`/`op` — `guard-attempt` from the session guard — which go to
+ * `onEvent` listeners rather than to the pending request. A daemon that does not know
+ * `subscribe` answers INVALID; the link stays registered and simply gets no events.
  */
 import * as net from 'node:net';
-import type { DaemonRequest, DaemonResponse } from '@rp/shared';
-import { DAEMON_SOCKET_PATH } from '@rp/shared';
+import type { DaemonEvent, DaemonEventName, DaemonRequest, DaemonResponse } from '@rp/shared';
+import { DAEMON_EVENT_NAMES, DAEMON_SOCKET_PATH } from '@rp/shared';
 import type { LaunchSpec } from '../quit-guard.js';
 
 export interface KeepaliveLinkOptions {
@@ -23,6 +28,8 @@ export interface KeepaliveLinkOptions {
   backoffMs?: { initial?: number; max?: number };
   /** Timeout for one request/response on the link (`hello`, `register`, `unregister`). Default 10 000. */
   timeoutMs?: number;
+  /** Events to subscribe to after registering. Default: every `DaemonEventName`; `[]` subscribes to nothing. */
+  events?: DaemonEventName[];
 }
 
 export type KeepaliveLinkState = 'idle' | 'connecting' | 'registered' | 'waiting' | 'stopped';
@@ -54,6 +61,9 @@ export class KeepaliveLink {
   private retryTimer: NodeJS.Timeout | undefined;
   private stopped = false;
   private registration: LaunchSpec;
+  private readonly events: DaemonEventName[];
+  private readonly listeners = new Set<(event: DaemonEvent) => void>();
+  private subscribedValue = false;
 
   constructor(opts: KeepaliveLinkOptions) {
     this.socketPath = opts.socketPath ?? DAEMON_SOCKET_PATH;
@@ -62,6 +72,20 @@ export class KeepaliveLink {
     this.connectImpl = opts.connect ?? ((p) => net.connect(p));
     this.logger = opts.logger;
     this.registration = opts.registration;
+    this.events = opts.events ?? [...DAEMON_EVENT_NAMES];
+  }
+
+  /** Whether the daemon acknowledged the event subscription on the current connection. */
+  get subscribed(): boolean {
+    return this.registered && this.subscribedValue;
+  }
+
+  /** Receive pushed daemon events (`guard-attempt`). Returns the unsubscribe function. */
+  onEvent(listener: (event: DaemonEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   get state(): KeepaliveLinkState {
@@ -134,6 +158,7 @@ export class KeepaliveLink {
       this.attempt = 0;
       this.stateValue = 'registered';
       this.logger?.info?.(`[keepalive] registered with rp-coded (${this.registration.exec}${this.registration.args.length > 0 ? ` ${this.registration.args.join(' ')}` : ''})`);
+      await this.subscribe();
     } catch (err) {
       if (this.stopped) return;
       const delay = reconnectDelay(this.attempt, this.backoff);
@@ -141,6 +166,23 @@ export class KeepaliveLink {
       this.logger?.[level]?.(`[keepalive] not registered (${(err as Error).message}); retrying in ${delay} ms`);
       this.dropSocket(err as Error);
       this.scheduleReconnect(delay);
+    }
+  }
+
+  /** Ask for pushed events; an older daemon refuses (INVALID) and the link carries on without them. */
+  private async subscribe(): Promise<void> {
+    this.subscribedValue = false;
+    if (this.events.length === 0) return;
+    try {
+      const res = await this.send({ op: 'subscribe', events: this.events });
+      if (res.ok && res.op === 'subscribe') {
+        this.subscribedValue = res.events.length > 0;
+        this.logger?.debug?.(`[keepalive] subscribed to ${res.events.join(', ') || 'nothing'}`);
+      } else if (!res.ok) {
+        this.logger?.debug?.(`[keepalive] daemon has no event push (${res.code}: ${res.error})`);
+      }
+    } catch (err) {
+      if (!this.stopped) this.logger?.debug?.(`[keepalive] subscribe failed: ${(err as Error).message}`);
     }
   }
 
@@ -235,16 +277,42 @@ export class KeepaliveLink {
       this.buffer = this.buffer.slice(idx + 1);
       idx = this.buffer.indexOf('\n');
       if (line.length === 0) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        const pending = this.pending.shift();
+        if (pending) {
+          clearTimeout(pending.timer);
+          pending.reject(new Error(`rp-coded sent invalid JSON: ${line.slice(0, 120)}`));
+        } else this.logger?.debug?.(`[keepalive] unparsable line: ${line.slice(0, 200)}`);
+        continue;
+      }
+      // A pushed event: `{ ev: … }`, never an answer to a request.
+      if (parsed && typeof parsed === 'object' && typeof (parsed as { ev?: unknown }).ev === 'string') {
+        this.dispatchEvent(parsed as DaemonEvent);
+        continue;
+      }
       const pending = this.pending.shift();
       if (!pending) {
         this.logger?.debug?.(`[keepalive] unsolicited line: ${line.slice(0, 200)}`);
         continue;
       }
       clearTimeout(pending.timer);
+      pending.resolve(parsed as DaemonResponse);
+    }
+  }
+
+  private dispatchEvent(event: DaemonEvent): void {
+    if (!(DAEMON_EVENT_NAMES as readonly string[]).includes(event.ev)) {
+      this.logger?.debug?.(`[keepalive] unknown event ${event.ev}`);
+      return;
+    }
+    for (const l of [...this.listeners]) {
       try {
-        pending.resolve(JSON.parse(line) as DaemonResponse);
-      } catch {
-        pending.reject(new Error(`rp-coded sent invalid JSON: ${line.slice(0, 120)}`));
+        l(event);
+      } catch (err) {
+        this.logger?.warn?.(`[keepalive] event listener failed: ${(err as Error).message}`);
       }
     }
   }
@@ -253,6 +321,7 @@ export class KeepaliveLink {
     const socket = this.socket;
     this.socket = undefined;
     this.buffer = '';
+    this.subscribedValue = false;
     if (this.stateValue === 'registered') this.stateValue = 'idle';
     if (socket && !socket.destroyed) socket.destroy();
     for (const p of this.pending.splice(0)) {

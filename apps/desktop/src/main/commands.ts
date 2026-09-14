@@ -133,14 +133,23 @@ export function defaultTemplates(
   const empty: CommandTemplate = { command: '' };
   const hyprland = Boolean(env.HYPRLAND_INSTANCE_SIGNATURE);
   let wallpaper: CommandTemplate = empty;
+  let wallpaperGet: CommandTemplate = empty;
   let browser: CommandTemplate = empty;
   if (platform === 'linux' || (platform !== 'win32' && platform !== 'darwin')) {
     browser = { command: 'xdg-open {url}' };
-    if (hyprland) {
+    const wayland = Boolean(env.WAYLAND_DISPLAY) || env.XDG_SESSION_TYPE === 'wayland' || hyprland;
+    if (wayland && probe('noctalia')) {
+      // Noctalia v5: `wallpaper-set [<connector>] <path>` (persists to settings.toml) and
+      // `wallpaper-get [<connector>]` prints the effective path. An empty {monitor} token is
+      // dropped by buildArgv, so both forms come from one template.
+      wallpaper = { command: 'noctalia msg wallpaper-set {monitor} {file}' };
+      wallpaperGet = { command: 'noctalia msg wallpaper-get {monitor}' };
+    } else if (hyprland) {
       if (probe('swww')) wallpaper = { command: 'swww img {file}' };
       else if (probe('hyprpaper')) wallpaper = { command: 'hyprctl hyprpaper wallpaper "{monitor},{file}"' };
     } else if (probe('gsettings')) {
       wallpaper = { command: 'gsettings set org.gnome.desktop.background picture-uri "file://{file}"' };
+      wallpaperGet = { command: 'gsettings get org.gnome.desktop.background picture-uri' };
     } else if (probe('feh')) {
       wallpaper = { command: 'feh --bg-fill {file}' };
     }
@@ -192,6 +201,7 @@ export function defaultTemplates(
   }
   return {
     wallpaper,
+    wallpaperGet,
     browser,
     activeWindow: empty,
     nowPlaying,
@@ -272,7 +282,14 @@ export interface RunTemplateOptions {
   signal?: AbortSignal;
 }
 
-/** Build the argv for a template without running it (exposed for tests and the settings "Test" preview). */
+const LONE_PLACEHOLDER = /^\{([a-zA-Z_][a-zA-Z0-9_]*)\}$/;
+
+/**
+ * Build the argv for a template without running it (exposed for tests and the settings "Test"
+ * preview). A token that is exactly one placeholder whose value is empty (`{monitor}` with no
+ * monitor) is dropped, so optional positional arguments need no second template; a placeholder
+ * embedded in a longer token (`"{monitor},{file}"`) is substituted as before.
+ */
 export function buildArgv(tpl: CommandTemplate, vars: Record<string, string>, platform: NodeJS.Platform): { file: string; args: string[]; verbatim: boolean } {
   if (!isConfigured(tpl)) throw notConfigured('matching');
   if (tpl.shell) {
@@ -282,7 +299,11 @@ export function buildArgv(tpl: CommandTemplate, vars: Record<string, string>, pl
     if (platform === 'win32') return { file: 'cmd.exe', args: ['/d', '/s', '/c', `"${line}"`], verbatim: true };
     return { file: 'sh', args: ['-c', line], verbatim: false };
   }
-  const argv = substitute(tokenize(tpl.command), vars);
+  const tokens = tokenize(tpl.command).filter((token) => {
+    const m = LONE_PLACEHOLDER.exec(token);
+    return !(m && (vars[m[1] as string] ?? '') === '');
+  });
+  const argv = substitute(tokens, vars);
   const file = argv[0];
   if (!file) throw new RpError('INVALID_ARGUMENT', 'Command template is empty after substitution');
   return { file, args: argv.slice(1), verbatim: false };

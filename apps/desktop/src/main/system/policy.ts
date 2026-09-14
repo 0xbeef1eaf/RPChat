@@ -3,8 +3,8 @@
  * is pure; `PolicyWatcher` re-reads the file whenever its mtime changes.
  */
 import * as fs from 'node:fs/promises';
-import type { AppPolicy, AppSettings, ManagedSettingsPaths, PolicyFile } from '@rp/shared';
-import { POLICY_FILE_PATH, RpError } from '@rp/shared';
+import type { AppPolicy, AppSettings, GuardPolicy, ManagedSettingsPaths, PolicyFile } from '@rp/shared';
+import { GUARD_COMPOSITOR_IPC, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RpError } from '@rp/shared';
 
 const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTimersPerSession', 'minRepeatIntervalMs', 'minDelayMs'] as const;
 const MEMORY_KEYS = ['enabled', 'consolidateEveryTurns', 'maxEntriesPerCharacter', 'promptBudgetTokens'] as const;
@@ -161,8 +161,72 @@ export function parsePolicy(json: unknown): PolicyFile {
       out.app = appBlock;
     }
   }
+  if (raw.guard !== undefined) {
+    const guard = parseGuard(raw.guard, problems);
+    if (guard) out.guard = guard;
+    const listed = (out.app?.users?.length ?? 0) > 0;
+    if (guard && guard.mode !== undefined && guard.mode !== 'off' && !listed) problems.push('guard.mode needs app.users: the guard confines the listed users\' sessions');
+  }
   if (problems.length > 0) throw new RpError('INVALID_ARGUMENT', `Invalid policy file:\n${problems.join('\n')}`, { problems });
   return out;
+}
+
+/** Path lists in the guard block: absolute (or `~/`, `@{HOME}/` where allowed), no whitespace or quotes — they become AppArmor rules verbatim. */
+function guardPathList(v: unknown, what: string, allowHome: boolean, problems: string[]): string[] | undefined {
+  const list = stringList(v, what, problems);
+  if (!list) return undefined;
+  for (const p of list) {
+    const okPrefix = p.startsWith('/') || (allowHome && (p.startsWith('~/') || p.startsWith('@{HOME}/')));
+    if (p.length === 0 || !okPrefix || /[\s"\\]/.test(p) || p.length > 1024) {
+      problems.push(`${what} entries must be absolute paths${allowHome ? ' (or start with ~/ or @{HOME}/)' : ''} without spaces or quotes (got "${p}")`);
+      return undefined;
+    }
+  }
+  return list;
+}
+
+/** The `guard` block, mirroring the daemon's `GuardPolicy` validation (`native/rp-coded/src/policy.rs`). */
+export function parseGuard(raw: unknown, problems: string[]): GuardPolicy | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    problems.push('guard must be an object');
+    return undefined;
+  }
+  const g = raw as Record<string, unknown>;
+  const out: GuardPolicy = {};
+  if (g.mode !== undefined) {
+    if (typeof g.mode === 'string' && (GUARD_MODES as readonly string[]).includes(g.mode)) out.mode = g.mode as GuardPolicy['mode'];
+    else problems.push('guard.mode must be off, audit or enforce');
+  }
+  for (const k of ['protectApp', 'wallpaper'] as const) {
+    if (g[k] === undefined) continue;
+    if (typeof g[k] === 'boolean') out[k] = g[k] as boolean;
+    else problems.push(`guard.${k} must be a boolean`);
+  }
+  if (g.compositorIpc !== undefined) {
+    if (typeof g.compositorIpc === 'string' && (GUARD_COMPOSITOR_IPC as readonly string[]).includes(g.compositorIpc)) out.compositorIpc = g.compositorIpc as GuardPolicy['compositorIpc'];
+    else problems.push('guard.compositorIpc must be allow, shell-only or deny');
+  }
+  if (g.shell !== undefined) {
+    if (typeof g.shell === 'string' && (GUARD_SHELLS as readonly string[]).includes(g.shell)) out.shell = g.shell as GuardPolicy['shell'];
+    else problems.push('guard.shell must be auto, noctalia, quickshell, hyprpaper, swww or none');
+  }
+  const helpers = guardPathList(g.loginHelpers, 'guard.loginHelpers', false, problems);
+  if (helpers) {
+    if (helpers.length === 0) problems.push('guard.loginHelpers must not be empty (omit it to auto-detect)');
+    else out.loginHelpers = helpers;
+  }
+  const denyPaths = guardPathList(g.extraDenyPaths, 'guard.extraDenyPaths', true, problems);
+  if (denyPaths) out.extraDenyPaths = denyPaths;
+  const denySockets = guardPathList(g.extraDenySockets, 'guard.extraDenySockets', true, problems);
+  if (denySockets) out.extraDenySockets = denySockets;
+  const allow = guardPathList(g.allowBinaries, 'guard.allowBinaries', false, problems);
+  if (allow) out.allowBinaries = allow;
+  return out;
+}
+
+/** Pure: the effective guard mode of a policy (`off` without a file or a `guard` block). */
+export function guardMode(policy: PolicyFile | null | undefined): NonNullable<GuardPolicy['mode']> {
+  return policy?.guard?.mode ?? 'off';
 }
 
 /** Pure: the effective `app` block — `allowQuit` is true unless a policy says `false`; `users` empty unless listed. */

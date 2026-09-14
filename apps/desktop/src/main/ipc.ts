@@ -267,6 +267,8 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       installerPath: () => services.system.installerPath(),
       createPolicy: (_e, text) => services.system.createPolicy(requireString(text, 'text')),
       policyTemplate: async () => services.system.policyTemplate(await engine.settings.get()),
+      guardApply: () => services.system.guardApply(),
+      guardAttempts: () => services.system.guardAttempts(),
     },
     browser: {
       status: () => services.browser.status(),

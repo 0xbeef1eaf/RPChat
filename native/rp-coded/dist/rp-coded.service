@@ -39,7 +39,9 @@ LockPersonality=yes
 SystemCallArchitectures=native
 # CAP_CHOWN/CAP_FOWNER/CAP_DAC_OVERRIDE: hand the socket to the rp-code group. CAP_SETUID/
 # CAP_SETGID: drop to the user (setgid, initgroups, setuid) before exec'ing a relaunched app.
-CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID
+# CAP_MAC_ADMIN: load/unload the session-guard AppArmor profiles (apparmor_parser writes
+# /sys/kernel/security/apparmor/.replace, which the kernel gates on this capability).
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID CAP_MAC_ADMIN
 # AF_UNIX for the daemon; the rest for the relaunched app (Chromium needs netlink too).
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 KillMode=process
@@ -64,6 +66,13 @@ ReadWritePaths=-/etc/udev/rules.d
 ReadWritePaths=-/etc/modules-load.d
 ReadWritePaths=-/usr/local/share/applications
 ReadWritePaths=-/usr/local/share/icons
+# Session guard (`policy.guard`, README "Session guard"): the generated profiles under
+# /etc/apparmor.d/rp-code-*, the state file in /etc/rp-code (already writable) and AppArmor's
+# securityfs interface, which ProtectKernelTunables would otherwise leave read-only. Both "-":
+# absent on machines without AppArmor. The audit tail reads the journal files (allowed under
+# ProtectKernelLogs); the /dev/kmsg fallback is only reachable when that option is removed.
+ReadWritePaths=-/etc/apparmor.d
+ReadWritePaths=-/sys/kernel/security/apparmor
 
 [Install]
 WantedBy=multi-user.target

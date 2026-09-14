@@ -112,6 +112,152 @@ impl AppRules {
     }
 }
 
+/// `guard.mode`: whether the session guard (AppArmor confinement of the listed users'
+/// login sessions, `src/guard.rs`) is off, only logging (`audit`) or blocking (`enforce`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardMode {
+    #[default]
+    Off,
+    Audit,
+    Enforce,
+}
+
+impl GuardMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GuardMode::Off => "off",
+            GuardMode::Audit => "audit",
+            GuardMode::Enforce => "enforce",
+        }
+    }
+}
+
+/// `guard.compositorIpc`: who may talk to the compositor's control socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompositorIpc {
+    Allow,
+    #[default]
+    ShellOnly,
+    Deny,
+}
+
+impl CompositorIpc {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CompositorIpc::Allow => "allow",
+            CompositorIpc::ShellOnly => "shell-only",
+            CompositorIpc::Deny => "deny",
+        }
+    }
+}
+
+/// `guard.shell`: the desktop shell / wallpaper daemon whose IPC and files are guarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardShell {
+    #[default]
+    Auto,
+    Noctalia,
+    Quickshell,
+    Hyprpaper,
+    Swww,
+    None,
+}
+
+impl GuardShell {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GuardShell::Auto => "auto",
+            GuardShell::Noctalia => "noctalia",
+            GuardShell::Quickshell => "quickshell",
+            GuardShell::Hyprpaper => "hyprpaper",
+            GuardShell::Swww => "swww",
+            GuardShell::None => "none",
+        }
+    }
+}
+
+/// `PolicyFile.guard`: the session guard (docs/system-integration.md "Session guard"). Applies
+/// to the users in `app.users`; every field is optional and defaults as in [`GuardRules`].
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuardPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<GuardMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protect_app: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallpaper: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compositor_ipc: Option<CompositorIpc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<GuardShell>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_helpers: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_deny_paths: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_deny_sockets: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_binaries: Option<Vec<String>>,
+}
+
+/// Effective `guard` block with defaults: off, app protected, wallpaper guarded, compositor
+/// IPC for the shell only, shell auto-detected, login helpers auto-detected, no extras.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuardRules {
+    pub mode: GuardMode,
+    pub protect_app: bool,
+    pub wallpaper: bool,
+    pub compositor_ipc: CompositorIpc,
+    pub shell: GuardShell,
+    /// `None`: auto-detect the login helpers present on the box.
+    pub login_helpers: Option<Vec<String>>,
+    pub extra_deny_paths: Vec<String>,
+    pub extra_deny_sockets: Vec<String>,
+    pub allow_binaries: Vec<String>,
+}
+
+impl Default for GuardRules {
+    fn default() -> Self {
+        GuardRules {
+            mode: GuardMode::Off,
+            protect_app: true,
+            wallpaper: true,
+            compositor_ipc: CompositorIpc::ShellOnly,
+            shell: GuardShell::Auto,
+            login_helpers: None,
+            extra_deny_paths: Vec::new(),
+            extra_deny_sockets: Vec::new(),
+            allow_binaries: Vec::new(),
+        }
+    }
+}
+
+impl GuardRules {
+    pub fn from_policy(guard: Option<&GuardPolicy>) -> GuardRules {
+        let d = GuardRules::default();
+        let Some(g) = guard else { return d };
+        GuardRules {
+            mode: g.mode.unwrap_or(d.mode),
+            protect_app: g.protect_app.unwrap_or(d.protect_app),
+            wallpaper: g.wallpaper.unwrap_or(d.wallpaper),
+            compositor_ipc: g.compositor_ipc.unwrap_or(d.compositor_ipc),
+            shell: g.shell.unwrap_or(d.shell),
+            login_helpers: g.login_helpers.clone(),
+            extra_deny_paths: g.extra_deny_paths.clone().unwrap_or_default(),
+            extra_deny_sockets: g.extra_deny_sockets.clone().unwrap_or_default(),
+            allow_binaries: g.allow_binaries.clone().unwrap_or_default(),
+        }
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.mode != GuardMode::Off
+    }
+}
+
 /// `PolicyFile` from `@rp/shared/system.ts`. `settings` is passed through as JSON; only its
 /// top-level shape (an object with known keys) is validated here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -126,6 +272,8 @@ pub struct PolicyFile {
     pub managed_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<AppPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<GuardPolicy>,
 }
 
 /// Keys allowed under `settings` (documented in `docs/spec/system.md`).
@@ -256,6 +404,20 @@ impl PolicyFile {
                 }
             }
         }
+        if let Some(guard) = &self.guard {
+            validate_guard(guard)?;
+            let listed = self
+                .app
+                .as_ref()
+                .and_then(|a| a.users.as_ref())
+                .is_some_and(|u| !u.is_empty());
+            if guard.mode.unwrap_or_default() != GuardMode::Off && !listed {
+                return Err(
+                    "guard.mode needs app.users: the guard confines the listed users' sessions"
+                        .into(),
+                );
+            }
+        }
         Ok(())
     }
 
@@ -283,6 +445,45 @@ impl PolicyFile {
         }
         rules
     }
+
+    /// The `guard` rules with defaults applied (off without a `guard` block).
+    pub fn guard_rules(&self) -> GuardRules {
+        GuardRules::from_policy(self.guard.as_ref())
+    }
+}
+
+/// Every path list entry must be absolute (or `@{HOME}`/`~/` for the deny globs), non-empty
+/// and free of whitespace and quotes — they are written into AppArmor rules verbatim.
+fn validate_guard(guard: &GuardPolicy) -> Result<(), String> {
+    fn check(list: Option<&Vec<String>>, what: &str, allow_home: bool) -> Result<(), String> {
+        let Some(list) = list else { return Ok(()) };
+        for p in list {
+            let ok_prefix = p.starts_with('/')
+                || (allow_home && (p.starts_with("@{HOME}/") || p.starts_with("~/")));
+            if p.is_empty()
+                || !ok_prefix
+                || p.chars()
+                    .any(|c| c.is_whitespace() || c == '"' || c == '\\')
+                || p.chars().count() > 1024
+            {
+                return Err(format!(
+                    "guard.{what} entries must be absolute paths{} without spaces or quotes (got {p:?})",
+                    if allow_home { " (or start with ~/ or @{HOME}/)" } else { "" }
+                ));
+            }
+        }
+        Ok(())
+    }
+    check(guard.login_helpers.as_ref(), "loginHelpers", false)?;
+    check(guard.extra_deny_paths.as_ref(), "extraDenyPaths", true)?;
+    check(guard.extra_deny_sockets.as_ref(), "extraDenySockets", true)?;
+    check(guard.allow_binaries.as_ref(), "allowBinaries", false)?;
+    if let Some(list) = &guard.login_helpers {
+        if list.is_empty() {
+            return Err("guard.loginHelpers must not be empty (omit it to auto-detect)".into());
+        }
+    }
+    Ok(())
 }
 
 /// Effective input-lock limits (defaults filled in, values clamped to sane ranges).
@@ -483,7 +684,8 @@ impl PolicyStore {
         &self.path
     }
 
-    fn stamp(&self) -> Option<(SystemTime, u64)> {
+    /// The file's (mtime, size), `None` when it is missing — what the cache is keyed on.
+    pub fn stamp(&self) -> Option<(SystemTime, u64)> {
         let meta = fs::metadata(&self.path).ok()?;
         Some((meta.modified().ok()?, meta.len()))
     }
@@ -871,5 +1073,63 @@ mod tests {
             .unwrap();
         f.write_all(b"\"}").unwrap();
         assert!(matches!(load_policy(&path), Err(PolicyError::Invalid(_))));
+    }
+
+    #[test]
+    fn guard_block_defaults_validates_and_round_trips() {
+        let none = policy(json!({"version":1})).unwrap().guard_rules();
+        assert_eq!(none, GuardRules::default());
+        assert!(!none.enabled());
+        assert_eq!(none.mode, GuardMode::Off);
+        assert!(none.protect_app && none.wallpaper);
+        assert_eq!(none.compositor_ipc, CompositorIpc::ShellOnly);
+        assert_eq!(none.shell, GuardShell::Auto);
+        // An empty block is the defaults; mode off needs no users.
+        assert_eq!(
+            policy(json!({"version":1,"guard":{}}))
+                .unwrap()
+                .guard_rules(),
+            GuardRules::default()
+        );
+        let full = policy(json!({"version":1,"app":{"users":["alice"]},"guard":{
+            "mode":"enforce","protectApp":false,"wallpaper":true,"compositorIpc":"deny","shell":"noctalia",
+            "loginHelpers":["/usr/lib/sddm/sddm-helper"],"extraDenyPaths":["~/.config/hypr/hyprpaper.conf","@{HOME}/x"],
+            "extraDenySockets":["/run/user/1000/foo.sock"],"allowBinaries":["/usr/bin/hyprctl"]}}))
+        .unwrap();
+        let rules = full.guard_rules();
+        assert!(rules.enabled());
+        assert_eq!(rules.mode, GuardMode::Enforce);
+        assert!(!rules.protect_app);
+        assert_eq!(rules.compositor_ipc, CompositorIpc::Deny);
+        assert_eq!(rules.shell, GuardShell::Noctalia);
+        assert_eq!(
+            rules.login_helpers.as_deref(),
+            Some(&["/usr/lib/sddm/sddm-helper".to_string()][..])
+        );
+        assert_eq!(rules.extra_deny_paths.len(), 2);
+        assert_eq!(rules.allow_binaries, vec!["/usr/bin/hyprctl"]);
+        assert_eq!(
+            serde_json::to_value(&full).unwrap()["guard"]["compositorIpc"],
+            json!("deny")
+        );
+        let bad = [
+            json!({"version":1,"guard":"on"}),
+            json!({"version":1,"guard":{"mode":"on"}}),
+            json!({"version":1,"guard":{"mode":"audit"}}),
+            json!({"version":1,"app":{"users":["a"]},"guard":{"mode":"audit","reassert":true}}),
+            json!({"version":1,"app":{"users":["a"]},"guard":{"compositorIpc":"maybe"}}),
+            json!({"version":1,"app":{"users":["a"]},"guard":{"shell":"waybar"}}),
+            json!({"version":1,"app":{"users":["a"]},"guard":{"loginHelpers":[]}}),
+            json!({"version":1,"app":{"users":["a"]},"guard":{"loginHelpers":["sddm-helper"]}}),
+            json!({"version":1,"app":{"users":["a"]},"guard":{"extraDenyPaths":["/a b"]}}),
+            json!({"version":1,"app":{"users":["a"]},"guard":{"allowBinaries":["~/bin/x"]}}),
+            json!({"version":1,"app":{"users":["a"]},"guard":{"extraDenySockets":[""]}}),
+        ];
+        for v in bad {
+            assert!(
+                matches!(policy(v.clone()), Err(PolicyError::Invalid(_))),
+                "should reject {v}"
+            );
+        }
     }
 }

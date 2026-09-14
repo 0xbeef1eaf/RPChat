@@ -48,5 +48,15 @@
   "app": {
     "allowQuit": true,
     "users": ["alice"]
+  },
+  "guard": {
+    "mode": "off",
+    "protectApp": true,
+    "wallpaper": true,
+    "compositorIpc": "shell-only",
+    "shell": "auto",
+    "extraDenyPaths": [],
+    "extraDenySockets": [],
+    "allowBinaries": []
   }
 }

@@ -36,6 +36,7 @@ for whoever set the machine up; the values in `settings` override everyone's own
 | `settings` | object | Forced app settings, see below. |
 | `inputLock` | object | Daemon-enforced lock limits, see below. |
 | `app` | object | How the app itself may behave (`allowQuit`, `users`), see below. |
+| `guard` | object | The session guard: AppArmor confinement of the `app.users` login sessions, see below. |
 
 ## `settings` — forced app settings
 
@@ -96,7 +97,43 @@ the app comes back through the user's autostart at their next login. `systemctl 
 switches the guard off entirely, and `kill` from a root shell followed by removing the policy
 line lets the app be quit normally again (the app re-reads the file within a minute).
 
+## `guard` — the session guard (AppArmor)
+
+Confines the login sessions of the users in `app.users` so that their own terminals, keybind
+scripts and pickers cannot undo what the character did: connecting to the compositor's and the
+desktop shell's IPC sockets, writing the wallpaper/shell config and state files, and signalling
+or tracing rp-code are logged (`audit`) or refused (`enforce`). rp-code itself (launched from
+`/opt/rp-code/current/rp-code`) runs in its own profile that allows all of it. Needs the AppArmor
+LSM (`/sys/kernel/security/apparmor`), `apparmor_parser` and the `pam_apparmor` line
+`install.sh --guard` adds; `mode` other than `off` requires a non-empty `app.users`. Details,
+verified AppArmor facts and the recovery steps: `docs/system-integration.md` "Session guard".
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `mode` | `"off"` \| `"audit"` \| `"enforce"` | `"off"` | `audit` loads the profiles in complain mode with audit rules: nothing is blocked, every attempt is logged and reported to the app as a `guard-attempt` event. `enforce` blocks. `off` unloads the profiles. |
+| `protectApp` | boolean | `true` | Signals (`kill`, `pkill`) and `ptrace` from the session to rp-code are guarded. |
+| `wallpaper` | boolean | `true` | The shell's IPC socket and its config/state files are guarded; the shell itself runs in `rp-code-shell` (may serve its socket, may not connect to it). |
+| `compositorIpc` | `"allow"` \| `"shell-only"` \| `"deny"` | `"shell-only"` | Who may reach the compositor's control socket (Hyprland `.socket.sock`/`.socket2.sock`, sway, niri): everyone, only the shell and rp-code, or only rp-code. Anything but `allow` runs the compositor in `rp-code-compositor` so its keybind/exec children return to the session confinement. |
+| `shell` | `"auto"` \| `"noctalia"` \| `"quickshell"` \| `"hyprpaper"` \| `"swww"` \| `"none"` | `"auto"` | Which shell table row applies (`auto`: the first whose binary exists, in that order). |
+| `loginHelpers` | non-empty string[] | auto-detect | The PAM login helpers whose profile carries the per-user hats (`/usr/lib/sddm/sddm-helper`, `greetd`, `/usr/bin/login`, `sshd` — those present on the box). |
+| `extraDenyPaths` | string[] | `[]` | More files the session may not write (absolute, `~/…` or `@{HOME}/…` globs). |
+| `extraDenySockets` | string[] | `[]` | More unix socket paths the session may not connect to. |
+| `allowBinaries` | string[] | `[]` | Absolute paths that leave the confinement entirely when executed (`ux`); use sparingly. |
+
+Recovery as root: `guard.mode: "off"` (picked up within seconds, or `rp-coded --guard-apply`),
+`rp-coded --guard-off`, or `apparmor_parser -R /etc/apparmor.d/rp-code-*`. `install.sh --no-guard`
+also removes the PAM line. Sessions already open when the guard engages are confined at their
+next login.
+
 ## Minimal examples
+
+Guard `alice`'s session in audit mode first (logs only), then switch to `enforce` once the log
+shows nothing unexpected:
+
+```json
+{ "version": 1, "app": { "allowQuit": false, "users": ["alice"] }, "guard": { "mode": "audit" } }
+```
+
 
 Keep the app running for `alice` (no quit in the UI, relaunched after a kill or crash):
 

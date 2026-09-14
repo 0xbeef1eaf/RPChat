@@ -57,6 +57,8 @@ export interface CommandTemplate {
 export interface CommandTemplates {
   /** Set the desktop wallpaper. Placeholders: {file} (absolute path), {monitor} (name or empty). */
   wallpaper: CommandTemplate;
+  /** Print the current wallpaper path (optionally of {monitor}) on stdout; captured before the first `set` so `restore` works without a configured file. */
+  wallpaperGet: CommandTemplate;
   /** Open a browser window. Placeholders: {url}. */
   browser: CommandTemplate;
   /** Print the active window as JSON `{title, app, class?}` or `title\tapp` on stdout. Not needed on Hyprland. */
@@ -98,7 +100,8 @@ export interface CommandTemplateInfo {
  * handlers (error messages), so a "not configured" error names the same place the user sees.
  */
 export const COMMAND_TEMPLATE_INFO: Record<keyof CommandTemplates, CommandTemplateInfo> = {
-  wallpaper: { label: 'Set wallpaper', usedBy: 'sdk.wallpaper.set / restore', defaults: 'swww or hyprpaper on Hyprland, gsettings or feh on other Linux desktops, built in on Windows and macOS' },
+  wallpaper: { label: 'Set wallpaper', usedBy: 'sdk.wallpaper.set / restore', defaults: 'noctalia msg wallpaper-set on Wayland with Noctalia, swww or hyprpaper on Hyprland, gsettings or feh on other Linux desktops, built in on Windows and macOS' },
+  wallpaperGet: { label: 'Read wallpaper', usedBy: 'sdk.wallpaper.set (remembers the wallpaper to restore) / restore', defaults: 'noctalia msg wallpaper-get with Noctalia, gsettings on GNOME; otherwise the restore file from Settings → Commands' },
   browser: { label: 'Open browser', usedBy: 'sdk.browser.open', defaults: 'xdg-open on Linux, the system default browser on Windows and macOS' },
   activeWindow: { label: 'Active window', usedBy: 'sdk.presence.activeWindow / status and the <senses> prompt line', defaults: 'none (Hyprland IPC is used directly; elsewhere the window is unknown until you set a command)' },
   nowPlaying: { label: 'Now playing', usedBy: 'sdk.presence.nowPlaying / status and the <senses> prompt line', defaults: 'playerctl when installed' },
@@ -249,6 +252,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   displayBackend: 'auto',
   commandTemplates: {
     wallpaper: { command: '' },
+    wallpaperGet: { command: '' },
     browser: { command: '' },
     activeWindow: { command: '' },
     nowPlaying: { command: '' },

@@ -3,19 +3,22 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AppSettings, DaemonRequest, DaemonResponse, InstallInfo } from '@rp/shared';
+import type { AppSettings, DaemonEvent, DaemonRequest, DaemonResponse, GuardInfo, InstallInfo } from '@rp/shared';
 import { defaultSettings } from '@rp/core';
 import { RpError } from '@rp/shared';
 import { APPLY_UPDATE_TIMEOUT_MS, DaemonClient, DaemonError, rpErrorCodeFor } from './daemon-client.js';
-import { SystemIntegration, autostartDesktopEntry, isSystemInstallExec, policyTemplate, systemInstallStatus } from './integration.js';
+import { GuardAttemptLog, SystemIntegration, autostartDesktopEntry, guardStatusOf, isSystemInstallExec, policyTemplate, systemInstallStatus } from './integration.js';
 import { KeepaliveLink, reconnectDelay } from './keepalive-link.js';
-import { PolicyWatcher, appPolicy, applyPolicy, loadPolicy, managedPaths, parsePolicy, stripManagedPatch } from './policy.js';
+import { PolicyWatcher, appPolicy, applyPolicy, guardMode, loadPolicy, managedPaths, parsePolicy, stripManagedPatch } from './policy.js';
 
 /** Fake rp-coded: answers the protocol from an in-memory lock state. */
-function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: string; install?: InstallInfo; applyDelayMs?: number; restartDaemon?: boolean } = {}) {
+function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: string; install?: InstallInfo; applyDelayMs?: number; restartDaemon?: boolean; guard?: GuardInfo; noSubscribe?: boolean } = {}) {
   let locked: { until: string; reason?: string; devices: 'keyboard' | 'mouse' | 'both' } | null = null;
   const seen: DaemonRequest[] = [];
   const conns = new Set<net.Socket>();
+  /** Like rp-coded: subscriptions live on their connection. */
+  const subscriptions = new Map<net.Socket, string[]>();
+  let guardApplies = 0;
   /** Like rp-coded: a registration lives on its connection; `unregister` clears it, a drop without it counts as a crash. */
   const registrations = new Map<net.Socket, Extract<DaemonRequest, { op: 'register' }>>();
   const crashed: Array<Extract<DaemonRequest, { op: 'register' }>> = [];
@@ -23,6 +26,7 @@ function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: str
     conns.add(conn);
     conn.on('close', () => {
       conns.delete(conn);
+      subscriptions.delete(conn);
       const reg = registrations.get(conn);
       if (reg) crashed.push(reg);
       registrations.delete(conn);
@@ -44,8 +48,26 @@ function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: str
             res = { ok: true, op: 'hello', version: '0.1.0', protocol: 1, devices: { keyboards: 1, pointers: 2, uinput: true } };
             break;
           case 'status':
-            res = { ok: true, op: 'status', locked, ...(opts.install ? { install: opts.install } : {}) };
+            res = { ok: true, op: 'status', locked, ...(opts.install ? { install: opts.install } : {}), ...(opts.guard ? { guard: opts.guard } : {}) };
             break;
+          case 'guard-apply':
+            guardApplies += 1;
+            res = opts.guard ? { ok: true, op: 'guard-apply', guard: { ...opts.guard, loaded: opts.guard.mode === 'off' ? [] : opts.guard.loaded } } : { ok: false, error: 'invalid request: unknown variant `guard-apply`', code: 'INVALID' };
+            break;
+          case 'guard-status':
+            res = opts.guard ? { ok: true, op: 'guard-status', guard: opts.guard } : { ok: false, error: 'invalid request: unknown variant `guard-status`', code: 'INVALID' };
+            break;
+          case 'subscribe': {
+            if (opts.noSubscribe) {
+              res = { ok: false, error: 'invalid request: unknown variant `subscribe`', code: 'INVALID' };
+              break;
+            }
+            const events = [...new Set(req.events.filter((e) => e === 'guard-attempt'))];
+            if (events.length > 0) subscriptions.set(conn, events);
+            else subscriptions.delete(conn);
+            res = { ok: true, op: 'subscribe', events };
+            break;
+          }
           case 'apply-update': {
             // Like rp-coded: a bad checksum is INVALID, root/foreign files REFUSED; success may take a while.
             const answer = (): DaemonResponse =>
@@ -109,6 +131,16 @@ function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: str
     seen,
     crashed,
     registered: () => [...registrations.values()],
+    subscribed: () => [...subscriptions.values()],
+    guardApplies: () => guardApplies,
+    /** Push an event to every subscribed connection (what the daemon's audit tail does). */
+    push: (event: DaemonEvent) => {
+      for (const [conn, events] of subscriptions) if (events.includes(event.ev)) conn.write(`${JSON.stringify(event)}\n`);
+    },
+    /** Write raw bytes to every connection (framing tests). */
+    raw: (text: string) => {
+      for (const conn of conns) conn.write(text);
+    },
     listen: () => new Promise<void>((r) => server.listen(socketPath, r)),
     close: () =>
       new Promise<void>((r) => {
@@ -252,8 +284,8 @@ describe('KeepaliveLink', () => {
     const link = new KeepaliveLink({ socketPath: sock, registration, backoffMs: { initial: 20, max: 100 }, timeoutMs: 1000 });
     expect(link.state).toBe('idle');
     link.start();
-    await until(() => link.registered);
-    expect(daemon.seen.map((r) => r.op)).toEqual(['hello', 'register']);
+    await until(() => link.subscribed);
+    expect(daemon.seen.map((r) => r.op)).toEqual(['hello', 'register', 'subscribe']);
     expect(daemon.registered()).toEqual([{ op: 'register', ...registration }]);
     expect(link.registrationCount).toBe(1);
     expect(link.attempts).toBe(0);
@@ -266,20 +298,77 @@ describe('KeepaliveLink', () => {
     expect(link.attempts).toBeGreaterThanOrEqual(2);
     const again = fakeDaemon(sock);
     await again.listen();
-    await until(() => link.registered);
-    expect(again.seen.map((r) => r.op)).toEqual(['hello', 'register']);
+    await until(() => link.subscribed);
+    expect(again.seen.map((r) => r.op)).toEqual(['hello', 'register', 'subscribe']);
     expect(link.registrationCount).toBe(2);
     expect(link.attempts).toBe(0);
     // An intended exit unregisters first; the daemon then has nothing to relaunch.
     await link.unregister();
     expect(link.state).toBe('stopped');
-    expect(again.seen.map((r) => r.op)).toEqual(['hello', 'register', 'unregister']);
+    expect(again.seen.map((r) => r.op)).toEqual(['hello', 'register', 'subscribe', 'unregister']);
     await until(() => again.registered().length === 0);
     expect(again.crashed).toHaveLength(0);
     await again.close();
     // Once stopped it stays stopped.
     link.start();
     expect(link.state).toBe('stopped');
+  });
+
+  it('subscribes after registering, dispatches pushed events between responses, and copes with a daemon without event push', async () => {
+    const sock = path.join(tmp, 'ev.sock');
+    const daemon = fakeDaemon(sock);
+    await daemon.listen();
+    const events: DaemonEvent[] = [];
+    const link = new KeepaliveLink({ socketPath: sock, registration, backoffMs: { initial: 20, max: 100 }, timeoutMs: 1000 });
+    const off = link.onEvent((e) => events.push(e));
+    link.start();
+    await until(() => link.subscribed);
+    expect(daemon.seen.map((r) => r.op)).toEqual(['hello', 'register', 'subscribe']);
+    expect(daemon.subscribed()).toEqual([['guard-attempt']]);
+    const attempt: DaemonEvent = { ev: 'guard-attempt', at: '2026-09-14T12:00:00.000Z', kind: 'ipc', target: '/run/user/1000/hypr/x/.socket.sock', command: 'hyprctl', pid: 42, blocked: false, profile: 'rp-code-session', operation: 'connect', requested: 'wr' };
+    daemon.push(attempt);
+    await until(() => events.length === 1);
+    expect(events[0]).toEqual(attempt);
+    // An event arriving while a request is pending goes to the listeners; the response still answers the request.
+    daemon.raw(`${JSON.stringify({ ...attempt, target: '/other' })}\n`);
+    await until(() => events.length === 2);
+    expect(events[1]!.target).toBe('/other');
+    // Unknown `ev` names and junk lines are ignored without breaking the link.
+    daemon.raw('{"ev":"weather","temp":3}\nnot json\n');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(events).toHaveLength(2);
+    expect(link.registered).toBe(true);
+    off();
+    daemon.push(attempt);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(events).toHaveLength(2);
+    // After a reconnect the subscription is renewed.
+    await daemon.close();
+    await until(() => !link.registered);
+    const again = fakeDaemon(sock);
+    await again.listen();
+    await until(() => link.subscribed);
+    expect(again.seen.map((r) => r.op)).toEqual(['hello', 'register', 'subscribe']);
+    await link.unregister();
+    await again.close();
+    // A daemon that predates `subscribe` refuses it: the link stays registered, just without events.
+    const sock2 = path.join(tmp, 'old.sock');
+    const old = fakeDaemon(sock2, { noSubscribe: true });
+    await old.listen();
+    const link2 = new KeepaliveLink({ socketPath: sock2, registration, backoffMs: { initial: 20, max: 100 }, timeoutMs: 1000 });
+    link2.start();
+    await until(() => old.seen.filter((r) => r.op === 'subscribe').length === 1);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(link2.registered).toBe(true);
+    expect(link2.subscribed).toBe(false);
+    // `events: []` skips the subscribe request entirely.
+    const link3 = new KeepaliveLink({ socketPath: sock2, registration, backoffMs: { initial: 20, max: 100 }, timeoutMs: 1000, events: [] });
+    link3.start();
+    await until(() => old.registered().length === 2);
+    expect(old.seen.filter((r) => r.op === 'subscribe')).toHaveLength(1);
+    await link2.unregister();
+    await link3.unregister();
+    await old.close();
   });
 
   it('keeps retrying while no daemon is listening and resolves unregister immediately', async () => {
@@ -327,6 +416,37 @@ describe('policy', () => {
     expect(() => parsePolicy({ version: 1, app: { users: [''] } })).toThrow(/app.users/);
     expect(() => parsePolicy({ version: 1, app: 'no' })).toThrow(/app must be an object/);
     expect(() => parsePolicy({ version: 1, app: [] })).toThrow(/app must be an object/);
+  });
+
+  it('parses the guard block like the daemon and rejects what it rejects', () => {
+    const full = parsePolicy({
+      version: 1,
+      app: { users: ['work'] },
+      guard: { mode: 'enforce', protectApp: false, wallpaper: true, compositorIpc: 'deny', shell: 'noctalia', loginHelpers: ['/usr/lib/sddm/sddm-helper'], extraDenyPaths: ['~/.config/hypr/hyprpaper.conf', '@{HOME}/x'], extraDenySockets: ['/run/user/1000/foo.sock'], allowBinaries: ['/usr/bin/hyprctl'] },
+    });
+    expect(full.guard).toEqual({ mode: 'enforce', protectApp: false, wallpaper: true, compositorIpc: 'deny', shell: 'noctalia', loginHelpers: ['/usr/lib/sddm/sddm-helper'], extraDenyPaths: ['~/.config/hypr/hyprpaper.conf', '@{HOME}/x'], extraDenySockets: ['/run/user/1000/foo.sock'], allowBinaries: ['/usr/bin/hyprctl'] });
+    expect(guardMode(full)).toBe('enforce');
+    expect(guardMode(parsePolicy({ version: 1 }))).toBe('off');
+    expect(guardMode(parsePolicy({ version: 1, guard: {} }))).toBe('off');
+    expect(guardMode(null)).toBe('off');
+    expect(parsePolicy({ version: 1, guard: { mode: 'off' } }).guard).toEqual({ mode: 'off' });
+    const bad: unknown[] = [
+      { version: 1, guard: 'on' },
+      { version: 1, guard: { mode: 'on' } },
+      { version: 1, guard: { mode: 'audit' } },
+      { version: 1, app: { users: ['a'] }, guard: { compositorIpc: 'maybe' } },
+      { version: 1, app: { users: ['a'] }, guard: { shell: 'waybar' } },
+      { version: 1, app: { users: ['a'] }, guard: { protectApp: 'yes' } },
+      { version: 1, app: { users: ['a'] }, guard: { loginHelpers: [] } },
+      { version: 1, app: { users: ['a'] }, guard: { loginHelpers: ['sddm-helper'] } },
+      { version: 1, app: { users: ['a'] }, guard: { extraDenyPaths: ['/a b'] } },
+      { version: 1, app: { users: ['a'] }, guard: { allowBinaries: ['~/bin/x'] } },
+      { version: 1, app: { users: ['a'] }, guard: { extraDenySockets: [''] } },
+    ];
+    for (const v of bad) expect(() => parsePolicy(v), JSON.stringify(v)).toThrow(/Invalid policy file/);
+    expect(() => parsePolicy({ version: 1, guard: { mode: 'audit' } })).toThrow(/guard.mode needs app.users/);
+    // Unknown guard keys are ignored here (the daemon rejects them on write).
+    expect(parsePolicy({ version: 1, app: { users: ['a'] }, guard: { mode: 'audit', reassert: true } }).guard).toEqual({ mode: 'audit' });
   });
 
   it('parses and validates the policy file', () => {
@@ -408,6 +528,98 @@ describe('policy', () => {
     const broken = await watcher.current();
     expect(broken.present).toBe(true);
     expect(broken.error).toMatch(/JSON|policy/);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
+describe('guard status and attempt log', () => {
+  const engaged: GuardInfo = { available: true, mode: 'audit', loaded: ['rp-code-session', 'rp-code-app'], users: ['work'], residual: ['audit mode: nothing is blocked'], pamConfigured: true, shell: 'noctalia', compositor: 'hyprland', appliedAt: '2026-09-14T12:00:00.000Z' };
+  const policy = parsePolicy({ version: 1, app: { users: ['work'] }, guard: { mode: 'audit' } });
+
+  it('guardStatusOf combines the policy with what the daemon reports', () => {
+    expect(guardStatusOf({ policy, daemon: { connected: true, guard: engaged } })).toEqual({ ...engaged, configured: true, daemonSupportsGuard: true });
+    // Off in the policy but still loaded: reported as-is (the daemon unloads on its next apply).
+    expect(guardStatusOf({ policy: parsePolicy({ version: 1 }), daemon: { connected: true, guard: engaged } })).toMatchObject({ configured: false, mode: 'audit', loaded: engaged.loaded });
+    // No daemon: only the policy side is known.
+    expect(guardStatusOf({ policy, daemon: { connected: false } })).toEqual({ configured: true, daemonSupportsGuard: false, available: false, mode: 'audit', loaded: [], users: ['work'], residual: ['the daemon is not connected; nothing is engaged'] });
+    expect(guardStatusOf({ policy: null, daemon: { connected: false } })).toEqual({ configured: false, daemonSupportsGuard: false, available: false, mode: 'off', loaded: [], users: [], residual: [] });
+    // An old daemon answers status without `guard`.
+    expect(guardStatusOf({ policy, daemon: { connected: true } }).residual[0]).toContain('predates the session guard');
+  });
+
+  it('GuardAttemptLog keeps the newest 50 without the ev tag', () => {
+    const log = new GuardAttemptLog(3);
+    const ev = (n: number): DaemonEvent => ({ ev: 'guard-attempt', at: `t${n}`, kind: 'config', target: `/f${n}`, command: 'vim', pid: n, blocked: false, profile: 'rp-code-session', operation: 'open' });
+    expect(log.push(ev(1))).toEqual({ at: 't1', kind: 'config', target: '/f1', command: 'vim', pid: 1, blocked: false, profile: 'rp-code-session', operation: 'open' });
+    for (const n of [2, 3, 4]) log.push(ev(n));
+    expect(log.list().map((r) => r.pid)).toEqual([4, 3, 2]);
+    expect(new GuardAttemptLog().list()).toEqual([]);
+  });
+
+  it('DaemonClient reports guard in status and maps guard-apply/guard-status', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-guard-'));
+    const sock = path.join(tmp, 'g.sock');
+    const daemon = fakeDaemon(sock, { guard: engaged });
+    await daemon.listen();
+    const client = new DaemonClient({ socketPath: sock, timeoutMs: 1000 });
+    expect((await client.status()).guard).toEqual(engaged);
+    expect(await client.guardStatus()).toEqual(engaged);
+    expect(await client.guardApply()).toEqual(engaged);
+    expect(daemon.guardApplies()).toBe(1);
+    client.close();
+    await daemon.close();
+    // An old daemon: INVALID → INVALID_ARGUMENT, and no guard in status.
+    const old = fakeDaemon(sock);
+    await old.listen();
+    const client2 = new DaemonClient({ socketPath: sock, timeoutMs: 1000 });
+    expect((await client2.status()).guard).toBeUndefined();
+    await expect(client2.guardApply()).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', details: { daemonCode: 'INVALID' } });
+    client2.close();
+    await old.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('SystemIntegration exposes guard status, guardApply, the attempt log and passes --guard to the installer', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-guard-int-'));
+    const sock = path.join(tmp, 'g.sock');
+    const daemon = fakeDaemon(sock, { guard: engaged });
+    await daemon.listen();
+    const resources = path.join(tmp, 'resources');
+    fs.mkdirSync(path.join(resources, 'system'), { recursive: true });
+    fs.writeFileSync(path.join(resources, 'system', 'install.sh'), '#!/bin/sh\necho ok\n');
+    const policyPath = path.join(tmp, 'policy.json');
+    fs.writeFileSync(policyPath, JSON.stringify({ version: 1, app: { users: ['work'] }, guard: { mode: 'audit' } }));
+    const commands: string[][] = [];
+    const log = new GuardAttemptLog();
+    const integration = new SystemIntegration({
+      platform: 'linux',
+      daemon: new DaemonClient({ socketPath: sock, timeoutMs: 1000 }),
+      policy: new PolicyWatcher(policyPath),
+      resourcesDirs: [resources],
+      homeDir: path.join(tmp, 'home'),
+      appBin: '/opt/rp-code/current/rp-code',
+      userName: 'work',
+      guardLog: log,
+      run: async (file, args) => {
+        commands.push([file, ...args]);
+        return { code: 0, stdout: file === 'id' ? 'work rp-code\n' : '[ok]\n', stderr: '' };
+      },
+      logger: { info: () => undefined, warn: () => undefined, debug: () => undefined },
+    });
+    const status = await integration.status();
+    expect(status.guard).toEqual({ ...engaged, configured: true, daemonSupportsGuard: true });
+    expect((await integration.guardApply()).guard.loaded).toEqual(engaged.loaded);
+    expect(daemon.guardApplies()).toBe(1);
+    log.push({ ev: 'guard-attempt', at: 't', kind: 'signal', target: 'rp-code-app', command: 'kill', pid: 9, blocked: false, profile: 'rp-code-session', operation: 'signal' });
+    expect(await integration.guardAttempts()).toEqual([{ at: 't', kind: 'signal', target: 'rp-code-app', command: 'kill', pid: 9, blocked: false, profile: 'rp-code-session', operation: 'signal' }]);
+    await integration.install({ autostart: false });
+    expect(commands.at(-1)!.slice(-1)).toEqual(['--guard']);
+    // Without the guard in the policy the flag stays off.
+    fs.writeFileSync(policyPath, JSON.stringify({ version: 1, app: { users: ['work'] } }));
+    await new Promise((r) => setTimeout(r, 20));
+    await integration.install({ autostart: false });
+    expect(commands.at(-1)).not.toContain('--guard');
+    await daemon.close();
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 });
@@ -515,6 +727,7 @@ describe('SystemIntegration', () => {
     const status = await integration.status();
     expect(status).toMatchObject({ platform: 'linux', daemon: { connected: false }, policy: { present: false, canCreate: false, managed: [], allowQuit: true, users: [] }, udev: { rulePresent: false, inGroup: true, groupName: 'rp-code' }, autostart: { enabled: false, method: 'none' }, installerAvailable: true });
     expect(status.install).toEqual({ systemInstall: false, dir: '/opt/rp-code/current', execInDir: false, daemonSupportsUpdates: false, canSystemInstall: true });
+    expect(status.guard).toEqual({ configured: false, daemonSupportsGuard: false, available: false, mode: 'off', loaded: [], users: [], residual: [] });
     expect(await integration.installerPath()).toBe(path.join(resources, 'system', 'install.sh'));
     const enabled = await integration.setAutostart(true);
     expect(enabled.autostart).toEqual({ enabled: true, method: 'xdg', path: path.join(tmp, 'home', '.config', 'autostart', 'rp-code.desktop') });

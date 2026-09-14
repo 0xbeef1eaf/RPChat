@@ -8,7 +8,7 @@ import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, SaveScriptInput, ScriptKind, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
-import type { ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
+import type { GuardAttemptRecord, ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
 import type { BrowserBlock, BrowserBridgeStatus } from './browser.js';
 import type { UpdateStatus } from './updates.js';
 import type { SandboxRunRequest, SandboxRunResult } from './sandbox.js';
@@ -241,6 +241,10 @@ export interface IpcApi {
     createPolicy(text: string): Promise<SystemIntegrationStatus>;
     /** Pretty JSON of a policy seeded from the current settings, to start editing from. */
     policyTemplate(): Promise<string>;
+    /** Session guard: have the daemon (re)generate and load the profiles from the policy now. Resolves with the new status. */
+    guardApply(): Promise<SystemIntegrationStatus>;
+    /** The last 50 `guard-attempt` events the daemon pushed (newest first). */
+    guardAttempts(): Promise<GuardAttemptRecord[]>;
   };
   /** Browser extension bridge (Settings → Browser; docs/browser-extension.md). */
   browser: {

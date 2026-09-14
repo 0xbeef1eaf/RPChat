@@ -62,6 +62,7 @@ mod logging {
 }
 
 mod devices;
+mod guard;
 mod inject;
 mod keepalive;
 mod lock;
@@ -76,11 +77,12 @@ use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
+use guard::{AttemptLimiter, GuardAttempt, GuardHooks, GuardInfo, GuardPaths, ParserOp};
 use inject::Injector;
 use keepalive::{
     CommandSpec, Decision, Keepalive, Peer, RegisterRequest, Registration, DEFAULT_SESSIONS_DIR,
@@ -89,7 +91,8 @@ use lock::{DeviceSource, LockEngine, UnlockCause, TICK_INTERVAL};
 use logging::Level;
 use policy::{CreateError, PolicyStore, DEFAULT_POLICY_PATH};
 use protocol::{
-    DaemonError, DaemonResult, ErrorCode, Ok as OkPayload, Request, Response, PROTOCOL_VERSION,
+    DaemonError, DaemonResult, ErrorCode, Event, Ok as OkPayload, Request, Response, EVENT_NAMES,
+    PROTOCOL_VERSION,
 };
 use sysinstall::{ApplyHooks, ApplyRequest, DEFAULT_INSTALL_ROOT};
 
@@ -110,6 +113,7 @@ rp-coded — input lock / injection daemon for the rp desktop app
 USAGE:
     rp-coded [--socket <path>] [--policy <path>] [--log-level <error|warn|info|debug>]
     rp-coded --check-devices
+    rp-coded --guard-apply | --guard-off [--policy <path>] [--profile-dir <p>] [--guard-state <p>]
     rp-coded --help | --version
 
 OPTIONS:
@@ -126,6 +130,13 @@ OPTIONS:
     --no-restart        After a self-update only log that a restart is due instead of
                         restarting (tests; env RP_CODED_NO_RESTART=1)
     --no-uinput         Do not create the uinput virtual device (injection reports NO_DEVICES)
+    --profile-dir <p>   Where the session-guard AppArmor profiles are written (default
+                        /etc/apparmor.d, env RP_CODED_PROFILE_DIR)
+    --guard-state <p>   Session-guard state file (default /etc/rp-code/guard-state.json,
+                        env RP_CODED_GUARD_STATE)
+    --guard-apply       Engage the session guard from the policy now (what the daemon does at
+                        start and on policy changes), print the status as JSON and exit
+    --guard-off         Unload the session guard whatever the policy says, print the status, exit
     --check-devices     Print which input devices and /dev/uinput can be opened, then exit 0
     --log-level <lvl>   stderr verbosity (default info)
 
@@ -141,6 +152,10 @@ struct Args {
     no_restart: bool,
     no_uinput: bool,
     check_devices: bool,
+    profile_dir: PathBuf,
+    guard_state: PathBuf,
+    guard_apply: bool,
+    guard_off: bool,
     log_level: Level,
     help: bool,
     version: bool,
@@ -166,6 +181,14 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         no_restart: std::env::var_os("RP_CODED_NO_RESTART").is_some_and(|v| v == "1"),
         no_uinput: false,
         check_devices: false,
+        profile_dir: std::env::var_os("RP_CODED_PROFILE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(guard::DEFAULT_PROFILE_DIR)),
+        guard_state: std::env::var_os("RP_CODED_GUARD_STATE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(guard::DEFAULT_STATE_FILE)),
+        guard_apply: false,
+        guard_off: false,
         log_level: Level::Info,
         help: false,
         version: false,
@@ -191,6 +214,14 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 ))
             }
             "--no-restart" => args.no_restart = true,
+            "--profile-dir" => {
+                args.profile_dir = PathBuf::from(iter.next().ok_or("--profile-dir needs a path")?)
+            }
+            "--guard-state" => {
+                args.guard_state = PathBuf::from(iter.next().ok_or("--guard-state needs a path")?)
+            }
+            "--guard-apply" => args.guard_apply = true,
+            "--guard-off" => args.guard_off = true,
             "--log-level" => {
                 let v = iter.next().ok_or("--log-level needs a value")?;
                 args.log_level =
@@ -241,7 +272,13 @@ pub struct ConnCtx {
     pub peer: Peer,
     pub label: String,
     pub registration: Option<Registration>,
+    /// Identifies this connection's subscription (`subscribe`).
+    pub conn_id: u64,
+    /// The connection's writer, shared with the event push (`None` in unit tests without a socket).
+    pub writer: Option<Arc<Mutex<UnixStream>>>,
 }
+
+static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 
 impl ConnCtx {
     pub fn new(peer: Peer) -> ConnCtx {
@@ -249,6 +286,8 @@ impl ConnCtx {
             label: format!("uid {} pid {}", peer.uid, peer.pid),
             peer,
             registration: None,
+            conn_id: NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed),
+            writer: None,
         }
     }
 
@@ -295,6 +334,25 @@ pub struct Daemon {
     /// Whether the restart thread was already started (only one).
     restart_scheduled: AtomicBool,
     restart: Mutex<RestartPlan>,
+    /// Session guard: OS hooks, locations, the last engage result and the audit tail state.
+    guard_hooks: GuardHooks,
+    guard_paths: GuardPaths,
+    guard_info: Mutex<Option<GuardInfo>>,
+    /// Policy file stamp at the last guard engage (re-engaged when it changes).
+    guard_stamp: Mutex<Option<(std::time::SystemTime, u64)>>,
+    ticks: AtomicU64,
+    tailer_started: AtomicBool,
+    limiter: Mutex<AttemptLimiter>,
+    /// Connections that asked for pushed events.
+    subscribers: Mutex<Vec<Subscriber>>,
+}
+
+/// A connection receiving pushed `{ "ev": … }` lines.
+pub struct Subscriber {
+    pub conn_id: u64,
+    pub label: String,
+    pub events: Vec<String>,
+    pub writer: Arc<Mutex<UnixStream>>,
 }
 
 impl Daemon {
@@ -316,7 +374,22 @@ impl Daemon {
             restart_pending: AtomicBool::new(false),
             restart_scheduled: AtomicBool::new(false),
             restart: Mutex::new(RestartPlan::from_process(true)),
+            guard_hooks: os::guard_hooks(),
+            guard_paths: GuardPaths::default(),
+            guard_info: Mutex::new(None),
+            guard_stamp: Mutex::new(None),
+            ticks: AtomicU64::new(0),
+            tailer_started: AtomicBool::new(false),
+            limiter: Mutex::new(AttemptLimiter::default()),
+            subscribers: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The session guard's OS hooks and locations (fakes and a temp dir in tests).
+    pub fn with_guard(mut self, hooks: GuardHooks, paths: GuardPaths) -> Self {
+        self.guard_hooks = hooks;
+        self.guard_paths = paths;
+        self
     }
 
     pub fn with_keepalive_hooks(mut self, hooks: KeepaliveHooks) -> Self {
@@ -360,6 +433,177 @@ impl Daemon {
             log_info!("lock ended: {cause}");
         }
         self.keepalive_tick(Instant::now());
+        // Every ~5 s: re-engage the guard when the policy file changed (a stat).
+        if self.ticks.fetch_add(1, Ordering::Relaxed) % 100 == 99 {
+            self.guard_tick();
+        }
+    }
+
+    /// Re-engage the session guard when the policy file's (mtime, size) changed since the
+    /// last engage. Cheap: one stat.
+    pub fn guard_tick(&self) {
+        let stamp = self.policy().stamp();
+        let changed = {
+            let last = self.guard_stamp.lock().unwrap_or_else(|e| e.into_inner());
+            last.is_some() && *last != stamp
+        };
+        if changed {
+            log_info!("policy file changed; re-applying the session guard");
+            self.guard_apply();
+        }
+    }
+
+    /// Engage/disengage the session guard from the current policy (`guard::apply`), remember
+    /// the outcome for `status`, and start the audit tail once something is engaged.
+    pub fn guard_apply(&self) -> GuardInfo {
+        let (policy, stamp) = {
+            let mut store = self.policy();
+            let stamp = store.stamp();
+            (store.load(), stamp)
+        };
+        let info = match &policy {
+            Ok(p) => guard::apply(p.as_ref(), &self.guard_hooks, &self.guard_paths),
+            Err(e) => {
+                log_warn!("session guard: policy unreadable ({e}); leaving the guard as it is");
+                let mut cur = guard::current_info(None, &self.guard_hooks, &self.guard_paths);
+                cur.last_error = Some(format!("policy file invalid: {e}"));
+                cur
+            }
+        };
+        *self.guard_stamp.lock().unwrap_or_else(|e| e.into_inner()) = stamp;
+        match (&info.last_error, info.loaded.is_empty()) {
+            (Some(e), _) => log_warn!("session guard ({}): {e}", info.mode.as_str()),
+            (None, false) => log_info!(
+                "session guard {}: {} loaded for {}{}{}",
+                info.mode.as_str(),
+                info.loaded.join(", "),
+                info.users.join(", "),
+                info.shell
+                    .as_deref()
+                    .map(|s| format!("; shell {s}"))
+                    .unwrap_or_default(),
+                info.compositor
+                    .as_deref()
+                    .map(|c| format!("; compositor {c}"))
+                    .unwrap_or_default()
+            ),
+            (None, true) => log_info!("session guard off"),
+        }
+        *self.guard_info.lock().unwrap_or_else(|e| e.into_inner()) = Some(info.clone());
+        info
+    }
+
+    /// `status.guard` / `guard-status`: the last engage result, or the state file.
+    pub fn guard_status(&self) -> GuardInfo {
+        if let Some(info) = self
+            .guard_info
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            return info;
+        }
+        let policy = self.policy().load().ok().flatten();
+        guard::current_info(policy.as_ref(), &self.guard_hooks, &self.guard_paths)
+    }
+
+    /// Whether the guard is engaged (something loaded) — the audit tail is only useful then.
+    pub fn guard_engaged(&self) -> bool {
+        self.guard_info
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|g| !g.loaded.is_empty())
+    }
+
+    /// Mark the audit tailer as started; false when it already was.
+    pub fn claim_tailer(&self) -> bool {
+        self.tailer_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// A subscription on a connection: replaces an earlier one from the same connection.
+    pub fn subscribe(&self, ctx: &ConnCtx, events: Vec<String>) -> DaemonResult<Vec<String>> {
+        let Some(writer) = ctx.writer.clone() else {
+            return Err(DaemonError::invalid("subscribe needs a socket connection"));
+        };
+        let mut events: Vec<String> = events
+            .into_iter()
+            .filter(|e| EVENT_NAMES.contains(&e.as_str()))
+            .collect();
+        events.sort();
+        events.dedup();
+        let mut subs = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
+        subs.retain(|s| s.conn_id != ctx.conn_id);
+        if !events.is_empty() {
+            subs.push(Subscriber {
+                conn_id: ctx.conn_id,
+                label: ctx.label.clone(),
+                events: events.clone(),
+                writer,
+            });
+        }
+        Ok(events)
+    }
+
+    pub fn unsubscribe(&self, conn_id: u64) {
+        self.subscribers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|s| s.conn_id != conn_id);
+    }
+
+    pub fn subscriber_count(&self) -> usize {
+        self.subscribers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
+    /// Push an event to every subscriber that asked for it; a failed write drops that subscriber.
+    pub fn broadcast(&self, event: &Event) {
+        let line = format!("{}\n", event.to_line());
+        let name = event.name();
+        let mut subs = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
+        subs.retain(|s| {
+            if !s.events.iter().any(|e| e == name) {
+                return true;
+            }
+            let mut w = s.writer.lock().unwrap_or_else(|e| e.into_inner());
+            match w.write_all(line.as_bytes()).and_then(|_| w.flush()) {
+                Ok(()) => true,
+                Err(e) => {
+                    log_debug!("dropping subscriber {} ({e})", s.label);
+                    false
+                }
+            }
+        });
+    }
+
+    /// An audit record about an rp-code profile: rate-limited per target, logged, pushed.
+    pub fn report_attempt(&self, attempt: GuardAttempt, now: Instant, at: String) -> bool {
+        let key = format!("{}:{}", attempt.kind.as_str(), attempt.target);
+        if !self
+            .limiter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .allow(&key, now)
+        {
+            return false;
+        }
+        log_info!(
+            "guard attempt {}: {} {} on {} by {} (pid {}) under {}",
+            if attempt.blocked { "blocked" } else { "logged" },
+            attempt.kind.as_str(),
+            attempt.operation,
+            attempt.target,
+            attempt.command,
+            attempt.pid,
+            attempt.profile
+        );
+        self.broadcast(&Event::GuardAttempt { at, attempt });
+        true
     }
 
     /// Fire pending relaunches whose delay is up, re-checking the gate first (policy re-read,
@@ -511,6 +755,7 @@ impl Daemon {
                     locked: self.engine().status(Instant::now()),
                     keepalive: self.keepalive().info(allow_quit),
                     install: sysinstall::install_info(&self.install_root, VERSION),
+                    guard: self.guard_status(),
                 })
             }
             Request::Policy => {
@@ -643,6 +888,20 @@ impl Daemon {
                 version,
                 sha512,
             } => self.apply_update(ctx, &file, &version, &sha512),
+            Request::GuardApply => {
+                log_info!("guard-apply from {peer}");
+                Ok(OkPayload::GuardApply {
+                    guard: self.guard_apply(),
+                })
+            }
+            Request::GuardStatus => Ok(OkPayload::GuardStatus {
+                guard: self.guard_status(),
+            }),
+            Request::Subscribe { events } => {
+                let events = self.subscribe(ctx, events)?;
+                log_debug!("{peer} subscribed to {}", events.join(", "));
+                Ok(OkPayload::Subscribe { events })
+            }
         }
     }
 
@@ -840,7 +1099,7 @@ impl Daemon {
 
 mod os {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     /// Uids owning an active graphical session: logind's state files first, `loginctl` when
     /// the directory is unreadable or empty. No logind at all → nobody (no relaunch).
@@ -1143,6 +1402,254 @@ mod os {
             .ok();
         Ok(pid)
     }
+
+    // ---- session guard ------------------------------------------------------------------
+
+    /// The real guard hooks: securityfs presence, `/etc/apparmor.d/abi/*`, files written
+    /// `0644` through a temp file + rename, `apparmor_parser`, `/proc` socket discovery.
+    pub fn guard_hooks() -> GuardHooks {
+        GuardHooks {
+            available: Box::new(|| Path::new(guard::APPARMOR_FS).is_dir()),
+            abi: Box::new(|| {
+                ["abi/4.0", "abi/3.0"]
+                    .into_iter()
+                    .find(|a| Path::new(guard::DEFAULT_PROFILE_DIR).join(a).is_file())
+                    .map(str::to_string)
+            }),
+            file_exists: Box::new(|p| p.exists()),
+            read_file: Box::new(|p| fs::read_to_string(p).ok()),
+            write_file: Box::new(write_file_0644),
+            remove_file: Box::new(|p| fs::remove_file(p)),
+            parser: Box::new(run_apparmor_parser),
+            discover: Box::new(discover_sockets),
+            now: Box::new(|| {
+                let ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                protocol::iso_millis(ms)
+            }),
+        }
+    }
+
+    fn write_file_0644(path: &Path, text: &str) -> io::Result<()> {
+        if let Some(dir) = path.parent() {
+            if !dir.exists() {
+                fs::create_dir_all(dir)?;
+            }
+        }
+        let tmp = path.with_extension("new");
+        {
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o644)
+                .open(&tmp)?;
+            f.set_permissions(fs::Permissions::from_mode(0o644))?;
+            f.write_all(text.as_bytes())?;
+            f.sync_all()?;
+        }
+        fs::rename(&tmp, path)
+    }
+
+    /// `apparmor_parser -Q|-r|-R -K <files>`; stderr becomes the error text.
+    pub fn run_apparmor_parser(op: ParserOp, files: &[PathBuf]) -> Result<(), String> {
+        if files.is_empty() {
+            return Ok(());
+        }
+        let flag = match op {
+            ParserOp::Check => "-Q",
+            ParserOp::Replace => "-r",
+            ParserOp::Remove => "-R",
+        };
+        let parser = ["/usr/sbin/apparmor_parser", "/usr/bin/apparmor_parser"]
+            .into_iter()
+            .find(|p| Path::new(p).exists())
+            .ok_or_else(|| "apparmor_parser is not installed (package apparmor)".to_string())?;
+        let out = std::process::Command::new(parser)
+            .arg(flag)
+            .arg("-K")
+            .args(files)
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("cannot run {parser}: {e}"))?;
+        let err = String::from_utf8_lossy(&out.stderr);
+        let noise: Vec<&str> = err
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.contains("Cache read/write disabled"))
+            .collect();
+        for l in &noise {
+            log_debug!("apparmor_parser {flag}: {l}");
+        }
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "apparmor_parser {flag} exited with {}: {}",
+                out.status,
+                noise.join(" | ").chars().take(600).collect::<String>()
+            ))
+        }
+    }
+
+    /// Listening path sockets owned by shell/compositor processes of the listed users
+    /// (`/proc/net/unix` + `/proc/<pid>/fd`), generalised into profile globs.
+    pub fn discover_sockets(users: &[String]) -> Vec<guard::DiscoveredSocket> {
+        let uids: Vec<u32> = users
+            .iter()
+            .filter_map(|u| {
+                nix::unistd::User::from_name(u)
+                    .ok()
+                    .flatten()
+                    .map(|user| user.uid.as_raw())
+            })
+            .collect();
+        if uids.is_empty() {
+            return Vec::new();
+        }
+        let Ok(unix) = fs::read_to_string("/proc/net/unix") else {
+            return Vec::new();
+        };
+        let listening = guard::parse_proc_net_unix(&unix);
+        if listening.is_empty() {
+            return Vec::new();
+        }
+        let by_inode: BTreeMap<u64, &guard::ListeningSocket> =
+            listening.iter().map(|s| (s.inode, s)).collect();
+        let mut out = std::collections::BTreeSet::new();
+        let Ok(procs) = fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        for entry in procs.flatten() {
+            let name = entry.file_name();
+            let Some(pid) = name
+                .to_str()
+                .filter(|n| n.chars().all(|c| c.is_ascii_digit()))
+            else {
+                continue;
+            };
+            let base = Path::new("/proc").join(pid);
+            let Ok(status) = fs::read_to_string(base.join("status")) else {
+                continue;
+            };
+            let Some(uid) = guard::parse_status_uid(&status) else {
+                continue;
+            };
+            if !uids.contains(&uid) {
+                continue;
+            }
+            let Ok(comm) = fs::read_to_string(base.join("comm")) else {
+                continue;
+            };
+            let Some(entry) = guard::classify_comm(comm.trim()) else {
+                continue;
+            };
+            let Ok(fds) = fs::read_dir(base.join("fd")) else {
+                continue;
+            };
+            for fd in fds.flatten() {
+                let Ok(link) = fs::read_link(fd.path()) else {
+                    continue;
+                };
+                let Some(inode) = guard::socket_inode(&link.to_string_lossy()) else {
+                    continue;
+                };
+                if let Some(sock) = by_inode.get(&inode) {
+                    out.insert(guard::DiscoveredSocket {
+                        glob: guard::generalise_socket_path(&sock.path),
+                        owner: entry.owner,
+                        entry: entry.id.to_string(),
+                    });
+                }
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// Start the audit tail once the guard is engaged (idempotent): `journalctl -f -o json`
+    /// over the kernel and audit transports, else `/dev/kmsg`. Records about `rp-code-*`
+    /// profiles become `guard-attempt` events for subscribed connections.
+    pub fn start_audit_tailer_if_engaged(daemon: &Arc<Daemon>) {
+        if !daemon.guard_engaged() || !daemon.claim_tailer() {
+            return;
+        }
+        let d = daemon.clone();
+        thread::Builder::new()
+            .name("rp-coded-audit".into())
+            .spawn(move || audit_tail_loop(&d))
+            .ok();
+    }
+
+    fn audit_tail_loop(daemon: &Arc<Daemon>) {
+        let report = |message: &str| {
+            if let Some(attempt) = guard::parse_audit_message(message) {
+                let at = (daemon.guard_hooks.now)();
+                daemon.report_attempt(attempt, Instant::now(), at);
+            }
+        };
+        match std::process::Command::new("journalctl")
+            .args([
+                "-f",
+                "-o",
+                "json",
+                "-n",
+                "0",
+                "--no-pager",
+                "_TRANSPORT=kernel",
+                "+",
+                "_TRANSPORT=audit",
+            ])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                log_info!("session guard: tailing the audit log through journalctl");
+                if let Some(stdout) = child.stdout.take() {
+                    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                        if let Some(msg) = guard::journal_message(&line) {
+                            report(&msg);
+                        }
+                    }
+                }
+                let _ = child.wait();
+                log_warn!("session guard: journalctl ended; falling back to /dev/kmsg");
+            }
+            Err(e) => log_warn!("session guard: cannot run journalctl ({e}); trying /dev/kmsg"),
+        }
+        match fs::File::open("/dev/kmsg") {
+            Ok(mut f) => {
+                use std::io::{Read, Seek, SeekFrom};
+                let _ = f.seek(SeekFrom::End(0));
+                let mut buf = vec![0u8; 8192];
+                loop {
+                    match f.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if let Some(msg) = guard::kmsg_message(&String::from_utf8_lossy(&buf[..n])) {
+                                report(&msg);
+                            }
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(e) if e.raw_os_error() == Some(nix::libc::EPIPE) => continue, // overrun
+                        Err(e) => {
+                            log_warn!("session guard: /dev/kmsg read failed ({e}); audit tail stopped");
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(e) => log_warn!(
+                "session guard: cannot open /dev/kmsg ({e}); guard attempts will not be reported (ProtectKernelLogs?)"
+            ),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,12 +1663,16 @@ fn serve_connection(stream: UnixStream, daemon: &Arc<Daemon>) -> io::Result<()> 
     log_debug!("connection from {}", ctx.label);
     let result = serve_lines(stream, daemon, &mut ctx);
     log_debug!("{} disconnected", ctx.label);
+    daemon.unsubscribe(ctx.conn_id);
     daemon.connection_lost(&mut ctx, Instant::now());
     result
 }
 
 fn serve_lines(stream: UnixStream, daemon: &Arc<Daemon>, ctx: &mut ConnCtx) -> io::Result<()> {
-    let mut writer = stream.try_clone()?;
+    // The writer is shared with the event push (`subscribe`), so responses and pushed lines
+    // never interleave mid-line.
+    let writer = Arc::new(Mutex::new(stream.try_clone()?));
+    ctx.writer = Some(writer.clone());
     let reader = BufReader::new(stream);
     for line in reader.lines() {
         let line = line?;
@@ -1173,9 +1684,12 @@ fn serve_lines(stream: UnixStream, daemon: &Arc<Daemon>, ctx: &mut ConnCtx) -> i
                 Response::err(ErrorCode::Invalid, e)
             }
         };
-        writer.write_all(response.to_line().as_bytes())?;
-        writer.write_all(b"\n")?;
-        writer.flush()?;
+        {
+            let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
+            w.write_all(response.to_line().as_bytes())?;
+            w.write_all(b"\n")?;
+            w.flush()?;
+        }
         // A self-update asked for a restart: start it now that the reply is out (the app keeps
         // its connection open, so waiting for the disconnect would wait forever).
         if daemon.restart_pending() && !daemon.is_shutting_down() {
@@ -1376,7 +1890,8 @@ fn run(args: Args) -> ExitCode {
             args.install_root.clone(),
             os::apply_hooks(args.system_prefix.clone()),
             RestartPlan::from_process(args.no_restart),
-        ),
+        )
+        .with_guard(os::guard_hooks(), guard_paths(&args)),
     );
     {
         let info = sysinstall::install_info(&args.install_root, VERSION);
@@ -1418,10 +1933,56 @@ fn run(args: Args) -> ExitCode {
 
     install_signal_handler(daemon.clone(), args.socket.clone());
     start_ticker(daemon.clone());
+    // Session guard: engage from the policy now; the ticker re-engages on policy changes and
+    // `guard-apply` on request. The audit tail starts once something is loaded.
+    daemon.guard_apply();
+    os::start_audit_tailer_if_engaged(&daemon);
     accept_loop(listener, daemon.clone());
     daemon.shutdown();
     let _ = fs::remove_file(&args.socket);
     ExitCode::SUCCESS
+}
+
+/// Guard locations from the command line (the app binary is the system install's).
+fn guard_paths(args: &Args) -> GuardPaths {
+    GuardPaths {
+        profile_dir: args.profile_dir.clone(),
+        state_file: args.guard_state.clone(),
+        app_exec: args
+            .install_root
+            .join("current/rp-code")
+            .to_string_lossy()
+            .into_owned(),
+        daemon_version: VERSION.to_string(),
+    }
+}
+
+/// `--guard-apply` / `--guard-off`: one engage (or unload) from the command line — what
+/// `install.sh --guard` / `--no-guard` run. Prints the `GuardInfo` JSON; exit 1 on an error.
+fn run_guard_cli(args: &Args, off: bool) -> ExitCode {
+    let hooks = os::guard_hooks();
+    let paths = guard_paths(args);
+    let policy = if off {
+        None
+    } else {
+        match PolicyStore::new(&args.policy).load() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("rp-coded: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    };
+    let info = guard::apply(policy.as_ref(), &hooks, &paths);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".into())
+    );
+    if info.last_error.is_some() {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn main() -> ExitCode {
@@ -1446,6 +2007,9 @@ fn main() -> ExitCode {
         print!("{}", devices::check_devices_report());
         return ExitCode::SUCCESS;
     }
+    if args.guard_apply || args.guard_off {
+        return run_guard_cli(&args, args.guard_off);
+    }
     run(args)
 }
 
@@ -1463,6 +2027,7 @@ mod tests {
     struct TestServer {
         socket: PathBuf,
         daemon: Arc<Daemon>,
+        guard_os: Arc<guard::tests::FakeOs>,
         _dir: tempfile::TempDir,
     }
 
@@ -1480,6 +2045,7 @@ mod tests {
             }
             let engine =
                 LockEngine::new(Box::new(source.clone())).with_wall_clock(|| 1_700_000_000_000);
+            let guard_os = Arc::new(guard::tests::FakeOs::default());
             let daemon = Arc::new(
                 Daemon::new(Box::new(source), Box::new(injector), &policy_path)
                     .with_engine(engine)
@@ -1491,6 +2057,15 @@ mod tests {
                             argv: Vec::new(),
                             suppressed: true,
                         },
+                    )
+                    .with_guard(
+                        guard_os.hooks(),
+                        GuardPaths {
+                            profile_dir: dir.path().join("apparmor.d"),
+                            state_file: dir.path().join("guard-state.json"),
+                            app_exec: guard::DEFAULT_APP_EXEC.to_string(),
+                            daemon_version: VERSION.to_string(),
+                        },
                     ),
             );
             let listener = bind_socket(&socket).unwrap();
@@ -1500,6 +2075,7 @@ mod tests {
             TestServer {
                 socket,
                 daemon,
+                guard_os,
                 _dir: dir,
             }
         }
@@ -1540,6 +2116,13 @@ mod tests {
         fn send(&mut self, req: Value) -> Value {
             self.send_raw(&req.to_string())
         }
+
+        /// The next line the daemon pushes (a subscribed event).
+        fn next_line(&mut self) -> Value {
+            let mut out = String::new();
+            self.reader.read_line(&mut out).unwrap();
+            serde_json::from_str(&out).unwrap_or_else(|e| panic!("bad line {out:?}: {e}"))
+        }
     }
 
     fn fake_devices() -> FakeSource {
@@ -1559,7 +2142,7 @@ mod tests {
 
         assert_eq!(
             c.send(json!({"op":"status"})),
-            json!({"ok":true,"op":"status","locked":null,"keepalive":{"registered":false,"relaunches":0,"allowQuit":true},"install":{"systemInstall":false,"daemonVersion":VERSION}})
+            json!({"ok":true,"op":"status","locked":null,"keepalive":{"registered":false,"relaunches":0,"allowQuit":true},"install":{"systemInstall":false,"daemonVersion":VERSION},"guard":{"available":false,"mode":"off","loaded":[],"users":[],"residual":[]}})
         );
 
         let lock = c.send(json!({"op":"lock","durationMs":30000,"reason":"surprise"}));
@@ -2288,6 +2871,7 @@ mod tests {
         let server = TestServer {
             socket,
             daemon,
+            guard_os: Arc::new(guard::tests::FakeOs::default()),
             _dir: dir,
         };
         let mut c = server.connect();
@@ -2472,6 +3056,203 @@ mod tests {
                 .version,
             "0.5.0"
         );
+    }
+
+    #[test]
+    fn guard_apply_status_and_policy_change_over_the_socket() {
+        let policy = r#"{"version":1,"app":{"users":["work"]},"guard":{"mode":"audit"}}"#;
+        let server = TestServer::start(fake_devices(), FakeInjector::default(), Some(policy));
+        let os = server.guard_os.clone();
+        *os.available.lock().unwrap() = true;
+        os.existing.lock().unwrap().extend(
+            [
+                "/usr/lib/sddm/sddm-helper",
+                "/usr/bin/noctalia",
+                "/usr/bin/Hyprland",
+            ]
+            .map(String::from),
+        );
+        os.files.lock().unwrap().insert(
+            PathBuf::from("/etc/pam.d/system-login"),
+            "session optional pam_apparmor.so order=user,group,default # rp-code session guard\n"
+                .into(),
+        );
+        let mut c = server.connect();
+        // Nothing engaged yet: status reports the policy's mode, nothing loaded, and the LSM.
+        let st = c.send(json!({"op":"status"}));
+        assert_eq!(st["guard"]["mode"], "audit");
+        assert_eq!(st["guard"]["loaded"], json!([]));
+        assert_eq!(st["guard"]["available"], true);
+        let gs = c.send(json!({"op":"guard-status"}));
+        assert_eq!(gs["ok"], true);
+        assert_eq!(
+            gs["guard"]["mode"], "audit",
+            "the policy says audit; nothing loaded"
+        );
+        assert!(gs["guard"]["residual"][0]
+            .as_str()
+            .unwrap()
+            .contains("guard-apply is pending"));
+
+        let applied = c.send(json!({"op":"guard-apply"}));
+        assert_eq!(applied["ok"], true);
+        assert_eq!(applied["op"], "guard-apply");
+        assert_eq!(applied["guard"]["mode"], "audit");
+        assert_eq!(applied["guard"]["users"], json!(["work"]));
+        assert_eq!(
+            applied["guard"]["loaded"],
+            json!([
+                "rp-code-session",
+                "rp-code-app",
+                "rp-code-shell",
+                "rp-code-compositor",
+                "rp-code-login"
+            ])
+        );
+        assert_eq!(applied["guard"]["pamConfigured"], true);
+        assert_eq!(applied["guard"]["shell"], "noctalia");
+        assert!(applied["guard"].get("lastError").is_none(), "{applied}");
+        assert_eq!(
+            os.parser_calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|c| c.0)
+                .collect::<Vec<_>>(),
+            vec![ParserOp::Check, ParserOp::Replace]
+        );
+        assert_eq!(
+            c.send(json!({"op":"status"}))["guard"]["loaded"]
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
+        assert!(server.daemon.guard_engaged());
+
+        // The policy file changes to enforce: the ticker's stamp check re-applies.
+        let path = server.daemon.policy().path().to_path_buf();
+        thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(
+            &path,
+            r#"{"version":1,"app":{"users":["work"]},"guard":{"mode":"enforce"}}"#,
+        )
+        .unwrap();
+        server.daemon.guard_tick();
+        assert_eq!(
+            c.send(json!({"op":"guard-status"}))["guard"]["mode"],
+            "enforce"
+        );
+        let session = os
+            .files
+            .lock()
+            .unwrap()
+            .get(
+                &server
+                    .daemon
+                    .guard_paths
+                    .profile_dir
+                    .join("rp-code-session"),
+            )
+            .cloned()
+            .unwrap();
+        assert!(session.contains("audit deny"));
+
+        // mode off → unloaded; a broken policy keeps whatever is engaged and says why.
+        fs::write(
+            &path,
+            r#"{"version":1,"app":{"users":["work"]},"guard":{"mode":"off"}}"#,
+        )
+        .unwrap();
+        let off = c.send(json!({"op":"guard-apply"}));
+        assert_eq!(off["guard"]["mode"], "off");
+        assert_eq!(off["guard"]["loaded"], json!([]));
+        assert_eq!(
+            os.parser_calls.lock().unwrap().last().unwrap().0,
+            ParserOp::Remove
+        );
+        fs::write(&path, "{").unwrap();
+        let broken = c.send(json!({"op":"guard-apply"}));
+        assert_eq!(broken["ok"], true);
+        assert!(broken["guard"]["lastError"]
+            .as_str()
+            .unwrap()
+            .contains("policy file invalid"));
+    }
+
+    #[test]
+    fn subscribe_receives_pushed_guard_attempts_rate_limited() {
+        let server = TestServer::start(fake_devices(), FakeInjector::default(), None);
+        let mut c = server.connect();
+        let mut other = server.connect();
+        assert_eq!(
+            c.send(json!({"op":"subscribe","events":["guard-attempt","weather","guard-attempt"]})),
+            json!({"ok":true,"op":"subscribe","events":["guard-attempt"]})
+        );
+        assert_eq!(server.daemon.subscriber_count(), 1);
+        let attempt = |target: &str| guard::GuardAttempt {
+            kind: guard::AttemptKind::Ipc,
+            target: target.into(),
+            command: "hyprctl".into(),
+            pid: 7,
+            blocked: false,
+            profile: "rp-code-session".into(),
+            operation: "connect".into(),
+            requested: Some("wr".into()),
+        };
+        let t0 = Instant::now();
+        assert!(server.daemon.report_attempt(
+            attempt("/run/user/1000/hypr/x/.socket.sock"),
+            t0,
+            "2026-09-14T12:00:00.000Z".into()
+        ));
+        let ev = c.next_line();
+        assert_eq!(ev["ev"], "guard-attempt");
+        assert_eq!(ev["at"], "2026-09-14T12:00:00.000Z");
+        assert_eq!(ev["kind"], "ipc");
+        assert_eq!(ev["target"], "/run/user/1000/hypr/x/.socket.sock");
+        assert_eq!(ev["command"], "hyprctl");
+        assert_eq!(ev["blocked"], false);
+        // Same target within 10 s: dropped; another target: pushed. Requests still work in between.
+        assert!(!server.daemon.report_attempt(
+            attempt("/run/user/1000/hypr/x/.socket.sock"),
+            t0 + std::time::Duration::from_secs(3),
+            "t".into()
+        ));
+        assert_eq!(c.send(json!({"op":"status"}))["op"], "status");
+        assert!(server.daemon.report_attempt(
+            attempt("/run/user/1000/noctalia-wayland-1.sock"),
+            t0 + std::time::Duration::from_secs(3),
+            "t2".into()
+        ));
+        assert_eq!(
+            c.next_line()["target"],
+            "/run/user/1000/noctalia-wayland-1.sock"
+        );
+        // The unsubscribed connection saw nothing (its next request answers first).
+        assert_eq!(other.send(json!({"op":"status"}))["op"], "status");
+        // An empty list unsubscribes; a dropped connection is forgotten.
+        assert_eq!(
+            c.send(json!({"op":"subscribe","events":[]}))["events"],
+            json!([])
+        );
+        assert_eq!(server.daemon.subscriber_count(), 0);
+        c.send(json!({"op":"subscribe","events":["guard-attempt"]}));
+        assert_eq!(server.daemon.subscriber_count(), 1);
+        drop(c);
+        for _ in 0..50 {
+            if server.daemon.subscriber_count() == 0 {
+                break;
+            }
+            thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(server.daemon.subscriber_count(), 0);
+        // Without a socket (unit-level ctx) subscribe is INVALID.
+        let mut ctx = ConnCtx::test(1000, 1);
+        assert!(matches!(
+            server.daemon.handle(Request::Subscribe { events: vec!["guard-attempt".into()] }, &mut ctx),
+            Response::Err(e) if e.code == ErrorCode::Invalid
+        ));
     }
 
     #[test]

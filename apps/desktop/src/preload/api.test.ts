@@ -50,6 +50,8 @@ describe('buildApi', () => {
     expect(invokeChannels()).toContain('system:createPolicy');
     expect(invokeChannels()).toContain('prompts:pending');
     expect(invokeChannels()).toContain('system:policyTemplate');
+    expect(invokeChannels()).toContain('system:guardApply');
+    expect(invokeChannels()).toContain('system:guardAttempts');
     expect(invokeChannels()).toContain('sandbox:run');
     expect(invokeChannels()).toContain('sandbox:cancel');
     expect(await api.system.createPolicy('{"version":1}')).toBe('result of system:createPolicy');

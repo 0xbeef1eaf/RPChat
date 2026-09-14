@@ -56,7 +56,8 @@ export type HostEventName =
   | 'routine-changed'    // data: { from, to, label? }
   | 'browser-navigated'  // data: { tabId, url, title }   a browser tab finished loading a page (needs the browser extension)
   | 'media-clicked'      // data: { mediaId, asset, packId, kind }          the user clicked a shown image/video overlay
-  | 'media-closed';      // data: { mediaId, asset, packId, kind, reason }  a media item went away (reason: MediaCloseReason)
+  | 'media-closed'       // data: { mediaId, asset, packId, kind, reason }  a media item went away (reason: MediaCloseReason)
+  | 'guard-attempt';     // data: GuardAttempt { kind, target, command, pid, blocked, … }  the session guard logged/blocked an attempt (Linux, rp-coded)
 
 /** Subscribable event names: host events plus character-raised `custom:<name>` events. */
 export type EventName = HostEventName | `custom:${string}`;

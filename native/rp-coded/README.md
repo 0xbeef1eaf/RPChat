@@ -8,7 +8,10 @@ loosened from the app. When that policy says the app may not be quit (`app.allow
 it also **relaunches the app** in the user's session after a kill or crash, and for a **system
 install** (`/opt/rp-code`) it **applies app updates** the user downloaded — verified, extracted
 as the user, swapped in as root — and updates itself from the same bundle. The app talks to it
-over a group-restricted unix socket.
+over a group-restricted unix socket. With a `guard` block in the policy it also runs the
+**session guard**: AppArmor profiles, generated from the policy, that confine the listed users'
+login sessions so their own terminals and scripts cannot reach the compositor/shell IPC, edit
+the wallpaper config or kill rp-code — and it reports every attempt to the app.
 
 Spec: `docs/spec/system.md`. User guide: `docs/system-integration.md`. Wire contract:
 `packages/shared/src/system.ts` (`DaemonRequest` / `DaemonResponse` / `PolicyFile`).
@@ -17,8 +20,9 @@ Spec: `docs/spec/system.md`. User guide: `docs/system-integration.md`. Wire cont
 
 ```sh
 cargo build --release          # → target/release/rp-coded (no system libraries needed)
-cargo test                     # 76 tests, all run without /dev/input or /dev/uinput (the chown/swap
-                               # parts of the update tests need root and are skipped otherwise)
+cargo test                     # 89 tests, all run without /dev/input or /dev/uinput (the chown/swap
+                               # parts of the update tests need root and are skipped otherwise; the
+                               # generated AppArmor profiles go through apparmor_parser -Q when installed)
 cargo clippy --all-targets
 pnpm run build:daemon          # same build, from the monorepo root
 ./target/release/rp-coded --check-devices
@@ -37,6 +41,8 @@ running daemon).
 sudo native/rp-coded/install.sh --user "$USER" --app-bin /path/to/rp-code.AppImage [--autostart xdg|systemd|none] [--policy-template] [--no-system-install]
 sudo native/rp-coded/install.sh --rollback        # system install: previous ⇄ current
 sudo native/rp-coded/install.sh --remove          # system install: delete /opt/rp-code/{current,previous,versions.json}
+sudo native/rp-coded/install.sh --guard           # session guard: pam_apparmor line + rp-coded --guard-apply
+sudo native/rp-coded/install.sh --no-guard        # remove the PAM line, unload the profiles
 sudo native/rp-coded/install.sh --uninstall --user "$USER"
 ./install.sh --dry-run ...      # print what would happen, no root needed
 sudo scripts/install-smoke.sh   # the whole thing against a scratch --prefix with a fake AppImage
@@ -56,8 +62,10 @@ run `sudo squashfs-root/resources/system/install.sh --app-bin "$(readlink -f rp-
 
 ```
 rp-coded [--socket <path>] [--policy <path>] [--sessions-dir <path>] [--install-root <path>]
-         [--system-prefix <path>] [--no-restart] [--no-uinput] [--log-level error|warn|info|debug]
+         [--system-prefix <path>] [--profile-dir <path>] [--guard-state <path>]
+         [--no-restart] [--no-uinput] [--log-level error|warn|info|debug]
 rp-coded --check-devices
+rp-coded --guard-apply | --guard-off [--policy <path>] [--profile-dir <path>] [--guard-state <path>]
 rp-coded --help | --version
 ```
 
@@ -72,6 +80,12 @@ rp-coded --help | --version
   `versions.json`); default `/opt/rp-code`. `--system-prefix` (env `RP_CODED_SYSTEM_PREFIX`) is
   handed to `install.sh --prefix` when the daemon refreshes its own files after an update, and
   `--no-restart` (env `RP_CODED_NO_RESTART=1`) makes it log instead of restarting — both for tests.
+- `--profile-dir` (env `RP_CODED_PROFILE_DIR`): where the session-guard AppArmor profiles are
+  written, default `/etc/apparmor.d`; `--guard-state` (env `RP_CODED_GUARD_STATE`): the guard
+  state file, default `/etc/rp-code/guard-state.json`.
+- `--guard-apply` / `--guard-off`: one engage (from the policy) or unload of the session guard
+  from the command line — what `install.sh --guard`/`--no-guard` run. Prints the `GuardInfo`
+  JSON; exit 1 when it reports an error.
 - `--check-devices`: lists the keyboards/pointers it can open, whether `/dev/uinput` is
   writable, and the screen size it would use. Exit 0 even with no devices.
 - Logs go to stderr (`rp-coded [level] message`), i.e. the journal under systemd. Every lock
@@ -102,9 +116,21 @@ created it. Unknown fields in requests are ignored; a malformed line gets
 | `{ "op": "register", "exec", "args", "cwd", "env" }` | `{ "ok": true, "op": "register" }` — keepalive registration on this connection (see below) |
 | `{ "op": "unregister" }` | `{ "ok": true, "op": "unregister" }` — forget it (also when nothing was registered) |
 | `{ "op": "apply-update", "file", "version", "sha512" }` | `{ "ok": true, "op": "apply-update", "version", "restartDaemon" }` — system install: verify, extract as the user, swap in, self-update (see below; may take a minute) |
+| `{ "op": "guard-apply" }` | `{ "ok": true, "op": "guard-apply", "guard": GuardInfo }` — session guard: (re)generate and load the profiles from the policy now (see below) |
+| `{ "op": "guard-status" }` | `{ "ok": true, "op": "guard-status", "guard": GuardInfo }` — what is engaged, without touching anything |
+| `{ "op": "subscribe", "events": ["guard-attempt"] }` | `{ "ok": true, "op": "subscribe", "events": [...] }` — receive pushed `{ "ev": … }` lines on this connection (see below); `[]` unsubscribes |
 
-`status` also carries `"keepalive": { "registered", "relaunches", "allowQuit" }` and
-`"install": { "systemInstall", "current"?, "previous"?, "daemonVersion" }`.
+`status` also carries `"keepalive": { "registered", "relaunches", "allowQuit" }`,
+`"install": { "systemInstall", "current"?, "previous"?, "daemonVersion" }` and
+`"guard": GuardInfo` = `{ "available", "mode", "loaded", "users", "residual", "pamConfigured"?,
+"shell"?, "compositor"?, "appliedAt"?, "lastError"? }`.
+
+**Pushed events** (the only lines the daemon writes without a request): after `subscribe`, a
+connection receives `{ "ev": "guard-attempt", "at", "kind": "ipc"|"config"|"signal"|"ptrace"|"exec",
+"target", "command", "pid", "blocked", "profile", "operation", "requested"? }` for every AppArmor
+audit record about an `rp-code-*` profile (one per target every 10 s). Clients tell them apart
+from responses by the `ev` key; they may arrive between a request and its response but never
+inside a line.
 
 `until` is RFC 3339 UTC with milliseconds (`2026-01-02T03:04:05.678Z`), the same shape as
 `Date.prototype.toISOString()`. `devices` is `"keyboard"`, `"mouse"` or `"both"` (default).
@@ -122,6 +148,21 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 | `EXISTS` | `set-policy` while something (file, symlink, directory) already exists at the policy path; only root can change it |
 
 ### Semantics the app relies on
+
+- **Session guard** (`policy.guard`, `docs/system-integration.md` "Session guard"): at start,
+  whenever the policy file changes (checked every ~5 s) and on `guard-apply`, the daemon renders
+  `/etc/apparmor.d/rp-code-{session,app,shell,compositor,login}` from the policy, the shell/
+  compositor table, the login helpers and binaries present, and the sockets discovered from
+  `/proc/net/unix` + `/proc/<pid>/fd` of the listed users' shell/compositor processes (cached in
+  `/etc/rp-code/guard-state.json`), validates them with `apparmor_parser -Q -K`, loads them with
+  `-r -K` and records the result; `mode: off` unloads (`-R`) and removes the files. `available`
+  is false without `/sys/kernel/security/apparmor`, in which case nothing is written and
+  `lastError` says so. `pamConfigured` reports the `pam_apparmor.so` line in
+  `/etc/pam.d/system-login` or `common-session` (the installer's `--guard` adds it; the daemon
+  never edits PAM). `residual` lists the documented gaps for this configuration. Once something
+  is loaded, the audit tail (`journalctl -f -o json _TRANSPORT=kernel + _TRANSPORT=audit`, else
+  `/dev/kmsg`) turns `apparmor="DENIED|ALLOWED|AUDIT"` records with `profile="rp-code-…"` into
+  `guard-attempt` events (`blocked` only for `DENIED`, i.e. enforce mode).
 
 - **Lock**: `durationMs` is rounded and clamped to `[1000, inputLock.maxDurationMs]` (default max
   300 000). A `lock` while locked replaces the deadline and device class (devices no longer
@@ -207,14 +248,15 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 |---|---|
 | `src/main.rs` | CLI, socket server (one thread per connection, `ConnCtx` with peer credentials and registration), ticker thread (lock timers + due relaunches), signal thread, keepalive OS glue behind `KeepaliveHooks` (`/proc`, logind, getpwuid, `Command::spawn` + reaper), socket-level and pipeline tests with fakes |
 | `src/protocol.rs` | serde types mirroring `DaemonRequest`/`DaemonResponse`, `iso_millis`, round-trip tests for every op and error code |
-| `src/policy.rs` | `PolicyFile` parsing/validation, `LockLimits` defaults and clamping, `AppRules` (`app.allowQuit`/`users`), mtime/size-cached `PolicyStore` |
+| `src/policy.rs` | `PolicyFile` parsing/validation, `LockLimits` defaults and clamping, `AppRules` (`app.allowQuit`/`users`), `GuardRules` (`guard`), mtime/size-cached `PolicyStore` |
+| `src/guard.rs` | Session guard: shell/compositor table, profile rendering (`render`), audit-line parsing, per-target rate limiting, `/proc` discovery parsing and socket-path generalisation, `GuardState` file, `apply`/`current_info` behind `GuardHooks` (fakes in tests, `apparmor_parser -Q` when installed) |
 | `src/keepalive.rs` | Pure relaunch logic: registration validation, the gate (policy, users, active session, process), `RelaunchTracker` backoff/give-up, logind session-file and `loginctl` parsing, `command_spec`/`build_command`; all tested |
 | `src/sysinstall.rs` | System install: `versions.json`, semver + downgrade rule, SHA-512 decoding, tree checks/normalisation, atomic swap, `apply_update` behind injectable `ApplyHooks` (home lookup, extraction as the user, bundled daemon version, `install.sh --refresh-daemon-files`); tested on a temp root with a fake AppImage |
 | `src/lock.rs` | `LockEngine` state machine (grab, timer, emergency chord, hot-plug, device classes) behind `DeviceSource`/`GrabbedDevice`; fakes and tests |
 | `src/inject.rs` | US keymap, `plan_text`, `parse_combo`, `ScreenSize` clamping, `Injector` trait, `NullInjector`, `FakeInjector` |
 | `src/devices.rs` | evdev `DeviceSource`, capability classification, DRM screen size, uinput `Injector`, `--check-devices` report |
 | `dist/` | `rp-coded.service`, `70-rp-code.rules`, `rp-code.conf`, `policy.example.json`, `POLICY.md`, `rp-code-autostart.desktop`, `rp-code.service` (user unit) |
-| `install.sh` | Idempotent installer / uninstaller, system install (`--system-install`, `--rollback`, `--remove`), `--refresh-daemon-files`, `--prefix` for tests (see the docs; `scripts/install-smoke.sh`) |
+| `install.sh` | Idempotent installer / uninstaller, system install (`--system-install`, `--rollback`, `--remove`), `--refresh-daemon-files`, session guard (`--guard`/`--no-guard`: PAM line + `--guard-apply`/`--guard-off`), `--prefix` for tests (see the docs; `scripts/install-smoke.sh`) |
 
 ## Security model
 
@@ -235,10 +277,14 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 - Relaunching (`app.allowQuit: false`) only ever runs what a non-root client registered, as
   that client's uid/gid with its own whitelisted environment; the daemon never keeps root in
   the child and only relaunches users listed in `app.users` who own the active session.
+- The session guard confines the listed users, never root: root (or the user with `sudo`) can
+  unload the profiles or change the policy at any time, and the guarded session keeps
+  `capability mac_admin` so a TTY login plus `sudo` is always a way out. The daemon writes only
+  its own `rp-code-*` profiles and never edits PAM (the installer does, with a marker line).
 - The systemd unit runs with `NoNewPrivileges`, read-only `/usr` and `/etc` (except
-  `/etc/rp-code`, `/opt/rp-code` and the daemon's own file locations it refreshes after a
-  self-update), kernel/cgroup protection and a capability bounding set of chown +
-  setuid/setgid. Because a relaunched app is a child of the service and inherits its sandbox,
+  `/etc/rp-code`, `/etc/apparmor.d`, `/opt/rp-code` and the daemon's own file locations it
+  refreshes after a self-update), kernel/cgroup protection and a capability bounding set of chown +
+  setuid/setgid + `mac_admin` (loading AppArmor policy). Because a relaunched app is a child of the service and inherits its sandbox,
   the unit does **not** use `ProtectHome`, `PrivateTmp`, a system-call filter,
   `MemoryDenyWriteExecute`, `RestrictNamespaces` or a closed device policy (a desktop app needs
   `$HOME`, `/tmp/.X11-unix`, JIT, Chromium's namespace sandbox, GPU and audio devices), and it

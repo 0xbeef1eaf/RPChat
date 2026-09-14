@@ -4,11 +4,12 @@
  * 10 s timeout (`apply-update`: 5 min), reconnect on the next request after the socket drops.
  */
 import * as net from 'node:net';
-import type { DaemonRequest, DaemonResponse, DaemonStatus, PolicyFile, RpErrorCode } from '@rp/shared';
+import type { DaemonRequest, DaemonResponse, DaemonStatus, GuardInfo, PolicyFile, RpErrorCode } from '@rp/shared';
 import { DAEMON_SOCKET_PATH, RpError } from '@rp/shared';
 
 export type HelloResponse = Extract<DaemonResponse, { op: 'hello' }>;
 export type StatusResponse = Extract<DaemonResponse, { op: 'status' }>;
+export type GuardResponse = Extract<DaemonResponse, { op: 'guard-apply' | 'guard-status' }>;
 export type SetPolicyResponse = Extract<DaemonResponse, { op: 'set-policy' }>;
 export type ApplyUpdateResponse = Extract<DaemonResponse, { op: 'apply-update' }>;
 
@@ -131,6 +132,7 @@ export class DaemonClient {
       const out: DaemonStatus = { connected: true, version: hello.version, socketPath: this.socketPath, devices: hello.devices, locked: status.locked };
       if (status.keepalive) out.keepalive = status.keepalive;
       if (status.install) out.install = status.install;
+      if (status.guard) out.guard = status.guard;
       return out;
     } catch (err) {
       return { connected: false, socketPath: this.socketPath, error: (err as Error).message };
@@ -149,6 +151,24 @@ export class DaemonClient {
       return { version: res.version, restartDaemon: res.restartDaemon };
     } catch (err) {
       throw toRpError(err, 'apply-update');
+    }
+  }
+
+  /** Session guard: (re)generate and load the profiles from the policy now. Daemon errors become `RpError`s like the other ops. */
+  async guardApply(): Promise<GuardInfo> {
+    try {
+      return (await this.request<GuardResponse>({ op: 'guard-apply' })).guard;
+    } catch (err) {
+      throw toRpError(err, 'guard-apply');
+    }
+  }
+
+  /** Session guard: what the daemon has engaged, without touching anything. */
+  async guardStatus(): Promise<GuardInfo> {
+    try {
+      return (await this.request<GuardResponse>({ op: 'guard-status' })).guard;
+    } catch (err) {
+      throw toRpError(err, 'guard-status');
     }
   }
 

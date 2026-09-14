@@ -259,7 +259,10 @@ interface CalendarEvent {
  * (a browser tab finished loading; filter { url?, title? } substrings; needs the browser extension);
  * 'media-clicked' { mediaId, asset, packId, kind } (the user clicked an image/video you showed;
  * filter { mediaId? } or { asset? }); 'media-closed' { mediaId, asset, packId, kind, reason } (an item
- * went away: reason 'click' | 'timeout' | 'ended' | 'api' | 'error'; filter { mediaId?, asset?, reason? }).
+ * went away: reason 'click' | 'timeout' | 'ended' | 'api' | 'error'; filter { mediaId?, asset?, reason? });
+ * 'guard-attempt' { kind: 'ipc' | 'config' | 'signal' | 'ptrace' | 'exec', target, command, pid, blocked } (the
+ * session guard on Linux saw the user's own terminal, keybind or picker try to reach the compositor/shell IPC,
+ * edit the wallpaper config or kill/trace rp-code; blocked only in enforce mode; filter { kind?, target?, command?, blocked? }).
  */
 type HostEventName =
   | 'user-idle'
@@ -277,7 +280,8 @@ type HostEventName =
   | 'routine-changed'
   | 'browser-navigated'
   | 'media-clicked'
-  | 'media-closed';
+  | 'media-closed'
+  | 'guard-attempt';
 
 /** A host event or one of your own custom events ('custom:<name>', raised with sdk.events.emit()). */
 type EventName = HostEventName | \`custom:\${string}\`;

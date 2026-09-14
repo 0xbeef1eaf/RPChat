@@ -53,6 +53,26 @@ describe('defaultTemplates', () => {
     expect(defaultTemplates('linux', hypr, () => true)).not.toHaveProperty('inputLock');
   });
 
+  it('linux on Wayland prefers noctalia (set and read templates), also under Hyprland', () => {
+    const wl = { WAYLAND_DISPLAY: 'wayland-1' } as NodeJS.ProcessEnv;
+    const t = defaultTemplates('linux', wl, (n) => n === 'noctalia' || n === 'swww');
+    expect(t.wallpaper.command).toBe('noctalia msg wallpaper-set {monitor} {file}');
+    expect(t.wallpaperGet.command).toBe('noctalia msg wallpaper-get {monitor}');
+    expect(defaultTemplates('linux', { HYPRLAND_INSTANCE_SIGNATURE: 'x' } as NodeJS.ProcessEnv, (n) => n === 'noctalia' || n === 'hyprpaper').wallpaper.command).toBe('noctalia msg wallpaper-set {monitor} {file}');
+    // Not on Wayland: noctalia is ignored; gsettings brings a read template, feh none.
+    expect(defaultTemplates('linux', {} as NodeJS.ProcessEnv, (n) => n === 'noctalia').wallpaper.command).toBe('');
+    expect(defaultTemplates('linux', {} as NodeJS.ProcessEnv, (n) => n === 'gsettings').wallpaperGet.command).toBe('gsettings get org.gnome.desktop.background picture-uri');
+    expect(defaultTemplates('linux', {} as NodeJS.ProcessEnv, (n) => n === 'feh').wallpaperGet.command).toBe('');
+    expect(defaultTemplates('linux', wl, (n) => n === 'swww').wallpaper.command).toBe('');
+    // A lone empty {monitor} token is dropped, so the single template serves both forms.
+    expect(buildArgv(t.wallpaper, { monitor: '', file: '/p/w.png' }, 'linux')).toEqual({ file: 'noctalia', args: ['msg', 'wallpaper-set', '/p/w.png'], verbatim: false });
+    expect(buildArgv(t.wallpaper, { monitor: 'DP-1', file: '/p/w.png' }, 'linux')).toEqual({ file: 'noctalia', args: ['msg', 'wallpaper-set', 'DP-1', '/p/w.png'], verbatim: false });
+    expect(buildArgv(t.wallpaperGet, { monitor: '' }, 'linux').args).toEqual(['msg', 'wallpaper-get']);
+    // Embedded placeholders and literal empty arguments are untouched.
+    expect(buildArgv({ command: 'hyprctl hyprpaper wallpaper "{monitor},{file}"' }, { monitor: '', file: '/p' }, 'linux').args).toEqual(['hyprpaper', 'wallpaper', ',/p']);
+    expect(buildArgv({ command: 'x "" {file}' }, { file: '/p' }, 'linux').args).toEqual(['', '/p']);
+  });
+
   it('linux without Hyprland uses gsettings then feh', () => {
     expect(defaultTemplates('linux', noEnv, (n) => n === 'gsettings').wallpaper.command).toContain('gsettings set org.gnome.desktop.background picture-uri');
     expect(defaultTemplates('linux', noEnv, (n) => n === 'feh').wallpaper.command).toBe('feh --bg-fill {file}');

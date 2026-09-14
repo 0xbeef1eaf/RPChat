@@ -134,7 +134,75 @@ echo "--- 8. --no-system-install keeps the AppImage as the launcher"
 check "menu entry uses the AppImage" grep -q "^Exec=$WORK/rp-code-0.2.0-linux-x86_64.AppImage %U" "$PREFIX/usr/local/share/applications/rp-code.desktop"
 check "system install untouched" grep -q "asar 0.1.0" "$OPT/current/resources/app.asar"
 
-echo "--- 9. remove, then uninstall"
+echo "--- 9. session guard: the pam_apparmor line lands after pam_env (Arch system-login fixture) and is idempotent"
+PAMD="$PREFIX/etc/pam.d"; mkdir -p "$PAMD"
+cat > "$PAMD/system-login" <<'EOF'
+#%PAM-1.0
+
+auth       required   pam_shells.so
+auth       requisite  pam_nologin.so
+auth       include    system-auth
+
+account    required   pam_access.so
+account    required   pam_nologin.so
+account    include    system-auth
+
+password   include    system-auth
+
+session    optional   pam_loginuid.so
+session    optional   pam_keyinit.so       force revoke
+session    include    system-auth
+session    optional   pam_lastlog2.so      silent
+session    optional   pam_motd.so
+session    optional   pam_mail.so          dir=/var/spool/mail standard quiet
+session    optional   pam_umask.so
+-session   optional   pam_systemd.so
+session    required   pam_env.so
+EOF
+cp "$PAMD/system-login" "$WORK/system-login.orig"
+"$INSTALL" --prefix "$PREFIX" --guard > "$WORK/guard-1.log" 2>&1 || { cat "$WORK/guard-1.log"; fail "guard 1"; }
+check "guard-only run" grep -q "session guard: engage" "$WORK/guard-1.log"
+check "line added" grep -q "added the pam_apparmor line" "$WORK/guard-1.log"
+check "exactly one marked line" test "$(grep -c '# rp-code session guard' "$PAMD/system-login")" = 1
+check "it is the last line, after pam_env" test "$(tail -n 1 "$PAMD/system-login")" = "session    optional   pam_apparmor.so      order=user,group,default # rp-code session guard"
+check "pam_env still precedes it" test "$(tail -n 2 "$PAMD/system-login" | head -n 1)" = "session    required   pam_env.so"
+check "everything else untouched" diff <(grep -v '# rp-code session guard' "$PAMD/system-login") "$WORK/system-login.orig"
+check "profile load skipped under --prefix" grep -q "profile load (no daemon binary, or --prefix)" "$WORK/guard-1.log"
+"$INSTALL" --prefix "$PREFIX" --guard > "$WORK/guard-2.log" 2>&1 || { cat "$WORK/guard-2.log"; fail "guard 2"; }
+check "second run is a no-op" grep -q "already has the pam_apparmor line" "$WORK/guard-2.log"
+check "still one line" test "$(grep -c 'pam_apparmor' "$PAMD/system-login")" = 1
+# A stale marked line (older wording) is replaced in place.
+sed -i 's|^session    optional   pam_apparmor.so.*$|session optional pam_apparmor.so order=group,default # rp-code session guard|' "$PAMD/system-login"
+"$INSTALL" --prefix "$PREFIX" --guard > "$WORK/guard-3.log" 2>&1 || { cat "$WORK/guard-3.log"; fail "guard 3"; }
+check "stale line updated" grep -q "updated the pam_apparmor line" "$WORK/guard-3.log"
+check "order=user,group,default restored" grep -q "order=user,group,default # rp-code session guard" "$PAMD/system-login"
+"$INSTALL" --prefix "$PREFIX" --no-guard > "$WORK/guard-4.log" 2>&1 || { cat "$WORK/guard-4.log"; fail "guard 4"; }
+check "line removed" diff "$PAMD/system-login" "$WORK/system-login.orig"
+"$INSTALL" --prefix "$PREFIX" --no-guard > "$WORK/guard-5.log" 2>&1 || { cat "$WORK/guard-5.log"; fail "guard 5"; }
+check "remove twice is a skip" grep -q "has no pam_apparmor line from rp-code" "$WORK/guard-5.log"
+# Without pam_env the line follows -session pam_systemd; without either, the last session line.
+grep -v pam_env.so "$WORK/system-login.orig" > "$PAMD/system-login"
+"$INSTALL" --prefix "$PREFIX" --guard > "$WORK/guard-6.log" 2>&1 || { cat "$WORK/guard-6.log"; fail "guard 6"; }
+check "after -session pam_systemd" test "$(grep -n 'pam_apparmor' "$PAMD/system-login" | cut -d: -f1)" = "$(( $(grep -n 'pam_systemd.so' "$PAMD/system-login" | cut -d: -f1) + 1 ))"
+grep -v 'pam_env.so\|pam_systemd.so' "$WORK/system-login.orig" > "$PAMD/system-login"
+"$INSTALL" --prefix "$PREFIX" --guard > "$WORK/guard-7.log" 2>&1 || { cat "$WORK/guard-7.log"; fail "guard 7"; }
+check "after the last session line" test "$(grep -n 'pam_apparmor' "$PAMD/system-login" | cut -d: -f1)" = "$(( $(grep -n 'pam_umask.so' "$PAMD/system-login" | cut -d: -f1) + 1 ))"
+# Debian layout: common-session, appended when it has no session lines rp-code knows.
+rm "$PAMD/system-login"; printf 'session [default=1] pam_permit.so\nsession requisite pam_deny.so\nsession required pam_permit.so\nsession optional pam_systemd.so\n' > "$PAMD/common-session"
+"$INSTALL" --prefix "$PREFIX" --guard > "$WORK/guard-8.log" 2>&1 || { cat "$WORK/guard-8.log"; fail "guard 8"; }
+check "common-session used" grep -q "common-session" "$WORK/guard-8.log"
+check "last line of common-session" test "$(tail -n 1 "$PAMD/common-session" | grep -c pam_apparmor)" = 1
+# A full install with the policy's guard.mode set engages too; the uninstall below removes the line.
+cp "$WORK/system-login.orig" "$PAMD/system-login"; rm "$PAMD/common-session"
+printf '{\n  "version": 1,\n  "app": { "users": ["%s"] },\n  "guard": {\n    "mode": "audit"\n  }\n}\n' "$USER_NAME" > "$PREFIX/etc/rp-code/policy.json"
+"$INSTALL" --prefix "$PREFIX" --app-bin "$WORK/rp-code-0.2.0-linux-x86_64.AppImage" --daemon-bin "$DAEMON" --autostart none > "$WORK/install-9.log" 2>&1 || { cat "$WORK/install-9.log"; fail "install 9"; }
+check "policy guard.mode engaged the guard" grep -q "added the pam_apparmor line" "$WORK/install-9.log"
+rm "$PREFIX/etc/rp-code/policy.json"
+"$INSTALL" --prefix "$PREFIX" --app-bin "$WORK/rp-code-0.2.0-linux-x86_64.AppImage" --daemon-bin "$DAEMON" --autostart none > "$WORK/install-10.log" 2>&1 || { cat "$WORK/install-10.log"; fail "install 10"; }
+check "without guard.mode the line is left alone" test "$(grep -c '# rp-code session guard' "$PAMD/system-login")" = 1
+check "and the step is skipped" grep -q "session guard (policy guard.mode is off" "$WORK/install-10.log"
+
+echo "--- 10. remove, then uninstall"
 "$INSTALL" --prefix "$PREFIX" --remove > "$WORK/remove.log" 2>&1 || { cat "$WORK/remove.log"; fail "remove"; }
 check "trees gone" test ! -e "$OPT/current" -a ! -e "$OPT/previous" -a ! -e "$OPT/versions.json"
 check "bin link gone" test ! -e "$PREFIX/usr/local/bin/rp-code" -a ! -L "$PREFIX/usr/local/bin/rp-code"
@@ -144,6 +212,7 @@ check "daemon dir gone" test ! -e "$PREFIX/usr/local/libexec/rp-code"
 check "unit gone" test ! -e "$PREFIX/etc/systemd/system/rp-coded.service"
 check "autostart gone" test ! -e "$PREFIX$USER_HOME/.config/autostart/rp-code.desktop"
 check "policy dir kept" test -d "$PREFIX/etc/rp-code"
+check "uninstall removed the pam_apparmor line" diff "$PAMD/system-login" "$WORK/system-login.orig"
 
 echo "install-smoke: all checks passed"
 if $CLEAN; then rm -rf "$WORK"; fi

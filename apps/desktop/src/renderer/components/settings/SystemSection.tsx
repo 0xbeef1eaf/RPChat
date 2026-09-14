@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { SystemIntegrationStatus } from '@rp/shared';
+import type { GuardAttemptRecord, SystemIntegrationStatus } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { formatDateTime } from '../../lib/format';
 import { refreshSettings, reportError, toast } from '../../store/actions';
@@ -17,6 +17,7 @@ export function SystemSection() {
   const [output, setOutput] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [policyDialog, setPolicyDialog] = useState(false);
+  const [auditLog, setAuditLog] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -61,6 +62,19 @@ export function SystemSection() {
     }
   };
 
+  const applyGuard = async () => {
+    setBusy(true);
+    try {
+      const next = await api().system.guardApply();
+      setStatus(next);
+      toast(next.guard.lastError ? 'error' : 'success', next.guard.lastError ? `Session guard: ${next.guard.lastError}` : `Session guard ${next.guard.mode}: ${next.guard.loaded.length} profile(s) loaded`);
+    } catch (err) {
+      reportError('Could not apply the session guard', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const copyPath = async () => {
     if (!installerPath) return;
     try {
@@ -92,7 +106,7 @@ export function SystemSection() {
   }
 
   const linux = status.platform === 'linux';
-  const { daemon, policy, udev, autostart, install: appInstall } = status;
+  const { daemon, policy, udev, autostart, install: appInstall, guard } = status;
   const reloginHint = udev.rulePresent && !udev.inGroup;
 
   return (
@@ -233,6 +247,45 @@ export function SystemSection() {
 
         <div className="card">
           <div className="row" style={{ marginBottom: 6 }}>
+            <h3 className="grow">Session guard</h3>
+            <span className={guardBadgeClass(guard)}>{guardBadge(guard)}</span>
+          </div>
+          <p className="muted small">{guardLine(guard)}</p>
+          {guard.lastError ? (
+            <div className="callout callout-danger small" style={{ marginTop: 8 }}>
+              {guard.lastError}
+            </div>
+          ) : null}
+          {guard.configured && guard.daemonSupportsGuard && guard.pamConfigured === false ? (
+            <div className="callout callout-warning small" style={{ marginTop: 8 }}>
+              The <code>pam_apparmor</code> session line is missing, so new logins are not confined. Run the installer below (it passes <code>--guard</code> while the policy has the
+              guard on).
+            </div>
+          ) : null}
+          {guard.residual.length > 0 ? (
+            <details className="small" style={{ marginTop: 8 }}>
+              <summary className="muted">What it cannot do ({guard.residual.length})</summary>
+              <ul className="muted">
+                {guard.residual.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+          <div className="row" style={{ marginTop: 8, gap: 8 }}>
+            <button type="button" className="btn btn-sm" onClick={() => setAuditLog(true)} disabled={!linux}>
+              Audit log…
+            </button>
+            {guard.configured && guard.daemonSupportsGuard ? (
+              <button type="button" className="btn btn-sm" onClick={applyGuard} disabled={busy || running}>
+                Apply now
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="row" style={{ marginBottom: 6 }}>
             <h3 className="grow">Device access</h3>
             <span className={udev.rulePresent && udev.inGroup ? 'badge badge-success' : 'badge'}>{udev.rulePresent && udev.inGroup ? 'ready' : 'not set up'}</span>
           </div>
@@ -309,6 +362,7 @@ export function SystemSection() {
         ) : null}
       </div>
 
+      {auditLog ? <GuardAuditDialog onClose={() => setAuditLog(false)} /> : null}
       {policyDialog ? (
         <CreatePolicyDialog
           path={policy.path ?? '/etc/rp-code/policy.json'}
@@ -366,6 +420,84 @@ export function SystemSection() {
         </Modal>
       ) : null}
     </div>
+  );
+}
+
+/** Pure: the Settings → System "Session guard" line (docs/system-integration.md "Session guard"). */
+export function guardLine(guard: SystemIntegrationStatus['guard']): string {
+  if (!guard.configured) return 'Off. The policy file has no guard block (guard.mode is off): the listed users\' sessions are not confined.';
+  if (!guard.daemonSupportsGuard) return `Session guard: ${guard.mode} in the policy, but ${guard.residual[0] ?? 'the daemon does not report it'}.`;
+  if (!guard.available) return `Session guard: ${guard.mode} in the policy, but unavailable: AppArmor is not active on this kernel (no /sys/kernel/security/apparmor).`;
+  const users = guard.users.length > 0 ? guard.users.join(', ') : 'nobody';
+  const what = [guard.shell ? `shell ${guard.shell}` : null, guard.compositor ? `compositor ${guard.compositor}` : null].filter(Boolean).join(', ');
+  if (guard.loaded.length === 0) return `Session guard: ${guard.mode} (AppArmor) — nothing loaded yet — users: ${users}.`;
+  return `Session guard: ${guard.mode} (AppArmor) — ${guard.loaded.length} profiles loaded — users: ${users}${what ? ` — ${what}` : ''}${guard.appliedAt ? ` — applied ${formatDateTime(guard.appliedAt)}` : ''}.`;
+}
+
+function guardBadge(guard: SystemIntegrationStatus['guard']): string {
+  if (!guard.configured) return 'off';
+  if (!guard.daemonSupportsGuard || !guard.available) return 'unavailable';
+  if (guard.lastError) return 'error';
+  return guard.loaded.length > 0 ? guard.mode : `${guard.mode} (pending)`;
+}
+
+function guardBadgeClass(guard: SystemIntegrationStatus['guard']): string {
+  if (!guard.configured) return 'badge';
+  if (!guard.daemonSupportsGuard || !guard.available || guard.lastError) return 'badge badge-warning';
+  return guard.mode === 'enforce' ? 'badge badge-accent' : 'badge badge-success';
+}
+
+/** Pure: one audit-log row. */
+export function guardAttemptLine(a: GuardAttemptRecord): string {
+  return `${a.blocked ? 'blocked' : 'logged'} ${a.kind} ${a.operation}${a.target ? ` on ${a.target}` : ''} by ${a.command || '?'} (pid ${a.pid}) under ${a.profile}`;
+}
+
+function GuardAuditDialog({ onClose }: { onClose: () => void }) {
+  const [rows, setRows] = useState<GuardAttemptRecord[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try {
+      setRows(await api().system.guardAttempts());
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err));
+      setRows([]);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  return (
+    <Modal title="Session guard: audit log" onClose={onClose} className="modal-wide">
+      <p className="muted small">
+        The last {rows?.length ?? 0} attempts the daemon reported since the app started (one per target every 10 s). In audit mode nothing is blocked; these are what
+        enforce mode would stop. The full log is in <code>journalctl -k</code> (<code>apparmor=</code> lines with <code>profile=&quot;rp-code-…&quot;</code>).
+      </p>
+      {error ? <div className="callout callout-danger small">{error}</div> : null}
+      {rows === null ? (
+        <div className="row muted small">
+          <span className="spinner" /> Loading…
+        </div>
+      ) : rows.length === 0 ? (
+        <p className="muted small">No attempts reported yet.</p>
+      ) : (
+        <ul className="list small mono">
+          {rows.map((a, i) => (
+            <li key={`${a.at}-${i}`}>
+              <span className="muted">{formatDateTime(a.at)}</span> {guardAttemptLine(a)}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="row" style={{ justifyContent: 'flex-end', marginTop: 12 }}>
+        <button type="button" className="btn btn-sm" onClick={load}>
+          Refresh
+        </button>
+        <button type="button" className="btn btn-sm" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Modal>
   );
 }
 

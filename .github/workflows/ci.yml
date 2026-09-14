@@ -36,12 +36,12 @@ jobs:
           workspaces: |
             native/overlay-wlr
             native/rp-coded
-      - name: Install system packages (helper build, Xvfb and nested Sway for smoke tests)
+      - name: Install system packages (helper build, Xvfb and nested Sway for smoke tests, apparmor_parser for the guard profiles)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libgtk-3-dev libgtk-layer-shell-dev libwebkit2gtk-4.1-dev pkg-config \
-            xvfb x11-apps xdotool imagemagick sway grim
+            xvfb x11-apps xdotool imagemagick sway grim apparmor
       - run: pnpm install --frozen-lockfile
       - name: Build packages and app (compiles and bundles the native helper)
         run: pnpm build

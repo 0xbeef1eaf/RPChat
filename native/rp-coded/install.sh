@@ -15,16 +15,24 @@
 # Usage:
 #   install.sh [--app-bin <path>] [--user <name>] [--autostart xdg|systemd|none]
 #              [--menu-entry yes|no] [--policy-template] [--daemon-bin <path>] [--dry-run]
-#              [--system-install | --no-system-install]
+#              [--system-install | --no-system-install] [--guard | --no-guard]
 #              [--browser-extension <id> --browser-update-url <url> [--browser-port <n>] [--browser-home <url>]
 #               [--browser-policy-dir <dir>]... [--browser-only]]
 #   install.sh --rollback [--dry-run]            swap /opt/rp-code/previous back to current
 #   install.sh --remove [--dry-run]              remove the system install (daemon stays)
 #   install.sh --refresh-daemon-files [--dry-run] reinstall the daemon binary/unit/udev files (no restart)
 #   install.sh --remove-browser-policy [--dry-run]
+#   install.sh --guard | --no-guard [--dry-run]   session guard: pam_apparmor line + profiles (docs/system-integration.md)
 #   install.sh --uninstall [--user <name>] [--dry-run]
 # Tests: --prefix <dir> relocates every system path under <dir> and skips groups/services.
 set -euo pipefail
+
+# Session guard (policy.guard): the pam_apparmor session line goes into the file that every
+# login path includes — Arch: system-login (sddm, login and sshd include it); Debian/Ubuntu:
+# common-session. Marked so it can be found, replaced and removed.
+PAM_FILES="/etc/pam.d/system-login /etc/pam.d/common-session"
+PAM_MARK="# rp-code session guard"
+PAM_LINE="session    optional   pam_apparmor.so      order=user,group,default $PAM_MARK"
 
 GROUP=rp-code
 LIBEXEC=/usr/local/libexec/rp-code
@@ -73,6 +81,11 @@ BROWSER_ONLY=false
 REMOVE_BROWSER_POLICY=false
 # auto: yes when --app-bin is an AppImage and the daemon is being installed.
 SYSTEM_INSTALL=auto
+# auto: engage when the daemon binary is installed and the policy file has guard.mode != off
+# (the app passes --guard when its policy says so); yes/no force it; only: just that step.
+GUARD=auto
+GUARD_ARG=""
+GUARD_ONLY=false
 ROLLBACK=false
 REMOVE_SYSTEM=false
 REFRESH_DAEMON=false
@@ -109,6 +122,8 @@ $2"; shift 2 ;;
     --remove-browser-policy) REMOVE_BROWSER_POLICY=true; shift ;;
     --system-install) SYSTEM_INSTALL=yes; shift ;;
     --no-system-install) SYSTEM_INSTALL=no; shift ;;
+    --guard) GUARD=yes; GUARD_ARG=yes; GUARD_ONLY=true; shift ;;
+    --no-guard) GUARD=no; GUARD_ARG=no; GUARD_ONLY=true; shift ;;
     --rollback) ROLLBACK=true; shift ;;
     --remove|--remove-system-install) REMOVE_SYSTEM=true; shift ;;
     --refresh-daemon-files) REFRESH_DAEMON=true; shift ;;
@@ -128,8 +143,12 @@ if [ -n "$PREFIX" ]; then
   UDEV_DST="$PREFIX$UDEV_DST"; MODULES_DST="$PREFIX$MODULES_DST"; POLICY_DIR="$PREFIX$POLICY_DIR"
   POLICY_DST="$POLICY_DIR/policy.json"; RUN_DIR="$PREFIX$RUN_DIR"; MENU_DST="$PREFIX$MENU_DST"
   ICON_DST="$PREFIX$ICON_DST"; INSTALL_ROOT="$PREFIX$INSTALL_ROOT"; BIN_LINK="$PREFIX$BIN_LINK"
+  PAM_FILES="$PREFIX/etc/pam.d/system-login $PREFIX/etc/pam.d/common-session"
   SYSTEM_CMDS=false
 fi
+# --guard/--no-guard together with the normal install flags run the whole install with the guard
+# forced; alone they run only the guard step.
+if $GUARD_ONLY && { [ -n "$APP_BIN" ] || [ -n "$TARGET_USER" ] || $POLICY_TEMPLATE || [ "$SYSTEM_INSTALL" != auto ] || [ -n "$DAEMON_BIN" ]; }; then GUARD_ONLY=false; fi
 case "$MENU_ENTRY" in yes|no) ;; *) echo "install.sh: --menu-entry must be yes or no" >&2; exit 64 ;; esac
 if [ -n "$BROWSER_EXT" ] || $BROWSER_ONLY; then
   case "$BROWSER_EXT" in
@@ -435,6 +454,95 @@ rollback_system_install() {
   note "restart rp-code to run it; the next update goes forward again"
 }
 
+# --- session guard helpers ----------------------------------------------------------------
+# The PAM file to edit: the first of PAM_FILES that exists.
+pam_file() { local f; for f in $PAM_FILES; do if [ -f "$f" ]; then echo "$f"; return 0; fi; done; return 1; }
+
+# pam_apparmor must run after pam_systemd_home (via the system-auth include) and pam_systemd:
+# insert the marked line as the LAST session line — after `session required pam_env.so` when
+# present, else after `-session optional pam_systemd.so`, else after the last session line,
+# else at the end. Idempotent: an existing marked line is kept when identical, replaced when not.
+pam_insert() { # pam_insert <file>
+  local f="$1" tmp
+  if grep -qF -- "$PAM_MARK" "$f"; then
+    if grep -qxF -- "$PAM_LINE" "$f"; then skip "$f already has the pam_apparmor line"; return 0; fi
+    if $DRY_RUN; then note "+ replace the marked line in $f"; ok "would update $f"; return 0; fi
+    tmp="$(mktemp "$f.XXXX")"
+    awk -v mark="$PAM_MARK" -v line="$PAM_LINE" 'index($0, mark) { print line; next } { print }' "$f" > "$tmp" && chmod --reference="$f" "$tmp" && mv -f "$tmp" "$f"
+    ok "updated the pam_apparmor line in $f"; return 0
+  fi
+  if $DRY_RUN; then note "+ add to $f: $PAM_LINE"; ok "would add the pam_apparmor line to $f"; return 0; fi
+  tmp="$(mktemp "$f.XXXX")"
+  awk -v line="$PAM_LINE" '
+    { lines[NR] = $0 }
+    $1 == "session" && $2 == "required" && $3 == "pam_env.so" { env = NR }
+    ($1 == "-session" || $1 == "session") && $3 == "pam_systemd.so" { systemd = NR }
+    $1 == "session" || $1 == "-session" { last = NR }
+    END {
+      at = env ? env : (systemd ? systemd : (last ? last : NR))
+      for (i = 1; i <= NR; i++) { print lines[i]; if (i == at) print line }
+      if (NR == 0) print line
+    }' "$f" > "$tmp" && chmod --reference="$f" "$tmp" && mv -f "$tmp" "$f"
+  ok "added the pam_apparmor line to $f (last session line)"
+}
+
+pam_remove() { # pam_remove <file>
+  local f="$1" tmp
+  if ! grep -qF -- "$PAM_MARK" "$f"; then skip "$f has no pam_apparmor line from rp-code"; return 0; fi
+  if $DRY_RUN; then note "+ remove the marked line from $f"; ok "would remove the pam_apparmor line from $f"; return 0; fi
+  tmp="$(mktemp "$f.XXXX")"
+  awk -v mark="$PAM_MARK" 'index($0, mark) { next } { print }' "$f" > "$tmp" && chmod --reference="$f" "$tmp" && mv -f "$tmp" "$f"
+  ok "removed the pam_apparmor line from $f"
+}
+
+# Where the pam_apparmor module would be (Arch: the apparmor package; Debian/Ubuntu: libpam-apparmor).
+have_pam_apparmor() {
+  local d
+  for d in /usr/lib/security /lib/security /usr/lib64/security /usr/lib/x86_64-linux-gnu/security /lib/x86_64-linux-gnu/security /usr/lib/aarch64-linux-gnu/security; do
+    [ -f "$d/pam_apparmor.so" ] && return 0
+  done
+  return 1
+}
+
+# guard.mode in the policy file, "off" when absent (a line-based read is enough: the file is
+# pretty JSON from the daemon or the template, one key per line).
+policy_guard_mode() {
+  [ -f "$POLICY_DST" ] || { echo off; return; }
+  awk '/"guard"[[:space:]]*:/ { inside = 1 } inside && /"mode"[[:space:]]*:/ { v = $0; sub(/^[^:]*:[[:space:]]*"/, "", v); sub(/".*$/, "", v); print v; exit }' "$POLICY_DST" | grep -E '^(off|audit|enforce)$' || echo off
+}
+
+# Engage: PAM line + `rp-coded --guard-apply` (writes and loads the profiles from the policy).
+guard_engage() {
+  local f
+  if [ ! -d /sys/kernel/security/apparmor ] && $SYSTEM_CMDS; then
+    warn "AppArmor is not active (/sys/kernel/security/apparmor missing): boot with lsm=...,apparmor and the apparmor package installed; the guard stays unavailable"
+  fi
+  if $SYSTEM_CMDS && ! have_pam_apparmor; then
+    warn "pam_apparmor.so not found: install it (Arch: part of the apparmor package; Debian/Ubuntu: libpam-apparmor) or sessions will not be confined"
+  fi
+  if f="$(pam_file)"; then pam_insert "$f"; else warn "no PAM file to edit (${PAM_FILES}); add manually: $PAM_LINE"; fi
+  if $SYSTEM_CMDS && [ -x "$DAEMON_DST" ]; then
+    if $DRY_RUN; then note "+ $DAEMON_DST --guard-apply"; else
+      if "$DAEMON_DST" --guard-apply | sed 's/^/       /'; then ok "session guard applied from $POLICY_DST"; else warn "rp-coded --guard-apply reported a problem (see above and journalctl -u rp-coded)"; fi
+    fi
+  else
+    skip "profile load (no daemon binary, or --prefix); the daemon applies the guard when it starts"
+  fi
+  note "the guard confines sessions opened after this point: log out and back in"
+}
+
+guard_disengage() {
+  local f
+  if f="$(pam_file)"; then pam_remove "$f"; else skip "no PAM file (${PAM_FILES})"; fi
+  if $SYSTEM_CMDS && [ -x "$DAEMON_DST" ]; then
+    if $DRY_RUN; then note "+ $DAEMON_DST --guard-off"; else
+      if "$DAEMON_DST" --guard-off | sed 's/^/       /'; then ok "session guard profiles unloaded"; else warn "rp-coded --guard-off reported a problem"; fi
+    fi
+  else
+    skip "profile unload (no daemon binary, or --prefix)"
+  fi
+}
+
 # --- browser policy helpers -----------------------------------------------------------------
 # Policy directories that should get (or lose) the file: the always-on ones plus every browser
 # that looks installed. Prints one directory per line.
@@ -512,6 +620,19 @@ if $BROWSER_ONLY; then
   exit 0
 fi
 
+if $GUARD_ONLY; then
+  if [ "$GUARD" = yes ]; then
+    echo "rp-code session guard: engage"
+    guard_engage
+    ok "session guard engaged"
+  else
+    echo "rp-code session guard: disengage"
+    guard_disengage
+    ok "session guard disengaged"
+  fi
+  exit 0
+fi
+
 if $ROLLBACK; then
   echo "rp-code system install: rollback"
   rollback_system_install
@@ -564,6 +685,7 @@ fi
 # =============================================================================================
 if $UNINSTALL; then
   echo "rp-code system integration: uninstall"
+  guard_disengage
   if $SYSTEM_CMDS && have systemctl; then
     if systemctl is-enabled rp-coded >/dev/null 2>&1 || systemctl is-active rp-coded >/dev/null 2>&1; then
       run systemctl disable --now rp-coded; ok "stopped and disabled rp-coded.service"
@@ -782,7 +904,21 @@ else
   skip "browser extension policy (pass --browser-extension/--browser-update-url, or use Settings → Browser in the app)"
 fi
 
-# 9. device check ----------------------------------------------------------------------------------
+# 9. session guard (policy.guard; docs/system-integration.md "Session guard") ---------------------
+if [ "$GUARD" = auto ]; then
+  if [ "$(policy_guard_mode)" != off ]; then GUARD=yes; else GUARD=no; fi
+fi
+if [ "$GUARD" = yes ]; then
+  guard_engage
+elif [ "$GUARD_ARG" = no ]; then
+  guard_disengage
+else
+  # Not asked for and not in the policy: a PAM line from an earlier run is left alone (a policy
+  # edited to mode: off unloads the profiles by itself); --no-guard removes it explicitly.
+  skip "session guard (policy guard.mode is off; set it to audit or pass --guard)"
+fi
+
+# 10. device check ---------------------------------------------------------------------------------
 if [ -x "$DAEMON_DST" ] && ! $DRY_RUN && $SYSTEM_CMDS; then
   echo "device check ($DAEMON_DST --check-devices):"
   "$DAEMON_DST" --check-devices 2>&1 | sed 's/^/       /' || true

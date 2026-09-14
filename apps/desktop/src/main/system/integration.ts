@@ -6,11 +6,56 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { AppSettings, DaemonStatus, PolicyFile, SystemInstallStatus, SystemIntegrationStatus } from '@rp/shared';
+import type { AppSettings, DaemonEvent, DaemonStatus, GuardAttemptRecord, GuardStatus, PolicyFile, SystemInstallStatus, SystemIntegrationStatus } from '@rp/shared';
 import { RpError, SYSTEM_GROUP, SYSTEM_INSTALL_DIR } from '@rp/shared';
 import type { DaemonClient } from './daemon-client.js';
 import type { PolicyWatcher } from './policy.js';
-import { parsePolicy } from './policy.js';
+import { guardMode, parsePolicy } from './policy.js';
+
+/** How many `guard-attempt` events the app keeps for Settings → System → Audit log. */
+export const GUARD_ATTEMPT_LOG_SIZE = 50;
+
+/**
+ * Pure: `SystemIntegrationStatus.guard` from the policy (what should be engaged) and the
+ * daemon's report (what is). Without a daemon that knows the guard, only the policy side is
+ * known and `available` is false.
+ */
+export function guardStatusOf(input: { policy: PolicyFile | null; daemon: DaemonStatus }): GuardStatus {
+  const mode = guardMode(input.policy);
+  const info = input.daemon.connected ? input.daemon.guard : undefined;
+  const users = input.policy?.app?.users ?? [];
+  if (!info) {
+    return {
+      configured: mode !== 'off',
+      daemonSupportsGuard: false,
+      available: false,
+      mode,
+      loaded: [],
+      users: [...users],
+      residual: mode === 'off' ? [] : [input.daemon.connected ? 'the connected daemon predates the session guard; run the installer once to update it' : 'the daemon is not connected; nothing is engaged'],
+    };
+  }
+  return { ...info, configured: mode !== 'off', daemonSupportsGuard: true };
+}
+
+/** A bounded, newest-first log of guard attempts (pure state; fed from the keepalive link's events). */
+export class GuardAttemptLog {
+  private readonly entries: GuardAttemptRecord[] = [];
+
+  constructor(private readonly size: number = GUARD_ATTEMPT_LOG_SIZE) {}
+
+  push(event: DaemonEvent): GuardAttemptRecord {
+    const { ev: _ev, ...rest } = event;
+    const record: GuardAttemptRecord = { ...rest };
+    this.entries.unshift(record);
+    if (this.entries.length > this.size) this.entries.length = this.size;
+    return record;
+  }
+
+  list(): GuardAttemptRecord[] {
+    return [...this.entries];
+  }
+}
 
 export const UDEV_RULE_PATH = '/etc/udev/rules.d/70-rp-code.rules';
 export const AUTOSTART_FILENAME = 'rp-code.desktop';
@@ -46,6 +91,8 @@ export interface SystemIntegrationDeps {
   run?: ProcessRunner;
   logger: Pick<Console, 'info' | 'warn' | 'debug'>;
   udevRulePath?: string;
+  /** The guard-attempt log the keepalive link feeds (`guardAttempts()`); a fresh one when absent. */
+  guardLog?: GuardAttemptLog;
 }
 
 /** Pure: the XDG autostart entry for the app. */
@@ -168,11 +215,13 @@ export class SystemIntegration {
   private readonly run: ProcessRunner;
   private readonly homeDir: string;
   private readonly udevRulePath: string;
+  readonly guardLog: GuardAttemptLog;
 
   constructor(private readonly deps: SystemIntegrationDeps) {
     this.run = deps.run ?? defaultRunner();
     this.homeDir = deps.homeDir ?? os.homedir();
     this.udevRulePath = deps.udevRulePath ?? UDEV_RULE_PATH;
+    this.guardLog = deps.guardLog ?? new GuardAttemptLog();
   }
 
   get autostartPath(): string {
@@ -273,7 +322,20 @@ export class SystemIntegration {
       autostart,
       installerAvailable: installer !== null,
       install: systemInstallStatus({ execPath: this.deps.execPath, dir: this.systemInstallDir, appImage: this.deps.appImage === true, daemon }),
+      guard: guardStatusOf({ policy: policyState.policy, daemon }),
     };
+  }
+
+  /** Session guard: ask the daemon to (re)generate and load the profiles now; resolves with the new status. */
+  async guardApply(): Promise<SystemIntegrationStatus> {
+    const info = await this.deps.daemon.guardApply();
+    this.deps.logger.info(`[system] session guard ${info.mode}: ${info.loaded.length > 0 ? `${info.loaded.join(', ')} loaded` : 'nothing loaded'}${info.lastError ? ` (${info.lastError})` : ''}`);
+    return this.status();
+  }
+
+  /** The last `GUARD_ATTEMPT_LOG_SIZE` guard attempts the daemon pushed, newest first. */
+  async guardAttempts(): Promise<GuardAttemptRecord[]> {
+    return this.guardLog.list();
   }
 
   get systemInstallDir(): string {
@@ -289,6 +351,9 @@ export class SystemIntegration {
     const installer = await this.stageInstaller();
     const args = [installer, '--app-bin', this.deps.appBin, '--user', this.userName(), '--autostart', options.autostart === false ? 'none' : 'xdg'];
     if (options.systemInstall === false) args.push('--no-system-install');
+    // The session guard needs the pam_apparmor line the installer adds: ask for it whenever the
+    // policy has the guard switched on (the installer also reads the policy itself).
+    if (guardMode((await this.deps.policy.current()).policy) !== 'off') args.push('--guard');
     this.deps.logger.info(`[system] pkexec ${args.join(' ')}`);
     let output = '';
     const collect = (chunk: string): void => {

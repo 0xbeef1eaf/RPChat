@@ -46,7 +46,90 @@ export interface PolicyFile {
    * session. An absent or empty `users` list means nobody is relaunched.
    */
   app?: { allowQuit?: boolean; users?: string[] };
+  /**
+   * The session guard (docs/system-integration.md "Session guard"): AppArmor confinement of the
+   * `app.users` login sessions so their own terminals, keybind scripts and pickers cannot reach
+   * the compositor's and shell's IPC sockets, write the wallpaper/shell config and state, or
+   * signal/trace rp-code — while rp-code itself may. `mode` other than `off` needs `app.users`.
+   */
+  guard?: GuardPolicy;
 }
+
+export type GuardMode = 'off' | 'audit' | 'enforce';
+export type GuardCompositorIpc = 'allow' | 'shell-only' | 'deny';
+export type GuardShell = 'auto' | 'noctalia' | 'quickshell' | 'hyprpaper' | 'swww' | 'none';
+
+export interface GuardPolicy {
+  /** `off` (default) unloads, `audit` logs every attempt without blocking, `enforce` blocks. */
+  mode?: GuardMode;
+  /** Signals and ptrace from the session to rp-code are guarded. Default true. */
+  protectApp?: boolean;
+  /** The shell's IPC socket and its config/state files are guarded. Default true. */
+  wallpaper?: boolean;
+  /** Who may reach the compositor's control socket. Default `shell-only`. */
+  compositorIpc?: GuardCompositorIpc;
+  /** Which shell table row applies. Default `auto` (first whose binary exists). */
+  shell?: GuardShell;
+  /** PAM login helpers carrying the per-user hats; default: those present on the box. */
+  loginHelpers?: string[];
+  /** More files the session may not write (absolute, `~/…` or `@{HOME}/…` globs). */
+  extraDenyPaths?: string[];
+  /** More unix socket paths the session may not connect to. */
+  extraDenySockets?: string[];
+  /** Absolute paths that leave the confinement entirely when executed. */
+  allowBinaries?: string[];
+}
+
+export const GUARD_MODES: readonly GuardMode[] = ['off', 'audit', 'enforce'];
+export const GUARD_COMPOSITOR_IPC: readonly GuardCompositorIpc[] = ['allow', 'shell-only', 'deny'];
+export const GUARD_SHELLS: readonly GuardShell[] = ['auto', 'noctalia', 'quickshell', 'hyprpaper', 'swww', 'none'];
+
+/** `status.guard` / `guard-apply` / `guard-status`: what the daemon has engaged. */
+export interface GuardInfo {
+  /** The AppArmor LSM is active (`/sys/kernel/security/apparmor` exists). */
+  available: boolean;
+  /** The policy's mode (what is or will be engaged). */
+  mode: GuardMode;
+  /** Profiles currently loaded (`rp-code-session`, `rp-code-app`, …); empty when off or failed. */
+  loaded: string[];
+  users: string[];
+  /** Documented gaps for this configuration, one sentence each. */
+  residual: string[];
+  /** The `pam_apparmor.so` session line is present (undefined when no known PAM file exists). */
+  pamConfigured?: boolean;
+  shell?: string;
+  compositor?: string;
+  appliedAt?: string;
+  lastError?: string;
+}
+
+/** What kind of guarded resource a `guard-attempt` touched. */
+export type GuardAttemptKind = 'ipc' | 'config' | 'signal' | 'ptrace' | 'exec';
+
+/** One AppArmor audit record about an `rp-code-*` profile (the `guard-attempt` host event's data). */
+export interface GuardAttempt {
+  kind: GuardAttemptKind;
+  /** The socket/file path, the peer profile (signal/ptrace) or the executable. */
+  target: string;
+  /** The process name (`comm`). */
+  command: string;
+  pid: number;
+  /** `true` in enforce mode (`DENIED`); audit mode logs without blocking. */
+  blocked: boolean;
+  profile: string;
+  operation: string;
+  requested?: string;
+}
+
+/** One entry of the app's guard-attempt log (Settings → System → Audit log): the event plus when it arrived. */
+export interface GuardAttemptRecord extends GuardAttempt {
+  at: string;
+}
+
+/** A pushed daemon line (`{ ev: … }`), received on a connection that sent `subscribe`. */
+export type DaemonEvent = { ev: 'guard-attempt'; at: string } & GuardAttempt;
+export type DaemonEventName = DaemonEvent['ev'];
+export const DAEMON_EVENT_NAMES: readonly DaemonEventName[] = ['guard-attempt'];
 
 /** The effective `PolicyFile.app` block with defaults applied (`allowQuit` defaults to true). */
 export interface AppPolicy {
@@ -93,7 +176,17 @@ export interface DaemonStatus {
   keepalive?: KeepaliveInfo;
   /** System install state, when the daemon reports it (daemons with `apply-update`). */
   install?: InstallInfo;
+  /** Session guard state, when the daemon reports it (daemons with `guard-apply`). */
+  guard?: GuardInfo;
   error?: string;
+}
+
+/** `SystemIntegrationStatus.guard`: the policy's guard block as the app reads it plus what the daemon engaged. */
+export interface GuardStatus extends GuardInfo {
+  /** The policy file has a `guard` block with `mode` other than `off`. */
+  configured: boolean;
+  /** The connected daemon reports guard state (older daemons do not). */
+  daemonSupportsGuard: boolean;
 }
 
 /** `SystemIntegrationStatus.install`: whether this app runs from the system install and what the daemon knows about it. */
@@ -138,6 +231,7 @@ export interface SystemIntegrationStatus {
   /** Whether the bundled installer script is available to run with elevated privileges. */
   installerAvailable: boolean;
   install: SystemInstallStatus;
+  guard: GuardStatus;
 }
 
 /** Which input devices a lock covers. */
@@ -173,17 +267,25 @@ export type DaemonRequest =
    * `version` must be semver and not older than the installed one unless the policy says
    * `updates.allowDowngrade`. May take minutes; the client uses a long timeout.
    */
-  | { op: 'apply-update'; file: string; version: string; sha512: string };
+  | { op: 'apply-update'; file: string; version: string; sha512: string }
+  /** Session guard: (re)generate and load the profiles from the policy now. */
+  | { op: 'guard-apply' }
+  /** Session guard: what is engaged, without touching anything. */
+  | { op: 'guard-status' }
+  /** Receive pushed `{ ev: … }` lines (`DaemonEvent`) on this connection for these events; `[]` unsubscribes. */
+  | { op: 'subscribe'; events: DaemonEventName[] };
 
 export type DaemonResponse =
   | { ok: true; op: 'hello'; version: string; protocol: 1; devices: { keyboards: number; pointers: number; uinput: boolean } }
-  | { ok: true; op: 'status'; locked: { until: string; reason?: string; devices: LockDevices } | null; keepalive?: KeepaliveInfo; install?: InstallInfo }
+  | { ok: true; op: 'status'; locked: { until: string; reason?: string; devices: LockDevices } | null; keepalive?: KeepaliveInfo; install?: InstallInfo; guard?: GuardInfo }
   | { ok: true; op: 'policy'; policy: PolicyFile | null; path: string }
   | { ok: true; op: 'lock'; until: string; durationMs: number; devices: LockDevices }
   | { ok: true; op: 'unlock' | 'type' | 'key' | 'click' | 'move' | 'register' | 'unregister' }
   | { ok: true; op: 'set-policy'; path: string }
   /** `restartDaemon`: the daemon updated itself and restarts right after answering (wait for it before relaunching). */
   | { ok: true; op: 'apply-update'; version: string; restartDaemon: boolean }
+  | { ok: true; op: 'guard-apply' | 'guard-status'; guard: GuardInfo }
+  | { ok: true; op: 'subscribe'; events: DaemonEventName[] }
   | { ok: false; error: string; code: 'REFUSED' | 'POLICY' | 'NO_DEVICES' | 'BUSY' | 'INVALID' | 'INTERNAL' | 'EXISTS' };
 
 export const DAEMON_SOCKET_PATH = '/run/rp-code/daemon.sock';

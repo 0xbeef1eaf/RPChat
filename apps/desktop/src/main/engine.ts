@@ -212,7 +212,17 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     },
     logger,
   });
-  const wallpaper = new WallpaperHandler({ commands, packs, backend: () => backend, restoreFile: async () => (await settingsOf()).wallpaperRestoreFile });
+  const wallpaper = new WallpaperHandler({
+    commands,
+    packs,
+    backend: () => backend,
+    restoreFile: async () => (await settingsOf()).wallpaperRestoreFile,
+    // The wallpaper read before the first change becomes the restore file, unless one is set.
+    remember: async (file) => {
+      if ((await settingsOf()).wallpaperRestoreFile.trim().length === 0) await engine.settings.update({ wallpaperRestoreFile: file });
+    },
+    logger,
+  });
   // ---- browser extension bridge -----------------------------------------------------------
   const extension = new ExtensionService({ resourcesDirs, keyFile: path.join(opts.userData, EXTENSION_KEY_FILENAME), port: () => loopback.listeningPort, logger });
   loopback.route(EXTENSION_ROUTE_PREFIX, (req, res, url) => extension.handle(req, res, url));
@@ -402,6 +412,15 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     ...(env.RP_DAEMON_SOCKET ? { socketPath: env.RP_DAEMON_SOCKET } : {}),
     registration: launchSpec({ execPath: process.execPath, argv: process.argv, appImage: env.APPIMAGE, cwd: process.cwd(), env }),
     logger,
+  });
+  // Session guard attempts arrive on the keepalive link: keep the last few for Settings → System
+  // and hand each one to the characters as a `guard-attempt` host event.
+  keepalive.onEvent((event) => {
+    if (event.ev !== 'guard-attempt') return;
+    const record = system.guardLog.push(event);
+    logger.info(`[guard] ${record.blocked ? 'blocked' : 'logged'} ${record.kind} ${record.operation} on ${record.target} by ${record.command} (pid ${record.pid})`);
+    const { at, ...data } = record;
+    emit({ name: 'guard-attempt', data, at });
   });
   /** An update restart is an authorised quit: let it through and make sure the daemon does not race the updater's relaunch. */
   const beforeRestart = async (): Promise<void> => {

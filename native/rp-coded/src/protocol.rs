@@ -9,6 +9,7 @@ use std::fmt;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
 
+use crate::guard::{GuardAttempt, GuardInfo};
 use crate::policy::PolicyFile;
 
 /// Protocol version this daemon speaks (`hello.version` it accepts and `protocol` it reports).
@@ -124,6 +125,18 @@ pub enum Request {
         version: String,
         sha512: String,
     },
+    /// Session guard: (re)generate and load the AppArmor profiles from the policy now (also
+    /// done at start and whenever the policy file changes).
+    #[serde(rename = "guard-apply")]
+    GuardApply,
+    /// Session guard: what is engaged, without touching anything.
+    #[serde(rename = "guard-status")]
+    GuardStatus,
+    /// Receive server-pushed `{ "ev": … }` lines on this connection for the named events
+    /// (`guard-attempt`). Replaces an earlier subscription on the same connection.
+    Subscribe {
+        events: Vec<String>,
+    },
 }
 
 impl Request {
@@ -143,6 +156,9 @@ impl Request {
             Request::Register { .. } => "register",
             Request::Unregister => "unregister",
             Request::ApplyUpdate { .. } => "apply-update",
+            Request::GuardApply => "guard-apply",
+            Request::GuardStatus => "guard-status",
+            Request::Subscribe { .. } => "subscribe",
         }
     }
 }
@@ -252,6 +268,8 @@ pub enum Ok {
         locked: Option<LockInfo>,
         keepalive: KeepaliveInfo,
         install: InstallInfo,
+        /// The session guard (`GuardInfo` in `@rp/shared`).
+        guard: GuardInfo,
     },
     Policy {
         policy: Option<PolicyFile>,
@@ -287,6 +305,46 @@ pub enum Ok {
         #[serde(rename = "restartDaemon")]
         restart_daemon: bool,
     },
+    #[serde(rename = "guard-apply")]
+    GuardApply {
+        guard: GuardInfo,
+    },
+    #[serde(rename = "guard-status")]
+    GuardStatus {
+        guard: GuardInfo,
+    },
+    /// The events this connection now receives.
+    Subscribe {
+        events: Vec<String>,
+    },
+}
+
+/// Names of the events a connection may subscribe to.
+pub const EVENT_NAMES: [&str; 1] = ["guard-attempt"];
+
+/// A server-pushed line (`DaemonEvent` in `@rp/shared`): `{ "ev": "guard-attempt", "at", … }`.
+/// Distinguished from responses by the `ev` key; the app dispatches it to listeners instead of
+/// matching it against a pending request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "ev", rename_all = "kebab-case")]
+pub enum Event {
+    GuardAttempt {
+        at: String,
+        #[serde(flatten)]
+        attempt: GuardAttempt,
+    },
+}
+
+impl Event {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Event::GuardAttempt { .. } => "guard-attempt",
+        }
+    }
+
+    pub fn to_line(&self) -> String {
+        serde_json::to_string(self).expect("event serialises")
+    }
 }
 
 /// Marker that serialises as the JSON literal `true` and refuses anything else.
@@ -346,6 +404,7 @@ pub struct ErrResponse {
 /// One response line.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)] // `Ok::Status` carries the guard info; responses are short-lived
 pub enum Response {
     Ok(OkResponse),
     Err(ErrResponse),
@@ -591,6 +650,25 @@ mod tests {
         assert!(
             parse_line(r#"{"op":"apply-update","file":"/x","version":1,"sha512":""}"#).is_err()
         );
+        assert_eq!(
+            round_trip_request(json!({"op":"guard-apply"})),
+            Request::GuardApply
+        );
+        assert_eq!(
+            round_trip_request(json!({"op":"guard-status"})),
+            Request::GuardStatus
+        );
+        assert_eq!(
+            round_trip_request(json!({"op":"subscribe","events":["guard-attempt"]})),
+            Request::Subscribe {
+                events: vec!["guard-attempt".into()]
+            }
+        );
+        assert!(
+            parse_line(r#"{"op":"subscribe"}"#).is_err(),
+            "events required"
+        );
+        assert!(parse_line(r#"{"op":"subscribe","events":"guard-attempt"}"#).is_err());
     }
 
     #[test]
@@ -598,6 +676,9 @@ mod tests {
         for (v, name) in [
             (json!({"op":"hello","version":1}), "hello"),
             (json!({"op":"status"}), "status"),
+            (json!({"op":"guard-apply"}), "guard-apply"),
+            (json!({"op":"guard-status"}), "guard-status"),
+            (json!({"op":"subscribe","events":[]}), "subscribe"),
             (json!({"op":"policy"}), "policy"),
             (json!({"op":"lock","durationMs":1}), "lock"),
             (json!({"op":"unlock"}), "unlock"),
@@ -675,13 +756,17 @@ mod tests {
             daemon_version: "0.1.0".into(),
         };
         let install_json = json!({"systemInstall":false,"daemonVersion":"0.1.0"});
+        let guard = GuardInfo::default();
+        let guard_json =
+            json!({"available":false,"mode":"off","loaded":[],"users":[],"residual":[]});
         round_trip_response(
             &Response::ok(Ok::Status {
                 locked: None,
                 keepalive: ka,
                 install: install.clone(),
+                guard: guard.clone(),
             }),
-            json!({"ok":true,"op":"status","locked":null,"keepalive":ka_json,"install":install_json}),
+            json!({"ok":true,"op":"status","locked":null,"keepalive":ka_json,"install":install_json,"guard":guard_json}),
         );
         round_trip_response(
             &Response::ok(Ok::Status {
@@ -693,8 +778,63 @@ mod tests {
                     previous: Some("0.1.8".into()),
                     daemon_version: "0.1.0".into(),
                 },
+                guard: guard.clone(),
             }),
-            json!({"ok":true,"op":"status","locked":null,"keepalive":ka_json,"install":{"systemInstall":true,"current":"0.1.9","previous":"0.1.8","daemonVersion":"0.1.0"}}),
+            json!({"ok":true,"op":"status","locked":null,"keepalive":ka_json,"install":{"systemInstall":true,"current":"0.1.9","previous":"0.1.8","daemonVersion":"0.1.0"},"guard":guard_json}),
+        );
+        let engaged = GuardInfo {
+            available: true,
+            mode: crate::policy::GuardMode::Audit,
+            loaded: vec!["rp-code-session".into()],
+            users: vec!["work".into()],
+            residual: vec!["audit mode".into()],
+            pam_configured: Some(true),
+            shell: Some("noctalia".into()),
+            compositor: Some("hyprland".into()),
+            applied_at: Some("2026-09-14T12:00:00.000Z".into()),
+            last_error: None,
+        };
+        let engaged_json = json!({"available":true,"mode":"audit","loaded":["rp-code-session"],"users":["work"],"residual":["audit mode"],"pamConfigured":true,"shell":"noctalia","compositor":"hyprland","appliedAt":"2026-09-14T12:00:00.000Z"});
+        round_trip_response(
+            &Response::ok(Ok::GuardApply {
+                guard: engaged.clone(),
+            }),
+            json!({"ok":true,"op":"guard-apply","guard":engaged_json}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::GuardStatus { guard: engaged }),
+            json!({"ok":true,"op":"guard-status","guard":engaged_json}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::Subscribe {
+                events: vec!["guard-attempt".into()],
+            }),
+            json!({"ok":true,"op":"subscribe","events":["guard-attempt"]}),
+        );
+        // Pushed events carry `ev` instead of `ok`/`op`.
+        let ev = Event::GuardAttempt {
+            at: "2026-09-14T12:00:00.000Z".into(),
+            attempt: GuardAttempt {
+                kind: crate::guard::AttemptKind::Ipc,
+                target: "/run/user/1000/hypr/x/.socket.sock".into(),
+                command: "hyprctl".into(),
+                pid: 42,
+                blocked: false,
+                profile: "rp-code-session".into(),
+                operation: "connect".into(),
+                requested: Some("wr".into()),
+            },
+        };
+        let v: Value = serde_json::from_str(&ev.to_line()).unwrap();
+        assert_eq!(
+            v,
+            json!({"ev":"guard-attempt","at":"2026-09-14T12:00:00.000Z","kind":"ipc","target":"/run/user/1000/hypr/x/.socket.sock","command":"hyprctl","pid":42,"blocked":false,"profile":"rp-code-session","operation":"connect","requested":"wr"})
+        );
+        assert_eq!(serde_json::from_value::<Event>(v).unwrap(), ev);
+        assert_eq!(ev.name(), "guard-attempt");
+        assert!(
+            serde_json::from_str::<Response>(&ev.to_line()).is_err(),
+            "an event is not a response"
         );
         round_trip_response(
             &Response::ok(Ok::ApplyUpdate {
@@ -716,8 +856,9 @@ mod tests {
                     allow_quit: false,
                 },
                 install: install.clone(),
+                guard: guard.clone(),
             }),
-            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","reason":"r","devices":"both"},"keepalive":{"registered":true,"relaunches":3,"allowQuit":false},"install":install_json}),
+            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","reason":"r","devices":"both"},"keepalive":{"registered":true,"relaunches":3,"allowQuit":false},"install":install_json,"guard":guard_json}),
         );
         round_trip_response(
             &Response::ok(Ok::Status {
@@ -728,8 +869,9 @@ mod tests {
                 }),
                 keepalive: ka,
                 install,
+                guard,
             }),
-            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","devices":"mouse"},"keepalive":ka_json,"install":install_json}),
+            json!({"ok":true,"op":"status","locked":{"until":"2026-01-01T00:00:00.000Z","devices":"mouse"},"keepalive":ka_json,"install":install_json,"guard":guard_json}),
         );
         round_trip_response(
             &Response::ok(Ok::Register),

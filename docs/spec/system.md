@@ -114,9 +114,58 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   filter, `MemoryDenyWriteExecute`, `RestrictNamespaces` and the device policy (a relaunched
   Electron app inherits them) and adds `CAP_SETUID`/`CAP_SETGID`, `AF_INET*`/`AF_NETLINK` and
   `KillMode=process`.
+- **Session guard** (`src/guard.rs`, pure + tested; OS glue in `main.rs::os`; user guide
+  `docs/system-integration.md` "Session guard"): `policy.guard` (`GuardPolicy`, `deny_unknown_fields`;
+  `mode` off|audit|enforce, `protectApp`, `wallpaper`, `compositorIpc` allow|shell-only|deny, `shell`
+  auto|noctalia|quickshell|hyprpaper|swww|none, `loginHelpers`, `extraDenyPaths`, `extraDenySockets`,
+  `allowBinaries`; path entries absolute or `~/`/`@{HOME}/`, no whitespace/quotes; a mode other than
+  off requires `app.users`) → `GuardRules` with defaults. A **table** (`NOCTALIA`, `QUICKSHELL`,
+  `HYPRPAPER`, `SWWW`, `HYPRLAND`, `SWAY`, `NIRI`: binaries, process names, socket globs, config/state
+  globs) plus **discovery** (`parse_proc_net_unix` listening path sockets + `/proc/<pid>/fd` of the
+  listed users' shell/compositor processes, `generalise_socket_path`: `/run/user/<uid>` →
+  `@{run}/user/[0-9]*`, `/home/<x>` → `@{HOME}`, digit/hex runs → `*`) feed `render(rules, ctx)` →
+  five files `/etc/apparmor.d/rp-code-{session,app,shell,compositor,login}` (self-contained: own
+  `@{run}`/`@{HOME}`, `abi <abi/4.0>` when present, no includes): `rp-code-session` (every class
+  allowed, `/** mrwlk`, `/** ix`, `px -> rp-code-app|shell|compositor` for the known binaries,
+  `ux` for `allowBinaries`, guarded socket `rw` / file `wl` / `signal (send)` / `ptrace (trace)
+  peer=rp-code-app` rules); `rp-code-app` (attached to `/opt/rp-code/current/rp-code`, `file,`,
+  guards `signal (receive)`/`ptrace (tracedby)` from the other three); `rp-code-shell` (`/** px ->
+  rp-code-session`, its socket `r` guarded so it can bind (`w`) but not connect (`rw`), compositor
+  sockets guarded with `compositorIpc: deny`); `rp-code-compositor` (children `px -> rp-code-session`);
+  `rp-code-login` (attached to the login helpers, always complain, `^<user>` hats with `/** px ->
+  rp-code-session`, `^DEFAULT` with `/** ux`). Audit mode = `audit <rule>` + `flags=(complain)`,
+  enforce = `audit deny <rule>` (explicit deny is enforced even in complain mode). Header line
+  `# rp-code-guard <sha256[..16]>` makes re-engages idempotent. `apply(policy, hooks, paths)`:
+  off → `apparmor_parser -R` + remove files; else resolve context (existing helpers/binaries,
+  cached + fresh discovery), write changed files, `-Q -K` then `-r -K`, state to
+  `/etc/rp-code/guard-state.json` (`GuardState { mode, hash, loaded, users, sockets, appliedAt,
+  lastError }`); returns `GuardInfo { available (securityfs present), mode, loaded, users, residual,
+  pamConfigured (pam_apparmor.so line in system-login/common-session), shell, compositor,
+  appliedAt, lastError }`. Runs at daemon start, every ~5 s when the policy file's stamp changed,
+  and on `guard-apply`; `rp-coded --guard-apply|--guard-off` do one engage from the CLI (the
+  installer calls them). **Audit tail**: once engaged, a thread runs `journalctl -f -o json -n 0
+  _TRANSPORT=kernel + _TRANSPORT=audit` (fallback `/dev/kmsg`), `parse_audit_message` keeps
+  `apparmor="DENIED|ALLOWED|AUDIT"` records whose `profile` starts with `rp-code-`, classifies
+  `kind` (signal/ptrace/exec by operation, `ipc` for connect/bind/… or `.sock`/`/hypr/` names, else
+  `config`), `AttemptLimiter` allows one per `kind:target` every 10 s, then `broadcast`s
+  `{ "ev": "guard-attempt", "at", kind, target, command, pid, blocked, profile, operation,
+  requested? }` to connections that sent `{ op: 'subscribe', events: ['guard-attempt'] }` (per
+  connection, replaced by a later `subscribe`, `[]` unsubscribes, dropped on disconnect; the
+  connection's writer is shared under a mutex so pushed lines never interleave with responses).
+  `status` carries `guard: GuardInfo`; `guard-status` returns it without touching anything
+  (the policy's mode with a "guard-apply is pending" residual when it differs from the state).
+  The unit adds `CAP_MAC_ADMIN` and `ReadWritePaths` for `/etc/apparmor.d` and
+  `/sys/kernel/security/apparmor`. Tests: profile snapshots (Noctalia+Hyprland+SDDM in audit
+  and enforce, switches, no shell/compositor), audit-line parsing (kernel and journald forms),
+  limiter, path generalisation, `/proc` fixtures, state round trip, `apply` through fake hooks
+  (engage, idempotent re-engage with cached sockets, enforce rewrite, parser failure, off, no
+  LSM), socket-level `guard-apply`/`guard-status`/policy-change and `subscribe` + pushed events,
+  and the generated profiles through `apparmor_parser -Q` when it is installed (CI installs it).
 - Layout: `src/main.rs` (socket server, signals, keepalive and update OS glue, self-restart),
   `src/protocol.rs` (serde types + tests), `src/policy.rs` (load/validate/clamp + tests, `app`
-  rules, `allow_downgrade`), `src/keepalive.rs` (relaunch decisions, pure), `src/sysinstall.rs`
+  rules, `allow_downgrade`, `guard` rules), `src/guard.rs` (session guard: table, profile
+  rendering, audit parsing, discovery parsing, state, `apply` behind `GuardHooks`),
+  `src/keepalive.rs` (relaunch decisions, pure), `src/sysinstall.rs`
   (versions.json, semver, checksum, tree checks, swap, `apply_update` behind `ApplyHooks`),
   `src/lock.rs` (grab/emergency/timer behind a `DeviceSource` trait so tests use fakes),
   `src/inject.rs` (keymap + combo parsing, tested purely), `src/devices.rs`. `cargo test` must
@@ -136,7 +185,16 @@ auto-detected when run from the app: an existing `/opt/rp-code/current/rp-code` 
 AppImage in the usual places), `--user <name>` (default `$SUDO_USER`/`$PKEXEC_UID`),
 `--autostart xdg|systemd|none` (default xdg), `--policy-template` (write the example policy if none
 exists), `--system-install`/`--no-system-install` (default: yes when `--app-bin` is an AppImage),
-`--rollback`, `--remove`, `--refresh-daemon-files`, `--prefix <dir>` (tests: every system path
+`--rollback`, `--remove`, `--refresh-daemon-files`, `--guard`/`--no-guard` (session guard: the
+`pam_apparmor.so` line — `session optional pam_apparmor.so order=user,group,default # rp-code
+session guard` — inserted as the last session line of `/etc/pam.d/system-login` (Arch; after
+`session required pam_env.so`, else after `-session optional pam_systemd.so`, else after the
+last session line, else appended) or `common-session` (Debian/Ubuntu), idempotent through the
+marker, replaced when stale, removed by `--no-guard`/`--uninstall`; then `rp-coded --guard-apply`
+/ `--guard-off` from the installed binary, skipped under `--prefix`. Alone: only that step; with
+install flags: forced; without either flag a full install engages when the policy file's
+`guard.mode` is not `off`. Warns when `/sys/kernel/security/apparmor` or `pam_apparmor.so` is
+missing), `--prefix <dir>` (tests: every system path
 under `<dir>`, no groups/services/udev/module/menu-cache commands), `--uninstall`. `install_file`
 copies to `<dst>.new` and renames (a running binary is replaced atomically). Steps, idempotent and
 printed as `[ok]`/`[skip]` lines:
@@ -160,14 +218,17 @@ printed as `[ok]`/`[skip]` lines:
    with the app path, or the systemd user unit in `~<user>/.config/systemd/user/` (enabled via
    `systemctl --user` when a session bus is available, else printed); files chowned to the user.
    Also print the Hyprland `exec-once = <app> --hidden` line for people who prefer it.
-8. Browser policy (`--browser-extension`), 9. `rp-coded --check-devices` summary.
+8. Browser policy (`--browser-extension`), 9. session guard (see `--guard`), 10. `rp-coded --check-devices` summary.
 `--uninstall` reverses everything (including the system install) except the policy file (prints how
 to remove it). `--rollback`: `current` ⇄ `previous` and the two `versions.json` entries. `--remove`:
 delete `current`, `previous`, `.new`, `.staging*`, `versions.json`, the symlink, and `/opt/rp-code`
 when empty (the `.deb` keeps its files there). `--refresh-daemon-files`: daemon binary, docs, unit,
 udev rule, module list, menu entry (if present) + icon, `systemctl daemon-reload`, `udevadm control
 --reload` when the rule changed — no group/user/autostart/policy steps and no restart.
-`scripts/install-smoke.sh` runs all of this against a `--prefix` with a fake AppImage (CI, as root).
+`scripts/install-smoke.sh` runs all of this against a `--prefix` with a fake AppImage (CI, as root),
+including the PAM edit against the Arch `system-login` layout (placement after `pam_env.so`,
+idempotency, stale-line replacement, the `pam_systemd`/last-line/`common-session` fallbacks,
+engage from the policy's `guard.mode`, removal by `--no-guard` and `--uninstall`).
 The deb package runs `install.sh --autostart none --menu-entry no` in `afterInstall` (electron-builder
 `deb.afterInstall`), skipping the user-specific steps and **not** passing `--policy-template` (the
 policy is write-once; the user creates it from the app); the app's Settings → System button runs it
@@ -177,7 +238,8 @@ with `pkexec` for the current user.
 
 - `src/main/system/daemon-client.ts`: `DaemonClient` (connect on demand, `hello`, request/response
   with 10 s timeout — `apply-update` 5 min (`APPLY_UPDATE_TIMEOUT_MS`, `applyTimeoutMs`) —,
-  reconnect, `status()` (with `keepalive`/`install` when reported), `setPolicy(policy)` → `{ path }`,
+  reconnect, `status()` (with `keepalive`/`install`/`guard` when reported), `setPolicy(policy)` → `{ path }`,
+  `guardApply()`/`guardStatus()` → `GuardInfo`,
   `applyUpdate({ file, version, sha512 })` → `{ version, restartDaemon }` (errors mapped like the
   other ops), `waitForHello(timeoutMs)` (fresh handshake retried with a growing delay, 500 ms → 5 s;
   resolves with whether the daemon is back)), unit-tested with a fake socket server. `rpErrorCodeFor`/`toRpError` map daemon codes for every caller: `REFUSED`/`POLICY` →
@@ -190,7 +252,9 @@ with `pkexec` for the current user.
   `app.allowQuit` (boolean) and `app.users` (non-empty string array), ignores unknown `app` keys. `SettingsService` results
   and every `settings.get()` go through `applyPolicy`; `settings.update` ignores managed paths and
   the response carries the forced values. Policy file is re-read when its mtime changes
-  (`PolicyWatcher.invalidate()` forces the next read).
+  (`PolicyWatcher.invalidate()` forces the next read). `parseGuard` mirrors the daemon's
+  validation of the `guard` block (enums, path lists, `mode` other than off needs `app.users`);
+  `guardMode(policy)` → the effective mode.
 - `InputHandler` is daemon-only: `lock/unlock/status/type/key/click/moveMouse` go through rp-coded
   (the daemon clamps; the app also clamps to `maxInputLockMs`) and `status()` reports `locked` from
   the daemon. There are no input command templates and no fallback: while the daemon is missing or
@@ -214,7 +278,13 @@ with `pkexec` for the current user.
   maxDurationMs: maxInputLockMs, emergencyKey: 'esc', emergencyHoldMs: 5000 }`). `createPolicy(text)`:
   `JSON.parse` + `parsePolicy` (`INVALID_ARGUMENT` with `details.problems`), sends the object the user
   wrote to `daemon.setPolicy` (so the daemon's stricter unknown-key check applies), `policy.invalidate()`,
-  returns `status()`.
+  returns `status()`. **Session guard**: `status().guard` = `guardStatusOf({ policy, daemon })`
+  (pure): the daemon's `GuardInfo` plus `configured` (policy mode ≠ off) and
+  `daemonSupportsGuard`; without a guard-aware daemon `available: false` and a residual saying
+  so. `guardApply()` → `daemon.guardApply()` then `status()`. `guardAttempts()` → the last
+  `GUARD_ATTEMPT_LOG_SIZE` (50) `GuardAttemptRecord`s from `GuardAttemptLog` (newest first),
+  which engine.ts feeds from the keepalive link's events. `install()` adds `--guard` when the
+  policy's `guard.mode` is not `off`.
 - App flag `--hidden`: start minimized to tray (add a tray icon with Show/Quit) so autostart is quiet.
 - **`app.allowQuit: false`** (`src/main/quit-guard.ts`, pure + tested; wired in `index.ts`):
   `trayMenuTemplate(allowQuit)` omits Quit; the window `close` handler always hides (tray or
@@ -227,6 +297,12 @@ with `pkexec` for the current user.
   `src/main/system/keepalive-link.ts` (`KeepaliveLink`, tested with a fake socket) keeps a dedicated
   connection open: `hello` → `register`, reconnect with backoff (1 s doubling to 30 s) whenever it
   drops, `unregister()` before an intended exit (update restart, `stop()`). Started on Linux only.
+  After `register` it sends `subscribe` for every `DaemonEventName` (`guard-attempt`); an older
+  daemon's INVALID is logged at debug level and ignored. Lines with an `ev` key are pushed
+  events (`DaemonEvent`) dispatched to `onEvent` listeners instead of the pending request queue;
+  `subscribed` reports the acknowledged subscription. engine.ts turns each `guard-attempt` into
+  a `GuardAttemptRecord` in the log and the `guard-attempt` host event (`emit` into the senses
+  provider; data `{ kind, target, command, pid, blocked, profile, operation, requested? }`).
   The single-instance lock (already present) makes a duplicate relaunch exit at once.
 - **Updates on a system install** (`src/main/updates/service.ts`, `system-updater.ts`): engine.ts
   wires `UpdateServiceDeps.systemInstall` (`dir`, `available()` → `{ daemonConnected,
@@ -248,7 +324,8 @@ with `pkexec` for the current user.
   `resources/system/{install.sh,rp-coded.service,70-rp-code.rules,...}`; electron-builder
   `extraResources` + `deb.afterInstall` script that calls the installer.
 - IPC `system.*` (`status`, `install`, `setAutostart`, `installerPath`, `createPolicy(text)`,
-  `policyTemplate()` — the latter reads the current settings in main), `settings.managed` and
+  `policyTemplate()` — the latter reads the current settings in main —, `guardApply()`,
+  `guardAttempts()`), `settings.managed` and
   `updates.*` (the update service reads `settings.updates` from the same policy state).
 
 ### Policy `app` block
@@ -257,6 +334,10 @@ with `pkexec` for the current user.
 |---|---|---|
 | `app.allowQuit` | boolean, default `true` | `false`: no Quit in the tray, close hides, Ctrl+Q/`app.quit()`/signals ignored; the daemon relaunches the app for the listed users. |
 | `app.users` | non-empty `string[]` of unix user names | Who the daemon relaunches (must also own the active graphical session). Absent/empty → nobody. Shown in Settings → System ("Quitting is disabled by policy … for: alice, bob"). |
+
+### Policy `guard` block
+
+`GuardPolicy` in `@rp/shared/system.ts`; validated identically by `parseGuard` (app) and `validate_guard` (daemon). `mode` `off` (default) \| `audit` \| `enforce`; `protectApp`, `wallpaper` booleans (default true); `compositorIpc` `allow` \| `shell-only` (default) \| `deny`; `shell` `auto` (default) \| `noctalia` \| `quickshell` \| `hyprpaper` \| `swww` \| `none`; `loginHelpers` (non-empty, absolute), `extraDenyPaths`/`extraDenySockets` (absolute, `~/…` or `@{HOME}/…`), `allowBinaries` (absolute) — no whitespace or quotes anywhere (they become AppArmor rules). A `mode` other than `off` without `app.users` is invalid; the listed users are the ones confined. Not a settings key; reported as `SystemIntegrationStatus.guard`.
 
 ### Policy `settings` keys
 
@@ -288,7 +369,13 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
   `system.policyTemplate()`, "Reset to current settings", an "I understand this cannot be undone
   without root" checkbox gating **Write policy**, validation problems in a danger callout; on success
   toast "Policy written", reload status and settings so managed badges appear; without the daemon a
-  hint to install the system integration), udev/group status with the "re-login required" hint,
+  hint to install the system integration), **Session guard** card (`guardLine()`: "Session guard:
+  audit (AppArmor) — 5 profiles loaded — users: work — shell noctalia, compositor hyprland — applied …",
+  "unavailable: AppArmor is not active…", or "Off…"; badge off/audit/enforce/pending/unavailable/error;
+  `lastError` callout; a warning when `pamConfigured` is false; a collapsible "What it cannot do"
+  list from `residual`; **Audit log…** opens `GuardAuditDialog` with the last 50
+  `system.guardAttempts()` rows (`guardAttemptLine()`); **Apply now** → `system.guardApply()`),
+  udev/group status with the "re-login required" hint,
   "Install system integration…" (explains what it does, runs `system.install`, shows the output),
   "Start on login" toggle (`system.setAutostart`), "Installer script path" with copy button.
 - Settings → **Updates**: packaging "System install · applied by the system service", an Install
@@ -303,5 +390,15 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
 ## Docs
 
 `docs/system-integration.md`: why the daemon, what the installer changes, the policy file reference,
-emergency unlock chord, uninstall, security notes (group membership means "may lock input and inject
-keys", so treat `rp-code` group like `input`).
+emergency unlock chord, the session guard (what it blocks, the verified AppArmor facts with sources,
+the login-helper/hat mechanism, audit → enforce procedure, limits, recovery), uninstall, security
+notes (group membership means "may lock input and inject keys", so treat `rp-code` group like `input`).
+
+## Host event `guard-attempt`
+
+`HostEventName` gains `guard-attempt` (`packages/shared/src/senses.ts`; `HOST_EVENT_NAMES` in
+`packages/core/src/services/events.ts`, mirrored in the SDK preamble); data is the `GuardAttempt`
+(`kind`, `target`, `command`, `pid`, `blocked`, `profile`, `operation`, `requested?`). Filters:
+`kind`/`blocked`/`pid` exact (the generic JSON comparison), `target`/`command` case-insensitive
+substring. Subject to the usual 2 s debounce of identical events; the daemon already limits one per
+target every 10 s. Documented for characters in `packages/sdk/src/modules/events.ts`.
