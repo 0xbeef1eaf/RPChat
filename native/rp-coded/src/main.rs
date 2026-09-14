@@ -1235,9 +1235,14 @@ mod os {
                 Ok(())
             });
         }
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("cannot run {} as uid {uid}: {e}", appimage.display()))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            let hint = if e.raw_os_error() == Some(nix::errno::Errno::EPERM as i32) {
+                " (the daemon cannot change to that user: it lacks CAP_SETUID/CAP_SETGID — the running rp-coded.service is probably older than the daemon; run install.sh --refresh-daemon-files, then systemctl daemon-reload && systemctl restart rp-coded)"
+            } else {
+                ""
+            };
+            format!("cannot run {} as uid {uid}: {e}{hint}", appimage.display())
+        })?;
         let mut stderr = child.stderr.take();
         let stderr_thread = thread::spawn(move || {
             let mut buf = String::new();
