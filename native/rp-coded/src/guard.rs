@@ -9,6 +9,8 @@
 //!   or `DEFAULT` (`order=`), inside the profile that confines the *login helper*. So the
 //!   helper (`sddm-helper`, `login`, `sshd`) carries a profile whose `^<user>` hats send every
 //!   exec into `rp-code-session` and whose `^DEFAULT` hat lets everyone else run unconfined.
+//!   That profile must be in *enforce* mode: a hat that does not exist makes a complain-mode
+//!   `change_hat()` build a learning profile, which deadlocks the kernel (see `render`).
 //! - Filesystem-path unix sockets are mediated as files (`security/apparmor/af_unix.c`):
 //!   `bind` is the `mknod` of the socket file (`w` = create), `connect` needs
 //!   `AA_MAY_CONNECT|AA_MAY_SEND|AA_MAY_RECEIVE` = open + write + read (`rw`). A profile that
@@ -264,9 +266,9 @@ pub fn normalise_glob(p: &str) -> String {
 
 /// Everything a permissive profile allows besides files: every mediation class the parser
 /// knows, so nothing the session does trips over a missing rule.
-const ALLOW_CLASSES: &str = "  capability,\n  network,\n  unix,\n  dbus,\n  signal,\n  ptrace,\n  mount,\n  umount,\n  pivot_root,\n  userns,\n  mqueue,\n  io_uring,\n";
+const ALLOW_CLASSES: &str = "  capability,\n  network,\n  unix,\n  dbus,\n  signal,\n  ptrace,\n  mount,\n  umount,\n  pivot_root,\n  userns,\n  mqueue,\n  io_uring,\n  change_profile,\n";
 /// The same, indented for a hat body.
-const HAT_CLASSES: &str = "    capability,\n    network,\n    unix,\n    dbus,\n    signal,\n    ptrace,\n    mount,\n    umount,\n    pivot_root,\n    userns,\n    mqueue,\n    io_uring,\n";
+const HAT_CLASSES: &str = "    capability,\n    network,\n    unix,\n    dbus,\n    signal,\n    ptrace,\n    mount,\n    umount,\n    pivot_root,\n    userns,\n    mqueue,\n    io_uring,\n    change_profile,\n";
 
 fn header(hash: &str, version: &str, name: &str, abi: Option<&str>) -> String {
     let mut s = format!(
@@ -480,8 +482,18 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         });
     }
 
-    // rp-code-login: the vehicle for pam_apparmor's hats. Always complain: it must never
-    // break a login; its only job is to host the hats.
+    // rp-code-login: the vehicle for pam_apparmor's hats. Always ENFORCE, in both modes, and
+    // never complain — the one place in this file where complain is the dangerous choice.
+    // `order=user,group,default` makes pam_apparmor look for a hat named after the user first,
+    // so every login by someone who is not in `app.users` is a miss. On a miss the kernel
+    // returns -ENOENT in enforce mode (pam_apparmor then tries the group, then ^DEFAULT, which
+    // is the design), but in *complain* mode it builds a learning profile instead —
+    // `build_change_hat` -> `aa_new_learning_profile` — and that path self-deadlocks on the
+    // AppArmor mutex the change_hat already holds (seen on 7.2.2: `login` wedged in D state,
+    // unkillable, holding the policy mutex so every later apparmor_parser and even a read of
+    // /sys/kernel/security/apparmor/profiles blocks; only a reboot clears it). The profile is
+    // permissive by construction — `file,` plus every mediation class — so enforce costs it
+    // nothing. The hats stay complain: they are entered by name, never built.
     let attach = match ctx.login_helpers.len() {
         0 => String::new(),
         1 => format!(" {}", ctx.login_helpers[0]),
@@ -497,7 +509,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     let mut login = String::new();
     login.push_str(&format!(
         "profile rp-code-login{attach} {} {{\n{ALLOW_CLASSES}  file,\n",
-        flags(&["complain"])
+        flags(&[])
     ));
     for user in &ctx.users {
         login.push_str(&format!(
@@ -1530,7 +1542,7 @@ pub mod tests {
         assert!(comp.contains("  /** px -> rp-code-session,\n"));
         assert!(comp.contains("  audit @{run}/user/[0-9]*/noctalia-*.sock rw,\n"));
         let login = text_of(&plan, "rp-code-login");
-        assert!(login.contains("profile rp-code-login /{usr/lib/sddm/sddm-helper,usr/bin/login} flags=(attach_disconnected,complain) {"));
+        assert!(login.contains("profile rp-code-login /{usr/lib/sddm/sddm-helper,usr/bin/login} flags=(attach_disconnected) {"));
         assert!(login.contains("  ^work flags=(attach_disconnected,complain) {\n"));
         assert!(login.contains("    /** px -> rp-code-session,\n"));
         assert!(login.contains("  ^DEFAULT flags=(attach_disconnected,complain) {\n"));
@@ -1628,7 +1640,7 @@ pub mod tests {
         );
         let plan2 = render(&r2, &bare);
         assert!(text_of(&plan2, "rp-code-login")
-            .contains("profile rp-code-login flags=(attach_disconnected,complain) {"));
+            .contains("profile rp-code-login flags=(attach_disconnected) {"));
         assert!(plan2
             .residual
             .iter()
@@ -1800,6 +1812,38 @@ pub mod tests {
         let w = pam_duplicate_warning(&hooks).expect("warned");
         assert!(w.contains("2 pam_apparmor.so session lines"), "{w}");
         assert!(w.contains("every login hangs"), "{w}");
+    }
+
+    #[test]
+    fn the_login_profile_is_never_complain_in_either_mode() {
+        // A complain-mode change_hat() into a hat that does not exist makes the kernel build a
+        // learning profile, and that path self-deadlocks: `login` wedges in D state holding the
+        // AppArmor policy mutex. `order=user,group,default` misses on every user who is not in
+        // `app.users`, so this is the ordinary case, not an edge one.
+        for mode in ["audit", "enforce"] {
+            let r = rules(
+                serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":mode}}),
+            );
+            let plan = render(&r, &noctalia_hyprland_ctx(&["work"]));
+            let login = text_of(&plan, "rp-code-login");
+            let header = login
+                .lines()
+                .find(|l| l.starts_with("profile rp-code-login"))
+                .unwrap_or_default();
+            assert!(!header.contains("complain"), "{mode}: {header}");
+            // Permissive by construction, so enforce takes nothing away.
+            assert!(login.contains("  file,\n"), "{login}");
+            assert!(login.contains("  change_profile,\n"), "{login}");
+            // The hats are entered by name, never built, so they may stay complain.
+            assert!(
+                login.contains("^work flags=(attach_disconnected,complain)"),
+                "{login}"
+            );
+            assert!(
+                login.contains("^DEFAULT flags=(attach_disconnected,complain)"),
+                "{login}"
+            );
+        }
     }
 
     #[test]

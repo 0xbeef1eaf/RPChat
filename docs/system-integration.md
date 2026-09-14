@@ -518,6 +518,28 @@ can do all of this (the session profile allows `capability mac_admin`), so a TTY
 listed user plus `sudo` is enough. The input-lock emergency key is unaffected. If no login works
 at all, boot with `apparmor=0` (or a kernel without the LSM) and fix it from there.
 
+> **A login that hangs in D state, unkillable.** `rp-code-login` is generated in *enforce*
+> mode, in both guard modes, and this is why. `order=user,group,default` makes `pam_apparmor`
+> look for a hat named after the user first, so every login by someone who is not in
+> `app.users` is a miss. In enforce mode the kernel returns `-ENOENT` and the module falls
+> through to the group and then `^DEFAULT`, which is the design. In *complain* mode it instead
+> builds a learning profile — `build_change_hat` → `aa_new_learning_profile` — and that path
+> self-deadlocks on the AppArmor policy mutex the `change_hat` already holds:
+>
+> ```
+> INFO: task login:4502 blocked for more than 122 seconds.
+>  __mutex_lock / aa_new_learning_profile / build_change_hat / aa_change_hat
+> INFO: task login:4502 is blocked on a mutex likely owned by task login:4502.
+> ```
+>
+> The task is in `D` (uninterruptible) state, so `kill -9` does nothing — the signal sits in
+> `ShdPnd` forever because the task never returns to user space. It holds the policy mutex, so
+> from then on every `apparmor_parser` run and even `cat /sys/kernel/security/apparmor/profiles`
+> blocks too, which means `rp-coded --guard-off` and `install.sh --no-guard` cannot help. Only
+> a reboot clears it. Seen on 7.2.2-1-cachyos; the profile never being complain avoids the path
+> entirely. To recover, remove the PAM line and `/etc/apparmor.d/rp-code-*` as plain file edits
+> (neither touches the mutex), set `guard.mode: "off"`, then reboot.
+
 > **A login that hangs with no message — check for two `pam_apparmor.so` lines.** `pam_apparmor`
 > enters the hat with a magic token and remembers it. A second `pam_apparmor.so` session line in
 > the stack — hand-added, or left behind by another tool — calls `change_hat()` again with a
