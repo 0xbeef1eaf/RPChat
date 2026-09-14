@@ -1205,6 +1205,28 @@ mod os {
         }
     }
 
+    /// Why `setuid()` just returned EPERM, for the error the app shows. Reads the daemon's own
+    /// permitted set: `CAP_SETUID` missing there while the unit lists it in
+    /// `CapabilityBoundingSet=` is the systemd trap — `NoNewPrivileges=yes` plus any
+    /// seccomp-installing option (`ProtectClock=`, `RestrictSUIDSGID=`, …) leaves the capability
+    /// out of the permitted set even for `User=root`, and only `AmbientCapabilities=` puts it
+    /// back. Otherwise the unit really is older than the daemon.
+    fn setuid_hint() -> String {
+        let permitted = fs::read_to_string("/proc/self/status").ok().and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("CapPrm:"))
+                .and_then(|v| u64::from_str_radix(v.trim(), 16).ok())
+        });
+        match permitted {
+            // CAP_SETUID is bit 7, CAP_SETGID bit 6.
+            Some(p) if p & (1 << 7) == 0 || p & (1 << 6) == 0 => {
+                " (the daemon cannot change to that user: CAP_SETUID/CAP_SETGID are not in its permitted set. If rp-coded.service has no `AmbientCapabilities=CAP_SETUID CAP_SETGID`, it predates this daemon — systemd drops the capability when NoNewPrivileges= meets a seccomp option, whatever CapabilityBoundingSet= says. Run install.sh --refresh-daemon-files, then systemctl daemon-reload && systemctl restart rp-coded)"
+                    .to_string()
+            }
+            _ => String::new(),
+        }
+    }
+
     /// Run `<appimage> --appimage-extract` as `uid`/`gid` in `cwd` (a directory that user
     /// owns), with an empty environment and a 4-minute limit. Never as root: the archive is
     /// untrusted until the extracted tree passed the checks.
@@ -1237,7 +1259,7 @@ mod os {
         }
         let mut child = cmd.spawn().map_err(|e| {
             let hint = if e.raw_os_error() == Some(nix::errno::Errno::EPERM as i32) {
-                " (the daemon cannot change to that user: it lacks CAP_SETUID/CAP_SETGID — the running rp-coded.service is probably older than the daemon; run install.sh --refresh-daemon-files, then systemctl daemon-reload && systemctl restart rp-coded)"
+                &setuid_hint()
             } else {
                 ""
             };

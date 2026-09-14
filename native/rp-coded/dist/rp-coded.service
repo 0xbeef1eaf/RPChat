@@ -42,6 +42,17 @@ SystemCallArchitectures=native
 # CAP_MAC_ADMIN: load/unload the session-guard AppArmor profiles (apparmor_parser writes
 # /sys/kernel/security/apparmor/.replace, which the kernel gates on this capability).
 CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID CAP_MAC_ADMIN
+# The bounding set is not enough. NoNewPrivileges=yes together with any option that installs a
+# seccomp filter (ProtectClock, ProtectKernelTunables/Modules/Logs, ProtectHostname,
+# RestrictRealtime, RestrictSUIDSGID, LockPersonality, SystemCallArchitectures — this unit has
+# most of them) makes systemd leave CAP_SETUID out of the *permitted* set, even for User=root:
+# the bounding set still lists it, but setuid() returns EPERM. That breaks both things the
+# daemon drops privileges for — relaunching the app for `app.allowQuit: false` and extracting
+# an update as the user — with "Operation not permitted (os error 1)". Naming them here puts
+# them back in the permitted set. They do not leak into the relaunched app: the pre_exec does
+# setgid/initgroups/setuid before execve, which clears the permitted, effective and ambient
+# sets (only the inheritable bits remain, and those grant nothing under NoNewPrivileges).
+AmbientCapabilities=CAP_SETUID CAP_SETGID
 # AF_UNIX for the daemon; the rest for the relaunched app (Chromium needs netlink too).
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 KillMode=process
