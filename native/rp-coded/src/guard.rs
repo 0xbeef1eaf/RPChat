@@ -104,9 +104,27 @@ pub const NOCTALIA: TableEntry = TableEntry {
     binaries: &["/usr/bin/noctalia", "/usr/local/bin/noctalia"],
     comm: &["noctalia"],
     sockets: &["@{run}/user/[0-9]*/noctalia-*.sock"],
+    // Only what actually carries the wallpaper, not the whole tree. Verified against a v5
+    // install: `~/.local/state/noctalia/settings.toml` holds `[wallpaper] directory` and
+    // `[wallpaper.default|last|monitors.<output>] path`; `~/.config/noctalia/settings.json`
+    // holds the wallpaper options and `hooks.wallpaperChange`, a command run on every change.
+    // Everything else under those directories — community-palettes/, community-templates/,
+    // colorschemes/, colors.json, the caches and the history files — is data the shell fetches
+    // through a child process, and that child lands in `rp-code-session` (the shell sends its
+    // children back). Denying the whole tree therefore broke the shell's own palette and
+    // template updates for no gain, so it is scoped to the files that matter.
+    //
+    // Plugins stay denied: they are QML/JS/sh executed *inside* the shell, which may write
+    // settings.toml, so a writable plugin tree is only a slower way to set the wallpaper. The
+    // cost is that plugin self-update stops working under enforce; the cost of the alternative
+    // is the guard.
     files: &[
-        "@{HOME}/.config/noctalia/**",
-        "@{HOME}/.local/state/noctalia/**",
+        "@{HOME}/.local/state/noctalia/settings.toml",
+        "@{HOME}/.config/noctalia/settings.json",
+        "@{HOME}/.config/noctalia/plugins/**",
+        "@{HOME}/.config/noctalia/plugins.json",
+        "@{HOME}/.local/state/noctalia/plugins/**",
+        "@{HOME}/.local/state/noctalia/plugin-cache/**",
     ],
 };
 /// Quickshell (Noctalia v4 and other shells): `$XDG_RUNTIME_DIR/quickshell/by-id/<id>/ipc.sock`
@@ -117,10 +135,16 @@ pub const QUICKSHELL: TableEntry = TableEntry {
     binaries: &["/usr/bin/quickshell", "/usr/bin/qs"],
     comm: &["quickshell", "qs"],
     sockets: &["@{run}/user/[0-9]*/quickshell/**"],
+    // Quickshell's own config is QML (code), so it stays whole; the noctalia half is scoped
+    // the same way as the v5 row above.
     files: &[
         "@{HOME}/.config/quickshell/**",
-        "@{HOME}/.config/noctalia/**",
         "@{HOME}/.local/state/quickshell/**",
+        "@{HOME}/.local/state/noctalia/settings.toml",
+        "@{HOME}/.config/noctalia/settings.json",
+        "@{HOME}/.config/noctalia/plugins/**",
+        "@{HOME}/.config/noctalia/plugins.json",
+        "@{HOME}/.local/state/noctalia/plugins/**",
     ],
 };
 /// hyprpaper: `$XDG_RUNTIME_DIR/hypr/<instance>/.hyprpaper.sock` (`hyprctl hyprpaper …`).
@@ -639,7 +663,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     );
     if shell_profile {
         residual.push("if the audit log shows the shell denied getattr on its own socket, the shell needs r too and `<shell> msg` from a terminal becomes the residual gap".to_string());
-        residual.push("the shell's own helpers (its plugin/palette git and sh) return to rp-code-session like any other child, so under enforce they cannot write the shell's state either: self-updating plugins and downloaded palettes stop working. Accepted — the alternative is letting anything the shell launches write the wallpaper config.".to_string());
+        residual.push("the shell's own helpers return to rp-code-session like any other child, so under enforce they may not write what the session may not: palettes, templates and colour schemes are left writable and keep updating, but plugin self-update does not, because a plugin is code the shell executes and could set the wallpaper from inside it".to_string());
     }
     residual.push(
         "a link whose source is an unnamed inode (O_TMPFILE) is logged as a denied `l`: AppArmor cannot resolve the name, so no rule can match it. The kernel refuses that link for unprivileged callers anyway, so it is audit noise, not a blocked operation.".to_string(),
@@ -1698,8 +1722,15 @@ pub mod tests {
             session.contains("  audit @{run}/user/[0-9]*/noctalia-wayland-*.sock rw,\n"),
             "discovered socket"
         );
-        assert!(session.contains("  audit @{HOME}/.config/noctalia/** wl,\n"));
-        assert!(session.contains("  audit @{HOME}/.local/state/noctalia/** wl,\n"));
+        // Scoped to the files that carry the wallpaper, so the shell's own palette and
+        // template updates (fetched by a child, which lands in rp-code-session) keep working.
+        assert!(session.contains("  audit @{HOME}/.config/noctalia/settings.json wl,\n"));
+        assert!(session.contains("  audit @{HOME}/.local/state/noctalia/settings.toml wl,\n"));
+        assert!(session.contains("  audit @{HOME}/.config/noctalia/plugins/** wl,\n"));
+        assert!(
+            !session.contains("community-palettes") && !session.contains("community-templates"),
+            "palettes and templates must stay writable: {session}"
+        );
         assert!(session.contains("  audit @{HOME}/.config/hypr/hyprpaper.conf wl,\n"));
         assert!(session.contains("  audit signal (send) peer=rp-code-app,\n"));
         assert!(session.contains("  audit ptrace (trace) peer=rp-code-app,\n"));

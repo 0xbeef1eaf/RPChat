@@ -528,11 +528,17 @@ nothing from the distro, so a machine with every distro profile parked in
 - **`systemctl --user`**: an app started as a systemd *user* unit lives in the user's delegated
   cgroup, where `systemctl --user stop`/`kill` work without signals (the daemon relaunches it,
   outside that cgroup). Prefer the XDG autostart entry (the installer's default).
-- **The shell's own helpers lose the shell's state.** `rp-code-shell` sends every child back to
-  `rp-code-session`, which is where the shell's config and state are denied. That catches a
-  terminal opened from the shell's launcher — and equally the `git` and `sh` the shell runs for
-  its own plugin and palette updates, so under `enforce` those stop working. This is accepted on
-  purpose: the alternative is letting anything the shell launches rewrite the wallpaper config.
+- **Plugin self-update stops, palettes keep working.** `rp-code-shell` sends every child back to
+  `rp-code-session`, so the `git` and `sh` the shell runs for its own updates are bound by the
+  session's rules. Rather than deny the shell's whole config and state tree, the guard denies
+  only what carries the wallpaper — `~/.local/state/noctalia/settings.toml`
+  (`[wallpaper] directory`, `[wallpaper.default|last|monitors.<output>] path`) and
+  `~/.config/noctalia/settings.json` (the wallpaper options and `hooks.wallpaperChange`, a
+  command run on every change). `community-palettes/`, `community-templates/`, `colorschemes/`,
+  `colors.json` and the caches stay writable, so palette and template updates keep working.
+  The **plugin** directories stay denied, and that is deliberate: a plugin is QML/JS/sh executed
+  *inside* the shell, and the shell may write `settings.toml`, so a writable plugin tree is only
+  a slower way to set the wallpaper. The cost is that plugin self-update fails under `enforce`.
 - **Links from unnamed inodes are logged but not blocked.** An `O_TMPFILE` inode has no name, so
   AppArmor renders it `<dir>/#<inode>`, fails the lookup and denies `l` — no rule can match a
   name that cannot be resolved, and an explicit `link subset /{,**} -> /{,**},` changes nothing
