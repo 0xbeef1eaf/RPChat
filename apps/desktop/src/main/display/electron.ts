@@ -60,6 +60,23 @@ export { OVERLAY_TITLE_PREFIX };
 /** media.html pads the stage by 12px on every side. */
 export const PAGE_PADDING_PX = 24;
 
+/**
+ * The last reported content size projected onto a new box width. The page scales its content to the
+ * box width keeping the aspect ratio, so a resize scales the content size by the same factor: using
+ * it right away keeps the window in proportion instead of pairing the new width with the old height
+ * until the page has re-rendered and reported (and lets the window grow, which `desiredSize`'s clamp
+ * to the last measured width would otherwise forbid).
+ */
+export function projectContentSize(size: Size, fromWidth: number, toWidth: number): Size {
+  if (!(fromWidth > 0) || !(toWidth > 0) || fromWidth === toWidth) return size;
+  const scale = toWidth / fromWidth;
+  const content = { width: Math.max(1, size.width - PAGE_PADDING_PX), height: Math.max(1, size.height - PAGE_PADDING_PX) };
+  return {
+    width: Math.max(1, Math.round(content.width * scale)) + PAGE_PADDING_PX,
+    height: Math.max(1, Math.round(content.height * scale)) + PAGE_PADDING_PX,
+  };
+}
+
 function inside(r: Rect, p: { x: number; y: number }): boolean {
   return p.x >= r.x && p.x < r.x + r.width && p.y >= r.y && p.y < r.y + r.height;
 }
@@ -261,7 +278,12 @@ export class ElectronOverlay implements OverlayHandle {
   async update(patch: OverlayUpdate): Promise<void> {
     if (this.closed) return;
     const monitors = await this.backend.monitors();
+    const previousWidth = this.options.width;
     this.options = applyOverlayUpdate(this.options, patch, monitors);
+    // Resized: carry the measured content size over in proportion until the page reports the real one.
+    if (this.contentSize && this.options.width !== previousWidth) {
+      this.contentSize = projectContentSize(this.contentSize, previousWidth, this.options.width);
+    }
     const visual = visualPatch(patch);
     if (Object.keys(visual).length > 0 && !this.win.isDestroyed()) this.win.send({ type: 'update', id: this.id, options: visual });
     await this.backend.place(this);

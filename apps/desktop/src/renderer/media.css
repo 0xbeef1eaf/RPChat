@@ -124,17 +124,21 @@ body {
 }
 
 /* ---------- avatar page ---------- */
+/* The avatar sizes the window, not the other way round: it keeps the width it was given and its own
+   aspect ratio even when the window is still the size it had before a resize (nothing here may
+   shrink it to fit, or the size we measure and report would just repeat the stale window). */
 .avatar-page {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  max-width: 100%;
+  flex: 0 0 auto;
 }
 .avatar-figure {
   cursor: pointer;
   line-height: 0;
+  flex: 0 0 auto;
 }
 .avatar-figure img {
   width: 100%;

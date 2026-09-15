@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { bubbleRemainingMs, lookTransform, type AvatarPageState } from './avatar';
+import { fitMedia, type NaturalSize } from './fit';
 import { effectiveOpacity, type MediaLocalEvent } from './mediaState';
 
 interface AvatarViewProps {
@@ -11,7 +12,8 @@ interface AvatarViewProps {
 export function AvatarView({ avatar, onEvent }: AvatarViewProps) {
   const { id, state, animation, opacity, clickThrough } = avatar;
   const ref = useRef<HTMLDivElement>(null);
-  const [loaded, setLoaded] = useState(false);
+  // Natural pixel size of the expression image once known; drives the aspect-preserving fit into `size`.
+  const [natural, setNatural] = useState<NaturalSize | undefined>(undefined);
   const [look, setLook] = useState({ rotate: 0, dx: 0, dy: 0 });
 
   // Cursor tracking: subtle tilt toward the pointer (only while the window receives mouse events).
@@ -45,20 +47,41 @@ export function AvatarView({ avatar, onEvent }: AvatarViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, until, state.bubble?.text]);
 
-  // Content size once the image is in.
+  // The avatar is drawn `size` wide with its own aspect ratio; the window is then resized to what we
+  // report here. Measuring must not depend on the window we are currently in (it still has the size
+  // from before a resize), so the figure is pinned to the fitted box and nothing around it may shrink it.
+  const fitted = natural ? fitMedia(natural, { width: state.size }) : undefined;
+
+  // Report the rendered size once the image is in, and again whenever it changes (a new expression,
+  // a resize, or a bubble re-flowing; the observer converges it).
   useLayoutEffect(() => {
-    if (!loaded || !ref.current) return;
-    const r = ref.current.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) onEvent({ type: 'content-size', id, width: Math.ceil(r.width), height: Math.ceil(r.height) });
+    if (!fitted || !ref.current) return;
+    const el = ref.current;
+    let last: { width: number; height: number } | undefined;
+    const report = () => {
+      const r = el.getBoundingClientRect();
+      const size = { width: Math.ceil(r.width), height: Math.ceil(r.height) };
+      if (size.width <= 0 || size.height <= 0) return;
+      if (last && last.width === size.width && last.height === size.height) return;
+      last = size;
+      onEvent({ type: 'content-size', id, ...size });
+    };
+    report();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, id, state.size, state.imageUrl, Boolean(state.bubble)]);
+  }, [id, fitted?.width, fitted?.height, state.imageUrl]);
 
   const style: CSSProperties = {
     opacity: effectiveOpacity(opacity),
     pointerEvents: clickThrough ? 'none' : undefined,
-    width: state.size,
+    width: fitted?.width ?? state.size,
   };
+  // Only the width is pinned; `height` stays auto (media.css) so the picture can never be squeezed.
   const imgStyle: CSSProperties = {
+    width: fitted?.width ?? state.size,
     transform: `translate(${look.dx}px, ${look.dy}px) rotate(${look.rotate}deg)`,
   };
   const animClass = animation ? ` anim-${animation.name}` : '';
@@ -81,7 +104,7 @@ export function AvatarView({ avatar, onEvent }: AvatarViewProps) {
           alt={state.expression}
           draggable={false}
           style={imgStyle}
-          onLoad={() => setLoaded(true)}
+          onLoad={(e) => setNatural({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
           onError={() => onEvent({ type: 'error', id, message: `Avatar image failed to load (${state.expression})` })}
         />
       </div>

@@ -36,10 +36,19 @@ export function clampSize(v: unknown, fallback = AVATAR_DEFAULT_SIZE): number {
   return Math.max(AVATAR_MIN_SIZE, Math.min(AVATAR_MAX_SIZE, Math.round(v)));
 }
 
+/**
+ * The avatar is drawn at exactly this width and keeps its own aspect ratio, so a size wider than the
+ * monitor would be clipped by the window (which is clamped to the monitor) rather than shrunk.
+ */
+export function fitToMonitor(size: number, monitor: Pick<MonitorInfo, 'width'>): number {
+  return Math.max(AVATAR_MIN_SIZE, Math.min(size, Math.round(monitor.width)));
+}
+
 /** Pure: resolved overlay options for an avatar (width = size; default bottom-right, top layer). */
 export function avatarPlacement(opts: AvatarShowOptions, size: number, monitors: MonitorInfo[]): ResolvedOverlayOptions {
   const { width: _w, height: _h, ...rest } = opts;
-  return resolveOverlayOptions({ monitor: 'primary', position: 'bottom-right', ...rest, width: size }, monitors, { layer: 'top' });
+  const options = resolveOverlayOptions({ monitor: 'primary', position: 'bottom-right', ...rest, width: size }, monitors, { layer: 'top' });
+  return { ...options, width: fitToMonitor(options.width, options.monitor) };
 }
 
 export function toInfo(state: AvatarState): AvatarStateInfo {
@@ -140,8 +149,8 @@ export class AvatarHandler implements CapabilityHandler {
     }
     const backend = this.deps.backend();
     const monitors = await backend.monitors();
-    const size = clampSize(opts.size, map.size);
-    const options = avatarPlacement(opts, size, monitors);
+    const options = avatarPlacement(opts, clampSize(opts.size, map.size), monitors);
+    const size = options.width;
     const expression = typeof opts.expression === 'string' && map.expressions[opts.expression] ? opts.expression : map.defaultExpression;
     const rel = map.expressions[expression] as string;
     const state: AvatarState = {
@@ -191,7 +200,7 @@ export class AvatarHandler implements CapabilityHandler {
       cmdPatch.imageUrl = img.url;
     }
     if (patch.size !== undefined) {
-      live.state.size = clampSize(patch.size, live.state.size);
+      live.state.size = fitToMonitor(clampSize(patch.size, live.state.size), live.options.monitor);
       cmdPatch.size = live.state.size;
     }
     if (typeof patch.lookAtCursor === 'boolean') {

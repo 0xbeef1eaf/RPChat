@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OverlaySpec } from './backend.js';
 import { resolveOverlayOptions } from './backend.js';
-import { ElectronBackend, monitorsFromScreen } from './electron.js';
+import { ElectronBackend, monitorsFromScreen, projectContentSize } from './electron.js';
 import { FakeOverlayWindow, fakeScreen } from './test-fakes.js';
 
 function spec(id: string, options: OverlaySpec['options'], kind: 'image' | 'video' = 'image'): OverlaySpec {
@@ -66,7 +66,25 @@ describe('ElectronBackend', () => {
     expect(win.bounds.width).toBe(424);
     await handle.update({ opacity: 0.3, width: 300 });
     expect(win.sent.at(-1)).toEqual({ type: 'update', id: 'b', options: { opacity: 0.3, width: 300 } });
-    expect(win.bounds.width).toBe(300);
+    // 480 → 300 scales the last measured 400×250 content to 250×156 before the page re-reports.
+    expect(win.bounds).toMatchObject({ width: 274, height: 180 });
+  });
+
+  it('keeps the aspect ratio across a resize, before and after the page re-reports', async () => {
+    const { backend, windows } = make();
+    const monitors = await backend.monitors();
+    // A tall avatar: 240 wide, twice as high.
+    const handle = await backend.createOverlay(spec('d', resolveOverlayOptions({ monitor: 'primary', width: 240 }, monitors, { layer: 'top' })));
+    const win = windows[0]!;
+    win.report({ type: 'content-size', id: 'd', width: 240, height: 480 });
+    expect(win.bounds).toMatchObject({ width: 240, height: 504 });
+    // Doubling the size doubles the height too, rather than pairing the new width with the old one.
+    await handle.update({ width: 480 });
+    expect(win.bounds).toMatchObject({ width: 480, height: 984 });
+    // The page then reports what it really rendered: the same window, no jump.
+    win.report({ type: 'content-size', id: 'd', width: 480, height: 960 });
+    expect(win.bounds).toMatchObject({ width: 480, height: 984 });
+    await handle.close();
   });
 
   it('uses macOS levels, real opacity, and emits ended/closed from page reports', async () => {
@@ -85,5 +103,17 @@ describe('ElectronBackend', () => {
     expect(events).toEqual(['ended', 'closed']);
     expect(win.destroyed).toBe(true);
     await backend.closeAll();
+  });
+});
+
+describe('projectContentSize', () => {
+  it('scales the measured content (not the page padding) with the box width', () => {
+    expect(projectContentSize({ width: 264, height: 504 }, 240, 480)).toEqual({ width: 504, height: 984 });
+    expect(projectContentSize({ width: 264, height: 504 }, 240, 120)).toEqual({ width: 144, height: 264 });
+  });
+
+  it('leaves the size alone when the width did not change or is unusable', () => {
+    expect(projectContentSize({ width: 264, height: 504 }, 240, 240)).toEqual({ width: 264, height: 504 });
+    expect(projectContentSize({ width: 264, height: 504 }, 0, 480)).toEqual({ width: 264, height: 504 });
   });
 });

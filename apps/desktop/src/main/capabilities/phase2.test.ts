@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MonitorInfo } from '@rp/shared';
 import { executableName, hostMatches, isAllowlisted, isLaunchAllowed } from './allowlist.js';
-import { avatarPlacement, clampSize, expressionMap } from './avatar.js';
+import { avatarPlacement, clampSize, expressionMap, fitToMonitor } from './avatar.js';
 import { clampLevel, hyprFocusCommand, hyprMoveWindowCommands, hyprWorkspaceCommand, matchWindow, parseVolumeOutput, windowsFromHyprClients } from './desktop.js';
 import { FilesHandler, characterHomeDir, resolveHomePath } from './files.js';
 import { expandEvents, occurrences, parseDateValue, parseIcs, parseProperty, unfoldLines } from './ics.js';
@@ -216,6 +216,11 @@ describe('avatar placement + draw shapes', () => {
     });
     expect(clampSize(10)).toBe(48);
     expect(clampSize(undefined, 200)).toBe(200);
+    // The avatar is drawn at exactly this width, so it may never be wider than the screen it is on.
+    expect(fitToMonitor(1024, monitors[0]!)).toBe(1024);
+    expect(fitToMonitor(1024, { width: 800 })).toBe(800);
+    expect(avatarPlacement({ monitor: 1 }, 1024, monitors)).toMatchObject({ monitor: monitors[1], width: 1024 });
+    expect(avatarPlacement({ monitor: 1 }, 1024, [{ ...monitors[1]!, width: 800 }])).toMatchObject({ width: 800 });
     const map = expressionMap({
       dir: 'characters/luna',
       definition: { id: 'luna', name: 'Luna', persona: 'p.md', avatar: 'avatar.png', avatarSet: { expressions: { happy: 'faces/happy.png', neutral: 'faces/neutral.png' }, size: 300 } },

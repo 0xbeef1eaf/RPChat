@@ -101,6 +101,15 @@ impl OverlaySettings {
             self.monitor = Some(m.clone());
         }
         if let Some(w) = patch.width {
+            // Resized: the page scales its content to the box width keeping the aspect ratio, so
+            // carry the last report over in proportion. Without this the new width is paired with
+            // the old content height until the page re-renders, and the surface goes out of shape.
+            if w > 0.0 && self.width > 0.0 && w != self.width {
+                let scale = w / self.width;
+                self.content_size = self
+                    .content_size
+                    .map(|(cw, ch)| (cw * scale, ch * scale));
+            }
             self.width = w;
         }
         if patch.height.is_some() {
@@ -724,6 +733,26 @@ mod tests {
         assert_eq!(plan(&s, &m).height, 200);
         s.apply(&patch(r#"{"height":null}"#));
         assert_eq!(plan(&s, &m).height, 200, "null in a patch is 'unchanged'");
+    }
+
+    #[test]
+    fn resize_scales_the_last_content_size_so_the_shape_is_kept() {
+        let m = fixture_monitors();
+        // A tall avatar: 240 wide, twice as high.
+        let mut s = show(r#"{"id":"a","url":"u","anchor":"bottom-right","width":240}"#);
+        assert!(s.set_content_size(240.0, 480.0));
+        assert_eq!((plan(&s, &m).width, plan(&s, &m).height), (240, 504));
+        // Doubling the width doubles the height too, instead of keeping the old one until the
+        // page has re-rendered and reported.
+        s.apply(&patch(r#"{"width":480}"#));
+        assert_eq!((plan(&s, &m).width, plan(&s, &m).height), (480, 984));
+        // The page then reports what it really rendered: the projection already had it, so the
+        // surface is not re-planned and never jumps.
+        assert!(!s.set_content_size(480.0, 960.0));
+        assert_eq!((plan(&s, &m).width, plan(&s, &m).height), (480, 984));
+        // A patch that repeats the current width (every `update` carries one) changes nothing.
+        s.apply(&patch(r#"{"width":480,"opacity":0.5}"#));
+        assert_eq!(s.content_size, Some((480.0, 960.0)));
     }
 
     #[test]

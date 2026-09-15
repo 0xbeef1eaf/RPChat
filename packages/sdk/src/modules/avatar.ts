@@ -16,7 +16,8 @@ export const avatarModule: CapabilityModuleSpec = {
 interface AvatarApi {
   /**
    * Show the avatar (or re-show with new settings).
-   * @param opts expression: name from expressions() (default "neutral"); size: height in px (default 256);
+   * @param opts expression: name from expressions() (default "neutral"); size: width in px, the picture
+   *   keeps its aspect ratio and is never wider than the monitor (48..1024, default 240);
    *   monitor/position/x/y: placement (default bottom-right of the primary monitor); layer (default 'top');
    *   opacity 0..1; clickThrough; lookAtCursor: turn slightly toward the pointer (default true).
    * @returns The resulting state.
@@ -25,7 +26,8 @@ interface AvatarApi {
   show(opts?: { expression?: string; size?: number; monitor?: MonitorSelector; position?: MediaPosition; x?: number; y?: number; layer?: OverlayLayer; opacity?: number; clickThrough?: boolean; lookAtCursor?: boolean }): Promise<AvatarStateInfo>;
   /**
    * Change expression/size/behaviour of the visible avatar. Only the given fields change.
-   * @param patch expression, size, lookAtCursor, opacity, clickThrough.
+   * @param patch expression, size (width in px; the avatar keeps its aspect ratio), lookAtCursor,
+   *   opacity, clickThrough.
    * @example await sdk.avatar.set({ expression: "surprised" });
    */
   set(patch: { expression?: string; size?: number; lookAtCursor?: boolean; opacity?: number; clickThrough?: boolean }): Promise<AvatarStateInfo>;
