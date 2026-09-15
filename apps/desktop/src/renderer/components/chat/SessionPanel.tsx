@@ -5,7 +5,8 @@ interface SessionPanelProps {
   session: Session;
   providers: ProviderConfig[];
   onSave: (session: Session) => Promise<boolean>;
-  onDelete: () => void;
+  /** Omitted while the policy forbids deleting sessions — the button is then not rendered. */
+  onDelete?: (() => void) | undefined;
   onReset: () => void;
   onClose: () => void;
 }
@@ -80,9 +81,11 @@ export function SessionPanel({ session, providers, onSave, onDelete, onReset, on
           <span className="field-hint">Changes apply from the next message on.</span>
         </div>
         <div className="form-actions">
-          <button type="button" className="btn btn-danger" onClick={onDelete}>
-            Delete session
-          </button>
+          {onDelete ? (
+            <button type="button" className="btn btn-danger" onClick={onDelete}>
+              Delete session
+            </button>
+          ) : null}
           <button
             type="button"
             className="btn"

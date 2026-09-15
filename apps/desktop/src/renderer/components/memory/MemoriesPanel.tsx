@@ -22,6 +22,7 @@ export function MemoriesPanel() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [forgetting, setForgetting] = useState<MemoryEntry | null>(null);
+  const canForget = useAppState((x) => x.restrictions.allowDeleteMemories);
   const [consolidating, setConsolidating] = useState(false);
 
   const characterRef = target?.characterRef ?? null;
@@ -136,7 +137,7 @@ export function MemoriesPanel() {
       ) : (
         <div className="memory-list">
           {visible.map((e) => (
-            <MemoryRow key={e.id} entry={e} onSave={save} onForget={() => setForgetting(e)} />
+            <MemoryRow key={e.id} entry={e} onSave={save} onForget={canForget ? () => setForgetting(e) : undefined} />
           ))}
           <p className="muted small">
             {visible.length} of {entries.length}
@@ -216,7 +217,7 @@ function TagChips({ tags, onChange }: { tags: string[]; onChange: (tags: string[
   );
 }
 
-function MemoryRow({ entry, onSave, onForget }: { entry: MemoryEntry; onSave: (e: MemoryEntry) => Promise<void>; onForget: () => void }) {
+function MemoryRow({ entry, onSave, onForget }: { entry: MemoryEntry; onSave: (e: MemoryEntry) => Promise<void>; /** Omitted while the policy forbids deleting memories. */ onForget?: (() => void) | undefined }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(entry.text);
   const src = SOURCE_LABEL[entry.source] ?? SOURCE_LABEL.character;
@@ -270,9 +271,11 @@ function MemoryRow({ entry, onSave, onForget }: { entry: MemoryEntry; onSave: (e
           {formatRelative(entry.createdAt)}
           {entry.recallCount > 0 ? ` · recalled ${entry.recallCount}×` : ''}
         </span>
-        <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={onForget}>
-          Forget
-        </button>
+        {onForget ? (
+  <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={onForget}>
+            Forget
+          </button>
+        ) : null}
       </div>
     </div>
   );

@@ -3,7 +3,7 @@
  * store through the pure reducers. Components call these; they never call the
  * API directly except for one-off reads that do not touch shared state.
  */
-import type { CharacterRef, PackInspection, PermissionDecision, Session, SessionId, UiPromptAnswer } from '@rp/shared';
+import type { AppRestrictions, CharacterRef, PackInspection, PermissionDecision, Session, SessionId, UiPromptAnswer } from '@rp/shared';
 import { clampChatZoom } from '@rp/shared';
 import { api, errorMessage } from '../api';
 import { truncate } from '../lib/format';
@@ -45,9 +45,15 @@ export function reportError(context: string, err: unknown): void {
   toast('error', `${context}: ${msg}`);
 }
 
+/** Routes the policy can withhold, and the restriction each needs. */
+const ROUTE_NEEDS: Partial<Record<RouteName, keyof AppRestrictions>> = { editor: 'allowPackEditor', sandbox: 'allowSandbox' };
+
 export function navigate(route: RouteName): void {
   update((s) => {
     if (s.route === route) return s;
+    // The nav hides these, but a stale deep link or a keyboard shortcut must not reach them either.
+    const needs = ROUTE_NEEDS[route];
+    if (needs && !s.restrictions[needs]) return s;
     const editor = route === 'editor' && !s.editor.visited ? { ...s.editor, visited: true } : s.editor;
     const next = { ...s, route, editor };
     // Coming back to the chat is reading it.
@@ -76,6 +82,17 @@ export async function refreshSettings(): Promise<void> {
   ]);
   update((s) => ({ ...s, settings, managed }));
   applyTheme(settings.theme);
+}
+
+/** What the system policy forbids; permissive defaults when the call fails (main still enforces). */
+export async function refreshRestrictions(): Promise<void> {
+  const restrictions = await api()
+    .app.restrictions()
+    .catch((err: unknown) => {
+      console.warn('app.restrictions failed', err);
+      return null;
+    });
+  if (restrictions) update((s) => ({ ...s, restrictions }));
 }
 
 export async function refreshCapabilities(): Promise<void> {
@@ -148,11 +165,31 @@ export async function bootstrap(): Promise<void> {
   rp.ui.onPrompt((request) => update((s) => enqueueUiPrompt(s, request)));
 
   try {
-    const [version] = await Promise.all([rp.app.version(), refreshSettings(), refreshPacks(), refreshCharacters(), refreshSessions(), refreshCapabilities()]);
+    const [version] = await Promise.all([rp.app.version(), refreshSettings(), refreshPacks(), refreshCharacters(), refreshSessions(), refreshCapabilities(), refreshRestrictions()]);
     update((s) => ({ ...s, appVersion: version, booting: false, bootError: null }));
+    await enterRequiredSession();
   } catch (err) {
     update((s) => ({ ...s, booting: false, bootError: errorMessage(err) }));
   }
+}
+
+/**
+ * `requireCharacterSession`: keep the app inside a conversation. Opens the most recent session,
+ * or starts one with the first installed character when there is none, and pins the view to the
+ * chat. A no-op unless the policy asks for it, or when no character is installed to talk to.
+ */
+export async function enterRequiredSession(): Promise<void> {
+  const s = appStore.getState();
+  if (!s.restrictions.requireCharacterSession) return;
+  if (s.route !== 'chat') update((x) => ({ ...x, route: 'chat' }));
+  if (s.activeSessionId && s.sessions.some((x) => x.id === s.activeSessionId)) return;
+  const newest = [...s.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  if (newest) {
+    await openSession(newest.id);
+    return;
+  }
+  const first = s.characters[0];
+  if (first) await createSession(first.ref);
 }
 
 export async function openSession(sessionId: SessionId): Promise<void> {

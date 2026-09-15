@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AppSettings, DaemonEvent, DaemonRequest, DaemonResponse, GuardInfo, InstallInfo } from '@rp/shared';
 import { defaultSettings } from '@rp/core';
-import { RpError } from '@rp/shared';
+import { DEFAULT_APP_RESTRICTIONS, RpError } from '@rp/shared';
 import { APPLY_UPDATE_TIMEOUT_MS, DaemonClient, DaemonError, rpErrorCodeFor } from './daemon-client.js';
 import { GuardAttemptLog, SystemIntegration, autostartDesktopEntry, guardStatusOf, isSystemInstallExec, policyTemplate, systemInstallStatus } from './integration.js';
 import { KeepaliveLink, reconnectDelay } from './keepalive-link.js';
@@ -639,9 +639,10 @@ describe('SystemIntegration.createPolicy', () => {
     const json = JSON.parse(text) as Record<string, unknown>;
     expect(json).toMatchObject({ version: 1, managedBy: '', inputLock: { enabled: true, maxDurationMs: 42_000, emergencyKey: 'esc', emergencyHoldMs: 5000 } });
     // The quit/relaunch and session-guard sections are present but off, with the user pre-filled.
-    expect(json.app).toEqual({ allowQuit: true, users: ['alice'] });
+    expect(json.app).toEqual({ allowQuit: true, users: ['alice'], ...DEFAULT_APP_RESTRICTIONS });
     expect(json.guard).toMatchObject({ mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', shell: 'auto' });
-    expect(JSON.parse(policyTemplate(settings)).app).toEqual({ allowQuit: true });
+    // Every restriction is present at its permissive default, so a new policy changes nothing until edited.
+    expect(JSON.parse(policyTemplate(settings)).app).toEqual({ allowQuit: true, ...DEFAULT_APP_RESTRICTIONS });
     expect(json.settings).toMatchObject({ maxInputLockMs: 42_000, autonomy: base.autonomy, permissions: { moduleAllow: { desktop: false } }, web: { allowlist: ['a.example'] }, desktop: { launchAllowlist: [] }, memory: base.memory, displayBackend: 'electron', updates: { enabled: true, automatic: false } });
     expect((json.settings as { senses: object }).senses).toEqual({ includeInPrompt: base.senses.includeInPrompt, watchDirs: base.senses.watchDirs, calendarSources: base.senses.calendarSources });
     // Round-trips through the app's parser without problems, with every key managed.

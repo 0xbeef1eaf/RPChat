@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { GuardAttemptRecord, SystemIntegrationStatus } from '@rp/shared';
+import type { AppRestrictions, GuardAttemptRecord, SystemIntegrationStatus } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { formatDateTime } from '../../lib/format';
 import { refreshSettings, reportError, toast } from '../../store/actions';
@@ -207,6 +207,20 @@ export function SystemSection() {
                 ) : null}
                 <dt>Managed by</dt>
                 <dd>{policy.managedBy || <span className="muted">not stated</span>}</dd>
+                <dt>Restrictions</dt>
+                <dd>
+                  {restrictionLabels(policy.restrictions).length === 0 ? (
+                    <span className="muted">none</span>
+                  ) : (
+                    <span className="chips">
+                      {restrictionLabels(policy.restrictions).map((label) => (
+                        <span key={label} className="chip">
+                          {label}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </dd>
                 <dt>Forced settings</dt>
                 <dd>
                   {policy.managed.length === 0 ? (
@@ -524,6 +538,26 @@ export function quitDisabledLine(policy: Pick<SystemIntegrationStatus['policy'],
   const by = policy.managedBy ? ` (managed by ${policy.managedBy})` : '';
   const who = policy.users.length > 0 ? ` for: ${policy.users.join(', ')}` : '; no users are listed in app.users, so the daemon relaunches nobody';
   return `Quitting is disabled by policy${by}${who}. Closing the window hides it; Ctrl+Q and the tray do not quit.`;
+}
+
+/** How each `app` restriction reads in Settings → System when it is in force. */
+const RESTRICTION_LABELS: Record<keyof AppRestrictions, string> = {
+  allowPackEditor: 'pack editor disabled',
+  allowPackRemove: 'packs cannot be removed',
+  allowPackInstall: 'packs cannot be installed or replaced',
+  allowDeleteSession: 'sessions cannot be deleted',
+  allowDeleteHistory: 'chat history cannot be deleted',
+  allowDeleteMemories: 'memories cannot be deleted',
+  allowRemoveEvents: 'event handlers cannot be removed',
+  allowSandbox: 'sandbox disabled',
+  requireCharacterSession: 'a conversation stays open',
+};
+
+/** Pure: one label per restriction in force (an `allow*` switched off, a `require*` switched on). */
+export function restrictionLabels(restrictions: AppRestrictions): string[] {
+  return (Object.keys(RESTRICTION_LABELS) as Array<keyof AppRestrictions>)
+    .filter((k) => (k.startsWith('require') ? restrictions[k] : !restrictions[k]))
+    .map((k) => RESTRICTION_LABELS[k]);
 }
 
 /** Validation problems from a `createPolicy` error: the message lists one problem per line after "Invalid policy file:". */

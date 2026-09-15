@@ -76,6 +76,12 @@ pub struct InputLockPolicy {
 /// `PolicyFile.app`: how the app itself may behave. `allowQuit: false` makes the app hide every
 /// way to quit and makes this daemon relaunch it when its process dies — for the unix users in
 /// `users` only, and only while one of them owns the active graphical session.
+///
+/// The `allow*`/`require*` keys below are the app-enforced restrictions (the pack editor, pack
+/// installs and removals, deleting sessions/history/memories, event handlers, the sandbox, and
+/// keeping a conversation open). The daemon does not act on them — the app refuses those
+/// operations on its own IPC boundary — but this struct denies unknown fields, so they are
+/// declared here to keep a policy that uses them loadable, and round-trip through `policy`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppPolicy {
@@ -83,6 +89,24 @@ pub struct AppPolicy {
     pub allow_quit: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub users: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_pack_editor: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_pack_remove: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_pack_install: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_delete_session: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_delete_history: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_delete_memories: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_remove_events: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_sandbox: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_character_session: Option<bool>,
 }
 
 /// Effective `app` rules with defaults: quitting allowed, nobody listed.
@@ -914,6 +938,43 @@ mod tests {
             .lock_limits();
         assert!(!limits.enabled);
         assert_eq!(limits.max_duration_ms, DEFAULT_MAX_LOCK_MS);
+    }
+
+    #[test]
+    /// The app enforces the `app` restrictions itself, but this struct denies unknown fields:
+    /// if it did not know them, a policy using them would fail to load *entirely* and take the
+    /// quit/relaunch and guard blocks down with it.
+    fn app_restrictions_load_and_round_trip_without_affecting_the_daemon() {
+        let doc = json!({"version":1,"app":{
+            "allowQuit": false,
+            "users": ["alice"],
+            "allowPackEditor": false,
+            "allowPackRemove": false,
+            "allowPackInstall": false,
+            "allowDeleteSession": false,
+            "allowDeleteHistory": false,
+            "allowDeleteMemories": false,
+            "allowRemoveEvents": false,
+            "allowSandbox": false,
+            "requireCharacterSession": true
+        }});
+        let loaded = policy(doc.clone()).unwrap();
+        // The daemon's own decisions are untouched by them.
+        let rules = loaded.app_rules();
+        assert!(!rules.allow_quit && rules.keeps_alive("alice"));
+        let app = loaded.app.as_ref().unwrap();
+        assert_eq!(app.allow_pack_editor, Some(false));
+        assert_eq!(app.allow_sandbox, Some(false));
+        assert_eq!(app.require_character_session, Some(true));
+        // Handed back to the app verbatim.
+        assert_eq!(serde_json::to_value(&loaded).unwrap(), doc);
+        // Omitted keys stay absent rather than becoming `false`.
+        let bare = policy(json!({"version":1,"app":{"allowQuit":true}})).unwrap();
+        let bare_app = bare.app.as_ref().unwrap();
+        assert_eq!(bare_app.allow_pack_editor, None);
+        assert_eq!(bare_app.require_character_session, None);
+        // A genuinely unknown key is still refused.
+        assert!(policy(json!({"version":1,"app":{"allowNonsense":true}})).is_err());
     }
 
     #[test]

@@ -8,7 +8,8 @@ import { MediaSummary } from './MediaSummary';
 
 interface PackCardProps {
   pack: InstalledPackView;
-  onUninstall: () => void;
+  /** Omitted while the policy forbids removing packs — the button is then not rendered. */
+  onUninstall?: (() => void) | undefined;
 }
 
 export function PackCard({ pack, onUninstall }: PackCardProps) {
@@ -38,9 +39,11 @@ export function PackCard({ pack, onUninstall }: PackCardProps) {
               {readmeOpen ? 'Hide README' : 'README'}
             </button>
           ) : null}
-          <button type="button" className="btn btn-sm btn-danger" onClick={onUninstall}>
-            Uninstall
-          </button>
+          {onUninstall ? (
+            <button type="button" className="btn btn-sm btn-danger" onClick={onUninstall}>
+              Uninstall
+            </button>
+          ) : null}
         </div>
       </div>
 

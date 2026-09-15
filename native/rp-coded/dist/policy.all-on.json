@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "managedBy": "Everything on: the app cannot be quit, the session is guarded (replace \"alice\" with your user name)",
+  "managedBy": "Everything on: the app cannot be quit or taken apart, a conversation stays open, the session is guarded (replace \"alice\" with your user name)",
   "settings": {
     "permissions": { "moduleAllow": {} },
     "updates": { "enabled": true, "automatic": true, "allowDowngrade": false }
@@ -13,7 +13,16 @@
   },
   "app": {
     "allowQuit": false,
-    "users": ["alice"]
+    "users": ["alice"],
+    "allowPackEditor": false,
+    "allowPackRemove": false,
+    "allowPackInstall": false,
+    "allowDeleteSession": false,
+    "allowDeleteHistory": false,
+    "allowDeleteMemories": false,
+    "allowRemoveEvents": false,
+    "allowSandbox": false,
+    "requireCharacterSession": true
   },
   "guard": {
     "mode": "enforce",

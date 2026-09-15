@@ -3,9 +3,10 @@
  * is pure; `PolicyWatcher` re-reads the file whenever its mtime changes.
  */
 import * as fs from 'node:fs/promises';
-import type { AppPolicy, AppSettings, GuardPolicy, ManagedSettingsPaths, PolicyFile } from '@rp/shared';
-import { GUARD_COMPOSITOR_IPC, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RpError } from '@rp/shared';
+import type { AppPolicy, AppRestrictions, AppSettings, GuardPolicy, ManagedSettingsPaths, PolicyFile } from '@rp/shared';
+import { APP_ALLOW_KEYS, APP_REQUIRE_KEYS, DEFAULT_APP_RESTRICTIONS, GUARD_COMPOSITOR_IPC, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RpError } from '@rp/shared';
 import type { GuardShell } from '@rp/shared';
+import { activeRestrictions } from './restrictions.js';
 
 const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTimersPerSession', 'minRepeatIntervalMs', 'minDelayMs'] as const;
 const MEMORY_KEYS = ['enabled', 'consolidateEveryTurns', 'maxEntriesPerCharacter', 'promptBudgetTokens'] as const;
@@ -159,6 +160,13 @@ export function parsePolicy(json: unknown): PolicyFile {
         if (Array.isArray(a.users) && a.users.length > 0 && a.users.every((u) => typeof u === 'string' && u.trim().length > 0)) appBlock.users = (a.users as string[]).map((u) => u.trim());
         else problems.push('app.users must be a non-empty array of user names');
       }
+      // The app-enforced restrictions: plain booleans, each absent key keeping its default.
+      for (const k of [...APP_ALLOW_KEYS, ...APP_REQUIRE_KEYS]) {
+        const v = a[k];
+        if (v === undefined) continue;
+        if (typeof v === 'boolean') appBlock[k] = v;
+        else problems.push(`app.${k} must be a boolean`);
+      }
       out.app = appBlock;
     }
   }
@@ -231,6 +239,18 @@ export function parseGuard(raw: unknown, problems: string[]): GuardPolicy | unde
 /** Pure: the effective guard mode of a policy (`off` without a file or a `guard` block). */
 export function guardMode(policy: PolicyFile | null | undefined): NonNullable<GuardPolicy['mode']> {
   return policy?.guard?.mode ?? 'off';
+}
+
+/** Pure: the effective restrictions — every key the policy does not mention keeps its permissive default. */
+export function appRestrictions(policy: PolicyFile | null | undefined): AppRestrictions {
+  const a = policy?.app;
+  const out: AppRestrictions = { ...DEFAULT_APP_RESTRICTIONS };
+  if (!a) return out;
+  for (const k of [...APP_ALLOW_KEYS, ...APP_REQUIRE_KEYS]) {
+    const v = a[k];
+    if (typeof v === 'boolean') out[k] = v;
+  }
+  return out;
 }
 
 /** Pure: the effective `app` block — `allowQuit` is true unless a policy says `false`; `users` empty unless listed. */
@@ -324,6 +344,8 @@ export interface PolicyState {
   managed: ManagedSettingsPaths;
   /** `appPolicy(policy)`: defaults (quit allowed, nobody listed) without a file or with a broken one. */
   app: AppPolicy;
+  /** `appRestrictions(policy)`: what the app refuses on the IPC boundary; permissive defaults without a file. */
+  restrictions: AppRestrictions;
   managedBy?: string;
   error?: string;
 }
@@ -334,16 +356,16 @@ export async function loadPolicy(path: string = POLICY_FILE_PATH): Promise<Polic
   try {
     text = await fs.readFile(path, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { present: false, path, policy: null, managed: [], app: appPolicy(null) };
-    return { present: true, path, policy: null, managed: [], app: appPolicy(null), error: `cannot read ${path}: ${(err as Error).message}` };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { present: false, path, policy: null, managed: [], app: appPolicy(null), restrictions: appRestrictions(null) };
+    return { present: true, path, policy: null, managed: [], app: appPolicy(null), restrictions: appRestrictions(null), error: `cannot read ${path}: ${(err as Error).message}` };
   }
   try {
     const policy = parsePolicy(JSON.parse(text));
-    const state: PolicyState = { present: true, path, policy, managed: managedPaths(policy), app: appPolicy(policy) };
+    const state: PolicyState = { present: true, path, policy, managed: managedPaths(policy), app: appPolicy(policy), restrictions: appRestrictions(policy) };
     if (policy.managedBy) state.managedBy = policy.managedBy;
     return state;
   } catch (err) {
-    return { present: true, path, policy: null, managed: [], app: appPolicy(null), error: (err as Error).message };
+    return { present: true, path, policy: null, managed: [], app: appPolicy(null), restrictions: appRestrictions(null), error: (err as Error).message };
   }
 }
 
@@ -380,7 +402,10 @@ export class PolicyWatcher {
         this.state = state;
         this.stamp = stamp;
         if (state.error) this.logger?.warn?.(`[policy] ${state.error}`);
-        else if (state.present) this.logger?.info?.(`[policy] ${changed ? 'reloaded' : 'loaded'} ${this.path}: ${state.managed.length} managed setting(s)${state.app.allowQuit ? '' : `, quitting disabled for ${state.app.users.length > 0 ? state.app.users.join(', ') : 'nobody (app.users is empty)'}`}${state.managedBy ? ` (managed by ${state.managedBy})` : ''}`);
+        else if (state.present) {
+          const restricted = activeRestrictions(state.restrictions);
+          this.logger?.info?.(`[policy] ${changed ? 'reloaded' : 'loaded'} ${this.path}: ${state.managed.length} managed setting(s)${state.app.allowQuit ? '' : `, quitting disabled for ${state.app.users.length > 0 ? state.app.users.join(', ') : 'nobody (app.users is empty)'}`}${restricted.length > 0 ? `, restrictions: ${restricted.join(', ')}` : ''}${state.managedBy ? ` (managed by ${state.managedBy})` : ''}`);
+        }
         return state;
       })
       .finally(() => {

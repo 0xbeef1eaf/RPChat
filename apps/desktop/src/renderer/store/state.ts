@@ -1,4 +1,5 @@
 import type {
+  AppRestrictions,
   AppSettings,
   CapabilityInfo,
   ChatMessage,
@@ -11,6 +12,7 @@ import type {
   SessionId,
   UiPromptRequest,
 } from '@rp/shared';
+import { DEFAULT_APP_RESTRICTIONS } from '@rp/shared';
 
 export type RouteName = 'chat' | 'packs' | 'settings' | 'log' | 'sdk' | 'editor' | 'sandbox';
 
@@ -75,6 +77,11 @@ export interface AppState {
   /** Dotted settings paths forced by the system policy (`settings.managed()`). */
   managed: string[];
   /**
+   * What the system policy forbids (`app.restrictions()`). The UI hides the matching controls;
+   * main refuses the operations regardless, so this is presentation, not enforcement.
+   */
+  restrictions: AppRestrictions;
+  /**
    * Messages that arrived in a session while the user was looking at something else, per
    * session. Cleared when that chat is opened; the sidebar shows the count.
    */
@@ -119,6 +126,7 @@ export function initialState(): AppState {
     runtime: {},
     settings: null,
     managed: [],
+    restrictions: { ...DEFAULT_APP_RESTRICTIONS },
     unread: {},
     permissionRequests: [],
     uiPrompts: [],

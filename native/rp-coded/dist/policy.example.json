@@ -47,7 +47,16 @@
   },
   "app": {
     "allowQuit": true,
-    "users": ["alice"]
+    "users": ["alice"],
+    "allowPackEditor": true,
+    "allowPackRemove": true,
+    "allowPackInstall": true,
+    "allowDeleteSession": true,
+    "allowDeleteHistory": true,
+    "allowDeleteMemories": true,
+    "allowRemoveEvents": true,
+    "allowSandbox": true,
+    "requireCharacterSession": false
   },
   "guard": {
     "mode": "off",

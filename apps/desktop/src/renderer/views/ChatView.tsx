@@ -43,7 +43,10 @@ export function ChatView() {
     return () => window.removeEventListener('keydown', onKey);
   }, [zoom]);
 
+  const restrictions = useAppState((s) => s.restrictions);
   const session = useMemo(() => sessions.find((s) => s.id === activeSessionId), [sessions, activeSessionId]);
+  // `requireCharacterSession` keeps a conversation open, so the last one may not be deleted either.
+  const canDeleteSession = restrictions.allowDeleteSession && !(restrictions.requireCharacterSession && sessions.length <= 1);
   const character = useMemo(() => (session ? characters.find((c) => c.ref === session.characterRef) : undefined), [characters, session]);
 
   const providersConfigured = (settings?.providers.length ?? 0) > 0;
@@ -131,15 +134,17 @@ export function ChatView() {
         <button type="button" className="btn btn-sm" onClick={closeAllMedia} title="Close every open media window">
           Close media
         </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => setConfirmClear(true)}
-          disabled={!messages || messages.length === 0}
-          title="Delete every message in this session; memories, timers and state stay"
-        >
-          Clear history
-        </button>
+        {restrictions.allowDeleteHistory ? (
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setConfirmClear(true)}
+            disabled={!messages || messages.length === 0}
+            title="Delete every message in this session; memories, timers and state stay"
+          >
+            Clear history
+          </button>
+        ) : null}
         <button type="button" className="btn btn-sm" onClick={() => setPanelOpen((v) => !v)} aria-expanded={panelOpen}>
           Session settings
         </button>
@@ -151,7 +156,7 @@ export function ChatView() {
           session={session}
           providers={settings?.providers ?? []}
           onSave={saveSession}
-          onDelete={() => setConfirmDelete(true)}
+          onDelete={canDeleteSession ? () => setConfirmDelete(true) : undefined}
           onReset={() => setConfirmReset(true)}
           onClose={() => setPanelOpen(false)}
         />
@@ -164,7 +169,7 @@ export function ChatView() {
         turnRunning={running}
         error={runtime.error}
         markers={runtime.eventMarkers}
-        onDeleteMessage={(messageId) => void deleteMessage(session.id, messageId)}
+        onDeleteMessage={restrictions.allowDeleteHistory ? (messageId) => void deleteMessage(session.id, messageId) : undefined}
         onRetry={onRetry}
       />
       <div className="status-line" aria-live="polite">

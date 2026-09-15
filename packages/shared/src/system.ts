@@ -45,7 +45,10 @@ export interface PolicyFile {
    * the users listed in `users` (unix user names) while one of them owns the active graphical
    * session. An absent or empty `users` list means nobody is relaunched.
    */
-  app?: { allowQuit?: boolean; users?: string[] };
+  app?: {
+    allowQuit?: boolean;
+    users?: string[];
+  } & Partial<AppRestrictions>;
   /**
    * The session guard (docs/system-integration.md "Session guard"): AppArmor confinement of the
    * `app.users` login sessions so their own terminals, keybind scripts and pickers cannot reach
@@ -138,7 +141,78 @@ export type DaemonEvent = { ev: 'guard-attempt'; at: string } & GuardAttempt;
 export type DaemonEventName = DaemonEvent['ev'];
 export const DAEMON_EVENT_NAMES: readonly DaemonEventName[] = ['guard-attempt'];
 
-/** The effective `PolicyFile.app` block with defaults applied (`allowQuit` defaults to true). */
+/**
+ * The app-enforced restrictions of the `app` block (docs/spec/system.md "Restrictions"). Unlike
+ * the `guard` block — AppArmor confinement the daemon applies to the *session around* the app —
+ * these are refused by the main process itself, on the IPC boundary, so neither the UI nor a
+ * character's script can reach the operation. The renderer also hides the matching controls, but
+ * that is cosmetic: `registerIpc` is what actually enforces them.
+ *
+ * Every `allow*` key defaults to `true` and every `require*` key to `false`, so a policy that
+ * does not mention them behaves exactly as before.
+ */
+export interface AppRestrictions {
+  /** `false` closes the pack editor: the whole `editor:*` IPC namespace is refused and the nav entry is gone. */
+  allowPackEditor: boolean;
+  /** `false` refuses `packs.uninstall` — no installed pack can be removed. */
+  allowPackRemove: boolean;
+  /**
+   * `false` freezes the installed packs on disk: `packs.install` and the editor's `installToApp`
+   * are refused, so no pack is added, replaced or rewritten in the pack store.
+   */
+  allowPackInstall: boolean;
+  /** `false` refuses `sessions.remove` — a conversation cannot be deleted. */
+  allowDeleteSession: boolean;
+  /** `false` refuses `sessions.clearMessages` and `sessions.removeMessage` — the chat history cannot be erased. */
+  allowDeleteHistory: boolean;
+  /** `false` refuses `memories.remove` — what a character remembers cannot be deleted. */
+  allowDeleteMemories: boolean;
+  /** `false` refuses `events.remove` — a character's event handlers cannot be unsubscribed by hand. */
+  allowRemoveEvents: boolean;
+  /** `false` closes the Sandbox tab: `sandbox.run`/`sandbox.cancel` are refused and the nav entry is gone. */
+  allowSandbox: boolean;
+  /**
+   * `true` keeps the app inside a conversation: the UI always opens a session with a character
+   * (creating one for the first installed character when none exists) and offers no way to sit on
+   * an empty chat. Refuses `sessions.remove` for the last remaining session so the requirement
+   * cannot be emptied out from under itself.
+   */
+  requireCharacterSession: boolean;
+}
+
+/** Permissive defaults: everything allowed, no session forced — what applies without a policy file. */
+export const DEFAULT_APP_RESTRICTIONS: AppRestrictions = {
+  allowPackEditor: true,
+  allowPackRemove: true,
+  allowPackInstall: true,
+  allowDeleteSession: true,
+  allowDeleteHistory: true,
+  allowDeleteMemories: true,
+  allowRemoveEvents: true,
+  allowSandbox: true,
+  requireCharacterSession: false,
+};
+
+/** The `allow*` restriction keys (all default `true`), for validation and iteration. */
+export const APP_ALLOW_KEYS = [
+  'allowPackEditor',
+  'allowPackRemove',
+  'allowPackInstall',
+  'allowDeleteSession',
+  'allowDeleteHistory',
+  'allowDeleteMemories',
+  'allowRemoveEvents',
+  'allowSandbox',
+] as const satisfies readonly (keyof AppRestrictions)[];
+
+/** The `require*` restriction keys (all default `false`). */
+export const APP_REQUIRE_KEYS = ['requireCharacterSession'] as const satisfies readonly (keyof AppRestrictions)[];
+
+/**
+ * The effective quit/relaunch half of `PolicyFile.app` (`allowQuit` defaults to true). The
+ * restrictions travel separately as `AppRestrictions`: the daemon acts on this half, the app on
+ * that one.
+ */
 export interface AppPolicy {
   allowQuit: boolean;
   users: string[];
@@ -230,6 +304,8 @@ export interface SystemIntegrationStatus {
     allowQuit: boolean;
     /** `app.users`: the unix user names the daemon relaunches the app for (only meaningful with `allowQuit: false`). */
     users: string[];
+    /** The effective `app` restrictions (`DEFAULT_APP_RESTRICTIONS` without a policy file); not settings keys, so not in `managed`. */
+    restrictions: AppRestrictions;
     error?: string;
   };
   /** udev rule and group membership as detected (Linux). */

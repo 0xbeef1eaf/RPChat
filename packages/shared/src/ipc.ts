@@ -9,7 +9,7 @@ import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, SaveScriptInput, ScriptKind, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
-import type { GuardAttemptRecord, ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
+import type { AppRestrictions, GuardAttemptRecord, ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
 import type { BrowserBlock, BrowserBridgeStatus } from './browser.js';
 import type { UpdateStatus } from './updates.js';
 import type { SandboxRunRequest, SandboxRunResult } from './sandbox.js';
@@ -107,6 +107,12 @@ export interface IpcApi {
     setVisibleSession(sessionId: string | null): Promise<void>;
     /** Clicking such a notification asks the UI to open that session. */
     onShowSession(listener: (sessionId: string) => void): Unsubscribe;
+    /**
+     * What the root-owned policy's `app` block forbids on this machine, so the UI can hide the
+     * controls it would refuse anyway. Cosmetic only: main refuses the guarded channels whatever
+     * the renderer shows. Permissive defaults without a policy file.
+     */
+    restrictions(): Promise<AppRestrictions>;
   };
   packs: {
     list(): Promise<InstalledPackView[]>;

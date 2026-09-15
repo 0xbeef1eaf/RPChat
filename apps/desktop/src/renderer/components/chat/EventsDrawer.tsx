@@ -14,6 +14,7 @@ interface EventsDrawerProps {
 /** Live `sdk.events.on` subscriptions for the session, with remove buttons. */
 export function EventsDrawer({ sessionId, onClose }: EventsDrawerProps) {
   const version = useAppState((s) => runtimeFor(s, sessionId).eventsVersion);
+  const canRemove = useAppState((s) => s.restrictions.allowRemoveEvents);
   const [subs, setSubs] = useState<EventSubscription[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showCode, setShowCode] = useState<string | null>(null);
@@ -55,7 +56,7 @@ export function EventsDrawer({ sessionId, onClose }: EventsDrawerProps) {
         </div>
         <p className="muted small">
           Subscriptions the character created with <code>sdk.events.on</code>. When one fires its code runs in the sandbox (audited), which
-          may wake the character. Remove any you do not want.
+          may wake the character.{canRemove ? ' Remove any you do not want.' : ' Removing them is disabled by the system policy on this machine.'}
         </p>
         {error ? <div className="callout callout-danger small">{error}</div> : null}
         {subs === null ? (
@@ -87,9 +88,11 @@ export function EventsDrawer({ sessionId, onClose }: EventsDrawerProps) {
                 <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowCode(showCode === s.id ? null : s.id)}>
                   {showCode === s.id ? 'Hide code' : 'Code'}
                 </button>
-                <button type="button" className="btn btn-sm btn-danger" onClick={() => remove(s.id)}>
-                  Remove
-                </button>
+                {canRemove ? (
+                  <button type="button" className="btn btn-sm btn-danger" onClick={() => remove(s.id)}>
+                    Remove
+                  </button>
+                ) : null}
               </div>
             ))}
           </div>

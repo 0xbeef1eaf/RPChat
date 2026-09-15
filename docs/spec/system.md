@@ -257,7 +257,8 @@ with `pkexec` for the current user.
   `applyPolicy(settings, policy)` (pure, tested) forces the listed keys; `appPolicy(policy)` →
   `{ allowQuit, users }` with defaults (`app.allowQuit` is not a settings key: it is reported as
   `SystemIntegrationStatus.policy.allowQuit`/`.users`, never in `managed`). `parsePolicy` accepts
-  `app.allowQuit` (boolean) and `app.users` (non-empty string array), ignores unknown `app` keys. `SettingsService` results
+  `app.allowQuit` (boolean), `app.users` (non-empty string array) and the boolean restriction keys
+  below, ignores unknown `app` keys. `SettingsService` results
   and every `settings.get()` go through `applyPolicy`; `settings.update` ignores managed paths and
   the response carries the forced values. Policy file is re-read when its mtime changes
   (`PolicyWatcher.invalidate()` forces the next read). `parseGuard` mirrors the daemon's
@@ -342,6 +343,38 @@ with `pkexec` for the current user.
 |---|---|---|
 | `app.allowQuit` | boolean, default `true` | `false`: no Quit in the tray, close hides, Ctrl+Q/`app.quit()`/signals ignored; the daemon relaunches the app for the listed users. |
 | `app.users` | non-empty `string[]` of unix user names | Who the daemon relaunches (must also own the active graphical session). Absent/empty → nobody. Shown in Settings → System ("Quitting is disabled by policy … for: alice, bob"). |
+
+### Policy `app` restrictions
+
+`AppRestrictions` in `@rp/shared/system.ts` (`DEFAULT_APP_RESTRICTIONS`: every `allow*` `true`,
+every `require*` `false`, so a policy that omits them changes nothing). `parsePolicy` accepts each
+as a boolean and rejects anything else; `appRestrictions(policy)` applies the defaults and lands on
+`PolicyState.restrictions`, reported as `SystemIntegrationStatus.policy.restrictions` and read by
+the renderer through `app.restrictions()`. Not settings keys: never in `managed`.
+
+Enforcement is `src/main/system/restrictions.ts` (pure + tested): `RESTRICTED_CHANNELS` maps an
+IPC channel — or a whole namespace as `"<ns>:*"` — to the restriction that forbids it, and
+`registerIpc`'s dispatch loop calls `refusalFor(channel, restrictions, managedBy)` before the
+handler, throwing `PERMISSION_DENIED` with the reason. A channel may match both a namespace rule
+and its own and is refused when either forbids it. `isRestrictable` resolves the guarded set once
+at registration so unguarded channels never read the policy. The renderer hides the matching
+controls (nav entries, Uninstall, Clear history, Forget, Remove, Delete session) — cosmetic only.
+
+| Key | Default | Effect | Channels refused |
+|---|---|---|---|
+| `allowPackEditor` | `true` | Pack editor closed; nav entry hidden, `navigate('editor')` is a no-op. | `editor:*` |
+| `allowPackRemove` | `true` | No *Uninstall* on a pack card. | `packs:uninstall` |
+| `allowPackInstall` | `true` | Installed packs frozen on disk — nothing added, replaced or rewritten. The editor still opens and still exports. | `packs:install`, `editor:installToApp` |
+| `allowDeleteSession` | `true` | No *Delete session* in the session panel. | `sessions:remove` |
+| `allowDeleteHistory` | `true` | No *Clear history*, no per-message delete. | `sessions:clearMessages`, `sessions:removeMessage` |
+| `allowDeleteMemories` | `true` | No *Forget* in the memories panel; add/edit still work. | `memories:remove` |
+| `allowRemoveEvents` | `true` | No *Remove* in the events drawer. | `events:remove` |
+| `allowSandbox` | `true` | Sandbox tab closed; nav entry hidden. Characters' own scripts unaffected. | `sandbox:run`, `sandbox:cancel` |
+| `requireCharacterSession` | `false` | `enterRequiredSession()` opens the newest session at boot, or creates one with the first installed character, and pins the route to `chat`. The **last** session cannot be deleted — checked in the `sessions.remove` handler (conditional, so not in the table) and mirrored in `ChatView`. | — |
+
+`AppPolicy` (`{ allowQuit, users }`) stays the daemon's half; the restrictions travel separately so
+`QuitGuard` is unaffected. The daemon's `AppPolicy` struct declares the same keys only because it
+sets `deny_unknown_fields` — it does not act on them.
 
 ### Policy `guard` block
 

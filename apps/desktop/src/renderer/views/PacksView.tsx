@@ -9,6 +9,8 @@ import { useAppState } from '../store/store';
 
 export function PacksView() {
   const packs = useAppState((s) => s.packs);
+  const canInstall = useAppState((s) => s.restrictions.allowPackInstall);
+  const canRemove = useAppState((s) => s.restrictions.allowPackRemove);
   const [pendingUninstall, setPendingUninstall] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [pending, setPending] = useState<{ sourcePath: string; inspection: PackInspection } | null>(null);
@@ -27,7 +29,8 @@ export function PacksView() {
     if (await installPackFromPath(pending.sourcePath)) setPending(null);
   };
 
-  const installButtons = (
+  // The policy can freeze the pack store; main refuses `packs.install` then, so offer nothing.
+  const installButtons = canInstall ? (
     <>
       <button type="button" className="btn btn-primary" disabled={installing} onClick={() => install('file')}>
         Install .rppack…
@@ -36,7 +39,7 @@ export function PacksView() {
         Install from folder…
       </button>
     </>
-  );
+  ) : null;
 
   return (
     <div className="view">
@@ -46,14 +49,20 @@ export function PacksView() {
       </div>
       {packs.length === 0 ? (
         <EmptyState title="No packs installed" actions={installButtons}>
-          A pack bundles a character with its persona, media and optional behaviour scripts. Install a <code>.rppack</code>{' '}
-          file or point at an unpacked pack folder (one that contains <code>pack.json</code>). What characters may do on this PC is set
-          once for all of them under Settings → Permissions.
+          {canInstall ? (
+            <>
+              A pack bundles a character with its persona, media and optional behaviour scripts. Install a <code>.rppack</code>{' '}
+              file or point at an unpacked pack folder (one that contains <code>pack.json</code>). What characters may do on this PC is set
+              once for all of them under Settings → Permissions.
+            </>
+          ) : (
+            <>Installing packs is disabled by the system policy on this machine. Ask whoever manages it to add one.</>
+          )}
         </EmptyState>
       ) : (
         <div className="pack-grid">
           {packs.map((p) => (
-            <PackCard key={p.packId} pack={p} onUninstall={() => setPendingUninstall(p.packId)} />
+            <PackCard key={p.packId} pack={p} onUninstall={canRemove ? () => setPendingUninstall(p.packId) : undefined} />
           ))}
         </div>
       )}

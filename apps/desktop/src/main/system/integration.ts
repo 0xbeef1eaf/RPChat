@@ -7,7 +7,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AppSettings, DaemonEvent, DaemonStatus, GuardAttemptRecord, GuardStatus, PolicyFile, SystemInstallStatus, SystemIntegrationStatus } from '@rp/shared';
-import { RpError, SYSTEM_GROUP, SYSTEM_INSTALL_DIR } from '@rp/shared';
+import { DEFAULT_APP_RESTRICTIONS, RpError, SYSTEM_GROUP, SYSTEM_INSTALL_DIR } from '@rp/shared';
 import type { DaemonClient } from './daemon-client.js';
 import type { PolicyWatcher } from './policy.js';
 import { guardMode, parsePolicy } from './policy.js';
@@ -134,7 +134,7 @@ export function policyTemplate(settings: AppSettings, userName?: string): string
     },
     inputLock: { enabled: true, maxDurationMs: settings.maxInputLockMs, emergencyKey: 'esc', emergencyHoldMs: 5000 },
     // Off by default so a freshly created policy changes nothing; every key is present to edit.
-    app: userName ? { allowQuit: true, users: [userName] } : { allowQuit: true },
+    app: { allowQuit: true, ...(userName ? { users: [userName] } : {}), ...DEFAULT_APP_RESTRICTIONS },
     guard: { mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', shell: 'auto', extraDenyPaths: [], extraDenySockets: [], allowBinaries: [] },
   };
   return `${JSON.stringify(policy, null, 2)}\n`;
@@ -314,6 +314,7 @@ export class SystemIntegration {
       managed: policyState.managed,
       allowQuit: policyState.app.allowQuit,
       users: policyState.app.users,
+      restrictions: policyState.restrictions,
     };
     if (policyState.managedBy) policy.managedBy = policyState.managedBy;
     if (policyState.error) policy.error = policyState.error;

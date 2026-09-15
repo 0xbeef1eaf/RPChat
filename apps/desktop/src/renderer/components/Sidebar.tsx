@@ -1,18 +1,20 @@
 import { useMemo } from 'react';
+import type { AppRestrictions } from '@rp/shared';
 import { formatRelative } from '../lib/format';
 import { createSession, navigate, openSession } from '../store/actions';
 import type { RouteName } from '../store/state';
 import { useAppState } from '../store/store';
 import { Avatar } from './common/Avatar';
 
-const NAV: Array<{ route: RouteName; label: string }> = [
+/** `needs`: the restriction a route depends on — the entry is hidden while the policy withholds it. */
+const NAV: Array<{ route: RouteName; label: string; needs?: keyof AppRestrictions }> = [
   { route: 'chat', label: 'Chat' },
   { route: 'packs', label: 'Packs' },
-  { route: 'editor', label: 'Pack editor' },
+  { route: 'editor', label: 'Pack editor', needs: 'allowPackEditor' },
   { route: 'settings', label: 'Settings' },
   { route: 'log', label: 'Action log' },
   { route: 'sdk', label: 'SDK reference' },
-  { route: 'sandbox', label: 'Sandbox' },
+  { route: 'sandbox', label: 'Sandbox', needs: 'allowSandbox' },
 ];
 
 export function Sidebar() {
@@ -24,6 +26,10 @@ export function Sidebar() {
   const unread = useAppState((s) => s.unread);
   const appVersion = useAppState((s) => s.appVersion);
   const pendingPermissions = useAppState((s) => s.permissionRequests.length);
+  const restrictions = useAppState((s) => s.restrictions);
+
+  // A route the policy withholds is not offered at all; main refuses its channels either way.
+  const nav = useMemo(() => NAV.filter((n) => !n.needs || restrictions[n.needs]), [restrictions]);
 
   // What the character said while the user was on another view — the Chat entry carries the total.
   const unreadTotal = useMemo(() => Object.values(unread).reduce((sum, n) => sum + n, 0), [unread]);
@@ -36,7 +42,7 @@ export function Sidebar() {
         <span className="brand">rp-code</span>
       </div>
       <nav className="nav" aria-label="Main">
-        {NAV.map((n) => (
+        {nav.map((n) => (
           <button
             key={n.route}
             type="button"

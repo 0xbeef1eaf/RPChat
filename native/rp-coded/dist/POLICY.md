@@ -35,7 +35,7 @@ for whoever set the machine up; the values in `settings` override everyone's own
 | `managedBy` | string (≤ 500 chars) | Free text shown in Settings → System ("Managed by …"). |
 | `settings` | object | Forced app settings, see below. |
 | `inputLock` | object | Daemon-enforced lock limits, see below. |
-| `app` | object | How the app itself may behave (`allowQuit`, `users`), see below. |
+| `app` | object | How the app itself may behave: `allowQuit`/`users` keep it running, and the `allow*`/`require*` keys take operations away from it. See below. |
 | `guard` | object | The session guard: AppArmor confinement of the `app.users` login sessions, see below. |
 
 ## `settings` — forced app settings
@@ -96,6 +96,52 @@ counters. If another user becomes the active session in the meantime the relaunc
 the app comes back through the user's autostart at their next login. `systemctl stop rp-coded`
 switches the guard off entirely, and `kill` from a root shell followed by removing the policy
 line lets the app be quit normally again (the app re-reads the file within a minute).
+
+## `app` — restrictions the app enforces on itself
+
+The keys above keep the app *running*; these take operations *away* from it. Every `allow*`
+defaults to `true` and `requireCharacterSession` to `false`, so a policy that omits them behaves
+exactly as before. Unlike `guard` (which the daemon enforces with AppArmor around the session),
+these are refused by the app itself on its IPC boundary — so the UI hides the control **and** the
+operation is refused whoever asks: a devtools console or a character's own script included.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `allowPackEditor` | boolean | `true` | `false` closes the pack editor: the *Pack editor* entry disappears and the whole `editor:*` IPC namespace is refused. |
+| `allowPackRemove` | boolean | `true` | `false` removes *Uninstall* from every pack card and refuses `packs.uninstall`. |
+| `allowPackInstall` | boolean | `true` | `false` freezes the installed packs on disk: no pack can be added, replaced or rewritten. Refuses `packs.install` and the editor's *Install to app*. The editor itself still opens (unless `allowPackEditor` is false) and can still export a `.rppack`. |
+| `allowDeleteSession` | boolean | `true` | `false` removes *Delete session* from the session panel and refuses `sessions.remove`. |
+| `allowDeleteHistory` | boolean | `true` | `false` removes *Clear history* and the per-message delete, and refuses `sessions.clearMessages` / `sessions.removeMessage`. |
+| `allowDeleteMemories` | boolean | `true` | `false` removes *Forget* from the memories panel and refuses `memories.remove`. Adding and editing memories still work. |
+| `allowRemoveEvents` | boolean | `true` | `false` removes *Remove* from the events drawer and refuses `events.remove`, so a character's `sdk.events.on` subscriptions cannot be unsubscribed by hand. |
+| `allowSandbox` | boolean | `true` | `false` closes the Sandbox tab: the entry disappears and `sandbox.run` / `sandbox.cancel` are refused. Characters' own scripts are unaffected — this is only the by-hand runner. |
+| `requireCharacterSession` | boolean | `false` | `true` keeps the app inside a conversation: it opens straight into the most recent session (starting one with the first installed character when there is none) instead of an empty chat, and the **last** remaining session cannot be deleted even when `allowDeleteSession` is true. |
+
+Settings → System lists whichever of these are in force, next to the forced settings. They are
+not settings keys, so they never appear in `settings` and are not shown as managed settings.
+
+A kiosk-style example — a machine where a character is always there to talk to and nothing about
+it can be taken apart:
+
+```json
+{
+  "version": 1,
+  "managedBy": "family PC",
+  "app": {
+    "allowQuit": false,
+    "users": ["alice"],
+    "allowPackEditor": false,
+    "allowPackRemove": false,
+    "allowPackInstall": false,
+    "allowDeleteSession": false,
+    "allowDeleteHistory": false,
+    "allowDeleteMemories": false,
+    "allowRemoveEvents": false,
+    "allowSandbox": false,
+    "requireCharacterSession": true
+  }
+}
+```
 
 ## Templates
 

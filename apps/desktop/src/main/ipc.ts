@@ -25,6 +25,7 @@ import type { Engine, Logger } from '@rp/core';
 import { notConfigured } from './commands.js';
 import type { AppServices } from './engine.js';
 import { phase2, unavailable } from './phase2.js';
+import { isRestrictable, refusalFor } from './system/restrictions.js';
 import type { WindowManager } from './windows.js';
 
 /** The memory service surface main needs (`engine.memories`, added by @rp/core). */
@@ -77,6 +78,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       setVisibleSession: async (_e, sessionId) => {
         opts.setVisibleSession?.(typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null);
       },
+      restrictions: async () => (await services.policy.current()).restrictions,
     },
     packs: {
       list: () => engine.packs.list(),
@@ -133,7 +135,18 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       create: (_e, input: CreateSessionInput) => engine.sessions.create(input),
       get: (_e, sessionId) => engine.sessions.get(requireString(sessionId, 'sessionId')),
       update: (_e, session: Session) => engine.sessions.update(session),
-      remove: (_e, sessionId) => engine.sessions.remove(requireString(sessionId, 'sessionId')),
+      remove: async (_e, sessionId) => {
+        const id = requireString(sessionId, 'sessionId');
+        // `requireCharacterSession` keeps the app inside a conversation, so the last one may not go.
+        const { restrictions, managedBy } = await services.policy.current();
+        if (restrictions.requireCharacterSession) {
+          const sessions = await engine.sessions.list();
+          if (sessions.length <= 1 && sessions.some((x) => x.id === id)) {
+            throw new RpError('PERMISSION_DENIED', `The system policy${managedBy ? ` (managed by ${managedBy})` : ''} keeps a conversation open: the last session cannot be deleted`);
+          }
+        }
+        return engine.sessions.remove(id);
+      },
       messages: (_e, sessionId) => engine.sessions.messages(requireString(sessionId, 'sessionId')),
       removeMessage: (_e, sessionId, messageId) => engine.chat.removeMessage(requireString(sessionId, 'sessionId'), requireString(messageId, 'messageId')),
       clearMessages: (_e, sessionId) => engine.chat.clearMessages(requireString(sessionId, 'sessionId')),
@@ -356,10 +369,21 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
   for (const [ns, methods] of Object.entries(handlers)) {
     for (const [method, fn] of Object.entries(methods as Record<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>)) {
       const channel = `${ns}:${method}`;
+      // Resolved once per channel: an unguarded one never reads the policy at call time.
+      const guarded = isRestrictable(channel);
       ipcMain.handle(channel, async (event, ...args) => {
         if (!windows.isOurs(event.sender)) {
           logger.warn(`[ipc] rejected ${channel} from an unknown sender (webContents ${event.sender.id})`);
           throw new RpError('PERMISSION_DENIED', 'Unknown sender');
+        }
+        // The policy's `app` restrictions, re-read per call so a policy change takes effect at once.
+        if (guarded) {
+          const state = await services.policy.current();
+          const refusal = refusalFor(channel, state.restrictions, state.managedBy);
+          if (refusal) {
+            logger.info(`[ipc] refused ${channel}: ${refusal}`);
+            throw new RpError('PERMISSION_DENIED', refusal);
+          }
         }
         try {
           return await fn(event, ...args);
