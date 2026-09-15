@@ -75,7 +75,8 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   (a failed last rename restores `current`); `versions.json` `{ current: { version, installedAt,
   source: file }, previous }` written via temp + rename `0644`. Failures clean the staging area.
   Then **self-update**: `current/resources/bin/rp-coded --version` parsed (`rp-coded X.Y.Z (protocol N)`);
-  when newer than the running `VERSION`, `current/resources/system/install.sh --refresh-daemon-files
+  when newer than the running `VERSION` — **or the same version but a different build**, compared
+  by hashing the bundled binary against `/proc/self/exe` — `current/resources/system/install.sh --refresh-daemon-files
   [--prefix <p>]` runs as root (output logged) and the answer carries `restartDaemon: true`; a
   failed refresh keeps the app update and answers `false` (logged). The connection thread then
   calls `restart_when_idle`: 500 ms grace, wait while `LockEngine::is_locked`, then

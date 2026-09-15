@@ -226,8 +226,10 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   and no symlink leaving the tree; it is chowned `root:root` (`0755` dirs, `0755`/`0644` files) and
   verified again. Swap: `previous` removed, `current` → `previous`, tree → `current` (a failed last
   rename restores `current`); `versions.json` rewritten (`current: { version, installedAt, source:
-  file }`, `previous`: the old entry). Then, when `current/resources/bin/rp-coded --version` is
-  newer than the running daemon, `current/resources/system/install.sh --refresh-daemon-files` runs
+  file }`, `previous`: the old entry). Then, when the bundled
+  `current/resources/bin/rp-coded` is newer than the running daemon — or is the *same version but a
+  different build*, which is the ordinary case since the version is not bumped for every build, and
+  is decided by hashing it against `/proc/self/exe` — `current/resources/system/install.sh --refresh-daemon-files` runs
   as root and the answer says `restartDaemon: true`; once the reply is out and no input lock is
   active the daemon restarts (`systemctl restart rp-coded` under systemd, else a re-exec of the
   replaced binary with the same arguments). A failed refresh keeps the app update and answers

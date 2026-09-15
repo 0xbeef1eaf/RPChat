@@ -1202,6 +1202,7 @@ mod os {
             refresh_daemon_files: Box::new(move |installer| {
                 refresh_daemon_files(installer, system_prefix.as_deref())
             }),
+            differs_from_running: Box::new(differs_from_running),
         }
     }
 
@@ -1320,6 +1321,24 @@ mod os {
             return None;
         }
         sysinstall::parse_version_output(&String::from_utf8_lossy(&out.stdout))
+    }
+
+    /// Whether the daemon at `path` is a different build from the one running.
+    ///
+    /// Compared against `/proc/self/exe` rather than the installed file: that is the binary
+    /// this process actually *is*, and it stays readable after the file on disk has been
+    /// replaced. So this answers "would restarting change anything", which covers both a stale
+    /// installed file and an installed file that is already fresh while the process still runs
+    /// the replaced (deleted) inode — the second is invisible to any version check.
+    pub fn differs_from_running(path: &Path) -> Option<bool> {
+        use sha2::Digest;
+        let digest = |p: &Path| -> Option<[u8; 32]> {
+            let mut f = fs::File::open(p).ok()?;
+            let mut h = sha2::Sha256::new();
+            io::copy(&mut f, &mut h).ok()?;
+            Some(h.finalize().into())
+        };
+        Some(digest(path)? != digest(Path::new("/proc/self/exe"))?)
     }
 
     /// `install.sh --refresh-daemon-files` from the freshly installed bundle, as root. Its

@@ -482,6 +482,9 @@ pub type Extract = Box<dyn Fn(&Path, &Path, u32, u32) -> Result<(), String> + Se
 pub type DaemonVersionOf = Box<dyn Fn(&Path) -> Option<Semver> + Send + Sync>;
 /// Run the new bundle's `install.sh --refresh-daemon-files` as root.
 pub type RefreshDaemonFiles = Box<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
+/// Whether the daemon at this path is a different build from the one currently *running*
+/// (content, not version). `None` when the comparison cannot be made.
+pub type DiffersFromRunning = Box<dyn Fn(&Path) -> Option<bool> + Send + Sync>;
 
 /// The parts of `apply-update` that need the OS (privileges, other programs), injectable.
 pub struct ApplyHooks {
@@ -489,6 +492,7 @@ pub struct ApplyHooks {
     pub extract: Extract,
     pub daemon_version_of: DaemonVersionOf,
     pub refresh_daemon_files: RefreshDaemonFiles,
+    pub differs_from_running: DiffersFromRunning,
 }
 
 /// `{ op: 'apply-update' }` as validated and applied.
@@ -730,14 +734,41 @@ fn self_update(root: &Path, running: &str, hooks: &ApplyHooks) -> Result<bool, S
     let Some(cur) = Semver::parse(running) else {
         return Err(format!("running daemon version {running:?} is not semver"));
     };
-    if new <= cur {
+    // A newer version always refreshes. An *equal* version still can: the version string is
+    // not bumped for every build, so "0.2.0 == 0.2.0" says nothing about whether the bundle
+    // ships the same daemon. Comparing content catches the same-version rebuild, which is the
+    // ordinary case during development and after any fix that did not move the version.
+    //
+    // This matters beyond tidiness: if the daemon will not refresh itself, finishing an update
+    // needs `sudo install.sh --refresh-daemon-files` plus `systemctl restart` by hand — so the
+    // guarded user has to be given sudo, and sudo is exactly what undoes the guard.
+    if new < cur {
         log_info!(
-            "apply-update: bundled rp-coded {}.{}.{} is not newer than the running {running}; no self-update",
+            "apply-update: bundled rp-coded {}.{}.{} is older than the running {running}; no self-update",
             new.major,
             new.minor,
             new.patch
         );
         return Ok(false);
+    }
+    if new == cur {
+        match (hooks.differs_from_running)(&bundled) {
+            Some(true) => log_info!(
+                "apply-update: bundled rp-coded is {running} like the running one but a different build; refreshing"
+            ),
+            Some(false) => {
+                log_info!(
+                    "apply-update: bundled rp-coded {running} is the build already running; no self-update"
+                );
+                return Ok(false);
+            }
+            None => {
+                log_info!(
+                    "apply-update: bundled rp-coded is {running} and it cannot be compared with the running build; no self-update"
+                );
+                return Ok(false);
+            }
+        }
     }
     let installer = root.join("current").join(BUNDLED_INSTALLER);
     if !installer.is_file() {
@@ -876,6 +907,12 @@ pub mod tests {
                 }
                 refreshed.lock().unwrap().push(installer.to_path_buf());
                 Ok(())
+            }),
+            // Tests drive the equal-version case through the file's own content: a bundled
+            // daemon whose text contains "same-build" stands for "identical to the running one".
+            differs_from_running: Box::new(|p| {
+                let text = fs::read_to_string(p).ok()?;
+                Some(!text.contains("same-build"))
             }),
         }
     }
@@ -1191,6 +1228,39 @@ pub mod tests {
         );
         fs::remove_dir_all(root.join("previous")).unwrap();
         assert!(rollback(root).unwrap_err().contains("no previous version"));
+    }
+
+    #[test]
+    fn self_update_triggers_on_a_rebuild_at_the_same_version() {
+        // The version string is not bumped for every build, so `bundled > running` misses the
+        // ordinary case: same version, different binary. Missing it means a human has to finish
+        // the update with sudo — and sudo is what undoes the guard.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::create_dir_all(root.join("current/resources/bin")).unwrap();
+        fs::create_dir_all(root.join("current/resources/system")).unwrap();
+        fs::write(root.join("current").join(BUNDLED_INSTALLER), "#!/bin/sh\n").unwrap();
+        let bundled = root.join("current").join(BUNDLED_DAEMON);
+        let refreshed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let hooks = test_hooks(root.clone(), refreshed.clone());
+        let run = |text: &str| {
+            fs::write(&bundled, text).unwrap();
+            refreshed.lock().unwrap().clear();
+            let r = self_update(&root, "0.2.0", &hooks);
+            (r, refreshed.lock().unwrap().len())
+        };
+
+        // Newer: refresh, as before.
+        assert_eq!(run("rp-coded 0.3.0 (protocol 1)"), (Ok(true), 1));
+        // Same version, different build: refresh. This is the case that was being missed.
+        assert_eq!(run("rp-coded 0.2.0 (protocol 1)"), (Ok(true), 1));
+        // Same version, same build: nothing to do, and no pointless restart.
+        assert_eq!(
+            run("rp-coded 0.2.0 (protocol 1) same-build"),
+            (Ok(false), 0)
+        );
+        // Older: never downgrade the daemon behind the user's back.
+        assert_eq!(run("rp-coded 0.1.0 (protocol 1)"), (Ok(false), 0));
     }
 
     #[test]
