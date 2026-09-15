@@ -153,6 +153,25 @@ impl CompositorIpc {
     }
 }
 
+/// `guard.shell` as written in the policy: one name or a list of them. A machine often has
+/// more than one — a bar/shell that owns its own IPC socket and a separate wallpaper daemon —
+/// and guarding only the first leaves the other's socket open to everyone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GuardShells {
+    One(GuardShell),
+    Many(Vec<GuardShell>),
+}
+
+impl GuardShells {
+    pub fn into_vec(self) -> Vec<GuardShell> {
+        match self {
+            GuardShells::One(s) => vec![s],
+            GuardShells::Many(v) => v,
+        }
+    }
+}
+
 /// `guard.shell`: the desktop shell / wallpaper daemon whose IPC and files are guarded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -193,7 +212,7 @@ pub struct GuardPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compositor_ipc: Option<CompositorIpc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shell: Option<GuardShell>,
+    pub shell: Option<GuardShells>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login_helpers: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -212,7 +231,8 @@ pub struct GuardRules {
     pub protect_app: bool,
     pub wallpaper: bool,
     pub compositor_ipc: CompositorIpc,
-    pub shell: GuardShell,
+    /// Every shell row the policy asks for. `[Auto]` means "every one whose binary is present".
+    pub shells: Vec<GuardShell>,
     /// `None`: auto-detect the login helpers present on the box.
     pub login_helpers: Option<Vec<String>>,
     pub extra_deny_paths: Vec<String>,
@@ -227,7 +247,7 @@ impl Default for GuardRules {
             protect_app: true,
             wallpaper: true,
             compositor_ipc: CompositorIpc::ShellOnly,
-            shell: GuardShell::Auto,
+            shells: vec![GuardShell::Auto],
             login_helpers: None,
             extra_deny_paths: Vec::new(),
             extra_deny_sockets: Vec::new(),
@@ -245,7 +265,12 @@ impl GuardRules {
             protect_app: g.protect_app.unwrap_or(d.protect_app),
             wallpaper: g.wallpaper.unwrap_or(d.wallpaper),
             compositor_ipc: g.compositor_ipc.unwrap_or(d.compositor_ipc),
-            shell: g.shell.unwrap_or(d.shell),
+            shells: g
+                .shell
+                .clone()
+                .map(GuardShells::into_vec)
+                .filter(|v| !v.is_empty())
+                .unwrap_or(d.shells),
             login_helpers: g.login_helpers.clone(),
             extra_deny_paths: g.extra_deny_paths.clone().unwrap_or_default(),
             extra_deny_sockets: g.extra_deny_sockets.clone().unwrap_or_default(),
@@ -1083,7 +1108,7 @@ mod tests {
         assert_eq!(none.mode, GuardMode::Off);
         assert!(none.protect_app && none.wallpaper);
         assert_eq!(none.compositor_ipc, CompositorIpc::ShellOnly);
-        assert_eq!(none.shell, GuardShell::Auto);
+        assert_eq!(none.shells, vec![GuardShell::Auto]);
         // An empty block is the defaults; mode off needs no users.
         assert_eq!(
             policy(json!({"version":1,"guard":{}}))
@@ -1101,7 +1126,27 @@ mod tests {
         assert_eq!(rules.mode, GuardMode::Enforce);
         assert!(!rules.protect_app);
         assert_eq!(rules.compositor_ipc, CompositorIpc::Deny);
-        assert_eq!(rules.shell, GuardShell::Noctalia);
+        assert_eq!(rules.shells, vec![GuardShell::Noctalia]);
+
+        // The same key takes a list, so a bar and a wallpaper daemon can both be guarded.
+        let many = parse_policy(
+            &json!({"version":1,"app":{"users":["a"]},
+                    "guard":{"shell":["noctalia","hyprpaper"]}})
+            .to_string(),
+        )
+        .unwrap()
+        .guard_rules();
+        assert_eq!(
+            many.shells,
+            vec![GuardShell::Noctalia, GuardShell::Hyprpaper]
+        );
+        // An empty list is not a way to silently disable the shell guard.
+        let empty = parse_policy(
+            &json!({"version":1,"app":{"users":["a"]},"guard":{"shell":[]}}).to_string(),
+        )
+        .unwrap()
+        .guard_rules();
+        assert_eq!(empty.shells, vec![GuardShell::Auto]);
         assert_eq!(
             rules.login_helpers.as_deref(),
             Some(&["/usr/lib/sddm/sddm-helper".to_string()][..])

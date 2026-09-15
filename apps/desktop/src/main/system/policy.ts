@@ -5,6 +5,7 @@
 import * as fs from 'node:fs/promises';
 import type { AppPolicy, AppSettings, GuardPolicy, ManagedSettingsPaths, PolicyFile } from '@rp/shared';
 import { GUARD_COMPOSITOR_IPC, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RpError } from '@rp/shared';
+import type { GuardShell } from '@rp/shared';
 
 const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTimersPerSession', 'minRepeatIntervalMs', 'minDelayMs'] as const;
 const MEMORY_KEYS = ['enabled', 'consolidateEveryTurns', 'maxEntriesPerCharacter', 'promptBudgetTokens'] as const;
@@ -207,8 +208,11 @@ export function parseGuard(raw: unknown, problems: string[]): GuardPolicy | unde
     else problems.push('guard.compositorIpc must be allow, shell-only or deny');
   }
   if (g.shell !== undefined) {
-    if (typeof g.shell === 'string' && (GUARD_SHELLS as readonly string[]).includes(g.shell)) out.shell = g.shell as GuardPolicy['shell'];
-    else problems.push('guard.shell must be auto, noctalia, quickshell, hyprpaper, swww or none');
+    // One name or a list of them; the daemon guards every row it is given.
+    const named = (v: unknown): v is GuardShell => typeof v === 'string' && (GUARD_SHELLS as readonly string[]).includes(v);
+    if (named(g.shell)) out.shell = g.shell;
+    else if (Array.isArray(g.shell) && g.shell.length > 0 && g.shell.every(named)) out.shell = [...g.shell];
+    else problems.push('guard.shell must be auto, noctalia, quickshell, hyprpaper, swww or none (or a non-empty list of them)');
   }
   const helpers = guardPathList(g.loginHelpers, 'guard.loginHelpers', false, problems);
   if (helpers) {

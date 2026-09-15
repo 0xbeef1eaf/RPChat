@@ -238,8 +238,9 @@ pub struct GuardContext {
     pub app_exec: String,
     /// Login helpers present on the box (or from the policy), absolute paths.
     pub login_helpers: Vec<String>,
-    /// The resolved shell, if any.
-    pub shell: Option<&'static TableEntry>,
+    /// The resolved shell rows (a bar with its own IPC socket and a wallpaper daemon are
+    /// commonly both present; each needs its socket guarded).
+    pub shells: Vec<&'static TableEntry>,
     /// Compositors present on the box.
     pub compositors: Vec<&'static TableEntry>,
     /// `abi/4.0` when `/etc/apparmor.d/abi/4.0` exists, else `abi/3.0`, else none.
@@ -300,7 +301,7 @@ pub struct GuardPlan {
     /// `user@<uid>.service.d/rp-code-guard.conf`, one per listed user.
     pub dropins: Vec<SessionDropin>,
     pub residual: Vec<String>,
-    pub shell: Option<&'static str>,
+    pub shells: Vec<&'static str>,
     pub compositors: Vec<&'static str>,
 }
 
@@ -372,7 +373,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     let mut shell_sockets: BTreeSet<String> = BTreeSet::new();
     let mut compositor_sockets: BTreeSet<String> = BTreeSet::new();
     if rules.wallpaper {
-        if let Some(shell) = ctx.shell {
+        for shell in &ctx.shells {
             for s in shell.sockets {
                 shell_sockets.insert((*s).to_string());
             }
@@ -393,7 +394,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
             continue;
         }
         match d.owner {
-            Owner::Shell if rules.wallpaper && ctx.shell.is_some_and(|s| s.id == d.entry) => {
+            Owner::Shell if rules.wallpaper && ctx.shells.iter().any(|s| s.id == d.entry) => {
                 shell_sockets.insert(d.glob.clone());
             }
             Owner::Compositor if rules.compositor_ipc != CompositorIpc::Allow => {
@@ -411,7 +412,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     deny_sockets.extend(shell_sockets.iter().cloned());
     deny_sockets.extend(compositor_sockets.iter().cloned());
 
-    let shell_profile = rules.wallpaper && ctx.shell.is_some();
+    let shell_profile = rules.wallpaper && !ctx.shells.is_empty();
     let compositor_profile =
         rules.compositor_ipc != CompositorIpc::Allow && !ctx.compositors.is_empty();
 
@@ -419,7 +420,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     let mut exits = String::new();
     exits.push_str(&format!("  {} px -> rp-code-app,\n", ctx.app_exec));
     if shell_profile {
-        for b in ctx.shell.map(|s| s.binaries).unwrap_or(&[]) {
+        for b in ctx.shells.iter().flat_map(|s| s.binaries.iter()) {
             exits.push_str(&format!("  {b} px -> rp-code-shell,\n"));
         }
     }
@@ -636,11 +637,18 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     if ctx.login_helpers.is_empty() {
         residual.push("no login helper found (sddm-helper, greetd, login, sshd): sessions are not confined until guard.loginHelpers names one".to_string());
     }
-    if rules.wallpaper && ctx.shell.is_none() {
-        residual.push(match rules.shell {
-            GuardShell::None => "guard.shell is none: wallpaper IPC and files are not guarded".to_string(),
-            _ => "no known shell found (noctalia, quickshell, hyprpaper, swww): wallpaper IPC and files are not guarded".to_string(),
+    if rules.wallpaper && ctx.shells.is_empty() {
+        residual.push(if rules.shells.contains(&GuardShell::None) {
+            "guard.shell is none: wallpaper IPC and files are not guarded".to_string()
+        } else {
+            "no known shell found (noctalia, quickshell, hyprpaper, swww): wallpaper IPC and files are not guarded".to_string()
         });
+    }
+    if shell_profile && ctx.shells.len() > 1 {
+        residual.push(format!(
+            "{} share one rp-code-shell profile: each may serve its own socket but none may connect to any of them, so they cannot drive each other (a bar cannot set the wallpaper through a wallpaper daemon)",
+            ctx.shells.iter().map(|s| s.id).collect::<Vec<_>>().join(" and ")
+        ));
     }
     if rules.compositor_ipc != CompositorIpc::Allow && ctx.compositors.is_empty() {
         residual.push(
@@ -674,7 +682,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         files,
         dropins,
         residual,
-        shell: ctx.shell.map(|s| s.id),
+        shells: ctx.shells.iter().map(|s| s.id).collect(),
         compositors: ctx.compositors.iter().map(|c| c.id).collect(),
     }
 }
@@ -1264,9 +1272,20 @@ pub fn resolve_context(
             .map(|h| (*h).to_string())
             .collect(),
     };
-    let shell = match rules.shell {
-        GuardShell::Auto => SHELLS.iter().find(|s| s.binaries.iter().any(|b| exists(b))),
-        other => shell_entry(other),
+    // `auto` takes every row whose binary is present, not just the first: a box with both a
+    // shell and a separate wallpaper daemon needs both sockets guarded, and denying a socket
+    // nobody serves costs nothing.
+    let shells: Vec<&'static TableEntry> = if rules.shells.contains(&GuardShell::Auto) {
+        SHELLS
+            .iter()
+            .filter(|s| s.binaries.iter().any(|b| exists(b)))
+            .collect()
+    } else {
+        rules
+            .shells
+            .iter()
+            .filter_map(|s| shell_entry(*s))
+            .collect()
     };
     let compositors: Vec<&'static TableEntry> = COMPOSITORS
         .iter()
@@ -1286,7 +1305,7 @@ pub fn resolve_context(
         user_uids,
         app_exec: paths.app_exec.clone(),
         login_helpers,
-        shell,
+        shells,
         compositors,
         abi: (hooks.abi)(),
         discovered: discovered.into_iter().collect(),
@@ -1374,7 +1393,11 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
     let ctx = resolve_context(&rules, &users, hooks, paths, &state.sockets);
     let plan = render(&rules, &ctx);
     info.residual = plan.residual.clone();
-    info.shell = plan.shell.map(|s| s.to_string());
+    info.shell = if plan.shells.is_empty() {
+        None
+    } else {
+        Some(plan.shells.join(", "))
+    };
     info.compositor = if plan.compositors.is_empty() {
         None
     } else {
@@ -1665,7 +1688,7 @@ pub mod tests {
             users: mode_users.iter().map(|u| u.to_string()).collect(),
             app_exec: DEFAULT_APP_EXEC.to_string(),
             login_helpers: vec!["/usr/lib/sddm/sddm-helper".into(), "/usr/bin/login".into()],
-            shell: Some(&NOCTALIA),
+            shells: vec![&NOCTALIA],
             compositors: vec![&HYPRLAND],
             abi: Some("abi/4.0".into()),
             discovered: vec![DiscoveredSocket {
@@ -1767,7 +1790,7 @@ pub mod tests {
                 .text
                 .contains("@{run}=/run /var/run\n@{HOME}=/home/*/ /root/\n"));
         }
-        assert_eq!(plan.shell, Some("noctalia"));
+        assert_eq!(plan.shells, vec!["noctalia"]);
         assert_eq!(plan.compositors, vec!["hyprland"]);
         assert!(plan.residual[0].starts_with("audit mode"));
         // Same inputs → same hash; a different mode → a different one.
@@ -1822,7 +1845,7 @@ pub mod tests {
             users: vec!["a".into()],
             app_exec: DEFAULT_APP_EXEC.into(),
             login_helpers: vec!["/usr/lib/sddm/sddm-helper".into()],
-            shell: Some(&NOCTALIA),
+            shells: vec![&NOCTALIA],
             compositors: vec![&HYPRLAND],
             abi: None,
             discovered: vec![],
@@ -2135,6 +2158,75 @@ pub mod tests {
         assert!(
             !os.files.lock().unwrap().contains_key(&dropin(1001)),
             "removed on disengage"
+        );
+    }
+
+    #[test]
+    fn two_shells_share_a_profile_and_cannot_drive_each_other() {
+        // The point of more than one shell row: a bar that owns its IPC socket *and* a separate
+        // wallpaper daemon. Guarding only the first leaves the other's socket open, and the bar
+        // could set the wallpaper through it — the exact hole this closes.
+        let mut ctx = noctalia_hyprland_ctx(&["work"]);
+        ctx.shells = vec![&NOCTALIA, &HYPRPAPER];
+        let r = rules(serde_json::json!({
+            "version":1,"app":{"users":["work"]},
+            "guard":{"mode":"enforce","shell":["noctalia","hyprpaper"]}
+        }));
+        let plan = render(&r, &ctx);
+        assert_eq!(plan.shells, vec!["noctalia", "hyprpaper"]);
+
+        // The session may not reach either socket, nor either set of files.
+        let session = text_of(&plan, "rp-code-session");
+        assert!(
+            session.contains("audit deny @{run}/user/[0-9]*/noctalia-*.sock rw,"),
+            "{session}"
+        );
+        assert!(
+            session.contains("audit deny @{run}/user/[0-9]*/hypr/*/.hyprpaper.sock rw,"),
+            "{session}"
+        );
+        assert!(
+            session.contains("audit deny @{HOME}/.config/hypr/hyprpaper.conf wl,"),
+            "{session}"
+        );
+        assert!(
+            session.contains("audit deny @{HOME}/.local/state/noctalia/settings.toml wl,"),
+            "{session}"
+        );
+
+        // Both binaries enter the one shell profile.
+        assert!(
+            session.contains("/usr/bin/noctalia px -> rp-code-shell,"),
+            "{session}"
+        );
+        assert!(
+            session.contains("/usr/bin/hyprpaper px -> rp-code-shell,"),
+            "{session}"
+        );
+
+        // Inside it: `r` denied on every shell socket, never `rw`. Denying `r` blocks connect
+        // (which needs rw) while leaving `w` — the mknod that *binding* is — allowed, so each
+        // daemon still serves its own socket. That is what stops noctalia driving hyprpaper.
+        let shell = text_of(&plan, "rp-code-shell");
+        for sock in [
+            "@{run}/user/[0-9]*/noctalia-*.sock",
+            "@{run}/user/[0-9]*/hypr/*/.hyprpaper.sock",
+        ] {
+            assert!(
+                shell.contains(&format!("audit deny {sock} r,")),
+                "{sock} must be connect-denied: {shell}"
+            );
+            assert!(
+                !shell.contains(&format!("audit deny {sock} rw,")),
+                "{sock} must stay bindable: {shell}"
+            );
+        }
+        assert!(
+            plan.residual
+                .iter()
+                .any(|r| r.contains("cannot drive each other")),
+            "{:?}",
+            plan.residual
         );
     }
 

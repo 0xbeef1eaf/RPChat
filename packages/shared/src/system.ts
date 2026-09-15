@@ -69,7 +69,8 @@ export interface GuardPolicy {
   /** Who may reach the compositor's control socket. Default `shell-only`. */
   compositorIpc?: GuardCompositorIpc;
   /** Which shell table row applies. Default `auto` (first whose binary exists). */
-  shell?: GuardShell;
+  /** One shell, or several: a bar with its own IPC socket and a wallpaper daemon are commonly both present. */
+  shell?: GuardShell | GuardShell[];
   /** PAM login helpers carrying the per-user hats; default: those present on the box. */
   loginHelpers?: string[];
   /** More files the session may not write (absolute, `~/…` or `@{HOME}/…` globs). */

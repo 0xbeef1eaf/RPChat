@@ -371,7 +371,7 @@ a policy switch.
 | `protectApp` | `true` | Signals and `ptrace` from the session to rp-code. |
 | `wallpaper` | `true` | The shell's IPC socket and config/state files; the shell runs in `rp-code-shell`. |
 | `compositorIpc` | `shell-only` | `allow` (nothing), `shell-only` (only the shell and rp-code may talk to the compositor), `deny` (only rp-code). |
-| `shell` | `auto` | `noctalia`, `quickshell`, `hyprpaper`, `swww` or `none`; `auto` takes the first whose binary exists. |
+| `shell` | `auto` | One row or a list. `auto` takes every row whose binary exists. With several (`["noctalia","hyprpaper"]`) each may serve its own socket but none may connect to another's, so a bar cannot set the wallpaper through a wallpaper daemon. |
 | `loginHelpers` | auto-detect | The PAM login helpers whose profile carries the per-user hats (see below). |
 | `extraDenyPaths`, `extraDenySockets`, `allowBinaries` | `[]` | More guarded files/sockets (`~/…` allowed); binaries that leave the confinement entirely when executed. |
 
