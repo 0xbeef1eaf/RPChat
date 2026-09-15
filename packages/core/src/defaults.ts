@@ -44,6 +44,7 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   if (stored.autonomy && typeof stored.autonomy === 'object') {
     merged.autonomy = { ...base.autonomy, ...stored.autonomy };
   }
+  if (stored.voice && typeof stored.voice === 'object') merged.voice = { ...base.voice, ...stored.voice };
   if (stored.senses && typeof stored.senses === 'object') merged.senses = { ...base.senses, ...stored.senses };
   if (stored.web && typeof stored.web === 'object') merged.web = { ...base.web, ...stored.web };
   if (stored.desktop && typeof stored.desktop === 'object') merged.desktop = { ...base.desktop, ...stored.desktop };

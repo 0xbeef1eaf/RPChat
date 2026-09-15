@@ -44,6 +44,16 @@ export class CommandRunner {
     return defaultTemplates(this.platform, this.env);
   }
 
+  /**
+   * The template the **user** set for `name`, ignoring the platform default. Callers that have a
+   * better built-in than the default (the voice handler's neural models, which should outrank
+   * espeak-ng but never a command the user typed themselves) use this to tell the two apart.
+   */
+  async userTemplate(name: keyof CommandTemplates): Promise<CommandTemplate | undefined> {
+    const settings = await this.deps.settings();
+    return settings.commandTemplates?.[name];
+  }
+
   /** The template that would run for `name` (user's or platform default); may be unconfigured. */
   async resolve(name: keyof CommandTemplates): Promise<CommandTemplate> {
     const settings = await this.deps.settings();

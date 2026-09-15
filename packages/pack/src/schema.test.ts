@@ -136,6 +136,27 @@ describe('characterDefinitionSchema', () => {
     expect(BEHAVIOUR_HOOKS).toEqual(['onInstall', 'onSessionStart', 'onUserMessage', 'onTimer', 'onEvent', 'onSessionEnd']);
   });
 
+  it('validates the voice block', () => {
+    const voice = { model: 'sherpa-onnx-pocket-tts-int8-2026-01-26', reference: 'voice/luna.wav', speaker: 2, rate: 1.1, steps: 8, attribution: 'VCTK (CC-BY-4.0)' };
+    const parsed = characterDefinitionSchema.parse({ ...goodCharacter(), voice });
+    expect(parsed.voice?.reference).toBe('voice/luna.wav');
+    expect(parsed.voice?.model).toBe('sherpa-onnx-pocket-tts-int8-2026-01-26');
+
+    const bad = (v: unknown) => characterDefinitionSchema.safeParse({ ...goodCharacter(), voice: v }).success;
+    // A model name is a directory under the voices folder, never a path.
+    expect(bad({ model: '../escape' })).toBe(false);
+    expect(bad({ model: 'nested/dir' })).toBe(false);
+    // Reference audio must be a wav inside the character directory.
+    expect(bad({ reference: '../../etc/passwd' })).toBe(false);
+    expect(bad({ reference: 'voice/luna.mp3' })).toBe(false);
+    // Out-of-range knobs are rejected rather than clamped silently.
+    expect(bad({ rate: 4 })).toBe(false);
+    expect(bad({ steps: 0 })).toBe(false);
+    // A transcript with nothing to transcribe is a mistake worth naming.
+    expect(bad({ referenceText: 'hello' })).toBe(false);
+    expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), voice: {} }).success).toBe(true);
+  });
+
   it('validates avatarSet and mood', () => {
     const ok = { ...goodCharacter(), avatarSet: { expressions: { neutral: 'faces/neutral.png', talk: 'faces/talk.webm' }, defaultExpression: 'neutral', size: 240 }, mood: { baseline: 0.2, energyBaseline: -0.1 } };
     const parsed = validateCharacter(ok);

@@ -313,8 +313,33 @@ export function buildArgv(tpl: CommandTemplate, vars: Record<string, string>, pl
 export function runTemplate(tpl: CommandTemplate, vars: Record<string, string>, opts: RunTemplateOptions = {}): Promise<CommandResult> {
   const platform = opts.platform ?? process.platform;
   const { file, args, verbatim } = buildArgv(tpl, vars, platform);
-  const timeoutMs = Math.max(100, opts.timeoutMs ?? tpl.timeoutMs ?? COMMAND_DEFAULT_TIMEOUT_MS);
-  const cwd = tpl.cwd && tpl.cwd.trim().length > 0 ? expandHome(tpl.cwd) : os.homedir();
+  return spawnCapture(file, args, {
+    ...opts,
+    verbatim,
+    timeoutMs: opts.timeoutMs ?? tpl.timeoutMs,
+    ...(tpl.cwd && tpl.cwd.trim().length > 0 ? { cwd: expandHome(tpl.cwd) } : {}),
+  });
+}
+
+export interface SpawnCaptureOptions extends Omit<RunTemplateOptions, 'platform'> {
+  /** Windows only: pass `args` through without re-quoting (used for `cmd /c "…"` lines). */
+  verbatim?: boolean;
+  /** Defaults to the user's home directory, as command templates do. */
+  cwd?: string;
+}
+
+/**
+ * Spawn `file` with an explicit argv and capture its output. This is what `runTemplate` runs after
+ * substitution, and what callers that build their own argv (the sherpa-onnx TTS invocation, whose
+ * flags are far too many to ask a user to type into a command template) use directly. Taking argv
+ * as an array means arbitrary speech text needs no quoting: nothing re-parses it.
+ *
+ * Rejects only when the process cannot be started; a non-zero exit is a resolved `CommandResult`.
+ */
+export function spawnCapture(file: string, args: string[], opts: SpawnCaptureOptions = {}): Promise<CommandResult> {
+  const verbatim = opts.verbatim ?? false;
+  const timeoutMs = Math.max(100, opts.timeoutMs ?? COMMAND_DEFAULT_TIMEOUT_MS);
+  const cwd = opts.cwd ?? os.homedir();
   return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';

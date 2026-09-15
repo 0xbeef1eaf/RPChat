@@ -6,6 +6,7 @@ import { isValidCharacterId, wordCount } from '../../lib/editor';
 import { reportError, toast } from '../../store/actions';
 import { useDraft, useEditor } from './context';
 import { SaveBar } from './SaveBar';
+import { VoicePicker } from './VoicePicker';
 
 interface CharacterSectionProps {
   dir: string;
@@ -103,6 +104,8 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
       definition: {
         ...dr.definition,
         avatar: saved.definition.avatar,
+        // `useVoice` copies the wav and writes the reference itself; the rest of the block is draft state.
+        voice: saved.definition.voice ? { ...dr.definition.voice, reference: saved.definition.voice.reference, referenceSource: saved.definition.voice.referenceSource, attribution: saved.definition.voice.attribution } : dr.definition.voice,
         avatarSet: saved.definition.avatarSet
           ? { ...saved.definition.avatarSet, ...(dr.definition.avatarSet ? { defaultExpression: dr.definition.avatarSet.defaultExpression, size: dr.definition.avatarSet.size } : {}), expressions: saved.definition.avatarSet.expressions }
           : dr.definition.avatarSet,
@@ -118,6 +121,13 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
     const next = { ...hints, ...patch };
     for (const k of Object.keys(next) as Array<keyof typeof next>) if (next[k] === undefined || (next[k] as unknown) === '') delete next[k];
     setDef({ modelHints: Object.keys(next).length ? next : undefined });
+  };
+  const voice = def.voice;
+  /** Same shape as `setHints`: empty values drop out, and an empty block drops the key entirely. */
+  const setVoice = (patch: Partial<NonNullable<CharacterDefinition['voice']>>) => {
+    const next = { ...(voice ?? {}), ...patch };
+    for (const k of Object.keys(next) as Array<keyof typeof next>) if (next[k] === undefined || (next[k] as unknown) === '') delete next[k];
+    setDef({ voice: Object.keys(next).length ? next : undefined });
   };
   const dialogue = def.exampleDialogue ?? [];
   const setDialogue = (list: ExampleDialogueTurn[]) => setDef({ exampleDialogue: list.length ? list : undefined });
@@ -314,6 +324,8 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
           </div>
         </div>
       </div>
+
+      <VoicePicker projectKey={project.summary.key} dir={dir} voice={voice} onChange={setVoice} onProject={(p) => setProject(p as typeof project)} />
 
       <div className="field" style={{ marginTop: 16 }}>
         <span className="field-label">Avatar expressions (sdk.avatar)</span>

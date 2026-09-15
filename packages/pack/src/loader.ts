@@ -160,6 +160,16 @@ async function loadCharacter(
     }
   }
 
+  // voice cloning reference (optional; must exist — a missing one would silently fall back to the
+  // model's own sample, so the character would speak in a stranger's voice with no error anywhere)
+  if (definition.voice?.reference !== undefined) {
+    const rel = definition.voice.reference;
+    const abs = safeResolve(rootAbs, joinRelative(dir, rel), problems, defRel);
+    if (abs && (await kindOf(abs)) !== 'file') {
+      problems.push(`${defRel}: voice reference "${rel}" not found`);
+    }
+  }
+
   // behaviour scripts (optional; each must exist)
   const behaviourSources: Partial<Record<BehaviourHook, string>> = {};
   for (const hook of BEHAVIOUR_HOOKS) {

@@ -24,7 +24,9 @@ import type {
   SaveCharacterInput,
   TagMediaOptions,
 } from '@rp/shared';
-import { CHARACTER_MANIFEST_FILENAME, LIB_MAX_SOURCE_BYTES, MEDIA_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME, RpError, assetUrl } from '@rp/shared';
+import { CHARACTER_MANIFEST_FILENAME, LIB_MAX_SOURCE_BYTES, MEDIA_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME, RpError, VOICE_BANK_COLLECTIONS, VOICE_BANK_REPO, assetUrl } from '@rp/shared';
+import type { VoiceBankCatalogue, VoiceBankProgress } from '@rp/shared';
+import { VOICE_BANK_PACK_ID } from '../capabilities/voice-bank.js';
 import {
   ASSET_KIND_BY_EXTENSION,
   CHARACTER_ID_PATTERN,
@@ -80,6 +82,17 @@ export interface EditorServiceDeps {
   writers?: PackWriters;
   /** Vision-model tagging for the Media section; absent in builds/tests without an LLM. */
   tagger?: MediaTagger;
+  /** The kyutai voice bank behind the character's voice picker; absent in tests. */
+  voiceBank?: VoiceBankLike;
+}
+
+/** The slice of `VoiceBank` the editor uses. */
+export interface VoiceBankLike {
+  catalogue(opts?: { refresh?: boolean }): Promise<VoiceBankCatalogue>;
+  ensurePreview(repoPath: string): Promise<string>;
+  ensureVoice(repoPath: string): Promise<string>;
+  prefetch(repoPaths: string[]): void;
+  progress(): VoiceBankProgress;
 }
 
 /** Assets asked for in one `suggestMediaTags` call, so a stray loop cannot hammer the model. */
@@ -525,6 +538,59 @@ export class EditorService {
     const rel = await this.copyIntoCharacter(dir, ch.dir, file);
     const set = { ...(ch.definition.avatarSet ?? { expressions: {} }), expressions: { ...(ch.definition.avatarSet?.expressions ?? {}), [expression]: rel } };
     await this.writers.writeCharacter(dir, ch.dir, { ...ch.definition, avatarSet: set }, ch.personaText, ch.behaviours);
+    return this.read(key);
+  }
+
+  // ---- voice bank ------------------------------------------------------------------
+  // Auditioning happens against the app's shared bank; choosing a voice copies the wav into the
+  // character so the pack stays self-contained (docs/spec/living.md §4 "Voice").
+
+  private bank(): VoiceBankLike {
+    const bank = this.deps.voiceBank;
+    if (!bank) throw new RpError('CAPABILITY_FAILED', 'The voice bank is not available in this build');
+    return bank;
+  }
+
+  async voiceBank(refresh?: boolean): Promise<VoiceBankCatalogue> {
+    return this.bank().catalogue({ refresh: refresh === true });
+  }
+
+  /** `rp-asset://` URL of the cached sample sentence, generating it on first ask. */
+  async voicePreview(repoPath: string): Promise<string> {
+    if (typeof repoPath !== 'string' || repoPath.trim().length === 0) throw new RpError('INVALID_ARGUMENT', 'repoPath is required');
+    const rel = await this.bank().ensurePreview(repoPath.trim());
+    return assetUrl(VOICE_BANK_PACK_ID, rel);
+  }
+
+  async voicePrefetch(repoPaths: string[]): Promise<VoiceBankProgress> {
+    const bank = this.bank();
+    if (Array.isArray(repoPaths)) bank.prefetch(repoPaths.filter((p): p is string => typeof p === 'string' && p.length > 0).slice(0, 200));
+    return bank.progress();
+  }
+
+  /**
+   * Copy a bank recording into the character directory and point `voice.reference` at it. The
+   * source path and, where the licence asks for it, a credit line are recorded alongside, so the
+   * pack can be published without losing track of where the voice came from.
+   */
+  async useVoice(key: string, charDir: string, repoPath: string): Promise<EditorProject> {
+    const { dir } = this.entry(key);
+    if (typeof repoPath !== 'string' || repoPath.trim().length === 0) throw new RpError('INVALID_ARGUMENT', 'repoPath is required');
+    const ch = await this.characterOf(dir, charDir, key);
+    const bank = this.bank();
+    const source = await bank.ensureVoice(repoPath.trim());
+    const rel = await this.copyIntoCharacter(dir, ch.dir, source);
+    const collectionId = repoPath.split('/')[0] ?? '';
+    const collection = VOICE_BANK_COLLECTIONS[collectionId];
+    const voice = {
+      ...(ch.definition.voice ?? {}),
+      reference: rel,
+      referenceSource: `${VOICE_BANK_REPO}:${repoPath.trim()}`,
+      ...(collection && collection.license.startsWith('CC-BY')
+        ? { attribution: `${collection.label} (${collection.license}) via ${VOICE_BANK_REPO}` }
+        : {}),
+    };
+    await this.writers.writeCharacter(dir, ch.dir, { ...ch.definition, voice }, ch.personaText, ch.behaviours);
     return this.read(key);
   }
 

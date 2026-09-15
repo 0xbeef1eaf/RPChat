@@ -202,9 +202,11 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   `neutral`); `moveTo` animates by re-placing through the backend in steps or via CSS when on the same
   monitor; persists last state per character in main memory), `widgets` (kind `widget`; `html` sanitised
   only by the iframe sandbox; `postMessage` → page → iframe; iframe messages → `widget-message` events),
-  `voice` (`tts` template with `{text}`/`{file}`: if the template writes `{file}` play it in the audio
-  window; defaults: Linux `espeak-ng "{text}"` if on PATH, macOS `say "{text}"`, Windows PowerShell SAPI
-  one-liner; fallback when empty: `speechSynthesis` in the hidden audio window; `wait` awaits
+  `voice` (four tiers, first available wins: (1) a `tts` template the **user** set (`{text}`/`{file}`:
+  if it writes `{file}` play that in the audio window); (2) a neural voice model under
+  `<userData>/voices/` driven by `sherpa-onnx-offline-tts` — see §4a; (3) the platform default
+  `tts` (Linux `espeak-ng "{text}"` if on PATH, macOS `say "{text}"`, Windows PowerShell SAPI
+  one-liner); (4) `speechSynthesis` in the hidden audio window. `wait` awaits
   completion; `stop` kills/cancels; `listen`: `stt` template printing the transcript), `desktop`
   (Hyprland: `j/clients`, `dispatch focuswindow address:`, `movewindow`, `resizewindowpixel`,
   `movetoworkspace`, `workspace`, `j/activeworkspace`; other platforms: only what templates provide;
@@ -225,6 +227,42 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
 - **Settings defaults**: extend `defaultTemplates` for all new templates (Hyprland-aware).
 - Tests: presence edge detection with a fake sampler, ICS parser, RSS parser, allowlist matcher,
   files path guard, messaging payload builders, desktop Hyprland command builders, avatar placement.
+
+### 4a. Voice models and the voice bank
+
+Neural TTS runs on the CPU, deliberately: the GPU is for text generation. Both pieces below are
+optional — with neither installed, `sdk.voice.speak` behaves exactly as it did before (espeak-ng and
+friends), so nothing here is a hard dependency.
+
+- **Engine** (`capabilities/voice-models.ts`, pure): `sherpa-onnx-offline-tts`, found via
+  `RP_SHERPA_TTS` → the app's `resources/bin` → PATH (`findSherpaTts`, mirroring `findHelperBinary`).
+  It is not vendored: it is ~30 MB per platform and users may already have it.
+- **Models**: directories unpacked under `<userData>/voices/`, straight from the k2-fsa `tts-models`
+  releases with nothing renamed. `detectVoiceModel` recognises them by the filenames those archives
+  contain and emits the right `--<engine>-*` flags: `pocket` (Pocket TTS, clones from reference
+  audio), `kokoro`, `kitten`, `vits`/Piper. Kokoro and Kitten have identical file shapes, so the
+  directory name decides, and an `rp-voice.json` `{ "engine": … }` marker overrides both. Where a
+  role has several candidates an `int8` build wins — the point is CPU speed.
+- **Per character**: `character.json` → `voice: { model?, reference?, referenceText?, speaker?, rate?,
+  steps?, referenceSource?, attribution? }`. `reference` is a wav **inside the character directory**,
+  so a published pack carries the voice it speaks with. Resolution order for the model is
+  `speak({ voice })` → the character's `voice.model` → `settings.voice.defaultModel` → the only
+  installed model when there is exactly one. A model that is named but missing, or a model present
+  with no binary, is a `CAPABILITY_FAILED` — never a silent drop to espeak.
+- **Voice bank** (`capabilities/voice-bank.ts`): a mirror of `kyutai/tts-voices` under
+  `<userData>/voice-bank/` (`catalogue.json`, `files/<repo path>`, `previews/<model>/<id>.wav`). The
+  Hugging Face tree endpoint is paged through its `Link: rel="next"` cursor and cached for a day; a
+  failed refresh falls back to the cached listing rather than emptying the picker. Downloads run
+  three at a time in the background, are written via a `.part` rename, and anything that does not
+  start with `RIFF` is rejected. Previews synthesise one fixed sentence (`VOICE_PREVIEW_SENTENCE`)
+  with the first installed cloning model and are cached per (voice, model). The previews directory is
+  served over `rp-asset://` as `app.rp-code.voice-bank`.
+- **Licensing**: collection licences are transcribed into `VOICE_BANK_COLLECTIONS` and shown in the
+  picker, because `expresso` and `ears` are CC BY-NC and copying one into a pack is the moment that
+  starts to matter. Choosing a CC-BY voice records an `attribution` line in `character.json`.
+- **Editor**: `editor.voiceBank / voicePreview / voicePrefetch / useVoice`. `useVoice` copies the
+  recording into the character directory and writes `voice.reference` plus its provenance; the
+  picker itself is `renderer/views/editor/VoicePicker.tsx`.
 
 ## 5. Renderer
 

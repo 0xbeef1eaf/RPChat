@@ -116,6 +116,25 @@ export const COMMAND_TEMPLATE_INFO: Record<keyof CommandTemplates, CommandTempla
   theme: { label: 'Switch theme', usedBy: 'sdk.desktop.setTheme', defaults: 'gsettings on Linux, osascript on macOS' },
 };
 
+/**
+ * Neural text-to-speech through sherpa-onnx, used by `sdk.voice.speak` when no `tts` command
+ * template is set. Models are directories unpacked under `<userData>/voices/`; a character picks
+ * one with `voice.model` in its `character.json` and falls back to `defaultModel` here.
+ */
+export interface VoiceSettings {
+  /** Voice model directory used by characters that name none. Empty = the only installed model, if there is exactly one. */
+  defaultModel: string;
+  /** onnxruntime threads per utterance. Kept low by default so text generation keeps the machine. */
+  numThreads: number;
+  /**
+   * Flow-matching steps for models that take them (Pocket TTS). Fewer is faster and flatter; the
+   * default is the model's own, which is what the upstream demos use.
+   */
+  steps?: number;
+  /** Turn the neural path off and fall back to the platform `tts` command even when a model is installed. */
+  disabled: boolean;
+}
+
 export interface AppSettings {
   providers: ProviderConfig[];
   /** Id of the provider used when a session has no override. */
@@ -141,6 +160,7 @@ export interface AppSettings {
   /** Display backend: `auto` picks `hyprland` when running under Hyprland, else `electron`. */
   displayBackend: 'auto' | 'electron' | 'hyprland';
   commandTemplates: CommandTemplates;
+  voice: VoiceSettings;
   /** Hard cap for `sdk.input.lock` durations. Default 5 minutes. */
   maxInputLockMs: number;
   /** Wallpaper file to restore with `sdk.wallpaper.restore()`; empty = unknown. */
@@ -266,6 +286,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
     doNotDisturb: { command: '' },
     theme: { command: '' },
   },
+  voice: { defaultModel: '', numThreads: 4, disabled: false },
   senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [], liveSnapshotAutoRefresh: false },
   web: { allowlist: [], maxBytes: 512 * 1024 },
   desktop: { launchAllowlist: [] },

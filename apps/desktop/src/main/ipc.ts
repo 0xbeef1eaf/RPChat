@@ -259,6 +259,10 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       installToApp: (_e, key) => services.editor.installToApp(requireString(key, 'key')),
       revealInFolder: (_e, key) => services.editor.revealInFolder(requireString(key, 'key')),
       behaviourTemplates: async () => services.editor.behaviourTemplates(),
+      voiceBank: (_e, refresh) => services.editor.voiceBank(refresh === true),
+      voicePreview: (_e, repoPath) => services.editor.voicePreview(requireString(repoPath, 'repoPath')),
+      voicePrefetch: (_e, repoPaths) => services.editor.voicePrefetch(Array.isArray(repoPaths) ? repoPaths : []),
+      useVoice: (_e, key, dir, repoPath) => services.editor.useVoice(requireString(key, 'key'), requireString(dir, 'dir'), requireString(repoPath, 'repoPath')),
     },
     system: {
       status: () => services.system.status(),

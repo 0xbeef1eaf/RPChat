@@ -138,6 +138,35 @@ function dropIgnoredKeys<T extends object>(value: T): T {
 
 export const packManifestSchema: z.ZodType<PackManifest> = packManifestObject.transform(dropIgnoredKeys);
 
+/** Directory name of an installed voice model: one path segment, no separators or `..`. */
+export const VOICE_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Extensions accepted for cloning reference audio (what sherpa-onnx can read). */
+export const REFERENCE_AUDIO_EXTENSIONS = ['wav'] as const;
+
+const referencePathSchema = relativePathSchema.check((ctx) => {
+  if (!(REFERENCE_AUDIO_EXTENSIONS as readonly string[]).includes(extensionOf(ctx.value))) {
+    ctx.issues.push({ code: 'custom', message: `voice.reference "${ctx.value}" must be a .wav file`, input: ctx.value });
+  }
+});
+
+const voiceSchema = z
+  .object({
+    model: z.string().regex(VOICE_MODEL_PATTERN, 'voice.model must be the directory name of an installed voice model').optional(),
+    reference: referencePathSchema.optional(),
+    referenceText: z.string().min(1).optional(),
+    referenceSource: z.string().min(1).max(300).optional(),
+    attribution: z.string().min(1).max(300).optional(),
+    speaker: z.number().int().min(0).optional(),
+    rate: z.number().min(0.5).max(2).optional(),
+    steps: z.number().int().min(1).max(64).optional(),
+  })
+  .check((ctx) => {
+    if (ctx.value.referenceText !== undefined && ctx.value.reference === undefined) {
+      ctx.issues.push({ code: 'custom', message: 'voice.referenceText needs a voice.reference to describe', input: ctx.value, path: ['referenceText'] });
+    }
+  });
+
 const exampleDialogueTurnSchema = z.object({
   user: z.string(),
   character: z.string(),
@@ -160,6 +189,7 @@ const characterDefinitionObject = z.object({
   behaviours: z.partialRecord(z.enum(BEHAVIOUR_HOOKS), behaviourPathSchema).optional(),
   avatarSet: avatarSetSchema.optional(),
   mood: moodSchema.optional(),
+  voice: voiceSchema.optional(),
   [IGNORED_CAPABILITIES_KEY]: ignoredCapabilitiesSchema,
   modelHints: modelHintsSchema.optional(),
 });

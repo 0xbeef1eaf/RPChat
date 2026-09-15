@@ -22,7 +22,9 @@ import { FilesHandler } from './capabilities/files.js';
 import { MessagingHandler } from './capabilities/messaging.js';
 import { PresenceHandler } from './capabilities/presence.js';
 import { ScreenHandler } from './capabilities/screen.js';
-import { TTS_PACK_ID, VoiceHandler } from './capabilities/voice.js';
+import { TTS_PACK_ID, VOICES_DIRNAME, VoiceHandler, readVoiceModels } from './capabilities/voice.js';
+import { findSherpaTts } from './capabilities/voice-models.js';
+import { VOICE_BANK_DIRNAME, VOICE_BANK_PACK_ID, VoiceBank } from './capabilities/voice-bank.js';
 import { WebHandler } from './capabilities/web.js';
 import { WidgetsHandler } from './capabilities/widgets.js';
 import { electronCapturer } from './capture.js';
@@ -126,7 +128,11 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const windowSystem = detectWindowSystem(env);
   /** Extra roots served by rp-asset:// besides installed packs (generated speech files). */
   const ttsDir = path.join(opts.userData, 'tts');
-  const extraRoots: Record<string, string> = { [TTS_PACK_ID]: ttsDir };
+  /** Unpacked sherpa-onnx voice models, one subdirectory each (docs/spec/living.md §4). */
+  const voicesDir = path.join(opts.userData, VOICES_DIRNAME);
+  /** Downloaded kyutai reference clips and their cached sample sentences (the editor's voice picker). */
+  const voiceBankDir = path.join(opts.userData, VOICE_BANK_DIRNAME);
+  const extraRoots: Record<string, string> = { [TTS_PACK_ID]: ttsDir, [VOICE_BANK_PACK_ID]: path.join(voiceBankDir, 'previews') };
   const registry = new ProjectRegistry(path.join(dataDir, 'editor-projects.json'));
   const packRootFor = (packId: string): string | undefined => {
     const editorKey = keyFromAssetHost(packId);
@@ -289,7 +295,36 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     },
     logger,
   });
-  const voice = new VoiceHandler({ commands, audioWindow: () => windows.audioWindow(), ttsDir, logger });
+  const findSherpa = (): string | undefined =>
+    findSherpaTts({
+      env,
+      resourcesDirs,
+      exists: (file) => {
+        try {
+          return fs.statSync(file).isFile();
+        } catch {
+          return false;
+        }
+      },
+      onPath: (name) => hasExecutable(name, env),
+    });
+  const voice = new VoiceHandler({
+    commands,
+    audioWindow: () => windows.audioWindow(),
+    ttsDir,
+    voicesDir,
+    packs,
+    voiceSettings: async () => (await settingsOf()).voice,
+    findSherpa,
+    logger,
+  });
+  const voiceBank = new VoiceBank({
+    dir: voiceBankDir,
+    models: () => readVoiceModels(voicesDir),
+    findSherpa,
+    numThreads: async () => (await settingsOf()).voice.numThreads,
+    logger,
+  });
   const desktop = new DesktopHandler({ commands, ...(hypr ? { hypr } : {}), launchAllowlist: async () => (await settingsOf()).desktop.launchAllowlist, logger });
   const files = new FilesHandler({ userData: opts.userData, openPath: (p) => shell.openPath(p) });
   const messaging = new MessagingHandler({ channels: async () => (await settingsOf()).messaging.channels, runCommand: (tpl, vars, label) => commands.runTemplate(tpl, vars, label) });
@@ -330,6 +365,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     reveal: (absolute) => shell.showItemInFolder(absolute),
     logger,
     tagger,
+    voiceBank,
   });
 
   engine = new Engine({

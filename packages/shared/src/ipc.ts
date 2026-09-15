@@ -3,6 +3,7 @@ import type { AuditEntry, ChatEvent, ChatMessage, CreateSessionInput, Session } 
 import type { ModelInfo, ProviderConfig } from './llm.js';
 import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo } from './media.js';
 import type { CharacterSummary, InstalledPackRecord, MediaManifest, PackManifest, TagSummary } from './pack.js';
+import type { VoiceBankCatalogue, VoiceBankProgress } from './voice.js';
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
@@ -345,6 +346,24 @@ export interface IpcApi {
     installToApp(key: string): Promise<InstalledPackView>;
     revealInFolder(key: string): Promise<void>;
     behaviourTemplates(): Promise<BehaviourTemplate[]>;
+    /**
+     * Reference voices from `kyutai/tts-voices` plus the voice models installed locally. The
+     * listing is cached on disk and refetched at most daily; `refresh` forces a re-list.
+     */
+    voiceBank(refresh?: boolean): Promise<VoiceBankCatalogue>;
+    /**
+     * Download the recording if needed, synthesise the shared sample sentence in that voice, and
+     * return the `rp-asset://` URL of the cached wav. Repeated calls reuse the cached file.
+     */
+    voicePreview(repoPath: string): Promise<string>;
+    /** Queue recordings for download in the background (the editor calls this for the visible page). */
+    voicePrefetch(repoPaths: string[]): Promise<VoiceBankProgress>;
+    /**
+     * Copy a bank recording into the character directory and point `voice.reference` at it, so the
+     * pack carries the voice it speaks with. Records the source and, for attributed licences, a
+     * credit line.
+     */
+    useVoice(key: string, dir: string, repoPath: string): Promise<EditorProject>;
   };
 }
 

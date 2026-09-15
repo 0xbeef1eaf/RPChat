@@ -1,12 +1,39 @@
-/** `sdk.voice`: TTS through the `tts` template (or the hidden window's speechSynthesis), STT through `stt`. */
+/**
+ * `sdk.voice`: TTS through a neural voice model (sherpa-onnx), the `tts` template, or the hidden
+ * window's speechSynthesis; STT through `stt`.
+ *
+ * `speak()` picks the first of these that is available, in order:
+ *  1. a `tts` command template the **user** set — the explicit escape hatch, so it always wins;
+ *  2. a voice model installed under `<userData>/voices/` driven by `sherpa-onnx-offline-tts`;
+ *  3. the platform's default `tts` command (espeak-ng, `say`, SAPI);
+ *  4. the hidden audio window's `speechSynthesis`.
+ *
+ * Step 2 is what makes a character sound like itself: a cloning model (Pocket TTS) takes its voice
+ * from the wav named by that character's `voice.reference`. Once a model is installed, a missing
+ * binary or an unknown model name is an error rather than a silent drop back to step 3 — installing
+ * a model is deliberate, and a character quietly speaking in espeak's robot voice hides the problem.
+ */
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { ActionContext, CapabilityHandler, Json } from '@rp/shared';
+import type { ActionContext, CapabilityHandler, CommandTemplate, Json, LoadedPack, VoiceSettings } from '@rp/shared';
 import { RpError, assetUrl } from '@rp/shared';
+import { joinRelative, resolveAssetPath } from '@rp/pack';
 import type { CommandRunner } from './commands-runner.js';
-import { commandFailed, notConfigured } from '../commands.js';
+import { commandFailed, isConfigured, notConfigured, spawnCapture } from '../commands.js';
+import type { CommandResult } from '../commands.js';
 import type { OverlayWindowLike } from '../display/backend.js';
+import type { VoiceModel } from './voice-models.js';
+import {
+  SAMPLE_DIRNAME,
+  SHERPA_TTS_BINARY,
+  SHERPA_TTS_ENV,
+  VOICES_DIRNAME,
+  VOICE_MODEL_MARKER,
+  buildSherpaArgs,
+  detectVoiceModel,
+  referenceFor,
+} from './voice-models.js';
 
 /** Synthetic pack id under which generated speech files are served to the audio window. */
 export const TTS_PACK_ID = 'app.rp-code.tts';
@@ -14,6 +41,13 @@ export const VOICE_TEXT_MAX = 2000;
 export const LISTEN_MAX_SECONDS = 60;
 /** How long a fire-and-forget `speak()` waits for the TTS command to fail before reporting success. */
 export const SPEAK_START_GRACE_MS = 300;
+/**
+ * Cap for one neural synthesis. `VOICE_TEXT_MAX` characters is around two minutes of speech, which
+ * even a slow CPU model finishes well inside this; the 30 s command default would cut it off.
+ */
+export const SYNTH_TIMEOUT_MS = 120_000;
+/** How long a scan of the voices directory is reused, so a model added while running is picked up. */
+export const MODEL_CACHE_MS = 10_000;
 
 export interface VoiceHandlerDeps {
   commands: CommandRunner;
@@ -23,6 +57,16 @@ export interface VoiceHandlerDeps {
   logger: Pick<Console, 'warn' | 'debug'>;
   /** Override of `SPEAK_START_GRACE_MS` for tests. */
   startGraceMs?: number;
+  /** Directory holding unpacked voice models (`<userData>/voices`). Without it, only steps 1, 3 and 4 run. */
+  voicesDir?: string;
+  /** Locates `sherpa-onnx-offline-tts` (env override, bundled resources, PATH). */
+  findSherpa?: () => string | undefined;
+  /** The speaking character's pack, for its `voice` block. */
+  packs?: { getLoaded(packId: string): LoadedPack };
+  /** App-level voice settings (default model, thread count, kill switch). */
+  voiceSettings?: () => Promise<VoiceSettings>;
+  /** Injectable for tests. */
+  spawn?: (file: string, args: string[], opts: { signal?: AbortSignal; timeoutMs?: number }) => Promise<CommandResult>;
 }
 
 export function speechSynthesisScript(text: string, rate: number | undefined, voice: string | undefined): string {
@@ -30,16 +74,68 @@ export function speechSynthesisScript(text: string, rate: number | undefined, vo
   return `(function(){try{var p=${payload};if(!window.speechSynthesis)return false;var u=new SpeechSynthesisUtterance(p.text);if(p.rate)u.rate=p.rate;if(p.voice){var v=speechSynthesis.getVoices().find(function(x){return x.name===p.voice});if(v)u.voice=v;}speechSynthesis.cancel();speechSynthesis.speak(u);return true;}catch(e){return false;}})();`;
 }
 
+/** A voice model plus everything one utterance needs from the character and the settings. */
+interface NeuralVoice {
+  binary: string;
+  model: VoiceModel;
+  reference?: string;
+  referenceText?: string;
+  speaker?: number;
+  steps?: number;
+  numThreads: number;
+  /** The character's own baseline speed, used when the call passes no `rate`. */
+  rate?: number;
+}
+
+/**
+ * Read every recognised voice model under `voicesDir`. A directory that matches no engine is
+ * skipped silently: users unpack archives here by hand, so stray folders are expected.
+ */
+export async function readVoiceModels(voicesDir: string): Promise<VoiceModel[]> {
+  let entries;
+  try {
+    entries = await fs.readdir(voicesDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const models: VoiceModel[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(voicesDir, entry.name);
+    const inner = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const files = inner.filter((e) => e.isFile()).map((e) => e.name);
+    const dirs = inner.filter((e) => e.isDirectory()).map((e) => e.name);
+    const samples = await fs.readdir(path.join(dir, SAMPLE_DIRNAME)).catch(() => []);
+    const pinned = await readEngineMarker(dir);
+    const model = detectVoiceModel(dir, { files, dirs, samples }, pinned);
+    if (model) models.push(model);
+  }
+  return models.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** `engine` from an `rp-voice.json` marker, which disambiguates look-alike model layouts. */
+async function readEngineMarker(dir: string): Promise<string | undefined> {
+  try {
+    const raw = await fs.readFile(path.join(dir, VOICE_MODEL_MARKER), 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    const engine = (parsed as { engine?: unknown } | null)?.engine;
+    return typeof engine === 'string' ? engine : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class VoiceHandler implements CapabilityHandler {
   readonly moduleId = 'voice';
   private current: { abort: AbortController; itemId?: string } | undefined;
+  private cache: { at: number; models: VoiceModel[] } | undefined;
 
   constructor(private readonly deps: VoiceHandlerDeps) {}
 
-  async invoke(method: string, args: Json[], _context: ActionContext): Promise<Json | void> {
+  async invoke(method: string, args: Json[], context: ActionContext): Promise<Json | void> {
     switch (method) {
       case 'speak':
-        await this.speak(args[0], asObject(args[1]));
+        await this.speak(args[0], asObject(args[1]), context);
         return;
       case 'stop':
         await this.stop();
@@ -51,7 +147,7 @@ export class VoiceHandler implements CapabilityHandler {
     }
   }
 
-  private async speak(textArg: unknown, opts: Record<string, unknown>): Promise<void> {
+  private async speak(textArg: unknown, opts: Record<string, unknown>, context: ActionContext): Promise<void> {
     if (typeof textArg !== 'string' || textArg.trim().length === 0) throw new RpError('INVALID_ARGUMENT', 'text must be a non-empty string');
     const text = textArg.trim().slice(0, VOICE_TEXT_MAX);
     const rate = typeof opts.rate === 'number' && opts.rate > 0 ? Math.min(4, opts.rate) : undefined;
@@ -60,26 +156,20 @@ export class VoiceHandler implements CapabilityHandler {
     await this.stop();
     const abort = new AbortController();
     this.current = { abort };
+
+    // 1. The user's own command template is the escape hatch and outranks everything.
+    const userTpl = this.deps.commands.userTemplate ? await this.deps.commands.userTemplate('tts') : undefined;
+    if (userTpl && isConfigured(userTpl)) return this.speakWithTemplate(userTpl, { text, rate, voice }, wait, abort);
+
+    // 2. A neural voice model, when one is installed.
+    const neural = await this.resolveNeural(context, voice);
+    if (neural) return this.speakWithSherpa(neural, text, rate, wait, abort);
+
+    // 3. The platform default (espeak-ng, `say`, SAPI).
     const tpl = await this.deps.commands.resolve('tts');
-    if (tpl.command.trim().length > 0) {
-      const writesFile = tpl.command.includes('{file}');
-      const file = path.join(this.deps.ttsDir, `${randomUUID()}.wav`);
-      if (writesFile) await fs.mkdir(this.deps.ttsDir, { recursive: true });
-      const vars: Record<string, string> = { text, file, rate: rate !== undefined ? String(rate) : '', voice: voice ?? '' };
-      const run = this.deps.commands.runTemplate(tpl, vars, 'tts', { signal: abort.signal }).then(async (result) => {
-        if (result.code !== 0 && !abort.signal.aborted) throw commandFailed('tts', tpl, result);
-        if (writesFile && !abort.signal.aborted) await this.play(file, wait, abort);
-      });
-      if (wait || writesFile) await run;
-      else {
-        // Fire-and-forget, but a command that cannot start (missing binary) or fails at once is still reported.
-        const settled = run.then(() => 'ok' as const);
-        settled.catch((err) => this.deps.logger.warn('[voice] tts failed', err));
-        await Promise.race([settled, new Promise<'pending'>((r) => setTimeout(() => r('pending'), this.deps.startGraceMs ?? SPEAK_START_GRACE_MS).unref?.())]);
-      }
-      return;
-    }
-    // Fallback: the hidden audio window's speechSynthesis.
+    if (isConfigured(tpl)) return this.speakWithTemplate(tpl, { text, rate, voice }, wait, abort);
+
+    // 4. The hidden audio window's speechSynthesis.
     const win = this.deps.audioWindow();
     await win.whenReady();
     const ok = await win.runScript?.(speechSynthesisScript(text, rate, voice));
@@ -87,6 +177,151 @@ export class VoiceHandler implements CapabilityHandler {
       throw new RpError('CAPABILITY_FAILED', `${notConfigured('tts').message}; the built-in speech synthesis is unavailable here too`, { template: 'tts' });
     }
     if (wait) await new Promise((r) => setTimeout(r, Math.min(60_000, 400 + text.length * 60)));
+  }
+
+  /** Steps 1 and 3: run a `tts` command template, playing `{file}` when it writes one. */
+  private async speakWithTemplate(
+    tpl: CommandTemplate,
+    vars: { text: string; rate?: number; voice?: string },
+    wait: boolean,
+    abort: AbortController,
+  ): Promise<void> {
+    const writesFile = tpl.command.includes('{file}');
+    const file = path.join(this.deps.ttsDir, `${randomUUID()}.wav`);
+    if (writesFile) await fs.mkdir(this.deps.ttsDir, { recursive: true });
+    const substitutions: Record<string, string> = {
+      text: vars.text,
+      file,
+      rate: vars.rate !== undefined ? String(vars.rate) : '',
+      voice: vars.voice ?? '',
+    };
+    const run = this.deps.commands.runTemplate(tpl, substitutions, 'tts', { signal: abort.signal }).then(async (result) => {
+      if (result.code !== 0 && !abort.signal.aborted) throw commandFailed('tts', tpl, result);
+      if (writesFile && !abort.signal.aborted) await this.play(file, wait, abort);
+    });
+    if (wait || writesFile) return run;
+    // Fire-and-forget, but a command that cannot start (missing binary) or fails at once is still reported.
+    const settled = run.then(() => 'ok' as const);
+    settled.catch((err) => this.deps.logger.warn('[voice] tts failed', err));
+    await Promise.race([settled, new Promise<'pending'>((r) => setTimeout(() => r('pending'), this.deps.startGraceMs ?? SPEAK_START_GRACE_MS).unref?.())]);
+  }
+
+  /** Step 2: synthesise to a wav with sherpa-onnx, then play it through the audio window. */
+  private async speakWithSherpa(voice: NeuralVoice, text: string, rate: number | undefined, wait: boolean, abort: AbortController): Promise<void> {
+    await fs.mkdir(this.deps.ttsDir, { recursive: true });
+    const file = path.join(this.deps.ttsDir, `${randomUUID()}.wav`);
+    const args = buildSherpaArgs(voice.model, {
+      text,
+      outFile: file,
+      ...(rate ?? voice.rate ? { rate: rate ?? voice.rate } : {}),
+      ...(voice.speaker !== undefined ? { speaker: voice.speaker } : {}),
+      ...(voice.steps !== undefined ? { steps: voice.steps } : {}),
+      ...(voice.reference ? { reference: voice.reference } : {}),
+      ...(voice.referenceText ? { referenceText: voice.referenceText } : {}),
+      numThreads: voice.numThreads,
+    });
+    const spawnFn = this.deps.spawn ?? ((f, a, o) => spawnCapture(f, a, o));
+    const started = Date.now();
+    const result = await spawnFn(voice.binary, args, { signal: abort.signal, timeoutMs: SYNTH_TIMEOUT_MS });
+    if (abort.signal.aborted) return;
+    if (result.code !== 0) {
+      await fs.rm(file, { force: true }).catch(() => undefined);
+      throw new RpError(
+        'CAPABILITY_FAILED',
+        `Voice model "${voice.model.name}" (${voice.model.label}) failed to synthesise: ${(result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`).slice(0, 500)}`,
+        { model: voice.model.name, engine: voice.model.engine, code: result.code },
+      );
+    }
+    this.deps.logger.debug?.(`[voice] ${voice.model.name} synthesised ${text.length} chars in ${Date.now() - started} ms`);
+    await this.play(file, wait, abort);
+  }
+
+  /** Every recognised model under `voicesDir`, re-scanned at most every `MODEL_CACHE_MS`. */
+  private async models(): Promise<VoiceModel[]> {
+    const dir = this.deps.voicesDir;
+    if (!dir) return [];
+    const now = Date.now();
+    if (this.cache && now - this.cache.at < MODEL_CACHE_MS) return this.cache.models;
+    const models = await readVoiceModels(dir);
+    this.cache = { at: now, models };
+    return models;
+  }
+
+  /**
+   * The voice model this call should use, or `undefined` to fall through to the command template.
+   * `requested` (from `speak(text, { voice })`) beats the character's `voice.model`, which beats the
+   * app default; with none of those and exactly one model installed, that one is used.
+   */
+  private async resolveNeural(context: ActionContext, requested?: string): Promise<NeuralVoice | undefined> {
+    if (!this.deps.voicesDir || !this.deps.findSherpa) return undefined;
+    const settings = this.deps.voiceSettings ? await this.deps.voiceSettings() : undefined;
+    if (settings?.disabled) return undefined;
+    const models = await this.models();
+    if (models.length === 0) return undefined;
+
+    const character = this.characterVoice(context);
+    const name = requested ?? character?.model ?? (settings?.defaultModel || undefined);
+    const model = name ? models.find((m) => m.name === name) : models.length === 1 ? models[0] : undefined;
+    if (name && !model) {
+      throw new RpError(
+        'CAPABILITY_FAILED',
+        `Voice model "${name}" is not installed; unpack it under ${this.deps.voicesDir} (installed: ${models.map((m) => m.name).join(', ')})`,
+        { model: name, installed: models.map((m) => m.name) },
+      );
+    }
+    if (!model) return undefined;
+
+    const binary = this.deps.findSherpa();
+    if (!binary) {
+      throw new RpError(
+        'CAPABILITY_FAILED',
+        `Voice model "${model.name}" is installed but ${SHERPA_TTS_BINARY} was not found (${SHERPA_TTS_ENV}, the app's resources/bin, or PATH); install sherpa-onnx or set a Speak command in Settings → Commands → Speak`,
+        { model: model.name, binary: SHERPA_TTS_BINARY },
+      );
+    }
+
+    const reference = referenceFor(model, this.referencePath(context, character?.reference));
+    if (model.clones && !reference) {
+      throw new RpError(
+        'CAPABILITY_FAILED',
+        `Voice model "${model.name}" (${model.label}) clones a voice from reference audio, but neither the character's voice.reference nor a sample in the model's ${SAMPLE_DIRNAME}/ was found`,
+        { model: model.name, engine: model.engine },
+      );
+    }
+    const numThreads = settings?.numThreads ?? 4;
+    const steps = character?.steps ?? settings?.steps;
+    return {
+      binary,
+      model,
+      numThreads,
+      ...(reference ? { reference } : {}),
+      ...(character?.referenceText ? { referenceText: character.referenceText } : {}),
+      ...(character?.speaker !== undefined ? { speaker: character.speaker } : {}),
+      ...(steps !== undefined ? { steps } : {}),
+      ...(character?.rate !== undefined ? { rate: character.rate } : {}),
+    };
+  }
+
+  /** The speaking character's `voice` block, or `undefined` when the pack is not loaded. */
+  private characterVoice(context: ActionContext): LoadedPack['character']['definition']['voice'] {
+    if (!this.deps.packs) return undefined;
+    try {
+      return this.deps.packs.getLoaded(context.packId).character.definition.voice;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Absolute path of a character-relative reference wav, guarded against escaping the pack root. */
+  private referencePath(context: ActionContext, relative?: string): string | undefined {
+    if (!relative || !this.deps.packs) return undefined;
+    try {
+      const pack = this.deps.packs.getLoaded(context.packId);
+      return resolveAssetPath(context.packRoot || pack.root, joinRelative(pack.character.dir, relative));
+    } catch (err) {
+      this.deps.logger.warn(`[voice] ignoring voice.reference "${relative}": ${(err as Error).message}`);
+      return undefined;
+    }
   }
 
   private async play(file: string, wait: boolean, abort: AbortController): Promise<void> {
@@ -146,3 +381,5 @@ export class VoiceHandler implements CapabilityHandler {
 function asObject(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
+
+export { VOICES_DIRNAME };

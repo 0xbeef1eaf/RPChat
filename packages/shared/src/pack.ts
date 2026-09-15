@@ -39,6 +39,41 @@ export interface ExampleDialogueTurn {
   character: string;
 }
 
+/**
+ * How a character sounds in `sdk.voice.speak()`. Every field is optional: a character with no
+ * `voice` block speaks with the app's default voice model (Settings → Voice), and a character
+ * with one still falls back to it for anything it leaves out.
+ */
+export interface CharacterVoice {
+  /**
+   * Directory name of an installed voice model (under the app's `voices` folder), e.g.
+   * `sherpa-onnx-pocket-tts-int8-2026-01-26`. Overridden per call by `speak(text, { voice })`.
+   */
+  model?: string;
+  /**
+   * Reference audio for zero-shot cloning models (PocketTTS, ZipVoice): a few seconds of wav,
+   * relative to the character directory. This is what makes the character sound like itself;
+   * without it a cloning model falls back to the sample shipped with the model.
+   */
+  reference?: string;
+  /** Transcript of `reference`. ZipVoice requires it; PocketTTS ignores it. */
+  referenceText?: string;
+  /**
+   * Where `reference` came from, when it was copied in from the voice bank, e.g.
+   * `kyutai/tts-voices:vctk/p329_022.wav`. Kept so the editor can show what a character's voice is
+   * and so an attributed licence (CC BY) can be traced back to its source.
+   */
+  referenceSource?: string;
+  /** Credit line for `reference`, filled in for collections whose licence requires attribution. */
+  attribution?: string;
+  /** Speaker id for multi-speaker models (Kokoro, VITS/VCTK). Ignored by cloning models. */
+  speaker?: number;
+  /** Baseline speed multiplier; `speak(text, { rate })` overrides it. */
+  rate?: number;
+  /** Flow-matching steps for PocketTTS/Supertonic: fewer is faster, more is smoother. */
+  steps?: number;
+}
+
 export interface ModelHints {
   temperature?: number;
   maxTokens?: number;
@@ -68,6 +103,8 @@ export interface CharacterDefinition {
   };
   /** Baselines for the mood model (`sdk.mood`). */
   mood?: { baseline?: number; energyBaseline?: number };
+  /** How the character sounds in `sdk.voice.speak()`. Paths are relative to the character directory. */
+  voice?: CharacterVoice;
   modelHints?: ModelHints;
 }
 
