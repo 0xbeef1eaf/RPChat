@@ -1159,6 +1159,123 @@ textarea:disabled {
   font-size: 12.5px;
 }
 
+/* ---------- Policy editor (Settings → System → "Create policy…") ---------- */
+.modal.policy-modal {
+  width: min(880px, 100%);
+  /* The tab body scrolls on its own, so the warning above it and the actions below stay put. */
+  overflow: hidden;
+}
+.policy-body {
+  overflow: auto;
+  min-height: 240px;
+  max-height: min(52vh, 560px);
+  /* Room for the rows' hover background and focus rings without clipping them. */
+  margin: 0 -8px;
+  padding: 0 8px;
+}
+.policy-body section > h3 {
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-muted);
+}
+
+/* One policy key: what decides it on the left, what it is set to on the right. */
+.policy-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+}
+.policy-row:hover {
+  background: var(--bg-hover);
+}
+.policy-row > input[type='checkbox'] {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+.policy-row > .toggle {
+  margin-top: 1px;
+}
+.policy-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.policy-row-hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.policy-row.off .policy-row-label > :first-child {
+  color: var(--fg-muted);
+}
+.policy-row-control {
+  justify-self: end;
+  min-width: 0;
+}
+/* Lists and the module table need the full width, so they drop under their own label. */
+.policy-row.wide {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.policy-row.wide .policy-row-control {
+  grid-column: 1 / -1;
+  justify-self: stretch;
+  padding-left: 26px;
+  margin-top: 4px;
+}
+
+.policy-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.policy-json {
+  font-size: 12px;
+}
+
+/* Segmented picker: a handful of named choices that read as one control. */
+.seg {
+  display: inline-flex;
+  /* Never stretch to the width of a column layout: these read as one compact control. */
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-elev);
+}
+.seg-btn {
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.seg-btn + .seg-btn {
+  border-left: 1px solid var(--border);
+}
+.seg-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.seg-btn[aria-checked='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.seg-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ---------- Tables ---------- */
 .table-wrap {
   overflow: auto;

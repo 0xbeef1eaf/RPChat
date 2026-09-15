@@ -314,14 +314,35 @@ sandbox (which the AppImage does anyway).
 
 You do not need root to create the policy — only to change it later. When the daemon is
 connected and no policy file exists, Settings → System shows **Create policy…** in the policy
-card. It opens an editor prefilled with a policy built from your *current* settings (every
+card. It opens a form over the whole policy file, prefilled from your *current* settings (every
 managed key, `inputLock` at your max lock with Esc for 5 s, `managedBy` left empty for you to
-fill in), with a *Reset to current settings* link. Edit it, tick *I understand this cannot be
-undone without root* and press **Write policy**: the app validates the JSON (problems are listed
-in the dialog), sends it to `rp-coded` (`set-policy`), which validates it again exactly like the
-file, creates `/etc/rp-code` if needed and writes `policy.json` as `root:root 0644`. Both the
-daemon and the app pick the new file up immediately; the managed badges appear once settings
-reload.
+fill in), in five tabs:
+
+- **The app** — `app.allowQuit`, the `app.users` list, and a switch per `app` restriction
+  (`allowPackEditor`, `allowSandbox`, `requireCharacterSession`, …). On means allowed, as it is
+  without a policy.
+- **Forced settings** — one switch per settings key the policy can force, grouped by area, with
+  the value beside it. A key switched **off is left out of the file entirely**, which is what
+  leaves it to each user; switched on it is pinned for everyone and shown to them as *managed by
+  policy*. *Force all* / *Force none* set them in one go, and the tab shows how many are on.
+  `permissions.moduleAllow` is a three-way per module — *user's choice*, *allow*, *deny* — since
+  a module left out of the map keeps the user's setting.
+- **Session guard** — `guard.mode`, the protection switches, `compositorIpc`, the shell picker
+  (`auto` and `none` are exclusive; named shells stack), and the path lists under *Extra rules*.
+- **Input lock** — the daemon's own `inputLock` limits.
+- **Review** — the exact JSON that will be written, a *Copy* button, and *Load a policy from
+  JSON* to fill the form in from a policy prepared elsewhere.
+
+A footer summarises what the policy does ("23 settings forced", "session guard: enforce") and
+lists anything that must be fixed first — a guard mode with no `app.users`, a duration below the
+daemon's floor, a home page that is not an http(s) URL, a guard path AppArmor could not carry.
+**Write policy** stays disabled while any of those stand, because the file is write-once and a
+refusal after the fact leaves the machine with no policy at all.
+
+Tick *I understand this cannot be undone without root* and press **Write policy**: the app sends
+the JSON to `rp-coded` (`set-policy`), which validates it again exactly like the file, creates
+`/etc/rp-code` if needed and writes `policy.json` as `root:root 0644`. Both the daemon and the
+app pick the new file up immediately; the managed badges appear once settings reload.
 
 Rules of the flow:
 

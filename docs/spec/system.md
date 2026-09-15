@@ -406,11 +406,22 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
   checkbox (shown for an AppImage launch, default on → `system.install({ systemInstall })`), policy card
   (managed-by text, list of forced settings, a warning line "Quitting is disabled by policy
   (managed by …) for: alice, bob" when `policy.allowQuit` is false — `quitDisabledLine()`; without a file and with `policy.canCreate`: **Create
-  policy…** → modal with the write-once explanation, a monospace textarea prefilled from
-  `system.policyTemplate()`, "Reset to current settings", an "I understand this cannot be undone
-  without root" checkbox gating **Write policy**, validation problems in a danger callout; on success
-  toast "Policy written", reload status and settings so managed badges appear; without the daemon a
-  hint to install the system integration), **Session guard** card (`guardLine()`: "Session guard:
+  policy…** → `CreatePolicyDialog` (`components/settings/PolicyEditor.tsx`): the write-once
+  explanation, a "Managed by" field and five tabs over a `PolicyDraft` (`renderer/lib/policy.ts`)
+  seeded from `system.policyTemplate()` — **The app** (`allowQuit`, the `users` list, a switch per
+  `AppRestrictions` key), **Forced settings** (a switch per forcible settings key beside its value,
+  grouped by `POLICY_GROUPS`, with *Force all* / *Force none* and a count on the tab; an off key is
+  omitted from the file, which is what leaves it to the user; `permissions.moduleAllow` is a
+  three-way per capability module), **Session guard** (mode, protection switches, `compositorIpc`,
+  the exclusive-`auto`/`none` shell picker, the path lists under *Extra rules*), **Input lock**
+  (the daemon's `inputLock` limits) and **Review** (the exact JSON with Copy, plus *Load a policy
+  from JSON* → `policyDraftFrom`). A footer shows `policyEffects()` as badges and
+  `policyDraftProblems()` — the rules `parsePolicy` would refuse, checked before the write since
+  the file cannot be rewritten — in a warning callout; **Write policy** is gated on both an "I
+  understand this cannot be undone without root" checkbox and an empty problem list, and sends
+  `policyDraftToFile()` as pretty JSON. A daemon refusal is split by `policyRefusals()` into a
+  danger callout; on success toast "Policy written", reload status and settings so managed badges
+  appear; without the daemon a hint to install the system integration), **Session guard** card (`guardLine()`: "Session guard:
   audit (AppArmor) — 5 profiles loaded — users: work — shell noctalia, compositor hyprland — applied …",
   "unavailable: AppArmor is not active…", or "Off…"; badge off/audit/enforce/pending/unavailable/error;
   `lastError` callout; a warning when `pamConfigured` is false; a collapsible "What it cannot do"

@@ -5,6 +5,7 @@ import { formatDateTime } from '../../lib/format';
 import { refreshSettings, reportError, toast } from '../../store/actions';
 import { Modal } from '../common/Modal';
 import { Toggle } from '../common/Toggle';
+import { CreatePolicyDialog } from './PolicyEditor';
 
 export function SystemSection() {
   const [status, setStatus] = useState<SystemIntegrationStatus | null>(null);
@@ -558,94 +559,4 @@ export function restrictionLabels(restrictions: AppRestrictions): string[] {
   return (Object.keys(RESTRICTION_LABELS) as Array<keyof AppRestrictions>)
     .filter((k) => (k.startsWith('require') ? restrictions[k] : !restrictions[k]))
     .map((k) => RESTRICTION_LABELS[k]);
-}
-
-/** Validation problems from a `createPolicy` error: the message lists one problem per line after "Invalid policy file:". */
-function policyProblems(err: unknown): string[] {
-  const message = errorMessage(err);
-  const lines = message
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-  if (lines.length > 1 && /^Invalid policy file:?$/.test(lines[0] ?? '')) return lines.slice(1);
-  return [message];
-}
-
-function CreatePolicyDialog({ path, onClose, onCreated }: { path: string; onClose: () => void; onCreated: (status: SystemIntegrationStatus) => void | Promise<void> }) {
-  const [text, setText] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [understood, setUnderstood] = useState(false);
-  const [writing, setWriting] = useState(false);
-  const [problems, setProblems] = useState<string[] | null>(null);
-
-  const reset = useCallback(async () => {
-    setLoading(true);
-    try {
-      setText(await api().system.policyTemplate());
-      setProblems(null);
-    } catch (err) {
-      setProblems([errorMessage(err)]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void reset();
-  }, [reset]);
-
-  const submit = async () => {
-    setWriting(true);
-    setProblems(null);
-    try {
-      const next = await api().system.createPolicy(text);
-      await onCreated(next);
-    } catch (err) {
-      setProblems(policyProblems(err));
-    } finally {
-      setWriting(false);
-    }
-  };
-
-  return (
-    <Modal title="Create the policy file" onClose={writing ? undefined : onClose}>
-      <p>
-        Writes <code>{path}</code> through the rp-code daemon. This does not need your password, but it can only be done once: afterwards only root
-        can edit or remove the file, and the values in it override the settings of every user on this machine.
-      </p>
-      <div className="field">
-        <div className="row">
-          <label className="grow" htmlFor="policy-json">
-            Policy (JSON, prefilled from your current settings)
-          </label>
-          <button type="button" className="btn btn-sm" onClick={reset} disabled={loading || writing}>
-            Reset to current settings
-          </button>
-        </div>
-        <textarea id="policy-json" className="code" rows={20} spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} disabled={loading || writing} />
-      </div>
-      {problems ? (
-        <div className="callout callout-danger small">
-          <strong>The policy was not written.</strong>
-          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-            {problems.map((p) => (
-              <li key={p}>{p}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      <label className="check">
-        <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} disabled={writing} />
-        I understand this cannot be undone without root
-      </label>
-      <div className="form-actions">
-        <button type="button" className="btn" onClick={onClose} disabled={writing}>
-          Cancel
-        </button>
-        <button type="button" className="btn btn-primary" onClick={submit} disabled={!understood || loading || writing || text.trim().length === 0}>
-          {writing ? 'Writing…' : 'Write policy'}
-        </button>
-      </div>
-    </Modal>
-  );
 }
