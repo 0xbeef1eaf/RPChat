@@ -182,6 +182,8 @@ pub enum GuardShell {
     Quickshell,
     Hyprpaper,
     Swww,
+    /// The same daemon as `swww`, after the rename; both spellings select the one row.
+    Awww,
     None,
 }
 
@@ -193,6 +195,7 @@ impl GuardShell {
             GuardShell::Quickshell => "quickshell",
             GuardShell::Hyprpaper => "hyprpaper",
             GuardShell::Swww => "swww",
+            GuardShell::Awww => "awww",
             GuardShell::None => "none",
         }
     }

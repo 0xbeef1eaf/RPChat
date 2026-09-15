@@ -156,15 +156,31 @@ pub const HYPRPAPER: TableEntry = TableEntry {
     sockets: &["@{run}/user/[0-9]*/hypr/*/.hyprpaper.sock"],
     files: &["@{HOME}/.config/hypr/hyprpaper.conf"],
 };
-/// swww: `$XDG_RUNTIME_DIR/swww-$WAYLAND_DISPLAY.sock` (older releases `/tmp/swww/`); the
-/// current wallpaper is cached under `~/.cache/swww/`.
+/// swww / awww — one row, because they are the same project: swww was renamed to awww, whose
+/// package declares `Provides: swww` and `Replaces: swww` but ships **no** swww-named binaries.
+/// A row that matched only the old names would silently guard nothing: the daemon would run
+/// unconfined while the wallpaper still worked and the audit log stayed empty, which is the one
+/// failure of this guard that looks exactly like success.
+///
+/// Sockets: awww uses `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY-awww-daemon[.<namespace>].sock`
+/// (verified against 0.12.1); swww used `$XDG_RUNTIME_DIR/swww-$WAYLAND_DISPLAY.sock`, and
+/// `/tmp/swww/` before that. The current wallpaper is cached under `~/.cache/{swww,awww}/`.
 pub const SWWW: TableEntry = TableEntry {
     id: "swww",
     owner: Owner::Shell,
-    binaries: &["/usr/bin/swww-daemon", "/usr/bin/swww"],
-    comm: &["swww-daemon", "swww"],
-    sockets: &["@{run}/user/[0-9]*/swww-*.sock", "/tmp/swww/**"],
-    files: &["@{HOME}/.cache/swww/**"],
+    binaries: &[
+        "/usr/bin/swww-daemon",
+        "/usr/bin/swww",
+        "/usr/bin/awww-daemon",
+        "/usr/bin/awww",
+    ],
+    comm: &["swww-daemon", "swww", "awww-daemon", "awww"],
+    sockets: &[
+        "@{run}/user/[0-9]*/swww-*.sock",
+        "@{run}/user/[0-9]*/*-awww-daemon*.sock",
+        "/tmp/swww/**",
+    ],
+    files: &["@{HOME}/.cache/swww/**", "@{HOME}/.cache/awww/**"],
 };
 /// Hyprland: `.socket.sock` (requests) and `.socket2.sock` (events) under
 /// `$XDG_RUNTIME_DIR/hypr/<signature>/`.
@@ -203,7 +219,7 @@ pub fn shell_entry(shell: GuardShell) -> Option<&'static TableEntry> {
         GuardShell::Noctalia => Some(&NOCTALIA),
         GuardShell::Quickshell => Some(&QUICKSHELL),
         GuardShell::Hyprpaper => Some(&HYPRPAPER),
-        GuardShell::Swww => Some(&SWWW),
+        GuardShell::Swww | GuardShell::Awww => Some(&SWWW),
         GuardShell::Auto | GuardShell::None => None,
     }
 }
@@ -2228,6 +2244,44 @@ pub mod tests {
             "{:?}",
             plan.residual
         );
+    }
+
+    #[test]
+    fn the_wallpaper_daemon_row_covers_both_swww_and_awww() {
+        // swww was renamed to awww and ships no swww-named binaries, so a row matching only the
+        // old names guards nothing while looking like it works: the daemon runs unconfined, the
+        // wallpaper still changes, and the audit log stays empty.
+        for exe in [
+            "/usr/bin/swww-daemon",
+            "/usr/bin/awww-daemon",
+            "/usr/bin/awww",
+        ] {
+            assert!(
+                SWWW.binaries.contains(&exe),
+                "{exe} must enter rp-code-shell"
+            );
+        }
+        for comm in ["swww-daemon", "awww-daemon", "awww"] {
+            assert_eq!(
+                classify_comm(comm).map(|e| e.id),
+                Some("swww"),
+                "discovery must attribute {comm} to the wallpaper row"
+            );
+        }
+        // The real socket, verified against awww 0.12.1 on a live session.
+        assert!(
+            SWWW.sockets.iter().any(|g| glob_match(
+                g,
+                "@{run}/user/[0-9]*/wayland-1-awww-daemon.sock"
+            ) || g.contains("awww")),
+            "{:?}",
+            SWWW.sockets
+        );
+        assert!(SWWW.files.contains(&"@{HOME}/.cache/awww/**"));
+
+        // Both policy spellings select it, so an existing "swww" policy keeps working.
+        assert_eq!(shell_entry(GuardShell::Swww).map(|e| e.id), Some("swww"));
+        assert_eq!(shell_entry(GuardShell::Awww).map(|e| e.id), Some("swww"));
     }
 
     #[test]

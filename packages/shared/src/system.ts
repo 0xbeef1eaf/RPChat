@@ -57,7 +57,7 @@ export interface PolicyFile {
 
 export type GuardMode = 'off' | 'audit' | 'enforce';
 export type GuardCompositorIpc = 'allow' | 'shell-only' | 'deny';
-export type GuardShell = 'auto' | 'noctalia' | 'quickshell' | 'hyprpaper' | 'swww' | 'none';
+export type GuardShell = 'auto' | 'noctalia' | 'quickshell' | 'hyprpaper' | 'swww' | 'awww' | 'none';
 
 export interface GuardPolicy {
   /** `off` (default) unloads, `audit` logs every attempt without blocking, `enforce` blocks. */
@@ -83,7 +83,8 @@ export interface GuardPolicy {
 
 export const GUARD_MODES: readonly GuardMode[] = ['off', 'audit', 'enforce'];
 export const GUARD_COMPOSITOR_IPC: readonly GuardCompositorIpc[] = ['allow', 'shell-only', 'deny'];
-export const GUARD_SHELLS: readonly GuardShell[] = ['auto', 'noctalia', 'quickshell', 'hyprpaper', 'swww', 'none'];
+/** `awww` is `swww` after its rename; both select the same row in the daemon. */
+export const GUARD_SHELLS: readonly GuardShell[] = ['auto', 'noctalia', 'quickshell', 'hyprpaper', 'swww', 'awww', 'none'];
 
 /** `status.guard` / `guard-apply` / `guard-status`: what the daemon has engaged. */
 export interface GuardInfo {
