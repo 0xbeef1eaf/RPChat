@@ -269,6 +269,10 @@ System prompt sections, in order (each a stable `<section>` block):
 
 Messages: the transcript, windowed by token budget (approximate 4 chars/token
 estimator in `@rp/llm`). Tool use/result pairs are kept intact when windowing.
+Replayed action code is stripped of its comments first (`stripCodeComments`):
+they are notes the model wrote to itself in the moment, they are never read
+back, and the window would otherwise pay for them on every later turn. The
+stored `ActionRecord.code` — what the user sees and what ran — keeps them.
 
 ---
 

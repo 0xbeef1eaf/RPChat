@@ -1,6 +1,6 @@
 import type { CapabilityRegistry } from '@rp/sdk';
 import { generateSdkIndex } from '@rp/sdk';
-import { estimateTokens, windowMessages } from '@rp/llm';
+import { estimateTokens, stripCodeComments, windowMessages } from '@rp/llm';
 import type {
   ActionRecord,
   AssetEntry,
@@ -224,9 +224,18 @@ function actionResultJson(action: ActionRecord): { json: string; isError: boolea
   return { json: JSON.stringify(payload), isError: !r.ok };
 }
 
+/**
+ * The code of a past action as the model gets it back: without its comments, which it wrote for
+ * itself in the moment and would otherwise pay for on every later turn. The stored
+ * `ActionRecord.code` — what the user sees and what ran — is untouched.
+ */
+function codeForModel(action: ActionRecord): string {
+  return stripCodeComments(action.code).trim();
+}
+
 function fenceFor(action: ActionRecord): string {
   const purpose = action.purpose.trim().length > 0 ? `// purpose: ${action.purpose.trim()}\n` : '';
-  return `\`\`\`${ACTION_FENCE_TAG}\n${purpose}${action.code.trim()}\n\`\`\``;
+  return `\`\`\`${ACTION_FENCE_TAG}\n${purpose}${codeForModel(action)}\n\`\`\``;
 }
 
 export interface TranscriptOptions {
@@ -288,7 +297,7 @@ export function transcriptToMessages(transcript: ChatMessage[], useTools: boolea
     if (useTools) {
       const parts: ContentPart[] = [];
       if (msg.content.trim().length > 0) parts.push({ type: 'text', text });
-      for (const a of actions) parts.push({ type: 'tool_use', id: a.id, name: RUN_ACTION_TOOL_NAME, input: { purpose: a.purpose, code: a.code } });
+      for (const a of actions) parts.push({ type: 'tool_use', id: a.id, name: RUN_ACTION_TOOL_NAME, input: { purpose: a.purpose, code: codeForModel(a) } });
       out.push({ role: 'assistant', content: parts });
       out.push({
         role: 'user',

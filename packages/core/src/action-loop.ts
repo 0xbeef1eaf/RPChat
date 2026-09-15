@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { RUN_ACTION_TOOL, extractFencedActions, stripFencedActions } from '@rp/llm';
+import { RUN_ACTION_TOOL, extractFencedActions, stripCodeComments, stripFencedActions } from '@rp/llm';
 import type {
   ActionContext,
   ActionRecord,
@@ -82,6 +82,24 @@ function joinText(a: string, b: string): string {
   if (a.length === 0) return b;
   if (b.length === 0) return a;
   return `${a}\n\n${b}`;
+}
+
+/**
+ * The assistant's message as it goes back into the conversation for the next round: the code of
+ * its `run_action` calls loses its comments, the same way `transcriptToMessages` replays it
+ * on later turns. The action that ran, and the text the user sees, are untouched.
+ */
+function withoutCodeComments(message: LlmMessage): LlmMessage {
+  if (!message.content.some((p) => p.type === 'tool_use' && p.name === RUN_ACTION_TOOL_NAME)) return message;
+  return {
+    ...message,
+    content: message.content.map((part) => {
+      if (part.type !== 'tool_use' || part.name !== RUN_ACTION_TOOL_NAME) return part;
+      const parsed = toolInput(part.input);
+      if (!parsed) return part;
+      return { ...part, input: { ...(part.input as object), purpose: parsed.purpose, code: stripCodeComments(parsed.code) } };
+    }),
+  };
 }
 
 function toolInput(input: unknown): { purpose: string; code: string } | undefined {
@@ -225,7 +243,7 @@ export class ActionLoop {
           // The model asked for actions after its last allowed round: refuse them and ask for text.
           this.logger.warn(`[action-loop] action limit (${input.maxActionRounds}) reached in session ${sessionId}`);
           exhausted = true;
-          conversation.push(response.message);
+          conversation.push(withoutCodeComments(response.message));
           conversation.push({ role: 'user', content: this.refusedResults(pending) });
           round += 1; // the text-only call below is its own round in the exchange log
           break;
@@ -250,7 +268,7 @@ export class ActionLoop {
         }
 
         // Feed results back.
-        conversation.push(response.message);
+        conversation.push(withoutCodeComments(response.message));
         const resultParts: ContentPart[] = [];
         const fencedResults: string[] = [];
         for (const { action, pending: p } of ran) {

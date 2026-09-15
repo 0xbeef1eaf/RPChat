@@ -227,6 +227,23 @@ describe('PromptBuilder', () => {
     ]);
   });
 
+  it('replays action code without its comments, in both tool and fenced form', () => {
+    const code = [
+      '// purpose: show the photo',
+      'const url = await sdk.pack.asset("beach.jpg"); // the one from summer',
+      '/* the model thinking out loud, at length */',
+      'await sdk.media.show({ url });',
+    ].join('\n');
+    const stripped = 'const url = await sdk.pack.asset("beach.jpg");\nawait sdk.media.show({ url });';
+    const transcript = [msg(1, 'assistant', 'here', { actions: [{ id: 'a1', purpose: 'p', code, language: 'ts' as const, source: 'tool' as const, startedAt: 't' }] })];
+
+    const [tooled] = transcriptToMessages(transcript, true);
+    expect(tooled!.content[1]).toEqual({ type: 'tool_use', id: 'a1', name: 'run_action', input: { purpose: 'p', code: stripped } });
+
+    const [fenced] = transcriptToMessages(transcript, false);
+    expect(fenced!.content[0]).toEqual({ type: 'text', text: `here\n\n\`\`\`action\n// purpose: p\n${stripped}\n\`\`\`` });
+  });
+
   it('windows a long transcript under the budget and keeps tool pairs intact', async () => {
     const transcript: ChatMessage[] = [];
     for (let i = 0; i < 400; i++) {

@@ -42,6 +42,7 @@ export {
   toProviderError,
 } from './providers/common.js';
 export { estimateMessageTokens, estimateTokens, groupToolPairs, windowMessages } from './tokens.js';
+export { stripCodeComments } from './comments.js';
 export { RUN_ACTION_TOOL, extractFencedActions, stripFencedActions } from './actions.js';
 export type { FencedAction } from './actions.js';
 
