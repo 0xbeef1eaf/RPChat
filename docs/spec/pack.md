@@ -51,7 +51,7 @@ async (mood: string) => {
 
 - `<name>` is the function name: `^[a-zA-Z_$][\w$]*$`, at most 64 characters, no JavaScript reserved words, not `__proto__` (`LIB_NAME_PATTERN` / `LIB_NAME_MAX_CHARS` in `@rp/shared`). Only regular `.ts` files count; a `README.md`, sub-folders and dotfiles in `lib/` are ignored.
 - The loader reads the folder into `LoadedCharacter.library: Record<name, { source; description?; bytes; file; updatedAt }>` (sorted by name; `updatedAt` is the file's mtime) and checks each source with `functionSourceProblem` — the same esbuild "exactly one function expression" check `LibraryService` applies to `sdk.lib.define`, so both cannot drift. A file that fails is reported as `warning: characters/<id>/lib/<name>.ts: not a single function expression: …` and left out; the pack still loads.
-- Caps, reported as problems: 50 files (`LIB_MAX_FUNCTIONS`), 16 KiB per source (`LIB_MAX_SOURCE_BYTES`), 128 KiB in total (`LIB_MAX_TOTAL_BYTES`).
+- Caps, reported as problems: 50 files (`LIB_MAX_FUNCTIONS`), 128 KiB in total (`LIB_MAX_TOTAL_BYTES`). A single file has no size cap — the total is what bounds the prelude prepended to every run.
 - `readCharacterLibrary(rootAbs, charDir, { previous })` reuses entries whose source text is unchanged, so core's rescan after every `define` stays cheap. `writeLibraryFunction` writes atomically (temp file + rename) and `removeLibraryFunction` deletes; core calls both against the installed copy, so what a character defines lands next to what the author shipped. `scaffoldPack` creates `lib/README.md` (`libraryReadme`) explaining the format. `packDirectory` zips the folder like any other pack file.
 
 ## Asset kinds

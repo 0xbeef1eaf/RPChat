@@ -1,6 +1,6 @@
 import { functionSourceProblem, libraryNameProblem, removeLibraryFunction, unwrapFunctionSource, writeLibraryFunction } from '@rp/pack';
 import type { CharacterLibraryEntry, LibFunction, LibFunctionInfo, LoadedCharacter, LoadedPack } from '@rp/shared';
-import { LIB_MAX_FUNCTIONS, LIB_MAX_SOURCE_BYTES, LIB_MAX_TOTAL_BYTES, RpError } from '@rp/shared';
+import { LIB_MAX_FUNCTIONS, LIB_MAX_TOTAL_BYTES, RpError } from '@rp/shared';
 
 export { functionSourceProblem, unwrapFunctionSource } from '@rp/pack';
 
@@ -101,9 +101,6 @@ export class LibraryService {
     if (typeof fn !== 'string') throw new RpError('INVALID_ARGUMENT', 'fn must be a function (or a string holding a function expression)');
     const source = unwrapFunctionSource(fn);
     const bytes = Buffer.byteLength(source, 'utf8');
-    if (bytes > LIB_MAX_SOURCE_BYTES) {
-      throw new RpError('INVALID_ARGUMENT', `fn is ${bytes} bytes; the limit is ${LIB_MAX_SOURCE_BYTES} bytes per function`, { bytes, limit: LIB_MAX_SOURCE_BYTES });
-    }
     const problem = functionSourceProblem(source);
     if (problem !== undefined) throw new RpError('INVALID_ARGUMENT', problem);
     if (opts.description !== undefined && opts.description !== null && typeof opts.description !== 'string') {

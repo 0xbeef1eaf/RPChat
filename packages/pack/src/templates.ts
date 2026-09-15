@@ -186,7 +186,7 @@ async (mood: string) => {
 
 The file name is the function name: a JavaScript identifier of at most 64
 characters. A function may use \`sdk\` and its sibling \`lib\` functions but
-closes over nothing else. Limits: 50 files, 16 KiB per file, 128 KiB in total.
+closes over nothing else. Limits: 50 files, 128 KiB in total (no per-file cap).
 This README and anything that is not a \`.ts\` file are ignored.
 `;
 }

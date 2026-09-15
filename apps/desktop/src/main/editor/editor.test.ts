@@ -217,7 +217,6 @@ describe('EditorService scripts (lib/<name>.ts)', () => {
     await expect(s.saveScript(key, { dir: mia.dir, name: 'class', source: '() => 1' })).rejects.toThrow(/reserved/);
     await expect(s.saveScript(key, { dir: mia.dir, name: 'cheer', source: '() => 1', previousName: 'tock' })).rejects.toThrow(/already exists/);
     await expect(s.saveScript(key, { dir: mia.dir, name: 'empty', source: '   ' })).rejects.toThrow(/source is required/);
-    await expect(s.saveScript(key, { dir: mia.dir, name: 'big', source: `() => "${'x'.repeat(16 * 1024)}"` })).rejects.toThrow(/16384 bytes/);
     await expect(s.saveScript(key, { dir: '../mia', name: 'x', source: '() => 1' })).rejects.toThrow(/Unsafe/);
     // delete
     p = await s.removeScript(key, mia.dir, 'half');

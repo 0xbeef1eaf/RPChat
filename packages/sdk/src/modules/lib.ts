@@ -22,7 +22,8 @@ interface LibFunctionInfo {
  * Your own function library. Define a function once; from then on every action, timer handler and
  * event handler of yours sees it as the global lib.<name>, across sessions and app restarts. Each
  * function is saved as a file in your pack (characters/<id>/lib/<name>.ts), where your author may
- * also have shipped some. The library is listed in your prompt under <library>. Max 50 functions, 16 KiB each.
+ * also have shipped some. The library is listed in your prompt under <library> (one line each: name,
+ * parameters and description — never the body). Max 50 functions per character.
  */
 interface LibApi {
   /**
@@ -47,7 +48,10 @@ interface LibApi {
   remove(name: string): Promise<boolean>;
   /** Every function in the library (also listed in your prompt under <library>). */
   list(): Promise<LibFunctionInfo[]>;
-  /** The source of one function as it stands in its file, e.g. to read it before changing it. Throws NOT_FOUND. */
+  /**
+   * The source of one function as it stands in its file, e.g. to read it before changing it. Throws NOT_FOUND.
+   * A very large function can push the action's return value past its result cap; return what you need of it, not the whole source.
+   */
   source(name: string): Promise<string>;
 }`,
   docs: `Keep the steps you repeat as functions instead of rewriting them. Once defined, \`lib.<name>\` is a global in every later action, timer handler and event handler, for this character, forever (until you \`remove\` it). Redefining a name replaces it.

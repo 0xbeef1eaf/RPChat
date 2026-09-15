@@ -14,7 +14,6 @@ import {
   LIB_DIR_NAME,
   LIB_FILE_EXTENSION,
   LIB_MAX_FUNCTIONS,
-  LIB_MAX_SOURCE_BYTES,
   LIB_MAX_TOTAL_BYTES,
   LIB_NAME_MAX_CHARS,
   LIB_NAME_PATTERN,
@@ -157,9 +156,9 @@ export interface ReadLibraryOptions {
  * Reads `<charDir>/lib/*.ts` under `rootAbs`. Only regular `.ts` files count;
  * anything else in the folder (a README, sub-folders, dotfiles) is ignored.
  * A file whose stem is not a valid name or whose body is not a single
- * function expression lands in `skipped` with the reason; the size caps
- * (`LIB_MAX_FUNCTIONS`, `LIB_MAX_SOURCE_BYTES`, `LIB_MAX_TOTAL_BYTES`) are
- * reported in `problems`.
+ * function expression lands in `skipped` with the reason; the caps
+ * (`LIB_MAX_FUNCTIONS`, `LIB_MAX_TOTAL_BYTES`) are reported in `problems`.
+ * A single file has no size cap of its own.
  */
 export async function readCharacterLibrary(rootAbs: string, charDir: string, options: ReadLibraryOptions = {}): Promise<CharacterLibraryScan> {
   const out: CharacterLibraryScan = { library: {}, skipped: [], problems: [] };
@@ -205,9 +204,6 @@ export async function readCharacterLibrary(rootAbs: string, charDir: string, opt
     }
     const parsed = parseLibraryFile(text);
     const bytes = Buffer.byteLength(parsed.source, 'utf8');
-    if (bytes > LIB_MAX_SOURCE_BYTES) {
-      out.problems.push(`${file}: ${bytes} bytes (max ${LIB_MAX_SOURCE_BYTES} bytes per function)`);
-    }
     const known = options.previous?.[name];
     const problem = known !== undefined && known.source === parsed.source ? undefined : functionSourceProblem(parsed.source);
     if (problem !== undefined) {

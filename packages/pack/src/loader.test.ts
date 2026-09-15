@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RpError } from '@rp/shared';
-import { LIB_MAX_FUNCTIONS, LIB_MAX_SOURCE_BYTES, LIB_MAX_TOTAL_BYTES } from '@rp/shared';
+import { LIB_MAX_FUNCTIONS, LIB_MAX_TOTAL_BYTES } from '@rp/shared';
 import { ignoredCapabilitiesWarning, loadPack, summariseTags, validatePack } from './index.js';
 import { LUNA_DIR, MAKIMA_DIR, MINIMAL_DIR, makeTempDir, minimalPackFiles, writeTree } from './test/helpers.js';
 
@@ -301,16 +301,17 @@ describe('validatePack / loadPack problems', () => {
   });
 
   it('enforces the library caps as problems', async () => {
-    const big = `() => "${'b'.repeat(LIB_MAX_SOURCE_BYTES)}"`;
-    const tooBig = await packWith({ ...minimalPackFiles(), 'characters/a/lib/big.ts': big });
-    expect((await validatePack(tooBig)).problems).toEqual([`characters/a/lib/big.ts: ${Buffer.byteLength(big)} bytes (max ${LIB_MAX_SOURCE_BYTES} bytes per function)`]);
+    // One file has no size cap of its own, however large.
+    const big = `() => "${'b'.repeat(20 * 1024)}"`;
+    const oneBig = await packWith({ ...minimalPackFiles(), 'characters/a/lib/big.ts': big });
+    expect((await validatePack(oneBig)).problems).toEqual([]);
 
     const many: Record<string, string> = {};
     for (let i = 0; i <= LIB_MAX_FUNCTIONS; i++) many[`characters/a/lib/f${i}.ts`] = '() => 1';
     const tooMany = await packWith({ ...minimalPackFiles(), ...many });
     expect((await validatePack(tooMany)).problems).toEqual([`characters/a/lib: ${LIB_MAX_FUNCTIONS + 1} functions (max ${LIB_MAX_FUNCTIONS})`]);
 
-    const chunk = `() => "${'c'.repeat(LIB_MAX_SOURCE_BYTES - 100)}"`;
+    const chunk = `() => "${'c'.repeat(16 * 1024)}"`;
     const files: Record<string, string> = {};
     const count = Math.floor(LIB_MAX_TOTAL_BYTES / Buffer.byteLength(chunk)) + 1;
     for (let i = 0; i < count; i++) files[`characters/a/lib/g${i}.ts`] = chunk;

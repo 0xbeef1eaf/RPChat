@@ -212,7 +212,7 @@ export function ScriptsSection() {
               <label htmlFor="sc-source" className="field-label grow">
                 Function
               </label>
-              <span className="muted small">{bytes > 16 * 1024 ? <strong className="msg-error">{bytes} bytes (max 16 KiB)</strong> : `${bytes} bytes`}</span>
+              <span className="muted small">{bytes} bytes</span>
               <button type="button" className="btn btn-sm" onClick={() => setSource(draft.source.trim() ? `${draft.source.trimEnd()}\n\n${template}` : template)} disabled={!template}>
                 Insert template
               </button>

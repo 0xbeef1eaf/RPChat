@@ -24,7 +24,7 @@ import type {
   SaveCharacterInput,
   TagMediaOptions,
 } from '@rp/shared';
-import { CHARACTER_MANIFEST_FILENAME, LIB_MAX_SOURCE_BYTES, MEDIA_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME, RpError, VOICE_BANK_COLLECTIONS, VOICE_BANK_REPO, assetUrl } from '@rp/shared';
+import { CHARACTER_MANIFEST_FILENAME, MEDIA_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME, RpError, VOICE_BANK_COLLECTIONS, VOICE_BANK_REPO, assetUrl } from '@rp/shared';
 import type { VoiceBankCatalogue, VoiceBankProgress } from '@rp/shared';
 import { VOICE_BANK_PACK_ID } from '../capabilities/voice-bank.js';
 import {
@@ -454,7 +454,7 @@ export class EditorService {
 
   /**
    * Write one library function file, `<dir>/lib/<name>.ts` (docs/spec/pack.md "Function library").
-   * The name must be a valid function name and the source within the per-file cap; a source that is
+   * The name must be a valid function name; the source has no size cap. A source that is
    * not a single function expression is still saved (the author is mid-edit) and comes back with
    * `problem` set, exactly as the loader reports it. `previousName` renames: the old file goes once
    * the new one is written.
@@ -469,8 +469,6 @@ export class EditorService {
     if (nameProblem !== undefined) throw new RpError('INVALID_ARGUMENT', nameProblem);
     const source = typeof input.source === 'string' ? input.source.trim() : '';
     if (source.length === 0) throw new RpError('INVALID_ARGUMENT', 'source is required: one function expression');
-    const bytes = Buffer.byteLength(source, 'utf8');
-    if (bytes > LIB_MAX_SOURCE_BYTES) throw new RpError('INVALID_ARGUMENT', `The function is ${bytes} bytes; the limit is ${LIB_MAX_SOURCE_BYTES} bytes per file`);
     const description = typeof input.description === 'string' && input.description.trim().length > 0 ? input.description.trim() : undefined;
     const previous = typeof input.previousName === 'string' ? input.previousName.trim() : '';
     if (previous.length > 0 && previous !== name && libraryNameProblem(previous) !== undefined) throw new RpError('INVALID_ARGUMENT', `Invalid previous name "${previous}"`);

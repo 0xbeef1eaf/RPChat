@@ -34,7 +34,5 @@ export const LIB_NAME_PATTERN = /^[a-zA-Z_$][\w$]*$/;
 export const LIB_NAME_MAX_CHARS = 64;
 /** Functions (files) per character. */
 export const LIB_MAX_FUNCTIONS = 50;
-/** UTF-8 bytes per function source (per file). */
-export const LIB_MAX_SOURCE_BYTES = 16 * 1024;
-/** UTF-8 bytes of all sources of one character together. */
+/** UTF-8 bytes of all sources of one character together: what the prelude prepended to every run costs. */
 export const LIB_MAX_TOTAL_BYTES = 128 * 1024;

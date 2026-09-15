@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ActionContext, Json, LibFunctionInfo } from '@rp/shared';
-import { LIB_MAX_FUNCTIONS, LIB_MAX_SOURCE_BYTES, LIB_MAX_TOTAL_BYTES } from '@rp/shared';
+import { LIB_MAX_FUNCTIONS, LIB_MAX_TOTAL_BYTES } from '@rp/shared';
 import { loadPack } from '@rp/pack';
 import { createStandardRegistry } from '@rp/sdk';
 import { PromptBuilder, libraryLine } from './prompt.js';
@@ -123,7 +123,9 @@ describe('sdk.lib through the engine', () => {
     expect((await bad('ok', '1 + 2'))?.message).toMatch(/function expression/);
     expect((await bad('ok', 'async ( => 1'))?.message).toMatch(/does not parse/);
     expect((await bad('ok', asHandlerArg('x => 1); (y => 2')))?.message).toMatch(/single function expression/);
-    expect((await bad('ok', `(x) => "${'a'.repeat(LIB_MAX_SOURCE_BYTES)}"`))?.message).toMatch(/bytes/);
+    // No per-file size cap: only the total and the count are capped.
+    expect((await invoke(ctx, 'define', 'big', `(x) => "${'a'.repeat(20 * 1024)}"`)).ok).toBe(true);
+    expect(await invoke(ctx, 'remove', 'big')).toEqual({ ok: true, value: true });
     expect((await bad('ok', 'x => x', { description: 5 }))?.code).toBe('INVALID_ARGUMENT');
     expect((await invoke(ctx, 'list')) as { value: LibFunctionInfo[] }).toMatchObject({ value: [{ name: 'cheer' }, { name: 'double' }] });
   });
