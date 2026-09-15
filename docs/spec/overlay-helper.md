@@ -78,6 +78,19 @@ Not found → the app falls back to the `hyprland-ipc` emulation and logs why.
 Tests: `cargo test` (protocol + plan), and `cargo run -- --self-test` which parses a sample conversation
 from stdin and prints the plans without touching GTK; exits 0.
 
+The app spawns the helper with `GDK_BACKEND=wayland` (GTK would pick X11 when `DISPLAY` is also set,
+and there is no layer shell there) and `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The second one is a
+workaround, not a preference: WebKitGTK's DMA-BUF renderer paints the layer surface through a GL
+context, Mesa then negotiates explicit sync (`wp_linux_drm_syncobj_v1`) on that surface, and the
+GTK3 + gtk-layer-shell commit path commits a frame with no acquire point. The compositor answers
+`wp_linux_drm_syncobj_surface_v1` error 4 ("Missing acquire timeline") and GDK aborts the client
+(`Error 71 (Protocol error)`, exit 1) on the *first* `show` — after `hello` has already succeeded, so
+`createHyprlandBackend` has committed to the helper tier and never falls back: every overlay dies and
+nothing is drawn. Reproduced on Hyprland 0.56.2 / Mesa 26.2.1 / WebKitGTK 2.52.6 / gtk-layer-shell
+0.10.1. The SHM transport keeps accelerated compositing inside the page and costs a CPU blit per
+frame, negligible at overlay sizes. An explicit `WEBKIT_DISABLE_DMABUF_RENDERER` in the environment
+wins, so `=0` restores the DMA-BUF path once GTK3/Mesa fix the commit.
+
 ## Verified against a nested compositor
 
 `pnpm test:wlr` (`scripts/wlr-smoke.sh`) runs Sway headless (software rendered, real

@@ -65,7 +65,20 @@ const defaultSpawn: HelperSpawner = (binary, args) =>
     // also set (GTK would otherwise pick X11, where there is no layer shell). RP_OVERLAY_WAYLAND_DISPLAY /
     // RP_OVERLAY_XDG_RUNTIME_DIR let the helper target a different compositor than the app itself
     // (used by the layer-shell smoke test, where the app runs on X11 and the helper on a nested Sway).
+    //
+    // WEBKIT_DISABLE_DMABUF_RENDERER: WebKitGTK's DMA-BUF renderer paints the layer surface through a
+    // GL context, and Mesa then negotiates explicit sync (wp_linux_drm_syncobj_v1) on that surface.
+    // The GTK3 + gtk-layer-shell commit path then commits a frame without an acquire point, and the
+    // compositor kills the client for it:
+    //   wl_display#1.error(wp_linux_drm_syncobj_surface_v1, 4, "Missing acquire timeline")
+    //   Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display.
+    // The helper exits 1 on the FIRST `show` — after `hello` has already succeeded, so the backend has
+    // committed to it and every overlay dies rather than falling back (Hyprland 0.56, Mesa 26.2,
+    // WebKitGTK 2.52, gtk-layer-shell 0.10). WebKit's SHM transport keeps accelerated compositing
+    // inside the page and costs a CPU blit per frame, which is cheap at overlay sizes. An explicit
+    // value in the environment wins, so the DMA-BUF path can be restored with `=0` once GTK3/Mesa fix it.
     env: {
+      WEBKIT_DISABLE_DMABUF_RENDERER: '1',
       ...process.env,
       GDK_BACKEND: 'wayland',
       ...(process.env.RP_OVERLAY_WAYLAND_DISPLAY ? { WAYLAND_DISPLAY: process.env.RP_OVERLAY_WAYLAND_DISPLAY } : {}),
