@@ -188,6 +188,20 @@ The file name is the function name: a JavaScript identifier of at most 64
 characters. A function may use \`sdk\` and its sibling \`lib\` functions but
 closes over nothing else. Limits: 50 files, 128 KiB in total (no per-file cap).
 This README and anything that is not a \`.ts\` file are ignored.
+
+Start the first line with \`// @internal\` (optionally followed by a
+description) to keep a function as your own plumbing:
+
+\`\`\`ts
+// @internal pick a picture for a mood
+async (mood: string) => (await sdk.pack.findAssets({ anyTags: [mood], kind: "image" }))[0]
+\`\`\`
+
+Your other library functions and the character's behaviour hooks call it as
+\`lib.<name>(...)\` as usual; the character itself never sees it — it is left
+out of the prompt, out of \`sdk.lib.list()\`/\`source()\`, and out of the
+\`lib\` object the code it writes runs against, and \`sdk.lib.define\` cannot
+take the name.
 `;
 }
 

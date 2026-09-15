@@ -18,14 +18,16 @@ interface ScriptDraft {
   name: string;
   description: string;
   source: string;
+  /** A helper the character cannot call itself (`// @internal`). */
+  internal: boolean;
 }
 
 function toDraft(s: EditorScript): ScriptDraft {
-  return { previousName: s.name, name: s.name, description: s.description ?? '', source: s.source };
+  return { previousName: s.name, name: s.name, description: s.description ?? '', source: s.source, internal: s.internal === true };
 }
 
 function fresh(template: string): ScriptDraft {
-  return { previousName: null, name: '', description: '', source: template };
+  return { previousName: null, name: '', description: '', source: template, internal: false };
 }
 
 /**
@@ -60,6 +62,7 @@ export function ScriptsSection() {
       try {
         const input: Parameters<ReturnType<typeof api>['editor']['saveScript']>[1] = { dir, name: draft.name.trim(), source: draft.source };
         if (draft.description.trim().length > 0) input.description = draft.description.trim();
+        if (draft.internal) input.internal = true;
         if (draft.previousName) input.previousName = draft.previousName;
         const p = await api().editor.saveScript(key, input);
         setProject(p);
@@ -171,7 +174,8 @@ export function ScriptsSection() {
       <p className="muted small" style={{ marginBottom: 14 }}>
         Each file is one function of {character.definition.name || character.definition.id}'s <code>sdk.lib</code> library, callable as <code>lib.&lt;name&gt;(...)</code> in every
         action, timer handler and event handler. The first line <code>// …</code> is its description in the prompt; the rest is exactly one function expression.
-        The character's own <code>sdk.lib.define</code> calls are saved into the same folder of the installed pack.
+        The character's own <code>sdk.lib.define</code> calls are saved into the same folder of the installed pack. Mark a function <em>internal</em> to keep it as
+        plumbing for your other functions and hooks, out of sight of the character.
       </p>
       <div className="scripts-layout">
         <nav className="scripts-list" aria-label="Functions">
@@ -182,6 +186,7 @@ export function ScriptsSection() {
                 <span className="item-title mono">{s.name}</span>
                 {s.description ? <span className="item-sub">{s.description}</span> : null}
               </span>
+              {s.internal ? <span className="badge">internal</span> : null}
               {s.problem ? <span className="badge badge-danger">broken</span> : null}
             </button>
           ))}
@@ -206,6 +211,16 @@ export function ScriptsSection() {
               <input id="sc-desc" type="text" value={draft.description} placeholder="show a picture for a mood" onChange={(e) => edit({ description: e.target.value })} />
               <span className="field-hint">One line, shown in the character's prompt under <code>&lt;library&gt;</code>.</span>
             </div>
+          </div>
+          <div className="field" style={{ marginTop: 10 }}>
+            <label className="check small">
+              <input type="checkbox" checked={draft.internal} onChange={(e) => edit({ internal: e.target.checked })} />
+              Internal helper (first line <code>// @internal</code>)
+            </label>
+            <span className="field-hint">
+              Your other functions and the character's behaviour hooks can call <code>lib.{name || 'name'}(...)</code>; the character cannot. It is left out of{' '}
+              <code>&lt;library&gt;</code>, of <code>sdk.lib.list()</code> and of the <code>lib</code> object the character's own code sees.
+            </span>
           </div>
           <div className="field" style={{ marginTop: 12 }}>
             <div className="row">

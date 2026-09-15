@@ -34,6 +34,7 @@ interface LibApi {
    *   may use \`sdk\` and \`lib\` (your other functions) — but nothing else from the action defining it: no
    *   variables, no helpers declared above it. (A string holding a function expression also works.)
    * @param opts description: one line saying what it is for, shown in <library>.
+   * @throws INVALID_ARGUMENT when the name is reserved by one of your pack's own helpers; pick another.
    * @example await sdk.lib.define("cheer", async (mood: string) => {
    *   const pic = (await sdk.pack.findAssets({ anyTags: [mood], kind: "image" }))[0];
    *   if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
@@ -60,6 +61,7 @@ interface LibApi {
 - Your prompt lists the library under \`<library>\` with each function's parameters; read \`sdk.lib.source(name)\` when you need the details before changing one.
 - Functions live in your pack as \`characters/<id>/lib/<name>.ts\` (a \`// description\` line, then the function); some may have been shipped by your author, the rest you saved. \`define\` writes the file, \`remove\` deletes it.
 - Prefer one clear function per repeated routine; the library is not a place for state (use \`sdk.state\` / \`sdk.memory\`).
+- Your author may have shipped plumbing of their own in that folder that is not yours to call or replace: it is not listed anywhere and \`define\` refuses its name (\`lib.<name> is reserved by this pack\`).
 
 \`\`\`ts
 await sdk.lib.define("cheer", async (mood: string) => {

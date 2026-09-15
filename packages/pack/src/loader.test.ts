@@ -261,11 +261,12 @@ describe('validatePack / loadPack problems', () => {
       'characters/a/lib/wave.ts': '// wave hello\nasync (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}\n',
       'characters/a/lib/double.ts': '(n: number) => n * 2',
       'characters/a/lib/named.ts': '  // has a description with trailing space   \r\n\r\nasync function named() { return 1; }\r\n',
+      'characters/a/lib/pick.ts': '// @internal pick a picture\n(mood: string) => mood\n',
     });
     expect(await validatePack(dir)).toEqual({ ok: true, problems: [], warnings: [] });
     const pack = await loadPack(dir);
     const lib = pack.character.library;
-    expect(Object.keys(lib)).toEqual(['double', 'named', 'wave']);
+    expect(Object.keys(lib)).toEqual(['double', 'named', 'pick', 'wave']);
     expect(lib['wave']).toMatchObject({
       description: 'wave hello',
       source: 'async (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}',
@@ -275,6 +276,9 @@ describe('validatePack / loadPack problems', () => {
     expect(lib['double']).toMatchObject({ source: '(n: number) => n * 2', file: 'characters/a/lib/double.ts' });
     expect(lib['double']!.description).toBeUndefined();
     expect(lib['named']).toMatchObject({ description: 'has a description with trailing space', source: 'async function named() { return 1; }' });
+    // `// @internal` marks the author's own helper: it loads like any other function, flagged
+    expect(lib['pick']).toMatchObject({ description: 'pick a picture', internal: true, source: '(mood: string) => mood' });
+    expect(lib['wave']!.internal).toBeUndefined();
   });
 
   it('skips a library file that is not one function expression or not a valid name, with a warning, and still loads', async () => {

@@ -58,7 +58,7 @@ export interface PromptInput {
   mood?: MoodState;
   /** Current routine status for the `<routine>` block. */
   routine?: RoutineStatus;
-  /** The character's own function library (`sdk.lib`), listed under `<library>` when non-empty. */
+  /** The character's own function library (`sdk.lib`), listed under `<library>` when non-empty (internal helpers are left out). */
   library?: LibFunction[];
   userDisplayName: string;
   /** `settings.autonomy.minDelayMs`: quoted in the engine rules so the character plans delays accordingly. */
@@ -167,6 +167,11 @@ function truncateJson(value: unknown, cap: number): string {
 export function libraryLine(f: Pick<LibFunction, 'name' | 'source' | 'description'>): string {
   const line = `- lib.${f.name}(${functionParams(f.source)})`;
   return f.description && f.description.trim().length > 0 ? `${line} — ${f.description.trim()}` : line;
+}
+
+/** The functions the character may call itself: the author's internal helpers are not listed and not callable. */
+function visibleLibrary(functions: LibFunction[]): LibFunction[] {
+  return functions.filter((f) => f.internal !== true);
 }
 
 function library(functions: LibFunction[]): string {
@@ -336,8 +341,9 @@ export class PromptBuilder {
     const usableSummary = summary && throughIdx >= 0 ? summary : undefined;
     const transcript = usableSummary ? input.transcript.slice(throughIdx + 1) : input.transcript;
 
+    const listedLibrary = input.library ? visibleLibrary(input.library) : [];
     const dynamic = [
-      ...(input.library && input.library.length > 0 ? [section('library', library(input.library))] : []),
+      ...(listedLibrary.length > 0 ? [section('library', library(listedLibrary))] : []),
       ...(usableSummary
         ? [
             section(

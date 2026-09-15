@@ -12,6 +12,7 @@ import type { Message } from 'esbuild';
 import type { CharacterLibraryEntry } from '@rp/shared';
 import {
   LIB_DIR_NAME,
+  LIB_INTERNAL_MARKER,
   LIB_FILE_EXTENSION,
   LIB_MAX_FUNCTIONS,
   LIB_MAX_TOTAL_BYTES,
@@ -98,27 +99,40 @@ export function libraryFilePath(name: string): string {
 }
 
 /**
- * Split a library file into its description (the first line when it is a `//`
- * comment) and the function source (the rest, trimmed).
+ * Split a library file into its description and the function source (the rest,
+ * trimmed). The first line, when it is a `//` comment, is the description; when
+ * it opens with `@internal` the function is the author's helper and the rest of
+ * that line is its description (docs/spec/pack.md "Function library").
  */
-export function parseLibraryFile(text: string): { source: string; description?: string } {
+export function parseLibraryFile(text: string): { source: string; description?: string; internal?: boolean } {
   const normalised = text.replace(/^﻿/, '').replace(/\r\n/g, '\n');
   const firstBreak = normalised.indexOf('\n');
   const firstLine = (firstBreak < 0 ? normalised : normalised.slice(0, firstBreak)).trim();
   if (firstLine.startsWith('//')) {
-    const description = firstLine.slice(2).trim();
+    let description = firstLine.slice(2).trim();
+    let internal = false;
+    if (description === LIB_INTERNAL_MARKER || description.startsWith(`${LIB_INTERNAL_MARKER} `)) {
+      internal = true;
+      description = description.slice(LIB_INTERNAL_MARKER.length).trim();
+    }
     const rest = firstBreak < 0 ? '' : normalised.slice(firstBreak + 1);
-    const out: { source: string; description?: string } = { source: rest.trim() };
+    const out: { source: string; description?: string; internal?: boolean } = { source: rest.trim() };
     if (description.length > 0) out.description = description;
+    if (internal) out.internal = true;
     return out;
   }
   return { source: normalised.trim() };
 }
 
-/** Render a library file: `// <description>` (when given) then the function source, newline-terminated. */
-export function formatLibraryFile(source: string, description?: string): string {
+/**
+ * Render a library file: the first line `// <description>` (when given, prefixed
+ * with `@internal` for an author's helper), then the function source, newline-terminated.
+ */
+export function formatLibraryFile(source: string, description?: string, internal = false): string {
   const body = source.trim();
-  const head = description !== undefined && description.trim().length > 0 ? `// ${description.trim().replace(/\s*\n\s*/g, ' ')}\n` : '';
+  const text = description !== undefined ? description.trim().replace(/\s*\n\s*/g, ' ') : '';
+  const comment = internal ? `${LIB_INTERNAL_MARKER}${text.length > 0 ? ` ${text}` : ''}` : text;
+  const head = comment.length > 0 ? `// ${comment}\n` : '';
   return `${head}${body}\n`;
 }
 
@@ -133,6 +147,8 @@ export interface LibraryFileProblem {
   message: string;
   source?: string;
   description?: string;
+  /** From a `// @internal` first line, so the editor shows a broken helper as one. */
+  internal?: boolean;
 }
 
 export interface CharacterLibraryScan {
@@ -209,12 +225,14 @@ export async function readCharacterLibrary(rootAbs: string, charDir: string, opt
     if (problem !== undefined) {
       const skipped: LibraryFileProblem = { file, name, message: `not a single function expression: ${problem}`, source: parsed.source };
       if (parsed.description !== undefined) skipped.description = parsed.description;
+      if (parsed.internal === true) skipped.internal = true;
       out.skipped.push(skipped);
       continue;
     }
     total += bytes;
     const entry: CharacterLibraryEntry = { source: parsed.source, bytes, file, updatedAt: st.mtime.toISOString() };
     if (parsed.description !== undefined) entry.description = parsed.description;
+    if (parsed.internal === true) entry.internal = true;
     out.library[name] = entry;
   }
   if (total > LIB_MAX_TOTAL_BYTES) {
@@ -231,7 +249,7 @@ export async function readCharacterLibrary(rootAbs: string, charDir: string, opt
  * {@link functionSourceProblem} when a broken file must not land on disk).
  * Returns the file path relative to the pack root.
  */
-export async function writeLibraryFunction(root: string, charDir: string, name: string, source: string, description?: string): Promise<string> {
+export async function writeLibraryFunction(root: string, charDir: string, name: string, source: string, description?: string, internal = false): Promise<string> {
   const rootAbs = path.resolve(root);
   const nameProblem = libraryNameProblem(name);
   if (nameProblem !== undefined) throw new RpError('INVALID_ARGUMENT', nameProblem, { name });
@@ -239,7 +257,7 @@ export async function writeLibraryFunction(root: string, charDir: string, name: 
   if (!n.ok) throw new RpError('PATH_ESCAPE', `Unsafe character directory "${charDir}": ${n.reason}`, { path: charDir });
   const rel = joinRelative(n.path, libraryFilePath(name));
   const abs = resolveAssetPath(rootAbs, rel);
-  await writeFileAtomic(abs, formatLibraryFile(source, description));
+  await writeFileAtomic(abs, formatLibraryFile(source, description, internal));
   return rel;
 }
 

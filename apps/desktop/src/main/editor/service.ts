@@ -322,11 +322,13 @@ export class EditorService {
     const out: EditorScript[] = Object.entries(scan.library).map(([name, e]) => {
       const script: EditorScript = { name, source: e.source, bytes: e.bytes, file: e.file };
       if (e.description !== undefined) script.description = e.description;
+      if (e.internal === true) script.internal = true;
       return script;
     });
     for (const skipped of scan.skipped) {
       const script: EditorScript = { name: skipped.name, source: skipped.source ?? '', bytes: Buffer.byteLength(skipped.source ?? '', 'utf8'), file: skipped.file, problem: skipped.message };
       if (skipped.description !== undefined) script.description = skipped.description;
+      if (skipped.internal === true) script.internal = true;
       out.push(script);
     }
     return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -476,7 +478,7 @@ export class EditorService {
       const existing = await this.libraryOf(dir, n.path);
       if (existing.some((f) => f.name === name)) throw new RpError('PACK_CONFLICT', `A function named "${name}" already exists`);
     }
-    await writeLibraryFunction(dir, n.path, name, source, description);
+    await writeLibraryFunction(dir, n.path, name, source, description, input.internal === true);
     if (previous.length > 0 && previous !== name) await removeLibraryFunction(dir, n.path, previous);
     return this.read(key);
   }

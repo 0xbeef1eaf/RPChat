@@ -7,6 +7,9 @@
  * "Function library", docs/spec/core.md "LibraryService").
  */
 
+/** First-line marker (`// @internal …`) of a function the character may not call itself. */
+export const LIB_INTERNAL_MARKER = '@internal';
+
 /** Directory under the character directory that holds the library files. */
 export const LIB_DIR_NAME = 'lib';
 /** Extension of a library file (`characters/<id>/lib/<name>.ts`). */
@@ -20,6 +23,13 @@ export interface LibFunction {
   source: string;
   /** What the function is for, shown in the prompt's `<library>` section. */
   description?: string;
+  /**
+   * An author's helper (`// @internal` first line): other library functions and the pack's
+   * behaviour hooks can call it, the character cannot. It is left out of `<library>`, of
+   * `sdk.lib.list()` and of `sdk.lib.source()`, and out of the `lib` object the model's own
+   * action code sees.
+   */
+  internal?: boolean;
   /** UTF-8 size of `source`. */
   bytes: number;
   /** ISO-8601 time of the last define (the file's modification time). */

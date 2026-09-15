@@ -83,6 +83,32 @@ describe('LibraryService helpers', () => {
     expect(prelude.endsWith('}),\n});')).toBe(true);
   });
 
+  it('splits the prelude in two scopes when a function is internal, and keeps one scope for the pack\'s own hooks', () => {
+    const functions = [
+      { name: 'pick', source: '(n: number) => n + 1', bytes: 1, updatedAt: 't', internal: true },
+      { name: 'double', source: 'async (n: number) => lib.pick(n) * 2', bytes: 1, updatedAt: 't' },
+    ];
+    // the inner `lib` shadows the outer one, so `double` reaches `pick` and the action code does not
+    expect(buildPrelude(functions)).toBe(
+      [
+        'const lib = (() => {',
+        '  const lib = Object.freeze({',
+        '    "pick": ((n: number) => n + 1),',
+        '    "double": (async (n: number) => lib.pick(n) * 2),',
+        '  });',
+        '  return Object.freeze({',
+        '    "double": lib["double"],',
+        '  });',
+        '})();',
+      ].join('\n'),
+    );
+    expect(buildPrelude(functions, { internals: true })).toBe('const lib = Object.freeze({\n  "pick": ((n: number) => n + 1),\n  "double": (async (n: number) => lib.pick(n) * 2),\n});');
+    expect(buildPrelude([functions[0]!])).toContain('  return Object.freeze({});');
+    // without an internal function nothing changes
+    expect(buildPrelude([functions[1]!])).toBe('const lib = Object.freeze({\n  "double": (async (n: number) => lib.pick(n) * 2),\n});');
+    expect(buildPrelude([], { internals: true })).toBe(EMPTY_PRELUDE);
+  });
+
   it('renders one prompt line per function', () => {
     expect(libraryLine({ name: 'cheer', source: 'async (mood: string) => 1', description: 'show a picture for a mood' })).toBe('- lib.cheer(mood: string) — show a picture for a mood');
     expect(libraryLine({ name: 'tick', source: '() => 1' })).toBe('- lib.tick()');
@@ -271,6 +297,52 @@ describe('sdk.lib through the engine', () => {
     expect(prelude).toContain('\n  "glance": (async () => {');
   });
 
+  it('keeps an author\'s internal helper out of the character\'s reach, but in the prelude of its own functions and hooks', async () => {
+    t = await createTestEngine({ script: [{ text: 'ok' }] });
+    await installLunaWith(t.engine, t.packsDir, { extraFiles: {
+      'characters/luna/lib/pick.ts': '// @internal pick a picture for a mood\n(mood: string) => mood\n',
+      'characters/luna/lib/cheer.ts': '// cheer the user up\nasync (mood: string) => lib.pick(mood)\n',
+    } });
+    const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
+    const ctx = ctxOf(LUNA_ID, 'luna', session.id);
+
+    // sdk.lib does not report it, and its source is as unreachable as a name that does not exist
+    expect(((await invoke(ctx, 'list')) as { value: LibFunctionInfo[] }).value.map((f) => f.name)).toEqual(['cheer']);
+    expect(await invoke(ctx, 'source', 'pick')).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
+    expect(await invoke(ctx, 'source', 'cheer')).toMatchObject({ ok: true });
+
+    // the character cannot take the name over, nor delete the file
+    expect(await invoke(ctx, 'define', 'pick', '() => 1')).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining('reserved') } });
+    expect(await invoke(ctx, 'remove', 'pick')).toEqual({ ok: true, value: false });
+    expect(await exists(libFile(LUNA_ID, 'luna', 'pick'))).toBe(true);
+    expect(await fs.readFile(libFile(LUNA_ID, 'luna', 'pick'), 'utf8')).toBe('// @internal pick a picture for a mood\n(mood: string) => mood\n');
+
+    // the prelude of the character's own runs carries it in the inner scope only
+    const split = await t.engine.library.preludeFor(LUNA_ID, 'luna');
+    expect(split).toContain('const lib = (() => {');
+    expect(split).toContain('"pick": ((mood: string) => mood),');
+    expect(split.slice(split.indexOf('return Object.freeze('))).toBe('return Object.freeze({\n    "cheer": lib["cheer"],\n  });\n})();');
+    // a script the pack ships runs against the flat prelude, so the author's hooks can use their own helper
+    expect(await t.engine.library.preludeFor(LUNA_ID, 'luna', { internals: true })).toMatch(/^const lib = Object\.freeze\(\{\n  "cheer"/);
+
+    const pack = t.engine.packs.getLoaded(LUNA_ID);
+    pack.characters[0]!.behaviourSources.onUserMessage = 'await lib.pick("happy");\nreturn { skipLlm: true };';
+    await t.engine.chat.send(session.id, 'hi');
+    const hookRun = t.runner.requests.find((r) => r.context.trigger.kind === 'behaviour');
+    expect(hookRun?.prelude).toBe(await t.engine.library.preludeFor(LUNA_ID, 'luna', { internals: true }));
+    // code the character wrote itself (a `code` timer) gets the split prelude, like an action
+    const timerCall = { callId: 'timers.runLater', module: 'timers', method: 'runLater', args: [5000, asHandlerArg('async () => 1'), {}] as Json[], context: ctx };
+    expect((await t.engine.dispatcher.invoke(timerCall)).ok).toBe(true);
+    t.clock.advance(5000);
+    expect(await t.engine.timers.fireDue()).toBe(1);
+    expect(t.runner.requests.find((r) => r.context.trigger.kind === 'timer')?.prelude).toBe(split);
+
+    // and the prompt lists only what the character may call
+    const system = t.provider.requests.at(-1)?.system ?? '';
+    expect(system).toContain(`${SECTION}\n- lib.cheer(mood: string) — cheer the user up\n</library>`);
+    expect(system).not.toContain('lib.pick');
+  });
+
   it('migrates functions still stored in character state into files on start and on install', async () => {
     t = await createTestEngine();
     await t.engine.packs.install(MINIMAL_DIR);
@@ -347,6 +419,17 @@ describe('PromptBuilder <library>', () => {
       ],
     });
     expect(built.system).toContain(`${SECTION}\n- lib.cheer(mood: string) — show a picture for a mood\n- lib.tick()\n</library>`);
+    // an internal helper is never listed; a library holding nothing else gets no section at all
+    const withHelper = new PromptBuilder().build({
+      ...base,
+      library: [
+        { name: 'cheer', source: 'async (mood: string) => 1', description: 'show a picture for a mood', bytes: 10, updatedAt: 't' },
+        { name: 'pick', source: '(mood: string) => mood', description: 'pick a picture', bytes: 10, updatedAt: 't', internal: true },
+      ],
+    });
+    expect(withHelper.system).toContain(`${SECTION}\n- lib.cheer(mood: string) — show a picture for a mood\n</library>`);
+    expect(withHelper.system).not.toContain('lib.pick');
+    expect(new PromptBuilder().build({ ...base, library: [{ name: 'pick', source: '(mood: string) => mood', bytes: 10, updatedAt: 't', internal: true }] }).system).not.toContain(SECTION);
     expect(built.system.indexOf(SECTION)).toBeGreaterThan(built.stablePrefixLength);
     expect(built.system.indexOf(SECTION)).toBeGreaterThan(built.system.indexOf('</sdk_reference>'));
     expect(built.system.slice(0, built.stablePrefixLength)).not.toContain(SECTION);

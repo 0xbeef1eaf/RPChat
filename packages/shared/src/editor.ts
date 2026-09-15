@@ -22,6 +22,8 @@ export interface EditorScript {
   name: string;
   /** From the file's first-line `// …` comment. */
   description?: string;
+  /** Marked `// @internal`: the character's other functions and its behaviour hooks may call it, the character itself may not. */
+  internal?: boolean;
   /** The function expression (without the description comment). */
   source: string;
   bytes: number;
@@ -98,6 +100,8 @@ export interface SaveScriptInput {
   /** The function expression (arrow or `async function`); saved as is, so a broken one is reported rather than refused. */
   source: string;
   description?: string;
+  /** Write it as an internal helper (`// @internal` first line): hidden from the character, callable from its other functions and hooks. */
+  internal?: boolean;
   /** When renaming: the file `<previousName>.ts` is removed after the new one is written. */
   previousName?: string;
 }

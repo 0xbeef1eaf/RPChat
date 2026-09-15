@@ -205,6 +205,16 @@ describe('EditorService scripts (lib/<name>.ts)', () => {
     p = await s.saveScript(key, { dir: mia.dir, name: 'tock', source: '() => 2', previousName: 'tick' });
     expect(p.characters[0]!.library.map((f) => f.name)).toEqual(['cheer', 'tock']);
     expect(fs.readdirSync(path.join(dir, 'characters', 'mia', 'lib')).sort()).toEqual(['README.md', 'cheer.ts', 'tock.ts']);
+    // an internal helper is written with the `// @internal` first line and comes back flagged
+    p = await s.saveScript(key, { dir: mia.dir, name: 'pick', source: '(mood: string) => mood', description: 'pick a picture', internal: true });
+    expect(p.characters[0]!.library.find((f) => f.name === 'pick')).toMatchObject({ description: 'pick a picture', internal: true, source: '(mood: string) => mood' });
+    expect(fs.readFileSync(path.join(dir, 'characters', 'mia', 'lib', 'pick.ts'), 'utf8')).toBe('// @internal pick a picture\n(mood: string) => mood\n');
+    expect(p.characters[0]!.library.find((f) => f.name === 'cheer')!.internal).toBeUndefined();
+    // clearing the box writes it back as an ordinary function
+    p = await s.saveScript(key, { dir: mia.dir, name: 'pick', source: '(mood: string) => mood', description: 'pick a picture', previousName: 'pick' });
+    expect(p.characters[0]!.library.find((f) => f.name === 'pick')!.internal).toBeUndefined();
+    p = await s.removeScript(key, mia.dir, 'pick');
+
     // a broken function is saved (the author is mid-edit) but reported the way the loader reports it
     p = await s.saveScript(key, { dir: mia.dir, name: 'half', source: 'async ( => 1' });
     const half = p.characters[0]!.library.find((f) => f.name === 'half')!;

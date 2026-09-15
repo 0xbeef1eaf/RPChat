@@ -200,6 +200,8 @@ export interface CharacterLibraryEntry {
   source: string;
   /** From the file's leading `// …` comment, when present. */
   description?: string;
+  /** Set by a `// @internal` first line: callable from the character's other library functions and its behaviour hooks, not by the character itself. */
+  internal?: boolean;
   /** UTF-8 size of `source`. */
   bytes: number;
   /** Path relative to the pack root, e.g. `characters/luna/lib/cheer.ts`. */

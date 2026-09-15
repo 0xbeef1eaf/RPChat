@@ -20,10 +20,10 @@ export const IGNORED_CAPABILITIES_KEY = 'capabilities'; export function ignoredC
 export function assetKindFor(path: string): AssetKind; export function mimeFor(path: string): string;
 // function library files (see "Function library" below)
 export function readCharacterLibrary(rootAbs, charDir, { previous? }): Promise<{ library: Record<name, CharacterLibraryEntry>; skipped: LibraryFileProblem[]; problems: string[] }>;
-export function writeLibraryFunction(root, charDir, name, source, description?): Promise<string>;   // atomic (temp + rename); returns the pack-relative path
+export function writeLibraryFunction(root, charDir, name, source, description?, internal?): Promise<string>;   // atomic (temp + rename); returns the pack-relative path
 export function removeLibraryFunction(root, charDir, name): Promise<boolean>;
 export function functionSourceProblem(source): string | undefined; export function unwrapFunctionSource(raw): string; export function libraryNameProblem(name): string | undefined;
-export function parseLibraryFile(text): { source; description? }; export function formatLibraryFile(source, description?): string; export function libraryFilePath(name): string;
+export function parseLibraryFile(text): { source; description?; internal? }; export function formatLibraryFile(source, description?, internal?): string; export function libraryFilePath(name): string;
 export function libraryReadme(name): string; export function libraryFunctionTemplate(): string;      // scaffold text for lib/README.md and the editor's starter function
 ```
 
@@ -50,7 +50,8 @@ async (mood: string) => {
 ```
 
 - `<name>` is the function name: `^[a-zA-Z_$][\w$]*$`, at most 64 characters, no JavaScript reserved words, not `__proto__` (`LIB_NAME_PATTERN` / `LIB_NAME_MAX_CHARS` in `@rp/shared`). Only regular `.ts` files count; a `README.md`, sub-folders and dotfiles in `lib/` are ignored.
-- The loader reads the folder into `LoadedCharacter.library: Record<name, { source; description?; bytes; file; updatedAt }>` (sorted by name; `updatedAt` is the file's mtime) and checks each source with `functionSourceProblem` — the same esbuild "exactly one function expression" check `LibraryService` applies to `sdk.lib.define`, so both cannot drift. A file that fails is reported as `warning: characters/<id>/lib/<name>.ts: not a single function expression: …` and left out; the pack still loads.
+- **Internal helpers.** A first line of `// @internal` (optionally `// @internal <description>`, `LIB_INTERNAL_MARKER` in `@rp/shared`) marks a function as the author's plumbing: `parseLibraryFile` returns `internal: true` and the loader sets it on the entry, `formatLibraryFile(source, description?, internal?)` and `writeLibraryFunction(…, description?, internal?)` write the marker back. Everything else about the file is unchanged (name rules, the one-function-expression check, the caps). What it means for the character is core's business (docs/spec/core.md "LibraryService"): its own functions and the pack's behaviour hooks call it, the character itself never sees it.
+- The loader reads the folder into `LoadedCharacter.library: Record<name, { source; description?; internal?; bytes; file; updatedAt }>` (sorted by name; `updatedAt` is the file's mtime) and checks each source with `functionSourceProblem` — the same esbuild "exactly one function expression" check `LibraryService` applies to `sdk.lib.define`, so both cannot drift. A file that fails is reported as `warning: characters/<id>/lib/<name>.ts: not a single function expression: …` and left out; the pack still loads.
 - Caps, reported as problems: 50 files (`LIB_MAX_FUNCTIONS`), 128 KiB in total (`LIB_MAX_TOTAL_BYTES`). A single file has no size cap — the total is what bounds the prelude prepended to every run.
 - `readCharacterLibrary(rootAbs, charDir, { previous })` reuses entries whose source text is unchanged, so core's rescan after every `define` stays cheap. `writeLibraryFunction` writes atomically (temp file + rename) and `removeLibraryFunction` deletes; core calls both against the installed copy, so what a character defines lands next to what the author shipped. `scaffoldPack` creates `lib/README.md` (`libraryReadme`) explaining the format. `packDirectory` zips the folder like any other pack file.
 
@@ -70,6 +71,6 @@ Also add `examples/packs/README.md` documenting the format for pack authors (cop
 - schema accepts the examples and rejects: bad id, missing characters, `..` in paths, absolute paths
 - loadPack on `examples/packs/luna` yields 1 character, persona text, behaviour sources, asset index with correct kinds; on `examples/packs/makima` the shipped `lib/glance.ts` loads with its description
 - a second character (listed in `pack.json`, or only present on disk) is a problem; a directory under `characters/` without a `character.json` is not a character
-- library files: read sorted with descriptions; bad ones skipped with a warning; caps are problems; `writeLibraryFunction`/`removeLibraryFunction` round-trip and leave no temp files; `packDirectory` → `extractPack` carries `lib/*.ts`
+- library files: read sorted with descriptions; a `// @internal` first line sets `internal` and keeps the rest of the line as the description; bad ones skipped with a warning; caps are problems; `writeLibraryFunction`/`removeLibraryFunction` round-trip and leave no temp files; `packDirectory` → `extractPack` carries `lib/*.ts`
 - resolveAssetPath rejects `../x`, `/etc/passwd`, `media\\..\\x`, and a symlink pointing outside root (create in a temp dir)
 - packDirectory → extractPack round-trips byte-for-byte; extractPack rejects a hand-built zip containing `../evil.txt`

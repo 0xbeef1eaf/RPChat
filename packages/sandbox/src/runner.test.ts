@@ -325,6 +325,25 @@ describe('QuickJsRunner', () => {
       expect(result.returnValue).toEqual({ four: 4, keys: ['double'] });
     });
 
+    it('keeps an internal function out of the lib the action sees, while its siblings still call it', async () => {
+      // What LibraryService emits for a library with an internal helper: the inner `lib` holds
+      // every function, the outer one only the functions the character may call itself.
+      const split = [
+        'const lib = (() => {',
+        '  const lib = Object.freeze({',
+        '    "pick": ((n: number) => n + 1),',
+        '    "double": (async (n: number) => lib.pick(n) * 2),',
+        '  });',
+        '  return Object.freeze({',
+        '    "double": lib["double"],',
+        '  });',
+        '})();',
+      ].join('\n');
+      const result = await runner.run(req('return { six: await lib.double(2), keys: Object.keys(lib), pick: typeof lib.pick };', { prelude: split }));
+      expect(result.error).toBeUndefined();
+      expect(result.returnValue).toEqual({ six: 6, keys: ['double'], pick: 'undefined' });
+    });
+
     it('still reports the user\'s own line numbers after a three-line prelude', async () => {
       const code = ['const items = [1, 2, 3];', 'function pick(list: any[]) {', '  return list.find((x) => x.missing.deep);', '}', 'return pick(items);'].join('\n');
       const result = await runner.run(req(code, { prelude }));
