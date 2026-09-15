@@ -17,8 +17,8 @@
 //!   grants `w` but not `r` on a socket can serve it but not connect to it.
 //! - Explicit `deny` rules are enforced even in complain mode, so audit mode uses
 //!   `audit <rule>` (allowed, logged as `apparmor="AUDIT"`) and enforce mode `audit deny`.
-//! - Named exec transitions take globs (`/** px -> rp-code-session`), and a more specific
-//!   rule (`/opt/rp-code/current/rp-code px -> rp-code-app`) coexists with `/** ix`
+//! - Named exec transitions take globs (`/{,**} px -> rp-code-session`), and a more specific
+//!   rule (`/opt/rp-code/current/rp-code px -> rp-code-app`) coexists with `/{,**} ix`
 //!   (checked with `apparmor_parser -Q`, see the test at the bottom).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,6 +34,10 @@ use crate::policy::{CompositorIpc, GuardMode, GuardRules, GuardShell, PolicyFile
 
 /// Where the generated profiles go.
 pub const DEFAULT_PROFILE_DIR: &str = "/etc/apparmor.d";
+/// Where `user@<uid>.service.d` drop-ins go.
+pub const DEFAULT_UNIT_DIR: &str = "/etc/systemd/system";
+/// The drop-in file name, inside `user@<uid>.service.d/`.
+pub const DROPIN_NAME: &str = "rp-code-guard.conf";
 /// Cached engage state (`/etc/rp-code/guard-state.json`).
 pub const DEFAULT_STATE_FILE: &str = "/etc/rp-code/guard-state.json";
 /// The app the `rp-code-app` profile attaches to (the system install).
@@ -218,7 +222,37 @@ pub struct GuardContext {
     pub abi: Option<String>,
     /// Sockets discovered at runtime or cached.
     pub discovered: Vec<DiscoveredSocket>,
+    /// `app.users` that resolve to a uid, with it — the `user@<uid>.service` drop-ins.
+    pub user_uids: Vec<(String, u32)>,
     pub daemon_version: String,
+}
+
+/// A `user@<uid>.service` drop-in that puts the user's whole systemd session into
+/// `rp-code-session`.
+///
+/// Without it the guard reaches only what the login helper exec'd. `systemd --user` is started
+/// by PID 1, so on a systemd-managed desktop (uwsm, GNOME, KDE) the compositor and every
+/// terminal under it stay unconfined however well the hats work. `AppArmorProfile=` makes PID 1
+/// do the transition instead, and everything the user manager starts inherits it.
+///
+/// The value is written with a **leading `-`**. Without it, a `user@<uid>.service` whose profile
+/// is not loaded fails to start — which is every boot before `rp-coded` has engaged, and every
+/// boot after someone unloads the profiles by hand. That failure mode is "this user cannot log
+/// in at all", so the profile is optional by construction: `-` means apply it when it exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionDropin {
+    pub user: String,
+    pub uid: u32,
+    pub text: String,
+}
+
+impl SessionDropin {
+    /// `<unit_dir>/user@<uid>.service.d/rp-code-guard.conf`.
+    pub fn path(&self, unit_dir: &Path) -> PathBuf {
+        unit_dir
+            .join(format!("user@{}.service.d", self.uid))
+            .join(DROPIN_NAME)
+    }
 }
 
 /// One generated profile file.
@@ -239,6 +273,8 @@ impl ProfileFile {
 pub struct GuardPlan {
     pub hash: String,
     pub files: Vec<ProfileFile>,
+    /// `user@<uid>.service.d/rp-code-guard.conf`, one per listed user.
+    pub dropins: Vec<SessionDropin>,
     pub residual: Vec<String>,
     pub shell: Option<&'static str>,
     pub compositors: Vec<&'static str>,
@@ -392,7 +428,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     // rp-code-session: everything the user could do before, minus the guarded parts.
     let mut session = String::new();
     session.push_str(&format!(
-        "profile rp-code-session {session_flags} {{\n{ALLOW_CLASSES}  /** mrwlk,\n  /** ix,\n"
+        "profile rp-code-session {session_flags} {{\n{ALLOW_CLASSES}  /{{,**}} mrwlk,\n  /{{,**}} ix,\n"
     ));
     session.push_str(&exits);
     session.push_str(&guard_rules);
@@ -432,7 +468,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     if shell_profile {
         let mut shell = String::new();
         shell.push_str(&format!(
-            "profile rp-code-shell {session_flags} {{\n{ALLOW_CLASSES}  /** mrwlk,\n  /** px -> rp-code-session,\n"
+            "profile rp-code-shell {session_flags} {{\n{ALLOW_CLASSES}  /{{,**}} mrwlk,\n  /{{,**}} px -> rp-code-session,\n"
         ));
         shell.push_str(&exits);
         for s in &shell_sockets {
@@ -462,7 +498,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     if compositor_profile {
         let mut comp = String::new();
         comp.push_str(&format!(
-            "profile rp-code-compositor {session_flags} {{\n{ALLOW_CLASSES}  /** mrwlk,\n  /** px -> rp-code-session,\n"
+            "profile rp-code-compositor {session_flags} {{\n{ALLOW_CLASSES}  /{{,**}} mrwlk,\n  /{{,**}} px -> rp-code-session,\n"
         ));
         comp.push_str(&exits);
         for s in &shell_sockets {
@@ -513,13 +549,13 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     ));
     for user in &ctx.users {
         login.push_str(&format!(
-            "  ^{} {} {{\n{HAT_CLASSES}    /** mrwlk,\n    /** px -> rp-code-session,\n  }}\n",
+            "  ^{} {} {{\n{HAT_CLASSES}    /{{,**}} mrwlk,\n    /{{,**}} px -> rp-code-session,\n  }}\n",
             quote_hat(user),
             flags(&["complain"])
         ));
     }
     login.push_str(&format!(
-        "  ^DEFAULT {} {{\n{HAT_CLASSES}    /** mrwlk,\n    /** ux,\n  }}\n}}\n",
+        "  ^DEFAULT {} {{\n{HAT_CLASSES}    /{{,**}} mrwlk,\n    /{{,**}} ux,\n  }}\n}}\n",
         flags(&["complain"])
     ));
     files.push(ProfileFile {
@@ -527,12 +563,32 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         text: login,
     });
 
+    // One drop-in per listed user, so `systemd --user` and everything under it starts confined.
+    let dropins: Vec<SessionDropin> = ctx
+        .user_uids
+        .iter()
+        .map(|(user, uid)| SessionDropin {
+            user: user.clone(),
+            uid: *uid,
+            text: format!(
+                "# rp-code session guard — generated by rp-coded {version} for {user}; do not edit\n                 # rp-code-guard drop-in. Removed by `rp-coded --guard-off` / `install.sh --no-guard`.\n                 # AppArmor confinement follows execve, and PID 1 starts this unit, not the login\n                 # helper the pam_apparmor hats hang off — without this the compositor and every\n                 # terminal under `systemd --user` run unconfined and the guard watches nothing.\n                 # The leading `-` keeps a missing profile from blocking the login entirely.\n                 [Service]\n                 AppArmorProfile=-rp-code-session\n",
+                version = ctx.daemon_version,
+                user = user,
+            ),
+        })
+        .collect();
+
     // Hash over the bodies (policy + context), then prepend the header carrying it.
     let mut hasher = Sha256::new();
     for f in &files {
         hasher.update(f.name.as_bytes());
         hasher.update(b"\0");
         hasher.update(f.text.as_bytes());
+        hasher.update(b"\0");
+    }
+    for d in &dropins {
+        hasher.update(d.uid.to_le_bytes());
+        hasher.update(d.text.as_bytes());
         hasher.update(b"\0");
     }
     hasher.update(mode.as_str().as_bytes());
@@ -583,11 +639,16 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     );
     if shell_profile {
         residual.push("if the audit log shows the shell denied getattr on its own socket, the shell needs r too and `<shell> msg` from a terminal becomes the residual gap".to_string());
+        residual.push("the shell's own helpers (its plugin/palette git and sh) return to rp-code-session like any other child, so under enforce they cannot write the shell's state either: self-updating plugins and downloaded palettes stop working. Accepted — the alternative is letting anything the shell launches write the wallpaper config.".to_string());
     }
+    residual.push(
+        "a link whose source is an unnamed inode (O_TMPFILE) is logged as a denied `l`: AppArmor cannot resolve the name, so no rule can match it. The kernel refuses that link for unprivileged callers anyway, so it is audit noise, not a blocked operation.".to_string(),
+    );
 
     GuardPlan {
         hash,
         files,
+        dropins,
         residual,
         shell: ctx.shell.map(|s| s.id),
         compositors: ctx.compositors.iter().map(|c| c.id).collect(),
@@ -976,6 +1037,9 @@ pub struct GuardState {
     pub users: Vec<String>,
     #[serde(default)]
     pub sockets: Vec<DiscoveredSocket>,
+    /// uids that currently carry a `user@<uid>.service.d` drop-in.
+    #[serde(default)]
+    pub dropin_uids: Vec<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub applied_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1054,6 +1118,13 @@ pub type Discover = Box<dyn Fn(&[String]) -> Vec<DiscoveredSocket> + Send + Sync
 /// `(pid, exe)` pairs. Such a helper was exec'd before the profiles were loaded and cannot enter
 /// a hat, so every login it handles stays unconfined until it restarts.
 pub type UnconfinedHelpers = Box<dyn Fn(&[String]) -> Vec<(u32, String)> + Send + Sync>;
+/// A unix user name to its uid.
+pub type UidOf = Box<dyn Fn(&str) -> Option<u32> + Send + Sync>;
+/// `systemctl daemon-reload`, after a drop-in is written or removed.
+pub type ReloadUnits = Box<dyn Fn() -> Result<(), String> + Send + Sync>;
+/// `(pid, comm)` of the listed users' shell/compositor processes that carry no profile — the
+/// session the guard is supposed to confine, running outside it (see [`session_warnings`]).
+pub type UnconfinedSession = Box<dyn Fn(&[String]) -> Vec<(u32, String)> + Send + Sync>;
 
 /// The OS-touching parts, injectable for tests.
 pub struct GuardHooks {
@@ -1070,6 +1141,10 @@ pub struct GuardHooks {
     pub discover: Discover,
     /// Running login helpers that carry no profile (see `UnconfinedHelpers`).
     pub unconfined_helpers: UnconfinedHelpers,
+    /// The listed users' session processes that carry no profile (see `UnconfinedSession`).
+    pub unconfined_session: UnconfinedSession,
+    pub uid_of: UidOf,
+    pub reload_units: ReloadUnits,
     pub now: Box<dyn Fn() -> String + Send + Sync>,
 }
 
@@ -1079,6 +1154,8 @@ pub struct GuardPaths {
     pub profile_dir: PathBuf,
     pub state_file: PathBuf,
     pub app_exec: String,
+    /// Where `user@<uid>.service.d/` drop-ins go (`/etc/systemd/system`).
+    pub unit_dir: PathBuf,
     pub daemon_version: String,
 }
 
@@ -1088,6 +1165,7 @@ impl Default for GuardPaths {
             profile_dir: PathBuf::from(DEFAULT_PROFILE_DIR),
             state_file: PathBuf::from(DEFAULT_STATE_FILE),
             app_exec: DEFAULT_APP_EXEC.to_string(),
+            unit_dir: PathBuf::from(DEFAULT_UNIT_DIR),
             daemon_version: crate::VERSION.to_string(),
         }
     }
@@ -1175,8 +1253,13 @@ pub fn resolve_context(
     // Drop the session's lifelines before they reach the profiles or the state cache; an
     // older cache may still carry them (see NEVER_GUARD).
     discovered.retain(|d| !never_guard(&d.glob));
+    let user_uids = users
+        .iter()
+        .filter_map(|u| (hooks.uid_of)(u).map(|uid| (u.clone(), uid)))
+        .collect();
     GuardContext {
         users: users.to_vec(),
+        user_uids,
         app_exec: paths.app_exec.clone(),
         login_helpers,
         shell,
@@ -1219,6 +1302,23 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
             for f in &files {
                 if let Err(e) = (hooks.remove_file)(f) {
                     info.last_error = Some(format!("cannot remove {}: {e}", f.display()));
+                }
+            }
+            let mut removed = false;
+            for uid in std::mem::take(&mut state.dropin_uids) {
+                let path = SessionDropin {
+                    user: String::new(),
+                    uid,
+                    text: String::new(),
+                }
+                .path(&paths.unit_dir);
+                if (hooks.file_exists)(&path) && (hooks.remove_file)(&path).is_ok() {
+                    removed = true;
+                }
+            }
+            if removed {
+                if let Err(e) = (hooks.reload_units)() {
+                    info.last_error = Some(format!("systemctl daemon-reload failed: {e}"));
                 }
             }
             state.mode = GuardMode::Off;
@@ -1289,10 +1389,45 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
             (hooks.parser)(ParserOp::Replace, &written)
                 .map_err(|e| format!("profile load failed: {e}"))
         });
+    // The drop-ins go in whether or not the parser succeeded: they carry `-rp-code-session`,
+    // so a drop-in without a loaded profile is a no-op rather than a login that fails.
+    let mut dropin_touched = false;
+    for d in &plan.dropins {
+        let path = d.path(&paths.unit_dir);
+        if (hooks.read_file)(&path).as_deref() != Some(d.text.as_str()) {
+            match (hooks.write_file)(&path, &d.text) {
+                Ok(()) => dropin_touched = true,
+                Err(e) => {
+                    info.last_error = Some(format!("cannot write {}: {e}", path.display()));
+                }
+            }
+        }
+    }
+    let wanted: BTreeSet<u32> = plan.dropins.iter().map(|d| d.uid).collect();
+    for uid in state.dropin_uids.iter().filter(|u| !wanted.contains(u)) {
+        let path = SessionDropin {
+            user: String::new(),
+            uid: *uid,
+            text: String::new(),
+        }
+        .path(&paths.unit_dir);
+        if (hooks.file_exists)(&path) && (hooks.remove_file)(&path).is_ok() {
+            dropin_touched = true;
+        }
+    }
+    if dropin_touched {
+        if let Err(e) = (hooks.reload_units)() {
+            info.last_error = Some(format!("systemctl daemon-reload failed: {e}"));
+        }
+    }
+    state.dropin_uids = wanted.into_iter().collect();
+
     match result {
         Ok(()) => {
             info.loaded = plan.files.iter().map(|f| f.name.to_string()).collect();
             info.warnings = helper_warnings(&(hooks.unconfined_helpers)(&ctx.login_helpers));
+            info.warnings
+                .extend(session_warnings(&(hooks.unconfined_session)(&users)));
             info.warnings.extend(pam_duplicate_warning(hooks));
             state.mode = rules.mode;
             state.hash = plan.hash.clone();
@@ -1314,6 +1449,32 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
         info.last_error = Some(e);
     }
     info
+}
+
+/// Warning lines for a session that is running outside the confinement the guard loaded for it.
+///
+/// AppArmor confinement follows `execve`, so it reaches only what the login helper itself
+/// started. A systemd-managed desktop session does not qualify: `systemd --user` is started by
+/// PID 1 through `user@<uid>.service`, never through the login helper, so `pam_apparmor`'s hat
+/// never applies to it and everything it launches — the compositor, the shell, every terminal —
+/// runs unconfined. The hats and the `rp-code-session` profile still load and still look right;
+/// what breaks is that nothing meaningful ever enters them, and an empty audit log reads as
+/// "nothing happened" instead of "nothing was watched". That is the case this reports, because
+/// it is the one failure of the guard that is otherwise invisible.
+pub fn session_warnings(unconfined: &[(u32, String)]) -> Vec<String> {
+    if unconfined.is_empty() {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = unconfined
+        .iter()
+        .map(|(pid, comm)| format!("{comm} (pid {pid})"))
+        .collect();
+    names.sort();
+    names.dedup();
+    vec![format!(
+        "the guard is loaded but the session is NOT confined: {} run unconfined. A systemd-managed session (uwsm, GNOME, KDE) starts the compositor from `systemd --user`, which PID 1 starts through user@<uid>.service — it never passes the login helper, so the hat never reaches it. Nothing is being watched and the audit log stays empty; enforce mode would block nothing either.",
+        names.join(", ")
+    )]
 }
 
 /// Warning lines for login helpers running without a profile: they were started before the
@@ -1371,6 +1532,8 @@ pub fn current_info(
             None => KNOWN_LOGIN_HELPERS.iter().map(|s| s.to_string()).collect(),
         };
         info.warnings = helper_warnings(&(hooks.unconfined_helpers)(&helpers));
+        info.warnings
+            .extend(session_warnings(&(hooks.unconfined_session)(&info.users)));
     }
     info.warnings.extend(pam_duplicate_warning(hooks));
     info
@@ -1391,6 +1554,9 @@ pub mod tests {
         pub parser_calls: Mutex<Vec<(ParserOp, Vec<PathBuf>)>>,
         pub parser_fail: Mutex<Option<ParserOp>>,
         pub discovered: Mutex<Vec<DiscoveredSocket>>,
+        pub unconfined_session: Mutex<Vec<(u32, String)>>,
+        pub uids: Mutex<HashMap<String, u32>>,
+        pub reloads: Mutex<u32>,
         pub available: Mutex<bool>,
     }
 
@@ -1404,6 +1570,9 @@ pub mod tests {
             let f = self.clone();
             let g = self.clone();
             let h = self.clone();
+            let i = self.clone();
+            let j = self.clone();
+            let k = self.clone();
             GuardHooks {
                 available: Box::new(move || *a.available.lock().unwrap()),
                 abi: Box::new(|| Some("abi/4.0".into())),
@@ -1432,6 +1601,14 @@ pub mod tests {
                 }),
                 discover: Box::new(move |_| g.discovered.lock().unwrap().clone()),
                 unconfined_helpers: Box::new(move |_| Vec::new()),
+                unconfined_session: Box::new(move |_| i.unconfined_session.lock().unwrap().clone()),
+                uid_of: Box::new(move |name| {
+                    j.uids.lock().unwrap().get(name).copied().or(Some(1000))
+                }),
+                reload_units: Box::new(move || {
+                    *k.reloads.lock().unwrap() += 1;
+                    Ok(())
+                }),
                 now: Box::new(move || {
                     let _ = &h;
                     "2026-09-14T12:00:00.000Z".to_string()
@@ -1454,6 +1631,7 @@ pub mod tests {
             profile_dir: dir.join("apparmor.d"),
             state_file: dir.join("guard-state.json"),
             app_exec: DEFAULT_APP_EXEC.to_string(),
+            unit_dir: dir.join("systemd"),
             daemon_version: "9.9.9".into(),
         }
     }
@@ -1471,6 +1649,11 @@ pub mod tests {
                 owner: Owner::Shell,
                 entry: "noctalia".into(),
             }],
+            user_uids: mode_users
+                .iter()
+                .enumerate()
+                .map(|(n, u)| (u.to_string(), 1000 + n as u32))
+                .collect(),
             daemon_version: "9.9.9".into(),
         }
     }
@@ -1502,7 +1685,7 @@ pub mod tests {
         let session = text_of(&plan, "rp-code-session");
         assert!(session.contains("abi <abi/4.0>,"));
         assert!(session.contains("profile rp-code-session flags=(attach_disconnected,complain) {"));
-        assert!(session.contains("  /** ix,\n"));
+        assert!(session.contains("  /{,**} ix,\n"));
         assert!(session.contains("  /opt/rp-code/current/rp-code px -> rp-code-app,\n"));
         assert!(session.contains("  /usr/bin/noctalia px -> rp-code-shell,\n"));
         assert!(session.contains("  /usr/bin/Hyprland px -> rp-code-compositor,\n"));
@@ -1529,7 +1712,7 @@ pub mod tests {
         assert!(app.contains("  audit signal (receive) peer=rp-code-session,\n"));
         assert!(app.contains("  audit ptrace (tracedby) peer=rp-code-compositor,\n"));
         let shell = text_of(&plan, "rp-code-shell");
-        assert!(shell.contains("  /** px -> rp-code-session,\n"));
+        assert!(shell.contains("  /{,**} px -> rp-code-session,\n"));
         assert!(
             shell.contains("  audit @{run}/user/[0-9]*/noctalia-*.sock r,\n"),
             "bind (w) allowed, connect (needs r) audited"
@@ -1539,14 +1722,14 @@ pub mod tests {
             "shell-only: the shell may talk to the compositor"
         );
         let comp = text_of(&plan, "rp-code-compositor");
-        assert!(comp.contains("  /** px -> rp-code-session,\n"));
+        assert!(comp.contains("  /{,**} px -> rp-code-session,\n"));
         assert!(comp.contains("  audit @{run}/user/[0-9]*/noctalia-*.sock rw,\n"));
         let login = text_of(&plan, "rp-code-login");
         assert!(login.contains("profile rp-code-login /{usr/lib/sddm/sddm-helper,usr/bin/login} flags=(attach_disconnected) {"));
         assert!(login.contains("  ^work flags=(attach_disconnected,complain) {\n"));
-        assert!(login.contains("    /** px -> rp-code-session,\n"));
+        assert!(login.contains("    /{,**} px -> rp-code-session,\n"));
         assert!(login.contains("  ^DEFAULT flags=(attach_disconnected,complain) {\n"));
-        assert!(login.contains("    /** ux,\n"));
+        assert!(login.contains("    /{,**} ux,\n"));
         for f in &plan.files {
             assert!(f.text.contains(&format!("# rp-code-guard {}", plan.hash)));
             assert!(f
@@ -1612,6 +1795,7 @@ pub mod tests {
             compositors: vec![&HYPRLAND],
             abi: None,
             discovered: vec![],
+            user_uids: vec![("a".to_string(), 1000)],
             daemon_version: "1".into(),
         };
         let plan = render(&r, &ctx);
@@ -1815,6 +1999,115 @@ pub mod tests {
     }
 
     #[test]
+    fn an_unconfined_session_is_reported_even_though_every_profile_loaded() {
+        assert!(
+            session_warnings(&[]).is_empty(),
+            "a confined session says nothing"
+        );
+        let w = session_warnings(&[(7419, "Hyprland".into()), (7453, "noctalia".into())]);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("NOT confined"), "{}", w[0]);
+        assert!(w[0].contains("Hyprland (pid 7419)"), "{}", w[0]);
+        assert!(w[0].contains("noctalia (pid 7453)"), "{}", w[0]);
+        assert!(w[0].contains("user@<uid>.service"), "{}", w[0]);
+
+        // It rides along with a successful engage: every profile loads, and the status still
+        // says the session is outside them.
+        let os = Arc::new(FakeOs::default());
+        *os.available.lock().unwrap() = true;
+        os.existing.lock().unwrap().push("/usr/bin/login".into());
+        os.unconfined_session
+            .lock()
+            .unwrap()
+            .push((7419, "Hyprland".into()));
+        let dir = PathBuf::from("/etc/apparmor.d");
+        let policy = parse_policy(
+            &serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":"audit"}})
+                .to_string(),
+        )
+        .unwrap();
+        let info = apply(Some(&policy), &os.hooks(), &paths(&dir));
+        assert!(
+            info.loaded.contains(&"rp-code-login".to_string())
+                && info.loaded.contains(&"rp-code-session".to_string()),
+            "{info:?}"
+        );
+        assert!(info.last_error.is_none(), "{info:?}");
+        assert!(
+            info.warnings.iter().any(|w| w.contains("NOT confined")),
+            "{:?}",
+            info.warnings
+        );
+    }
+
+    #[test]
+    fn the_user_manager_dropin_is_written_reaped_and_removed() {
+        let os = Arc::new(FakeOs::default());
+        *os.available.lock().unwrap() = true;
+        os.existing.lock().unwrap().push("/usr/bin/login".into());
+        os.uids.lock().unwrap().insert("work".into(), 1000);
+        os.uids.lock().unwrap().insert("alice".into(), 1001);
+        let hooks = os.hooks();
+        let dir = PathBuf::from("/root");
+        let paths = paths(&dir);
+        let dropin = |uid: u32| {
+            paths
+                .unit_dir
+                .join(format!("user@{uid}.service.d/rp-code-guard.conf"))
+        };
+
+        let engage = |users: &str| {
+            parse_policy(&format!(
+                r#"{{"version":1,"app":{{"users":[{users}]}},"guard":{{"mode":"audit"}}}}"#
+            ))
+            .unwrap()
+        };
+
+        // Engage for one user: the drop-in lands and the units are reloaded once.
+        let info = apply(Some(&engage("\"work\"")), &hooks, &paths);
+        assert!(info.last_error.is_none(), "{info:?}");
+        let text = os
+            .files
+            .lock()
+            .unwrap()
+            .get(&dropin(1000))
+            .cloned()
+            .expect("drop-in written");
+        // The `-` is what keeps a missing profile from blocking the login entirely.
+        assert!(text.contains("AppArmorProfile=-rp-code-session"), "{text}");
+        assert!(!text.contains("AppArmorProfile=rp-code-session"), "{text}");
+        assert_eq!(*os.reloads.lock().unwrap(), 1);
+
+        // Idempotent: same policy, no rewrite, no extra daemon-reload.
+        apply(Some(&engage("\"work\"")), &hooks, &paths);
+        assert_eq!(
+            *os.reloads.lock().unwrap(),
+            1,
+            "unchanged drop-in must not reload"
+        );
+
+        // A user swapped out: the old drop-in is reaped, the new one written.
+        apply(Some(&engage("\"alice\"")), &hooks, &paths);
+        assert!(
+            os.files.lock().unwrap().contains_key(&dropin(1001)),
+            "alice gets one"
+        );
+        assert!(
+            !os.files.lock().unwrap().contains_key(&dropin(1000)),
+            "work's is reaped"
+        );
+
+        // mode: off removes what is left.
+        let off = parse_policy(r#"{"version":1,"app":{"users":["alice"]},"guard":{"mode":"off"}}"#)
+            .unwrap();
+        apply(Some(&off), &hooks, &paths);
+        assert!(
+            !os.files.lock().unwrap().contains_key(&dropin(1001)),
+            "removed on disengage"
+        );
+    }
+
+    #[test]
     fn the_login_profile_is_never_complain_in_either_mode() {
         // A complain-mode change_hat() into a hat that does not exist makes the kernel build a
         // learning profile, and that path self-deadlocks: `login` wedges in D state holding the
@@ -1960,6 +2253,7 @@ garbage line\n";
                 owner: Owner::Shell,
                 entry: "noctalia".into(),
             }],
+            dropin_uids: vec![1000],
             applied_at: Some("2026-09-14T12:00:00.000Z".into()),
             last_error: None,
         };

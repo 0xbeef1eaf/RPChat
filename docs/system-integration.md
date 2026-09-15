@@ -454,6 +454,29 @@ Every rule below was checked against the sources named, not guessed.
   the state cache: guarding the display socket would cut every client in the session off from
   its compositor the moment the mode became `enforce`. Only `extraDenySockets` can name them,
   and only deliberately.
+- **The user manager, and why the hats are not enough.** AppArmor confinement follows `execve`,
+  so `pam_apparmor`'s hat reaches only what the login helper itself started. A systemd-managed
+  desktop session does not qualify: `systemctl --user` merely *asks* `systemd --user` to start
+  things, and `systemd --user` was started by PID 1 through `user@<uid>.service`. Everything it
+  launches — the compositor, the shell, every terminal — therefore runs unconfined, while the
+  profiles and hats still load and still look correct. The tell is an audit log that stays empty,
+  which reads as "nothing happened" rather than "nothing was watched". So the daemon also writes
+  `/etc/systemd/system/user@<uid>.service.d/rp-code-guard.conf` for each `app.users` entry:
+
+  ```ini
+  [Service]
+  AppArmorProfile=-rp-code-session
+  ```
+
+  PID 1 does the transition, and the whole user session starts inside `rp-code-session`
+  (the compositor then takes its `px` to `rp-code-compositor`, the shell to `rp-code-shell`).
+  The leading **`-`** is load-bearing: without it a `user@<uid>.service` whose profile is not
+  loaded *fails to start*, which is every boot before `rp-coded` has engaged — the failure mode
+  is "this account cannot log in at all". Drop-ins are written on engage, reaped when a user
+  leaves `app.users`, removed by `--no-guard`/`mode: off`, and each change is followed by
+  `systemctl daemon-reload`. They bind when PID 1 execs the manager, so a **re-login** is needed,
+  not just a policy reload. `status.guard.warnings` reports a session running unconfined despite
+  loaded profiles, so this cannot silently no-op again.
 - **Exec transitions.** Named transitions take globs: `rp-code-shell` and `rp-code-compositor`
   send every child back with `/** px -> rp-code-session` (a terminal opened by a keybind, a
   script run by the launcher), while `/opt/rp-code/current/rp-code px -> rp-code-app` and the
@@ -505,6 +528,16 @@ nothing from the distro, so a machine with every distro profile parked in
 - **`systemctl --user`**: an app started as a systemd *user* unit lives in the user's delegated
   cgroup, where `systemctl --user stop`/`kill` work without signals (the daemon relaunches it,
   outside that cgroup). Prefer the XDG autostart entry (the installer's default).
+- **The shell's own helpers lose the shell's state.** `rp-code-shell` sends every child back to
+  `rp-code-session`, which is where the shell's config and state are denied. That catches a
+  terminal opened from the shell's launcher — and equally the `git` and `sh` the shell runs for
+  its own plugin and palette updates, so under `enforce` those stop working. This is accepted on
+  purpose: the alternative is letting anything the shell launches rewrite the wallpaper config.
+- **Links from unnamed inodes are logged but not blocked.** An `O_TMPFILE` inode has no name, so
+  AppArmor renders it `<dir>/#<inode>`, fails the lookup and denies `l` — no rule can match a
+  name that cannot be resolved, and an explicit `link subset /{,**} -> /{,**},` changes nothing
+  (measured). The kernel refuses that link for unprivileged callers regardless, so these records
+  are audit noise on an operation that was already failing, not an enforce-mode breakage.
 - **Unknown shells or compositors** are not guarded until a table row exists or discovery has
   seen them running (the status line names what was found; Settings → System lists every gap
   under *What it cannot do*).

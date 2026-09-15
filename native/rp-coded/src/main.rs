@@ -1468,6 +1468,62 @@ mod os {
         out
     }
 
+    /// The listed users' shell/compositor processes that carry no AppArmor profile.
+    ///
+    /// The guard can load every profile correctly and still confine nothing: a systemd-managed
+    /// session runs the compositor under `systemd --user`, which PID 1 starts through
+    /// `user@<uid>.service`, so it never passes the login helper the hats hang off. Comparing
+    /// what is *running* against what should be confined is the only way to notice, because the
+    /// symptom is an empty audit log — indistinguishable from a quiet one.
+    pub fn unconfined_session_processes(users: &[String]) -> Vec<(u32, String)> {
+        let uids: Vec<u32> = users
+            .iter()
+            .filter_map(|u| {
+                nix::unistd::User::from_name(u)
+                    .ok()
+                    .flatten()
+                    .map(|user| user.uid.as_raw())
+            })
+            .collect();
+        let mut out = Vec::new();
+        if uids.is_empty() {
+            return out;
+        }
+        let Ok(procs) = fs::read_dir("/proc") else {
+            return out;
+        };
+        for entry in procs.flatten() {
+            let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                continue;
+            };
+            let base = entry.path();
+            let Ok(status) = fs::read_to_string(base.join("status")) else {
+                continue;
+            };
+            match guard::parse_status_uid(&status) {
+                Some(uid) if uids.contains(&uid) => {}
+                _ => continue,
+            }
+            let Ok(comm) = fs::read_to_string(base.join("comm")) else {
+                continue;
+            };
+            let comm = comm.trim();
+            // Only the processes the guard exists to confine: the shell and the compositor.
+            if guard::classify_comm(comm).is_none() {
+                continue;
+            }
+            let label = fs::read_to_string(base.join("attr/current"))
+                .or_else(|_| fs::read_to_string(base.join("attr/apparmor/current")))
+                .unwrap_or_default();
+            let label = label.trim_end_matches(['\n', '\0']).trim();
+            if label.is_empty() || label == "unconfined" {
+                out.push((pid, comm.to_string()));
+            }
+        }
+        out.sort();
+        out
+    }
+
     pub fn guard_hooks() -> GuardHooks {
         GuardHooks {
             available: Box::new(|| Path::new(guard::APPARMOR_FS).is_dir()),
@@ -1484,6 +1540,24 @@ mod os {
             parser: Box::new(run_apparmor_parser),
             discover: Box::new(discover_sockets),
             unconfined_helpers: Box::new(unconfined_login_helpers),
+            unconfined_session: Box::new(unconfined_session_processes),
+            uid_of: Box::new(|name| {
+                nix::unistd::User::from_name(name)
+                    .ok()
+                    .flatten()
+                    .map(|u| u.uid.as_raw())
+            }),
+            reload_units: Box::new(|| {
+                let out = std::process::Command::new("systemctl")
+                    .arg("daemon-reload")
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                if out.status.success() {
+                    Ok(())
+                } else {
+                    Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+                }
+            }),
             now: Box::new(|| {
                 let ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -2015,6 +2089,7 @@ fn guard_paths(args: &Args) -> GuardPaths {
             .join("current/rp-code")
             .to_string_lossy()
             .into_owned(),
+        unit_dir: PathBuf::from(guard::DEFAULT_UNIT_DIR),
         daemon_version: VERSION.to_string(),
     }
 }
@@ -2126,6 +2201,7 @@ mod tests {
                             profile_dir: dir.path().join("apparmor.d"),
                             state_file: dir.path().join("guard-state.json"),
                             app_exec: guard::DEFAULT_APP_EXEC.to_string(),
+                            unit_dir: dir.path().join("systemd"),
                             daemon_version: VERSION.to_string(),
                         },
                     ),
