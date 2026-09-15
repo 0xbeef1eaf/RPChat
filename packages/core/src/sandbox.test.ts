@@ -14,7 +14,7 @@ describe('SandboxService', () => {
     t = await createTestEngine({
       runnerHandler: async (request, runner) => {
         if (request.context.trigger.kind !== 'sandbox') return;
-        await runner.call(request, 'chat', 'say', 'from the sandbox');
+        await runner.call(request, 'chat', 'emote', 'from the sandbox');
         return { echoed: request.code };
       },
     });
@@ -24,7 +24,7 @@ describe('SandboxService', () => {
     expect(out.runId).toBe('run-1');
     expect(out.result.ok).toBe(true);
     expect(out.result.returnValue).toEqual({ echoed: 'const input = {"n":1}; return input;' });
-    expect(out.result.calls.map((c) => `${c.module}.${c.method}`)).toEqual(['chat.say']);
+    expect(out.result.calls.map((c) => `${c.module}.${c.method}`)).toEqual(['chat.emote']);
 
     // the character had no session: one was created and the script ran in it
     const session = await t.engine.sessions.forCharacter(LUNA_REF);
@@ -48,7 +48,7 @@ describe('SandboxService', () => {
       ['run-1', 'allowed'],
       [again.runId, 'allowed'],
     ]);
-    expect(audit.some((e) => e.module === 'chat' && e.method === 'say')).toBe(true);
+    expect(audit.some((e) => e.module === 'chat' && e.method === 'emote')).toBe(true);
   });
 
   it('reports a failed script in the result and the audit log, without rejecting', async () => {

@@ -186,6 +186,7 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `wallpaper` | pack    | `set(asset, { monitor? })`, `restore()`, `current()` — via the user's wallpaper command template |
 | `browser`| pack       | `open(url, { newWindow? })` via the user's browser command; with the browser extension connected also `status`, `tabs`, `openTab`, `activate`, `close`, `navigate`, `back/forward/reload`, `read`, `query`, `click`, `type`, `scroll`, `screenshot`, `find` (docs/browser-extension.md) |
 | `input`  | pack       | `lock(durationMs, { reason?, devices? })`, `unlock()`, `status()`, `type`, `key`, `click`, `moveMouse` — daemon-only (`rp-coded`, Linux), duration capped; `CAPABILITY_FAILED` without the daemon |
+| `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — via the user's camera command templates; the capture is saved under `webcam/` in the character home and returned as a `source: 'home'` AssetRef |
 | `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)`, `clipboardRead()` |
 
 Adding a module = write a spec (typings+docs+methods) and a host handler,
@@ -228,7 +229,7 @@ per-run call budgets, writes the audit log, then invokes the host handler.
 4. The result is fed back as a tool result (or, in fallback mode, as a user
    message wrapped in `<action_result>`), and the model is called again.
 5. The loop ends when the model produces a message with no actions, or after
-   `maxActionRounds` (default 4), or on abort. `sdk.chat.say()` output is
+   `maxActionRounds` (default 4), or on abort. `sdk.chat.emote()` output is
    appended to the transcript as assistant text immediately, so a character can
    speak while acting.
 

@@ -48,6 +48,6 @@ to follow up, continue stories, or check in. Limits apply; do not chain wakes ne
 
 ## Tests
 
-- runLater: validation, fires code with `input`, repeat with maxRuns, cancel; code that calls `sdk.chat.say` produces a message-added.
+- runLater: validation, fires code with `input`, repeat with maxRuns, cancel; code that calls `sdk.chat.emote` produces a message-added.
 - selfWake: immediate wake runs after turn-finished (event order), delayed wake via timer, per-hour and consecutive limits drop with audit + status, counters reset on user message.
 - ask: MockProvider called without tools, transcript unchanged.

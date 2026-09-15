@@ -203,7 +203,7 @@ describe('event matching', () => {
     const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
     const ctx = ctxOf(MINIMAL_ID, 'echo', session.id);
 
-    const sub = (await invoke(ctx, 'events', 'on', 'user-idle', 'await sdk.chat.say("away");', { label: 'idle' })) as { ok: true; value: { id: string } };
+    const sub = (await invoke(ctx, 'events', 'on', 'user-idle', 'await sdk.chat.emote("away");', { label: 'idle' })) as { ok: true; value: { id: string } };
     // The host reports idle at the threshold the user configured (2 min by
     // default). A subscription default above that could never be reached.
     senses.push('user-idle', { idleMs: 120_000 });
@@ -232,7 +232,7 @@ describe('event matching', () => {
         const trigger = request.context.trigger;
         if (trigger.kind !== 'event' && !(trigger.kind === 'behaviour' && trigger.hook === 'onEvent')) return;
         runs.push({ code: request.code, input: request.code.slice(0, request.code.indexOf('; ') + 1), trigger });
-        if (request.code.includes('sdk.chat.say')) await runner.call(request, 'chat', 'say', 'noticed!');
+        if (request.code.includes('sdk.chat.emote')) await runner.call(request, 'chat', 'emote', 'noticed!');
         return null;
       },
     });
@@ -241,7 +241,7 @@ describe('event matching', () => {
     const ctx = ctxOf(MINIMAL_ID, 'echo', session.id);
     expect(senses.interests.at(-1)).toEqual(['time']);
 
-    const idle = (await invoke(ctx, 'events', 'on', 'user-idle', 'await sdk.chat.say("idle");', { filter: { idleMs: 60_000 }, input: { tag: 'x' }, label: 'idle watch' })) as { ok: true; value: { id: string; event: string; label: string; fired: number } };
+    const idle = (await invoke(ctx, 'events', 'on', 'user-idle', 'await sdk.chat.emote("idle");', { filter: { idleMs: 60_000 }, input: { tag: 'x' }, label: 'idle watch' })) as { ok: true; value: { id: string; event: string; label: string; fired: number } };
     expect(idle.value).toMatchObject({ event: 'user-idle', label: 'idle watch', fired: 0 });
     const win = (await invoke(ctx, 'events', 'on', 'window-changed', 'return 1;', { filter: { app: 'code' }, once: true })) as { ok: true; value: { id: string; once: boolean } };
     expect(win.value.once).toBe(true);
@@ -257,7 +257,7 @@ describe('event matching', () => {
     senses.push('user-idle', { idleMs: 120_000 });
     await t.engine.eventService.idle();
     expect(runs).toHaveLength(1);
-    expect(runs[0]!.code.startsWith('const input = {"tag":"x","event":"user-idle","data":{"idleMs":90000}}; await sdk.chat.say("idle");')).toBe(true);
+    expect(runs[0]!.code.startsWith('const input = {"tag":"x","event":"user-idle","data":{"idleMs":90000}}; await sdk.chat.emote("idle");')).toBe(true);
     expect(runs[0]!.trigger).toEqual({ kind: 'event', subscriptionId: idle.value.id, event: 'user-idle' });
     expect((await t.engine.sessions.messages(session.id)).at(-1)).toMatchObject({ role: 'assistant', origin: 'event', content: 'noticed!' });
     senses.push('user-back', { idleMs: 0 });
@@ -411,7 +411,7 @@ describe('event interest with onEvent behaviours (Makima)', () => {
         const trig = request.context.trigger;
         if (trig.kind === 'behaviour' && trig.hook === 'onEvent') {
           onEventRuns.push(request.code.slice(0, request.code.indexOf('; ') + 1));
-          await runner.call(request, 'chat', 'say', 'There you are.');
+          await runner.call(request, 'chat', 'emote', 'There you are.');
         }
         return null;
       },

@@ -27,7 +27,7 @@ function requireText(value: unknown, what: string): string {
   return value;
 }
 
-/** `sdk.chat`: say / emote append assistant messages, history reads the transcript, setStatus emits a status event. */
+/** `sdk.chat`: emote appends an assistant message, history reads the transcript, setStatus emits a status event. */
 export class ChatHandler implements CapabilityHandler {
   readonly moduleId = 'chat';
 
@@ -39,7 +39,6 @@ export class ChatHandler implements CapabilityHandler {
 
   async invoke(method: string, args: Json[], context: ActionContext): Promise<Json | void> {
     switch (method) {
-      case 'say':
       case 'emote': {
         const text = requireText(args[0], 'text');
         await this.sessions.require(context.sessionId);
@@ -48,7 +47,7 @@ export class ChatHandler implements CapabilityHandler {
           role: 'assistant',
           content: text,
           origin: originOf(context),
-          kind: method === 'emote' ? 'emote' : 'text',
+          kind: 'emote',
         });
         return;
       }

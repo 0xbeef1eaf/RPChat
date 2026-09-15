@@ -6,13 +6,11 @@ await sdk.state.set('remindersFired', fired + 1);
 
 await sdk.media.playAudio('audio/chime.wav', { volume: 0.5 });
 
-const lines = [
-  'Hey. Stand up, roll your shoulders, look at something far away for a minute. I\'ll wait.',
-  'Reminder from earlier: stretch break. Go on, I can tell you\'ve been hunched.',
-  'That\'s the chime. Water, stretch, back in two minutes.',
-];
-const line = lines[fired % lines.length] ?? lines[0]!;
-await sdk.chat.say(line);
+// The script sets the stage (chime, counter); the wake gives Luna a turn to say it herself.
+await sdk.llm.wake(
+  `Your stretch-break chime just went off (nudge number ${fired + 1} this session). Tell them to stand up, ` +
+    `roll their shoulders and look at something far away for a minute. One line, warm, no nagging.`,
+);
 
 // Re-arm at most twice per session so a long chat gets a couple of nudges, not a metronome.
 if (fired < 2) {

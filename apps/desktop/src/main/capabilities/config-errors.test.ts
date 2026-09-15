@@ -186,8 +186,6 @@ describe('desktop', () => {
       message: expect.stringContaining('No set volume command is configured for sdk.desktop.setVolume; set one in Settings → Commands → Set volume (platform default: wpctl or pactl'),
     });
     await expect(desktop.invoke('setBrightness', [50], ctx)).rejects.toMatchObject({ message: expect.stringContaining('Settings → Commands → Brightness') });
-    await expect(desktop.invoke('doNotDisturb', [true], ctx)).rejects.toMatchObject({ message: expect.stringContaining('Settings → Commands → Do not disturb') });
-    await expect(desktop.invoke('setTheme', ['dark'], ctx)).rejects.toMatchObject({ message: expect.stringContaining('Settings → Commands → Switch theme') });
     expect(await desktop.invoke('getVolume', [], ctx)).toBeNull();
   });
 

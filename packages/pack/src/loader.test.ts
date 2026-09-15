@@ -26,7 +26,7 @@ describe('loadPack', () => {
     expect(luna.avatarPath).toBe('characters/luna/avatar.png');
 
     expect(Object.keys(luna.behaviourSources).sort()).toEqual(['onSessionStart', 'onTimer']);
-    expect(luna.behaviourSources.onSessionStart).toContain('sdk.chat.say(');
+    expect(luna.behaviourSources.onSessionStart).toContain('sdk.llm.wake(');
     expect(luna.behaviourSources.onSessionStart).toContain("sdk.state.set('sessions'");
     expect(luna.behaviourSources.onTimer).toContain('sdk.media.playAudio(');
 
@@ -282,7 +282,7 @@ describe('validatePack / loadPack problems', () => {
       ...minimalPackFiles(),
       'characters/a/lib/good.ts': '() => 1',
       'characters/a/lib/broken.ts': '// half\nasync ( => 1',
-      'characters/a/lib/call.ts': 'sdk.chat.say("hi")',
+      'characters/a/lib/call.ts': 'sdk.chat.emote("hi")',
       'characters/a/lib/two.ts': 'x => 1); (y => 2',
       'characters/a/lib/1bad.ts': '() => 1',
       'characters/a/lib/class.ts': '() => 1',

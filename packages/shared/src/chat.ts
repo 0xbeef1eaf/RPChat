@@ -16,7 +16,7 @@ export interface ChatMessage {
   createdAt: string;
   /** Actions executed as part of producing this assistant message. */
   actions?: ActionRecord[];
-  /** Origin of assistant text: LLM, a behaviour script (`sdk.chat.say`), a timer, an event or a routine transition. */
+  /** Origin of assistant text: LLM, a behaviour script (`sdk.chat.emote`), a timer, an event or a routine transition. */
   origin?: 'llm' | 'behaviour' | 'timer' | 'event' | 'routine' | 'greeting';
   /** Emotes (`sdk.chat.emote`) are rendered in italics. */
   kind?: 'text' | 'emote';

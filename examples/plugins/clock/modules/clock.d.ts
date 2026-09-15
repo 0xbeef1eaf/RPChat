@@ -8,7 +8,7 @@ interface ClockApi {
   /**
    * The current date and time on the user's computer.
    * @returns iso: ISO-8601 with offset; local: human-readable local time; weekday: e.g. "Tuesday"; unix: seconds since the epoch.
-   * @example const { local, weekday } = await sdk.clock.now(); await sdk.chat.say(`It's ${local}, ${weekday}.`);
+   * @example const { local, weekday } = await sdk.clock.now(); return { local, weekday };
    */
   now(): Promise<{ iso: string; local: string; weekday: string; unix: number }>;
   /**
@@ -18,7 +18,7 @@ interface ClockApi {
    * @param label Optional label handed back in the event, e.g. "tea".
    * @returns id of the countdown and the ISO time it ends.
    * @example
-   * await sdk.events.on("custom:countdown", async (input) => { await sdk.chat.say(`Your ${input.data.label} is ready!`); }, { once: true });
+   * await sdk.events.on("custom:countdown", async (input) => { await sdk.llm.wake(`The countdown "${input.data.label}" is up. Tell them.`); }, { once: true });
    * await sdk.clock.countdown(180, "tea");
    */
   countdown(seconds: number, label?: string): Promise<{ id: string; endsAt: string }>;

@@ -124,9 +124,9 @@ await sdk.state.set("visits", 3);
 await sdk.state.set("profile", { name: typeof name === "string" ? name : null, tags: ["a", "b"] });
 const all = await sdk.state.all();
 const hist = await sdk.chat.history(5);
-sdk.log.info("history", hist.length, hist[0]?.role, hist[0]?.at);
+console.info("history", hist.length, hist[0]?.role, hist[0]?.at);
 console.log("keys", await sdk.state.keys(), Object.keys(all));
-await sdk.chat.say("One moment...");
+await sdk.chat.emote("thinks for a moment");
 await sdk.chat.emote("smiles");
 await sdk.chat.setStatus(null);
 const ok = await sdk.ui.confirm("Play it?");
@@ -148,7 +148,7 @@ const cal = await sdk.calendar.upcoming(6);
 const w = await sdk.web.weather("Oslo");
 const feed = await sdk.web.rss("https://example.com/feed", 3);
 const r2 = await sdk.web.fetch("https://example.com", { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
-const sub = await sdk.events.on("time", "await sdk.chat.say('tick')", { filter: { hour: 9, minute: 0 }, once: true, label: "morning" });
+const sub = await sdk.events.on("time", "await sdk.chat.emote('checks the clock')", { filter: { hour: 9, minute: 0 }, once: true, label: "morning" });
 await sdk.events.on("custom:tea", "return input", { input: { cups: 1 } });
 await sdk.events.emit("tea", { cups: 2 });
 const subs = await sdk.events.list();
@@ -194,7 +194,7 @@ await sdk.state.session.get(1);`);
   });
 
   it('does not expose denied modules to character code', () => {
-    const typings = generateSdkTypings(registry, { modules: ['chat', 'log', 'state', 'pack', 'timers'] });
+    const typings = generateSdkTypings(registry, { modules: ['chat', 'state', 'pack', 'timers'] });
     const diags = compile({ 'sdk.d.ts': typings, 'action.ts': characterAction('await sdk.system.exec("rm");') });
     expect(diags).toHaveLength(1);
     expect(diags[0]).toMatch(/Property 'system' does not exist on type 'Sdk'/);
@@ -252,8 +252,8 @@ describe('describeSurface', () => {
   it('lists modules with their method names, dotted for nested members', () => {
     const surface = describeSurface(registry);
     expect(surface.modules.map((m) => m.id)).toEqual([
-      'chat', 'log', 'help', 'lib', 'state', 'pack', 'timers', 'llm', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input',
-      'presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging',
+      'chat', 'help', 'lib', 'state', 'pack', 'timers', 'llm', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input',
+      'presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging', 'webcam',
       'system',
     ]);
     const state = surface.modules.find((m) => m.id === 'state')!;

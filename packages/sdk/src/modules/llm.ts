@@ -38,12 +38,11 @@ interface LlmApi {
 }`,
   docs: `Use the model as a tool inside actions, and drive yourself forward without the user having to type.
 
-- \`ask()\` is for private generation or judgement ("pick one of these three ideas and say why"); keep it short and do not use it to talk to the user (use \`sdk.chat.say\` or just reply).
+- \`ask()\` is for private generation or judgement ("pick one of these three ideas and say why"); keep it short and do not use it to talk to the user — just say it in your reply.
 - \`wake()\` is how you take initiative: after this action, or after a delay, you get a turn with your own prompt. Write the prompt for someone with no memory of this moment: say what happened and what to do.
 - Wakes are rate-limited (see the user's autonomy settings); prefer one well-timed wake over many. Chain wakes only when the story genuinely needs it.
 
 \`\`\`ts
-await sdk.chat.say("Give me a minute to think about the plan.");
 await sdk.llm.wake("You promised a plan for their weekend trip. Propose three options now, then ask which they prefer.", { delayMs: 60_000 });
 \`\`\``,
   methods: {

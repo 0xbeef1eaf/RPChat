@@ -70,7 +70,8 @@ return { firstInstall: !installedAt };
   onSessionStart: {
     title: 'On session start',
     source: `// Runs when a new chat session starts, before the model's first turn.
-// \`input\` is null for this hook. Anything you \`sdk.chat.say\` appears as the character's message.
+// \`input\` is null for this hook. To open the conversation yourself, use \`sdk.llm.wake\`:
+// it queues a real turn in which you speak in your own words.
 
 const previous = (await sdk.state.get('sessions')) as number | null;
 const sessions = (previous ?? 0) + 1;
@@ -85,9 +86,9 @@ const partOfDay =
   'late one tonight';
 
 if (sessions === 1) {
-  await sdk.chat.say(\`Hey. \${partOfDay.charAt(0).toUpperCase() + partOfDay.slice(1)}. Tell me what to call you and I'll remember it.\`);
+  await sdk.llm.wake(\`This is your first ever conversation with them and it is \${partOfDay}. Greet them, and ask what to call them so you can remember it.\`);
 } else {
-  await sdk.chat.say(\`Hey, \${partOfDay}. Good to see you back.\`);
+  await sdk.llm.wake(\`They are back for chat number \${sessions} and it is \${partOfDay}. Greet them warmly, briefly.\`);
 }
 
 return { sessions };
@@ -102,7 +103,7 @@ return { sessions };
 const text = String((input as { text: string }).text ?? '').trim();
 
 if (/^\\/ping$/i.test(text)) {
-  await sdk.chat.say('pong');
+  await sdk.chat.emote('pings back: pong');
   return { skipLlm: true };
 }
 
@@ -127,7 +128,7 @@ const reason =
     ? String((timer.payload as { reason: unknown }).reason)
     : timer.label ?? 'a reminder';
 
-await sdk.chat.say(\`Reminder: \${reason}.\`);
+await sdk.llm.wake(\`A timer you set has gone off: \${reason}. Remind them about it in your own words.\`);
 return { handled: timer.id };
 `,
   },
@@ -139,9 +140,9 @@ return { handled: timer.id };
 const { event, data } = input as { event: string; data: Record<string, unknown> | null };
 
 if (event === 'user-back') {
-  await sdk.chat.say('Welcome back.');
+  await sdk.chat.emote('looks up as they come back');
 } else if (event === 'battery-low') {
-  await sdk.chat.say(\`Your battery is at \${data?.percent ?? 'low'}%, maybe plug in?\`);
+  await sdk.llm.wake(\`Their battery is at \${data?.percent ?? 'low'}%. Tell them to plug in, in your own words.\`);
 }
 
 return { event };

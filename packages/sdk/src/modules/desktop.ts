@@ -4,7 +4,7 @@ export const desktopModule: CapabilityModuleSpec = {
   id: 'desktop',
   version: '1.0.0',
   title: 'Desktop control',
-  summary: 'Launch apps, manage windows and workspaces, set volume, brightness, do-not-disturb and theme.',
+  summary: 'Launch apps, manage windows and workspaces, set volume and brightness.',
   permission: 'pack',
   apiTypeName: 'DesktopApi',
   typings: `/** A window as reported by sdk.desktop.listWindows(). */
@@ -77,21 +77,15 @@ interface DesktopApi {
    * @param level 0..100. Very low values can make the screen unreadable; stay above 10 unless asked.
    */
   setBrightness(level: number): Promise<void>;
-  /** Turn do-not-disturb (notification muting) on or off. */
-  doNotDisturb(on: boolean): Promise<void>;
-  /** Switch the desktop colour scheme. */
-  setTheme(theme: 'dark' | 'light'): Promise<void>;
 }`,
   docs: `Tidy the desktop, set the mood, start things. Requires the \`desktop\` capability; \`launch()\` is limited to the user's launch allowlist when they set one. Availability varies by platform (best on Hyprland); unsupported calls throw \`CAPABILITY_FAILED\`.
 
-- Make changes the user asked for or will obviously welcome (dim lights and DND for a movie, focus their editor when they say "back to work"). Restore what you changed when the moment passes.
-- Volume, brightness, do-not-disturb and theme run the user's commands: when one is missing the call throws CAPABILITY_FAILED naming the command and Settings → Commands — tell the user. \`launch()\` throws PERMISSION_DENIED for an app outside their allowlist (Settings → Integrations).
+- Make changes the user asked for or will obviously welcome (dim the screen for a movie, focus their editor when they say "back to work"). Restore what you changed when the moment passes.
+- Volume and brightness run the user's commands: when one is missing the call throws CAPABILITY_FAILED naming the command and Settings → Commands — tell the user. \`launch()\` throws PERMISSION_DENIED for an app outside their allowlist (Settings → Integrations).
 - \`listWindows()\` first, then match by \`id\` — titles change. Never close windows or touch volume/brightness abruptly (step gently).
 
 \`\`\`ts
-await sdk.desktop.doNotDisturb(true);
 await sdk.desktop.setBrightness(40);
-await sdk.desktop.setTheme("dark");
 await sdk.desktop.focusWindow({ app: "mpv" });
 return { movieMode: true };
 \`\`\``,
@@ -105,7 +99,5 @@ return { movieMode: true };
     setVolume: { description: 'Set output volume.' },
     getVolume: { description: 'Read output volume.' },
     setBrightness: { description: 'Set screen brightness.' },
-    doNotDisturb: { description: 'Toggle do-not-disturb.' },
-    setTheme: { description: 'Switch dark/light theme.' },
   },
 };

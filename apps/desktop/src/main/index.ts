@@ -289,7 +289,7 @@ function watchUnpromptedMessages(services: AppServices, windows: WindowManager, 
   services.engine.events.on('chat', (event) => {
     switch (event.type) {
       case 'message-added':
-        // sdk.chat.say from a behaviour or timer script is complete when added.
+        // sdk.chat.emote from a behaviour or timer script is complete when added.
         if (event.message.role === 'assistant' && event.message.origin === 'behaviour') announce(event.message);
         return;
       case 'message-updated':

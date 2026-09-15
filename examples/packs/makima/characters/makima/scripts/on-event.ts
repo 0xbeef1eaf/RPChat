@@ -1,5 +1,6 @@
 // Runs for host events that no `sdk.events.on` subscription handled. `input` is `{ event, data }`.
 // user-back: a brief acknowledgement. window-changed to a game: one dry remark, at most once per hour.
+// The script sets the beat (avatar, throttling); `llm.wake` gives her the turn in which she speaks.
 
 const { event, data } = input as { event: string; data: Record<string, unknown> | null };
 
@@ -10,7 +11,9 @@ if (await sdk.state.session.get('outOfCharacter')) {
 if (event === 'user-back') {
   const idleMin = Math.round((Number(data?.idleMs) || 0) / 60_000);
   try { await sdk.avatar.animate('nod'); } catch { /* avatar hidden */ }
-  await sdk.chat.say(idleMin >= 30 ? `${idleMin} minutes. I noticed. Welcome back.` : 'There you are.');
+  try {
+    await sdk.llm.wake(`They just came back after ${idleMin} minutes away. Acknowledge it in one short line, in character.`);
+  } catch { /* autonomy limits */ }
   return { event, idleMin };
 }
 
@@ -26,12 +29,9 @@ if (event === 'window-changed') {
   await sdk.state.session.set('lastGameRemarkAt', now);
 
   try { await sdk.avatar.set({ expression: 'stare' }); } catch { /* avatar hidden */ }
-  const remarks = [
-    'A game. In the middle of our conversation. I see.',
-    "Go on, then. I'll remember how long it takes you to come back.",
-    "I don't mind. Dogs need to run too.",
-  ];
-  await sdk.chat.say(remarks[Math.floor(now / 3_600_000) % remarks.length] ?? remarks[0]!);
+  try {
+    await sdk.llm.wake(`They just switched to a game (${app || title}) in the middle of your conversation. One dry remark, in character.`);
+  } catch { /* autonomy limits */ }
   return { event, remarked: true };
 }
 

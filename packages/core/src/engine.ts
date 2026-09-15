@@ -25,7 +25,6 @@ import { TypedEmitter } from './emitter.js';
 import { ChatHandler } from './handlers/chat.js';
 import { LlmHandler } from './handlers/llm.js';
 import { EventsHandler, MoodHandler, RoutineHandler } from './handlers/living.js';
-import { LogHandler } from './handlers/log.js';
 import { HelpHandler } from './handlers/help.js';
 import { LibHandler } from './handlers/lib.js';
 import { MemoryHandler } from './handlers/memory.js';
@@ -184,7 +183,6 @@ export class Engine {
 
     const coreHandlers: CapabilityHandler[] = [
       new ChatHandler(this.sessions, opts.storage.messages, this.events),
-      new LogHandler(logger),
       new HelpHandler(opts.registry, this.permissions),
       new LibHandler(this.library),
       new StateHandler(opts.storage.state),

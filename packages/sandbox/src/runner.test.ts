@@ -8,7 +8,6 @@ const surface: SdkSurface = {
     { id: 'media', methods: ['showImage', 'close'] },
     { id: 'state', methods: ['get', 'set', 'session.get', 'session.set'] },
     { id: 'events', methods: ['on'] },
-    { id: 'log', methods: ['debug', 'info', 'warn', 'error'] },
   ],
 };
 
@@ -106,16 +105,16 @@ describe('QuickJsRunner', () => {
     expect(result.returnValue).toEqual({ hasMedia: 'object', hasSystem: 'undefined', hasHostCall: 'undefined' });
   });
 
-  it('captures console output and sdk.log without host calls', async () => {
+  it('captures console output without host calls', async () => {
     const invoker = makeInvoker();
     const result = await runner.run(
       req(
         `console.log("hello", 42, { a: 1 }, [1, 2], null, undefined);
          console.warn("careful");
          console.error(new Error("boom"));
-         sdk.log.debug("dbg");
-         sdk.log.info("inf", 1);
-         const r = sdk.log.warn("sync");
+         console.debug("dbg");
+         console.info("inf", 1);
+         const r = console.warn("sync");
          return r === undefined;`,
         { invoker },
       ),

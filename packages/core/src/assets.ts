@@ -5,6 +5,8 @@ import { DEFAULT_MEDIA_ROOT, assetKindFor, mimeFor, normalizeRelativePath, resol
 
 /** The shape of `AssetRef` in the SDK preamble (mirrors `AssetEntry`). */
 export interface AssetRef {
+  /** Where `path` is relative to; omitted (i.e. 'pack') for everything the pack itself indexes. */
+  source?: 'pack' | 'home';
   path: string;
   kind: AssetEntry['kind'];
   mime: string;
@@ -152,11 +154,23 @@ export function resolvePackAsset(pack: LoadedPack, input: string): AssetRef {
   });
 }
 
-/** Accepts a path string or an `AssetRef`-like object and returns the validated `AssetRef`. */
+/**
+ * Accepts a path string or an `AssetRef`-like object and returns the validated `AssetRef`.
+ * Only pack assets can be shown or set as wallpaper, so a `source: 'home'` ref (an `sdk.webcam`
+ * capture, say) is rejected by name rather than reported as a pack file that does not exist.
+ */
 export function coerceAssetArg(pack: LoadedPack, arg: unknown): AssetRef {
   if (typeof arg === 'string') return resolvePackAsset(pack, arg);
   if (arg && typeof arg === 'object' && typeof (arg as { path?: unknown }).path === 'string') {
-    return resolvePackAsset(pack, (arg as { path: string }).path);
+    const ref = arg as { path: string; source?: unknown };
+    if (ref.source === 'home') {
+      throw new RpError(
+        'INVALID_ARGUMENT',
+        `"${ref.path}" is a file in the character home, not a pack asset; only pack assets can be shown or set as wallpaper. Use sdk.files.open/read on it instead.`,
+        { path: ref.path, source: 'home' },
+      );
+    }
+    return resolvePackAsset(pack, ref.path);
   }
   throw new RpError('INVALID_ARGUMENT', 'Expected an asset path string or an AssetRef object');
 }

@@ -48,14 +48,20 @@ const GROUPS: TemplateGroup[] = [
   },
   {
     title: 'Desktop',
-    hint: 'sdk.desktop — launching apps, audio, brightness, notifications, theme',
+    hint: 'sdk.desktop — launching apps, audio and brightness',
     templates: [
       { name: 'launch', label: 'Launch app', placeholders: '{app} {args}', help: 'Empty: spawn {app} directly. The launch allowlist (Integrations) limits which apps may be started at all.' },
       { name: 'volumeSet', label: 'Set volume', placeholders: '{level}', help: '0..100.' },
       { name: 'volumeGet', label: 'Get volume', placeholders: '', help: 'Print the current volume 0..100. Without it sdk.desktop.getVolume returns null.' },
       { name: 'brightness', label: 'Brightness', placeholders: '{level}', help: '0..100.' },
-      { name: 'doNotDisturb', label: 'Do not disturb', placeholders: '{on}', help: '{on} is 1 or 0.' },
-      { name: 'theme', label: 'Switch theme', placeholders: '{theme}', help: 'dark or light.' },
+    ],
+  },
+  {
+    title: 'Camera',
+    hint: 'sdk.webcam — every capture also needs the user to confirm it',
+    templates: [
+      { name: 'webcamImage', label: 'Camera photo', placeholders: '{file}', help: 'Take one photo and write it to {file} (jpg). Required for sdk.webcam.takeImage.' },
+      { name: 'webcamVideo', label: 'Camera video', placeholders: '{file} {seconds}', help: 'Record {seconds} of video and write it to {file} (mp4). Required for sdk.webcam.takeVideo.' },
     ],
   },
 ];

@@ -17,7 +17,7 @@ interface HelpApi {
   /**
    * Complete TypeScript typings and the usage guide of one available module.
    * @param id Module id as it appears on sdk, e.g. "media".
-   * @example const ref = await sdk.help.module("media"); sdk.log.info(ref.typings);
+   * @example const ref = await sdk.help.module("media"); console.info(ref.typings);
    */
   module(id: string): Promise<{ id: string; title: string; typings: string; docs: string }>;
 }`,

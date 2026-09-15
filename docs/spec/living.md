@@ -30,12 +30,13 @@ all mirroring `@rp/shared` (add them to the structural-identity test where they 
 | `avatar` | pack | `show(opts?: { expression?; size?; monitor?; position?; x?; y?; layer?; opacity?; clickThrough?; lookAtCursor? }): AvatarStateInfo`; `set(patch: { expression?; size?; lookAtCursor?; opacity?; clickThrough? }): AvatarStateInfo`; `say(text, opts?: { durationMs? }): void` (speech bubble); `animate(name: AvatarAnimation): void`; `moveTo(target: { monitor?; position?; x?; y? }, opts?: { durationMs? }): void`; `hide(): void`; `state(): AvatarStateInfo \| null`; `expressions(): string[]` |
 | `widgets` | pack | `show(spec: { id?; title?; html; width?; height? } & OverlayOptions): WidgetInfo`; `update(id, patch: { html?; title?; postMessage?: Json }): void`; `close(id): void`; `closeAll(): void`; `list(): WidgetInfo[]` — `html` may embed pack images as `{{asset:<path>}}` placeholders, substituted by the host (docs/spec/overlay.md §5; a bad path → INVALID_ARGUMENT) |
 | `voice` | pack | `speak(text, opts?: { rate?: number; voice?: string; wait?: boolean }): void`; `stop(): void`; `listen(opts?: { maxSeconds?: number }): { text: string }` (D) |
-| `desktop` | pack | `launch(app: string, args?: string[]): { pid?: number }` (D; restricted to launchAllowlist when one is set); `listWindows(): Array<{ id; title; app; monitor?; workspace?; focused }>`; `focusWindow(match: { id?; title?; app? }): boolean`; `moveWindow(match, to: { monitor?; x?; y?; width?; height?; workspace? }): boolean`; `workspace(target: string \| number): void`; `currentWorkspace(): { id; name }`; `setVolume(level: number): void`; `getVolume(): number \| null`; `setBrightness(level): void`; `doNotDisturb(on: boolean): void`; `setTheme(theme: 'dark'\|'light'): void` |
+| `desktop` | pack | `launch(app: string, args?: string[]): { pid?: number }` (D; restricted to launchAllowlist when one is set); `listWindows(): Array<{ id; title; app; monitor?; workspace?; focused }>`; `focusWindow(match: { id?; title?; app? }): boolean`; `moveWindow(match, to: { monitor?; x?; y?; width?; height?; workspace? }): boolean`; `workspace(target: string \| number): void`; `currentWorkspace(): { id; name }`; `setVolume(level: number): void`; `getVolume(): number \| null`; `setBrightness(level): void` |
 | `input` (v1.1) | pack | existing lock/unlock/status + `type(text)`, `key(combo)`, `click(x, y, button?)`, `moveMouse(x, y)` (all D; no per-call prompt) |
 | `files` | pack | character home dir: `write(path, text): void`; `append(path, text): void`; `read(path, maxBytes?): string`; `list(prefix?): Array<{ path; bytes; modifiedAt }>`; `delete(path): boolean`; `open(path): void` (open with the default app, D); `homePath(): string` |
 | `mood` | trusted | `get(): MoodState`; `nudge(delta: { mood?: number; energy?: number }, reason: string): MoodState` (deltas clamped ±0.5); `set(state: { mood?; energy?; tags? }, reason: string): MoodState` |
 | `routine` | trusted | `set(entries: RoutineEntry[]): RoutineStatus`; `get(): { entries: RoutineEntry[]; status: RoutineStatus }`; `now(): RoutineStatus`; `override(state: RoutineStateName, opts?: { minutes?: number; label? }): RoutineStatus` |
 | `messaging` | pack | `send(channel: string, text: string): { ok: boolean }` (D); `channels(): Array<{ name; kind }>` |
+| `webcam` | pack | `takeImage(): AssetRef` (D); `takeVideo(seconds: number): AssetRef` (D; 1..60) — both write into the character home under `webcam/` and return a `source: 'home'` ref |
 | `system` (v1.1) | pack | + `clipboardRead(): string` (D) |
 
 `presence` docs must say: prefer the `<senses>` line already in the prompt; call `status()` only for
@@ -212,13 +213,14 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   `movetoworkspace`, `workspace`, `j/activeworkspace`; other platforms: only what templates provide;
   `launch` via template or direct spawn with `preauthorize` = executable name in `launchAllowlist`;
   volume defaults `wpctl set-volume @DEFAULT_AUDIO_SINK@ {level}%` / `wpctl get-volume` (parse), then
-  `pactl`; brightness `brightnessctl set {level}%`; DND `makoctl mode -t do-not-disturb` if on PATH,
-  else `dunstctl set-paused {on}`; theme `gsettings set org.gnome.desktop.interface color-scheme
-  prefer-{theme}`), `input` additions (`type`/`key`/`click`/`moveMouse`, daemon-only since the system
+  `pactl`; brightness `brightnessctl set {level}%`), `input` additions (`type`/`key`/`click`/`moveMouse`, daemon-only since the system
   integration — see `docs/spec/system.md`), `files` (home `<userData>/characters/<encoded
   ref>/home`, path guard like assets, 5 MB per file, 200 files, `open` via `shell.openPath`),
   `messaging` (discord/slack/generic JSON POST, telegram GET/POST `text`, `command` template; 10 s
-  timeout; `channels()` from settings), `system.clipboardRead`. The `media` handler (`MediaManager`,
+  timeout; `channels()` from settings), `webcam` (`webcamImage`/`webcamVideo` templates writing to
+  `{file}` in the character home under `webcam/`; a clip raises the command timeout to
+  `seconds + 30 s`; a command that exits 0 without writing, or writes an empty file, is a
+  CAPABILITY_FAILED and the file is removed), `system.clipboardRead`. The `media` handler (`MediaManager`,
   `emit` dep) raises `media-clicked` from the overlay's `clicked` event and `media-closed` with the
   reason from the overlay's `closed` detail, the page (`click`/`timeout`/`ended`/`error`) or its own
   close (`api`); `ShowImageOptions.closeOnClick` is forwarded to the page.

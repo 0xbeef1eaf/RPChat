@@ -176,8 +176,8 @@ export function defaultTemplates(
   let volumeSet: CommandTemplate = empty;
   let volumeGet: CommandTemplate = empty;
   let brightness: CommandTemplate = empty;
-  let doNotDisturb: CommandTemplate = empty;
-  let theme: CommandTemplate = empty;
+  let webcamImage: CommandTemplate = empty;
+  let webcamVideo: CommandTemplate = empty;
   if (linux) {
     if (hyprland) screenshot = pick(['grim', 'grim -o {monitor} {file}']);
     else screenshot = pick(['grim', 'grim {file}'], ['scrot', 'scrot -o {file}'], ['import', 'import -window root {file}']);
@@ -185,14 +185,19 @@ export function defaultTemplates(
     volumeSet = pick(['wpctl', 'wpctl set-volume @DEFAULT_AUDIO_SINK@ {level}%'], ['pactl', 'pactl set-sink-volume @DEFAULT_SINK@ {level}%']);
     volumeGet = pick(['wpctl', 'wpctl get-volume @DEFAULT_AUDIO_SINK@'], ['pactl', 'pactl get-sink-volume @DEFAULT_SINK@']);
     brightness = pick(['brightnessctl', 'brightnessctl set {level}%']);
-    doNotDisturb = pick(['makoctl', 'makoctl mode -t do-not-disturb'], ['dunstctl', 'dunstctl set-paused {on}']);
-    theme = pick(['gsettings', 'gsettings set org.gnome.desktop.interface color-scheme prefer-{theme}']);
+    // fswebcam warms the sensor up by itself; ffmpeg needs a couple of frames skipped or the shot is black.
+    webcamImage = pick(
+      ['fswebcam', 'fswebcam -r 1280x720 --no-banner -q {file}'],
+      ['ffmpeg', 'ffmpeg -y -loglevel error -f v4l2 -i /dev/video0 -vframes 3 -update 1 {file}'],
+    );
+    webcamVideo = pick(['ffmpeg', 'ffmpeg -y -loglevel error -f v4l2 -i /dev/video0 -t {seconds} {file}']);
   } else if (platform === 'darwin') {
     screenshot = { command: 'screencapture -x {file}' };
     tts = { command: 'say "{text}"' };
     volumeSet = { command: `osascript -e 'set volume output volume {level}'` };
     volumeGet = { command: `osascript -e 'output volume of (get volume settings)'` };
-    theme = { command: `osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to {darkMode}'` };
+    webcamImage = pick(['ffmpeg', 'ffmpeg -y -loglevel error -f avfoundation -i "0" -vframes 3 -update 1 {file}']);
+    webcamVideo = pick(['ffmpeg', 'ffmpeg -y -loglevel error -f avfoundation -i "0" -t {seconds} {file}']);
   } else if (platform === 'win32') {
     tts = {
       command:
@@ -212,8 +217,8 @@ export function defaultTemplates(
     volumeSet,
     volumeGet,
     brightness,
-    doNotDisturb,
-    theme,
+    webcamImage,
+    webcamVideo,
   };
 }
 

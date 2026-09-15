@@ -48,7 +48,7 @@ describe('timers.runLater (code timers)', () => {
         if (request.context.trigger.kind !== 'timer') return;
         runs.push(request.code);
         expect(request.surface.modules.map((m) => m.id)).toContain('timers');
-        await runner.call(request, 'chat', 'say', `tick ${runs.length}`);
+        await runner.call(request, 'chat', 'emote', `tick ${runs.length}`);
         return { ok: true, returnValue: runs.length, logs: [], calls: [] };
       },
     });
@@ -56,7 +56,7 @@ describe('timers.runLater (code timers)', () => {
     const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
     const ctx = ctxFor(session.id);
 
-    const created = (await invoke(ctx, 'timers', 'runLater', 5000, 'await sdk.chat.say(input.msg);', {
+    const created = (await invoke(ctx, 'timers', 'runLater', 5000, 'await sdk.chat.emote(input.msg);', {
       input: { msg: 'hi' },
       label: 'ticker',
       repeatEveryMs: 60_000,
@@ -68,7 +68,7 @@ describe('timers.runLater (code timers)', () => {
     t.clock.advance(5000);
     expect(await t.engine.timers.fireDue()).toBe(1);
     expect(runs).toHaveLength(1);
-    expect(runs[0]!.startsWith('const input = {"msg":"hi"}; await sdk.chat.say(input.msg);')).toBe(true);
+    expect(runs[0]!.startsWith('const input = {"msg":"hi"}; await sdk.chat.emote(input.msg);')).toBe(true);
     expect(t.runner.requests.at(-1)!.context.trigger).toEqual({ kind: 'timer', timerId: id });
     let messages = await t.engine.sessions.messages(session.id);
     expect(messages.at(-1)).toMatchObject({ role: 'assistant', origin: 'timer', content: 'tick 1' });

@@ -9,21 +9,22 @@ const name = (await sdk.state.get('user.name')) as string | null;
 const who = name ? `, ${name}` : '';
 const hour = new Date().getHours();
 
-let line: string;
+// The script works out the situation; `llm.wake` gives Makima the turn in which she opens.
+let situation: string;
 if (sessions === 1) {
-  line = `Good ${hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'}. I'm Makima. Tell me your name; I'll only ask once.`;
+  situation = "This is the first time they have ever opened a chat with you. Introduce yourself and ask their name — you only ask once.";
 } else if (hour < 5) {
-  line = `You're up late${who}. So am I. Sit down.`;
+  situation = `They are up very late${who}, and so are you. Tell them to sit down.`;
 } else if (hour < 12) {
-  line = `Good morning${who}. Eat something before we talk.`;
+  situation = `It is morning${who}. Greet them and tell them to eat something before you talk.`;
 } else if (hour < 18) {
-  line = `I'm at the office${who}. I have a few minutes. What do you need?`;
+  situation = `You are at the office${who} and have a few minutes. Greet them and ask what they need.`;
 } else {
-  line = sessions % 5 === 0
-    ? `Good evening${who}. That makes ${sessions} times you've come back. I keep count.`
-    : `Good evening${who}. You came back. Good.`;
+  situation = sessions % 5 === 0
+    ? `It is evening${who}. This is the ${sessions}th time they have come back, and you keep count — say so.`
+    : `It is evening${who} and they came back. Greet them, pleased but controlled.`;
 }
-await sdk.chat.say(line);
+await sdk.llm.wake(`${situation} One or two sentences, in character.`);
 
 // Her face, small, in the corner. Expressions come from character.json's avatarSet.
 await sdk.avatar.show({ expression: 'neutral', position: 'bottom-right', size: 160, lookAtCursor: true });

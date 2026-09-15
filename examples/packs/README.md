@@ -191,7 +191,7 @@ loader warning.)
 
 | level     | meaning                                                                                  |
 |-----------|------------------------------------------------------------------------------------------|
-| `trusted` | always available (`chat`, `log`, `state`, `pack`, `timers`, …); no effects outside the app; cannot be switched off |
+| `trusted` | always available (`chat`, `state`, `pack`, `timers`, …); no effects outside the app; cannot be switched off |
 | `pack`    | on for every character unless the user switches the module off under Settings → Permissions (`media`, `ui`, `system`, …) |
 | `prompt`  | as `pack`, plus a confirmation dialog on every call (no built-in module uses it)          |
 
@@ -207,7 +207,7 @@ same sandbox and with the same permissions as code the model writes:
 | hook             | when                                                                  | `input`                                         | return value                                   |
 |------------------|-----------------------------------------------------------------------|-------------------------------------------------|------------------------------------------------|
 | `onInstall`      | once, right after the user installed the pack                         | `null`                                          | ignored                                        |
-| `onSessionStart` | when a new chat session starts, before the first model turn           | `null`                                          | ignored (use `sdk.chat.say` to speak)          |
+| `onSessionStart` | when a new chat session starts, before the first model turn           | `null`                                          | ignored (use `sdk.llm.wake` to open)           |
 | `onUserMessage`  | after each user message, before the model turn                        | `{ text }`                                      | `{ skipLlm: true }` to fully script the reply  |
 | `onTimer`        | when a timer scheduled with `sdk.timers.schedule` fires               | `{ timer: { id, payload, label? } }`            | ignored                                        |
 | `onEvent`        | when a host event fires that no `sdk.events.on` subscription handled  | `{ event, data }`                               | ignored                                        |
@@ -293,14 +293,14 @@ Standard modules (v1):
 
 | module   | permission | methods                                                                                          |
 |----------|------------|--------------------------------------------------------------------------------------------------|
-| `chat`   | trusted    | `say(text)`, `emote(text)`, `history(limit)`, `setStatus(text)`                                  |
-| `log`    | trusted    | `debug/info/warn/error(...args)`                                                                 |
+| `chat`   | trusted    | `emote(text)`, `history(limit)`, `setStatus(text)`                                              |
 | `state`  | trusted    | `get/set/delete/keys` (per character, persistent), `session.get/set/delete/keys`                 |
 | `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `tags()`, `readText(path)`, `info()`                       |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `cancel(id)`, `list()`                                      |
 | `lib`    | trusted    | `define(name, fn, opts?)`, `remove(name)`, `list()`, `source(name)` — the function library, files under `lib/` (§8) |
 | `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `close(id)`, `closeAll()`, `list()` |
 | `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`                       |
+| `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — saved under `webcam/` in the character home, returned as a `source: 'home'` AssetRef |
 | `system` | prompt     | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)` |
 
 Every run is limited (wall-clock timeout, CPU budget, memory, number of host

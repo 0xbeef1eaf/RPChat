@@ -53,7 +53,6 @@ export { MemoryHandler, toSdkMemory, MEMORY_LIST_DEFAULT, MEMORY_LIST_MAX } from
 export type { TimerFireHandler } from './services/timers.js';
 
 export { ChatHandler } from './handlers/chat.js';
-export { LogHandler } from './handlers/log.js';
 export { PackHandler } from './handlers/pack.js';
 export { StateHandler, STATE_MAX_KEYS, STATE_MAX_VALUE_BYTES, characterScope, sessionScope } from './handlers/state.js';
 export { TimersHandler, timerInfo, TIMER_MAX_DELAY_MS, TIMER_MIN_DELAY_MS } from './handlers/timers.js';

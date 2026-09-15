@@ -50,12 +50,12 @@ describe('extractFencedActions', () => {
       '```action',
       'const s = `hello ${name}`;',
       'const t = "```";',
-      'await sdk.chat.say(s + t); // ``` inline',
+      'await sdk.chat.emote(s + t); // ``` inline',
       '```',
     ].join('\n');
     const found = extractFencedActions(text);
     expect(found).toHaveLength(1);
-    expect(found[0]!.code).toBe(['const s = `hello ${name}`;', 'const t = "```";', 'await sdk.chat.say(s + t); // ``` inline'].join('\n'));
+    expect(found[0]!.code).toBe(['const s = `hello ${name}`;', 'const t = "```";', 'await sdk.chat.emote(s + t); // ``` inline'].join('\n'));
   });
 
   it('supports longer fences wrapping code that contains a triple-backtick line', () => {

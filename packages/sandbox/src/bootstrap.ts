@@ -12,15 +12,14 @@
  * the isolate: `hostCall` and `log` are captured by closures only, so user code
  * can only reach the host through the methods listed in the surface.
  *
- * `sdk.log.*` (when the `log` module is in the surface) and `console.*` are
- * synchronous and captured locally; they never cross to the host as calls.
+ * `console.*` is synchronous and captured locally; it never crosses to the
+ * host as a call.
  * Dotted method names (`session.get`) are exposed one level deep
  * (`sdk.state.session.get`).
  */
 export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log) {
   'use strict';
   var surface = JSON.parse(surfaceJson);
-  var LEVELS = ['debug', 'info', 'warn', 'error'];
 
   function formatArg(a) {
     if (typeof a === 'string') return a;
@@ -87,7 +86,7 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
     var target = {};
     for (var n = 0; n < mod.methods.length; n++) {
       var name = mod.methods[n];
-      var fn = mod.id === 'log' ? logger(LEVELS.indexOf(name) >= 0 ? name : 'info') : makeMethod(mod.id, name);
+      var fn = makeMethod(mod.id, name);
       var dot = name.indexOf('.');
       if (dot === -1) {
         target[name] = fn;

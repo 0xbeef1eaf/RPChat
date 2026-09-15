@@ -22,7 +22,7 @@ interface PresenceApi {
   status(): Promise<PresenceSnapshot>;
   /**
    * What the user's media player is playing, or null when nothing is known.
-   * @example const np = await sdk.presence.nowPlaying(); if (np?.status === "playing") await sdk.chat.say("Good song.");
+   * @example const np = await sdk.presence.nowPlaying(); return np?.status === "playing" ? { track: np.title } : {};
    */
   nowPlaying(): Promise<NowPlaying | null>;
   /**

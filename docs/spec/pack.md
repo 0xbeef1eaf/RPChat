@@ -60,7 +60,7 @@ image: png jpg jpeg gif webp avif svg bmp — video: mp4 webm mkv mov m4v — au
 
 ## Example packs (create under `examples/packs/`)
 
-1. `examples/packs/luna/` — companion character "Luna" with persona.md, avatar (generate a small PNG programmatically in a script or commit a tiny 1×1/16×16 PNG), 2 images and 1 short generated WAV (write a tiny sine-wave WAV file with a script; keep < 100 KB), behaviours `on-session-start.ts` (calls `sdk.chat.say` with a time-aware greeting and `sdk.state.set('sessions', n+1)`), and `on-timer.ts`. Uses `media` and `ui` (no declaration needed: permissions are app-wide).
+1. `examples/packs/luna/` — companion character "Luna" with persona.md, avatar (generate a small PNG programmatically in a script or commit a tiny 1×1/16×16 PNG), 2 images and 1 short generated WAV (write a tiny sine-wave WAV file with a script; keep < 100 KB), behaviours `on-session-start.ts` (calls `sdk.llm.wake` with a time-aware greeting brief and `sdk.state.set('sessions', n+1)`), and `on-timer.ts`. Uses `media` and `ui` (no declaration needed: permissions are app-wide).
 2. `examples/packs/minimal/` — one character, no media, no behaviours. Used by tests as the smallest valid pack.
 
 Also add `examples/packs/README.md` documenting the format for pack authors (copy §8 of ARCHITECTURE.md and expand with the behaviour hooks and a full SDK usage example).

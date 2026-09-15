@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createStandardRegistry, validateModuleSpec, modules } from './index.js';
 
 const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
-  chat: { permission: 'trusted', methods: ['say', 'emote', 'history', 'setStatus'] },
-  log: { permission: 'trusted', methods: ['debug', 'info', 'warn', 'error'] },
+  chat: { permission: 'trusted', methods: ['emote', 'history', 'setStatus'] },
   help: { permission: 'trusted', methods: ['modules', 'module'] },
   lib: { permission: 'trusted', methods: ['define', 'remove', 'list', 'source'] },
   state: {
@@ -37,12 +36,13 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   voice: { permission: 'pack', methods: ['speak', 'stop', 'listen'] },
   desktop: {
     permission: 'pack',
-    methods: ['launch', 'listWindows', 'focusWindow', 'moveWindow', 'workspace', 'currentWorkspace', 'setVolume', 'getVolume', 'setBrightness', 'doNotDisturb', 'setTheme'],
+    methods: ['launch', 'listWindows', 'focusWindow', 'moveWindow', 'workspace', 'currentWorkspace', 'setVolume', 'getVolume', 'setBrightness'],
   },
   files: { permission: 'pack', methods: ['write', 'append', 'read', 'list', 'delete', 'open', 'homePath'] },
   mood: { permission: 'trusted', methods: ['get', 'nudge', 'set'] },
   routine: { permission: 'trusted', methods: ['set', 'get', 'now', 'override'] },
   messaging: { permission: 'pack', methods: ['send', 'channels'] },
+  webcam: { permission: 'pack', methods: ['takeImage', 'takeVideo'] },
   system: { permission: 'pack', methods: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead'] },
 };
 
@@ -57,6 +57,7 @@ const OVERRIDES: Record<string, { prompt?: string[]; dangerous?: string[] }> = {
   files: { dangerous: ['open'] },
   messaging: { dangerous: ['send'] },
   input: { dangerous: ['lock', 'unlock', 'type', 'key', 'click', 'moveMouse'] },
+  webcam: { dangerous: ['takeImage', 'takeVideo'] },
   system: { dangerous: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead'] },
 };
 
@@ -73,7 +74,6 @@ describe('standard modules', () => {
     expect(ids0).toEqual(Object.keys(EXPECTED));
     expect(modules.standardModules.map((m) => m.id)).toEqual(Object.keys(EXPECTED));
     expect(modules.chatModule.id).toBe('chat');
-    expect(modules.logModule.id).toBe('log');
     expect(modules.libModule.id).toBe('lib');
     expect(ids0.indexOf('lib')).toBe(ids0.indexOf('help') + 1);
     expect(modules.stateModule.id).toBe('state');
@@ -83,7 +83,7 @@ describe('standard modules', () => {
     expect(modules.mediaModule.id).toBe('media');
     expect(modules.uiModule.id).toBe('ui');
     expect(modules.systemModule.id).toBe('system');
-    for (const id of ['presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging']) {
+    for (const id of ['presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging', 'webcam']) {
       const exported = (modules as Record<string, unknown>)[`${id}Module`] as { id: string } | undefined;
       expect(exported?.id, id).toBe(id);
     }
@@ -91,7 +91,7 @@ describe('standard modules', () => {
     const ids = r.list().map((m) => m.id);
     expect(ids.at(-1)).toBe('system');
     expect(ids.indexOf('presence')).toBe(ids.indexOf('input') + 1);
-    expect(ids.slice(ids.indexOf('presence'), -1)).toEqual(['presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging']);
+    expect(ids.slice(ids.indexOf('presence'), -1)).toEqual(['presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging', 'webcam']);
   });
 
   it('expose exactly the methods and permissions from the spec', () => {

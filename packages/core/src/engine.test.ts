@@ -103,9 +103,9 @@ describe('SessionService', () => {
         expect(request.code.startsWith('const input = null; ')).toBe(true);
         expect(request.code).toContain("sdk.state.set('sessions'");
         const surface = request.surface.modules.map((m) => m.id);
-        expect(surface).toEqual(expect.arrayContaining(['chat', 'log', 'state', 'pack', 'timers']));
+        expect(surface).toEqual(expect.arrayContaining(['chat', 'state', 'pack', 'timers']));
         expect(surface).toEqual(expect.arrayContaining(['media', 'ui', 'system'])); // every module is on unless switched off under Settings → Permissions
-        await runner.call(request, 'chat', 'say', 'Hey. I am Luna.');
+        await runner.call(request, 'chat', 'emote', 'Hey. I am Luna.');
         await runner.call(request, 'state', 'set', 'sessions', 1);
         return { sessions: 1 };
       },
@@ -126,7 +126,7 @@ describe('SessionService', () => {
 
     const audit = await t.engine.audit.list({ sessionId: session.id });
     expect(audit.map((a) => [a.module, a.method, a.outcome])).toEqual([
-      ['chat', 'say', 'allowed'],
+      ['chat', 'emote', 'allowed'],
       ['state', 'set', 'allowed'],
     ]);
   });
@@ -288,11 +288,11 @@ describe('ChatService turns', () => {
     await t.engine.packs.install(LUNA_DIR);
     // give Luna an onUserMessage behaviour by patching the loaded pack in memory
     const pack = t.engine.packs.getLoaded(LUNA_ID);
-    pack.characters[0]!.behaviourSources.onUserMessage = 'await sdk.chat.say("scripted: " + input.text); return { skipLlm: true };';
+    pack.characters[0]!.behaviourSources.onUserMessage = 'await sdk.chat.emote("scripted: " + input.text); return { skipLlm: true };';
     t.runner.setHandler(async (request, runner) => {
       if (request.context.trigger.kind === 'behaviour' && request.context.trigger.hook === 'onUserMessage') {
         expect(request.code.startsWith('const input = {"text":"ping"}; ')).toBe(true);
-        await runner.call(request, 'chat', 'say', 'scripted: ping');
+        await runner.call(request, 'chat', 'emote', 'scripted: ping');
         return { skipLlm: true };
       }
       return undefined;
@@ -623,7 +623,7 @@ describe('timers', () => {
         }
         if (trig.kind === 'timer') {
           runs.push(request.code);
-          await runner.call(request, 'chat', 'say', 'Stretch!');
+          await runner.call(request, 'chat', 'emote', 'Stretch!');
           await runner.call(request, 'timers', 'schedule', 120_000, { reason: 'stretch' }, { label: 'Stretch break' });
           return;
         }

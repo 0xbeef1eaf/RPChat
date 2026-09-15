@@ -98,6 +98,20 @@ describe('CapabilityDispatcher', () => {
     expect(audit[0]!.args).toEqual(['media/images/luna-wave.png', { monitor: 'primary' }]);
   });
 
+  it('refuses a character-home ref (an sdk.webcam capture) where a pack asset is expected', async () => {
+    const luna = await loadPack(LUNA_DIR);
+    const packs = { tryGetLoaded: (id: string) => (id === LUNA_ID ? luna : undefined) };
+    const calls: Json[][] = [];
+    const { dispatcher } = setup('allow', { moduleId: 'media', invoke: async (_m, args) => { calls.push(args); return null; } }, packs);
+    const ctx = { ...context, packId: LUNA_ID, packRoot: luna.root };
+    const shot = { source: 'home', path: 'webcam/2026-09-15T12-30-00-123Z-abcdef01.jpg', kind: 'image', mime: 'image/jpeg', bytes: 10 };
+
+    const result = await dispatcher.invoke({ callId: '1', module: 'media', method: 'showImage', args: [shot as unknown as Json], context: ctx });
+    // Named for what it is, rather than reported as a pack file that does not exist.
+    expect(result).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining('not a pack asset') } });
+    expect(calls).toEqual([]);
+  });
+
   it('unwraps MediaHandle objects to ids for media.update and media.close, passing the changes through', async () => {
     const calls: Array<[string, Json[]]> = [];
     const { dispatcher } = setup('allow', { moduleId: 'media', invoke: async (m, args) => { calls.push([m, args]); return null; } });

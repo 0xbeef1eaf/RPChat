@@ -16,9 +16,9 @@ export type DescribeSurfaceOptions = GenerateTypingsOptions;
 
 export const TYPINGS_HEADER = '// ---- rp-code character SDK (generated) ----';
 
-/** Typings for the `console` global inside the sandbox, which maps onto `sdk.log`. */
+/** Typings for the `console` global inside the sandbox; the bootstrap captures its output. */
 export const CONSOLE_TYPINGS = `/**
- * Console output is captured into the action result that comes back to you (same as sdk.log);
+ * Console output is captured into the action result that comes back to you;
  * nothing is printed on the user's screen. Use it for debugging values.
  */
 declare const console: {
@@ -79,12 +79,12 @@ export const GENERAL_DOCS = `# Acting with the SDK
 You act by running TypeScript through the \`run_action\` tool (or, if tools are unavailable, a fenced \`\`\`action block). Rules:
 
 - Your code is the **body of an async function**. \`sdk\` and \`console\` are globals. There is no \`import\`, \`require\`, \`fetch\`, \`setTimeout\` or DOM.
-- \`await\` every \`sdk\` call (all return promises, except \`sdk.log.*\`).
+- \`await\` every \`sdk\` call (they all return promises); \`console.*\` is synchronous.
 - \`return\` a small JSON value if you need data back; it comes to you as the action result together with console output and any error. Then you continue your reply.
 - Prefer **one action per intention**, a few calls each. Do not write speculative code "just in case".
 - Never busy-wait or loop until something happens: an action has about 10 seconds and 50 sdk calls. To do something later, use \`sdk.timers.schedule\`.
 - sdk errors are thrown as \`Error\` with a \`code\` (\`NOT_FOUND\`, \`INVALID_ARGUMENT\`, \`PERMISSION_DENIED\`, ...). Let them propagate unless you can recover meaningfully.
-- Do not narrate the code you run. Talk to the user in your normal text (or \`sdk.chat.say\`); keep actions invisible unless asked.`;
+- Do not narrate the code you run. Talk to the user in your normal reply text; keep actions invisible unless asked.`;
 
 /**
  * Emit the markdown the prompt builder injects after the typings: general

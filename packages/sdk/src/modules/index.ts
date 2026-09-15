@@ -1,6 +1,5 @@
 import type { CapabilityModuleSpec } from '@rp/shared';
 import { chatModule } from './chat.js';
-import { logModule } from './log.js';
 import { helpModule } from './help.js';
 import { libModule } from './lib.js';
 import { stateModule } from './state.js';
@@ -28,19 +27,19 @@ import { filesModule } from './files.js';
 import { moodModule } from './mood.js';
 import { routineModule } from './routine.js';
 import { messagingModule } from './messaging.js';
+import { webcamModule } from './webcam.js';
 
 export {
-  chatModule, logModule, helpModule, libModule, stateModule, packModule, timersModule, llmModule, memoryModule, displayModule,
+  chatModule, helpModule, libModule, stateModule, packModule, timersModule, llmModule, memoryModule, displayModule,
   mediaModule, uiModule, wallpaperModule, browserModule, inputModule,
   presenceModule, screenModule, calendarModule, webModule, eventsModule, avatarModule, widgetsModule,
-  voiceModule, desktopModule, filesModule, moodModule, routineModule, messagingModule,
+  voiceModule, desktopModule, filesModule, moodModule, routineModule, messagingModule, webcamModule,
   systemModule,
 };
 
 /** All standard modules in their canonical (prompt) order: v1 modules, then the phase-2 "living" modules, `system` last. */
 export const standardModules: readonly CapabilityModuleSpec[] = [
   chatModule,
-  logModule,
   helpModule,
   libModule,
   stateModule,
@@ -67,5 +66,6 @@ export const standardModules: readonly CapabilityModuleSpec[] = [
   moodModule,
   routineModule,
   messagingModule,
+  webcamModule,
   systemModule,
 ];

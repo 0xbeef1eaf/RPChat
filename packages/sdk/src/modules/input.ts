@@ -65,7 +65,7 @@ interface InputApi {
 - Needs the rp-code system integration daemon (Settings → System → Install). Without it every call fails with CAPABILITY_FAILED ("Input control needs the rp-code system integration…"); tell the user rather than retrying.
 
 \`\`\`ts
-await sdk.chat.say("Close your eyes. Ten seconds.");
+await sdk.chat.emote("reaches over and covers their hands");
 const { until } = await sdk.input.lock(10_000, { reason: "surprise" });
 return { until };
 \`\`\``,

@@ -5,13 +5,19 @@ import type { Logger } from '@rp/core';
 import type { CommandResult } from '../commands.js';
 import { commandFailed, defaultTemplates, effectiveTemplate, isConfigured, notConfigured, runTemplate, templateLocation } from '../commands.js';
 
+/** Per-call overrides for a template run; `timeoutMs` outranks the template's own and the 30 s default. */
+export interface RunOpts {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
 export interface CommandRunnerDeps {
   settings(): Promise<AppSettings>;
   logger: Logger;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   /** Injectable for tests. */
-  run?: (tpl: CommandTemplate, vars: Record<string, string>, opts?: { signal?: AbortSignal }) => Promise<CommandResult>;
+  run?: (tpl: CommandTemplate, vars: Record<string, string>, opts?: RunOpts) => Promise<CommandResult>;
 }
 
 /**
@@ -78,10 +84,10 @@ export class CommandRunner {
    * Like `run` but throws `commandFailed` when the process exits non-zero, so callers that only
    * care about success do not repeat the exit-code check.
    */
-  async runChecked(name: keyof CommandTemplates, vars: Record<string, string>): Promise<CommandResult> {
+  async runChecked(name: keyof CommandTemplates, vars: Record<string, string>, opts: RunOpts = {}): Promise<CommandResult> {
     const tpl = await this.resolve(name);
     if (!isConfigured(tpl)) throw notConfigured(name);
-    const result = await this.runTemplate(tpl, vars, name);
+    const result = await this.runTemplate(tpl, vars, name, opts);
     if (result.code !== 0) throw commandFailed(name, tpl, result);
     return result;
   }
@@ -97,11 +103,18 @@ export class CommandRunner {
     }
   }
 
-  async runTemplate(tpl: CommandTemplate, vars: Record<string, string>, label: string, opts: { signal?: AbortSignal } = {}): Promise<CommandResult> {
+  async runTemplate(tpl: CommandTemplate, vars: Record<string, string>, label: string, opts: RunOpts = {}): Promise<CommandResult> {
     const started = Date.now();
     let result: CommandResult;
     try {
-      result = await (this.deps.run ?? ((t, v, o) => runTemplate(t, v, { platform: this.platform, env: this.env, ...(o?.signal ? { signal: o.signal } : {}) })))(tpl, vars, opts);
+      result = await (this.deps.run ??
+        ((t, v, o) =>
+          runTemplate(t, v, {
+            platform: this.platform,
+            env: this.env,
+            ...(o?.signal ? { signal: o.signal } : {}),
+            ...(o?.timeoutMs !== undefined ? { timeoutMs: o.timeoutMs } : {}),
+          })))(tpl, vars, opts);
     } catch (err) {
       this.deps.logger.warn(`[commands] ${label}: "${tpl.command}" could not start: ${(err as Error).message}`);
       throw describeSpawnFailure(err, label.split(' ')[0] ?? label);

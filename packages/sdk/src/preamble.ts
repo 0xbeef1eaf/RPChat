@@ -11,11 +11,15 @@ export const SDK_PREAMBLE_TYPINGS = `/** Any JSON-serialisable value. Everything
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 /**
- * A file inside the current pack, as returned by sdk.pack.asset() / sdk.pack.listAssets().
- * Pass it (or just its path string) to the media functions.
+ * A file the character can name: a pack asset from sdk.pack.asset() / sdk.pack.listAssets()
+ * (source 'pack'), or a file in the character's own home folder, e.g. an sdk.webcam capture
+ * (source 'home'). Only pack assets can be passed to sdk.media.* and sdk.wallpaper.set;
+ * home files are reached through sdk.files.*.
  */
 interface AssetRef {
-  /** Path relative to the pack root, forward slashes, e.g. "media/images/smile.png". */
+  /** Where the path below is relative to. Absent means 'pack'. */
+  readonly source?: 'pack' | 'home';
+  /** Path relative to the pack root (or to the character home for source 'home'), forward slashes. */
   readonly path: string;
   /** Detected from the file extension. */
   readonly kind: 'image' | 'video' | 'audio' | 'text' | 'other';

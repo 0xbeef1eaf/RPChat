@@ -43,7 +43,7 @@ interface Sdk {
   media: MediaApi;
   ...
 }
-declare const console: { log(...a: unknown[]): void; ... };   // maps to sdk.log
+declare const console: { log(...a: unknown[]): void; ... };   // captured into the action result
 declare const lib: { [name: string]: (...args: any[]) => any };  // the character's function library (LIB_TYPINGS); defined at run time by CodeRunRequest.prelude
 <each module's typings verbatim, separated by a `// ---- module: <id> vX.Y.Z ----` banner>
 ```

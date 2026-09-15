@@ -79,10 +79,10 @@ export interface CommandTemplates {
   volumeGet: CommandTemplate;
   /** Set screen brightness 0..100: `{level}`. */
   brightness: CommandTemplate;
-  /** Do-not-disturb on/off: `{on}` (1/0). */
-  doNotDisturb: CommandTemplate;
-  /** Switch theme: `{theme}` (dark/light). */
-  theme: CommandTemplate;
+  /** Take one photo from the camera and write it to `{file}` (jpg). */
+  webcamImage: CommandTemplate;
+  /** Record `{seconds}` of camera video and write it to `{file}` (mp4). */
+  webcamVideo: CommandTemplate;
 }
 
 /** What a command template is for: which SDK methods run it and how the platform default is chosen. */
@@ -112,8 +112,8 @@ export const COMMAND_TEMPLATE_INFO: Record<keyof CommandTemplates, CommandTempla
   volumeSet: { label: 'Set volume', usedBy: 'sdk.desktop.setVolume', defaults: 'wpctl or pactl on Linux, osascript on macOS' },
   volumeGet: { label: 'Get volume', usedBy: 'sdk.desktop.getVolume', defaults: 'wpctl or pactl on Linux, osascript on macOS' },
   brightness: { label: 'Brightness', usedBy: 'sdk.desktop.setBrightness', defaults: 'brightnessctl on Linux' },
-  doNotDisturb: { label: 'Do not disturb', usedBy: 'sdk.desktop.doNotDisturb', defaults: 'makoctl or dunstctl on Linux' },
-  theme: { label: 'Switch theme', usedBy: 'sdk.desktop.setTheme', defaults: 'gsettings on Linux, osascript on macOS' },
+  webcamImage: { label: 'Camera photo', usedBy: 'sdk.webcam.takeImage', defaults: 'fswebcam, else ffmpeg with v4l2, on Linux; ffmpeg with avfoundation on macOS' },
+  webcamVideo: { label: 'Camera video', usedBy: 'sdk.webcam.takeVideo', defaults: 'ffmpeg with v4l2 on Linux, ffmpeg with avfoundation on macOS' },
 };
 
 /**
@@ -283,8 +283,8 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
     volumeSet: { command: '' },
     volumeGet: { command: '' },
     brightness: { command: '' },
-    doNotDisturb: { command: '' },
-    theme: { command: '' },
+    webcamImage: { command: '' },
+    webcamVideo: { command: '' },
   },
   voice: { defaultModel: '', numThreads: 4, disabled: false },
   senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [], liveSnapshotAutoRefresh: false },

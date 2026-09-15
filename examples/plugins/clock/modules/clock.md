@@ -9,7 +9,7 @@ Precise time and countdowns. Always available (trusted); no prompt is shown.
 
 ```ts
 await sdk.events.on("custom:countdown", async (input) => {
-  await sdk.chat.say(`Time! Your ${input.data.label} is done.`);
+  await sdk.llm.wake(`The countdown "${input.data.label}" you set just finished. Tell them so.`);
 }, { once: true, label: "tea timer" });
 const { endsAt } = await sdk.clock.countdown(240, "tea");
 return { endsAt };

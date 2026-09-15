@@ -37,7 +37,7 @@ interface TimersApi {
    * @returns The created timer.
    * @example await sdk.timers.runLater(10 * 60 * 1000, async () => {
    *   await sdk.media.closeAll();
-   *   await sdk.chat.say("Break is over!");
+   *   await sdk.llm.wake("Their break is over. Tell them so.");
    * }, { label: "end break" });
    * @example await sdk.timers.runLater(60_000, async (input) => {
    *   await sdk.media.showImage(String(input.pic), { durationMs: 3000, layer: "background", opacity: 0.4 });

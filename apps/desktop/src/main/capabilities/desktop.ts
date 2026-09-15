@@ -166,14 +166,6 @@ export class DesktopHandler implements CapabilityHandler {
       case 'setBrightness':
         await this.deps.commands.runChecked('brightness', { level: String(clampLevel(args[0])) });
         return;
-      case 'doNotDisturb':
-        await this.deps.commands.runChecked('doNotDisturb', { on: args[0] === true ? '1' : '0', onWord: args[0] === true ? 'true' : 'false' });
-        return;
-      case 'setTheme': {
-        if (args[0] !== 'dark' && args[0] !== 'light') throw new RpError('INVALID_ARGUMENT', "theme must be 'dark' or 'light'");
-        await this.deps.commands.runChecked('theme', { theme: args[0], darkMode: args[0] === 'dark' ? 'true' : 'false' });
-        return;
-      }
       default:
         throw new RpError('CAPABILITY_UNKNOWN', `Unknown method sdk.desktop.${method}`);
     }

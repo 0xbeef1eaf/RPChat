@@ -19,6 +19,7 @@ import { BrowserHandler } from './capabilities/browser.js';
 import { CalendarHandler } from './capabilities/calendar.js';
 import { DesktopHandler } from './capabilities/desktop.js';
 import { FilesHandler } from './capabilities/files.js';
+import { WebcamHandler } from './capabilities/webcam.js';
 import { MessagingHandler } from './capabilities/messaging.js';
 import { PresenceHandler } from './capabilities/presence.js';
 import { ScreenHandler } from './capabilities/screen.js';
@@ -327,6 +328,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   });
   const desktop = new DesktopHandler({ commands, ...(hypr ? { hypr } : {}), launchAllowlist: async () => (await settingsOf()).desktop.launchAllowlist, logger });
   const files = new FilesHandler({ userData: opts.userData, openPath: (p) => shell.openPath(p) });
+  const webcam = new WebcamHandler({ commands, userData: opts.userData });
   const messaging = new MessagingHandler({ channels: async () => (await settingsOf()).messaging.channels, runCommand: (tpl, vars, label) => commands.runTemplate(tpl, vars, label) });
   const web = new WebHandler({ settings: async () => (await settingsOf()).web });
   const calendar = new CalendarHandler({ sources: async () => (await settingsOf()).senses.calendarSources, logger });
@@ -401,6 +403,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       desktop,
       files,
       messaging,
+      webcam,
     ],
     permissionPrompter,
     appVersion: opts.appVersion,

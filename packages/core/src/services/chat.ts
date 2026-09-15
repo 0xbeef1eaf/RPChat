@@ -503,7 +503,7 @@ export class ChatService {
 
 /**
  * The messages the last turn produced: the run of assistant messages at the end of the
- * transcript (a turn can add several — `sdk.chat.say`, an emote, then the reply). Everything
+ * transcript (a turn can add several — an `sdk.chat.emote`, then the reply). Everything
  * before them is the turn's input and stays.
  */
 export function trailingReply(transcript: ChatMessage[]): ChatMessage[] {

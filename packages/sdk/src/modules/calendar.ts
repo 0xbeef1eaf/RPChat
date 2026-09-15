@@ -15,7 +15,7 @@ interface CalendarApi {
   /**
    * Events starting within the next N hours, soonest first.
    * @param hours Window length in hours. Default 24, maximum 336 (14 days).
-   * @example const next = (await sdk.calendar.upcoming(6))[0]; if (next) await sdk.chat.say("You have " + next.title + " soon.");
+   * @example const next = (await sdk.calendar.upcoming(6))[0]; return next ? { next: next.title, at: next.start } : {};
    */
   upcoming(hours?: number): Promise<CalendarEvent[]>;
   /** Every event of the current local day (including all-day events), soonest first. */

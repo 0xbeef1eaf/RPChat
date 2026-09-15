@@ -231,7 +231,7 @@ describe('EditorService scripts (lib/<name>.ts)', () => {
     const s = svc();
     expect(await s.checkScript('async (mood: string) => mood', 'function')).toEqual([]);
     expect(await s.checkScript('  ', 'function')).toEqual([]);
-    const [call] = await s.checkScript('sdk.chat.say("hi")', 'function');
+    const [call] = await s.checkScript('sdk.chat.emote("hi")', 'function');
     expect(call?.message).toMatch(/function expression/);
     expect(call?.line).toBeUndefined();
     const [broken] = await s.checkScript('async (a: string) => {\n  return a +;\n}', 'function');
@@ -277,7 +277,7 @@ describe('EditorService.checkScript', () => {
 
   it('is quiet for a script that compiles, and for an empty one', async () => {
     const s = svc();
-    expect(await s.checkScript('await sdk.events.on("window-changed", async (input) => { await sdk.log.info(String(input.data)); }, {});')).toEqual([]);
+    expect(await s.checkScript('await sdk.events.on("window-changed", async (input) => { console.info(String(input.data)); }, {});')).toEqual([]);
     expect(await s.checkScript('   ')).toEqual([]);
     expect(await s.checkScript(undefined as unknown as string)).toEqual([]);
   });

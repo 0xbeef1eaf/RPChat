@@ -17,12 +17,10 @@ await sdk.state.set('taskChecks', asked + 1);
 if (payload.reason === 'task-check' && payload.task) {
   await sdk.media.playAudio('media/audio/attention.wav', { volume: 0.5 });
   try { await sdk.avatar.set({ expression: 'stare' }); } catch { /* avatar hidden */ }
-  const lines = [
-    `I asked you to ${payload.task}. Is it done?`,
-    `The ${payload.task}. You said you would. Tell me where it stands.`,
-    `It's time. ${payload.task}: yes or not yet?`,
-  ];
-  await sdk.chat.say(lines[asked % lines.length] ?? lines[0]!);
+  await sdk.llm.wake(
+    `The check-in timer for the task you set them — "${payload.task}" — just fired (check number ${asked + 1}). ` +
+      `Ask whether it is done. One line, in character.`,
+  );
   // If they're away, make sure they see it when they come back.
   try {
     const p = await sdk.presence.status();
@@ -32,5 +30,9 @@ if (payload.reason === 'task-check' && payload.task) {
 }
 
 await sdk.media.playAudio('media/audio/click.wav', { volume: 0.4 });
-await sdk.chat.say(payload.reason ? `A reminder: ${payload.reason}.` : `You asked me to remind you. Consider yourself reminded.`);
+await sdk.llm.wake(
+  payload.reason
+    ? `A reminder you set for them just fired: ${payload.reason}. Deliver it in one line, in character.`
+    : `A reminder they asked you for just fired, with no stated reason. Remind them anyway, in one dry line.`,
+);
 return { reminded: timer.id };

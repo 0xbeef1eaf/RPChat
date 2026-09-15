@@ -55,7 +55,7 @@ export interface RegisterIpcOptions {
 }
 
 const COMMAND_NAMES: ReadonlySet<string> = new Set<keyof CommandTemplates>([
-  'wallpaper', 'browser', 'activeWindow', 'nowPlaying', 'screenshot', 'tts', 'stt', 'launch', 'volumeSet', 'volumeGet', 'brightness', 'doNotDisturb', 'theme',
+  'wallpaper', 'browser', 'activeWindow', 'nowPlaying', 'screenshot', 'tts', 'stt', 'launch', 'volumeSet', 'volumeGet', 'brightness', 'webcamImage', 'webcamVideo',
 ]);
 
 function requireString(v: unknown, what: string): string {

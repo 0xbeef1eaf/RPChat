@@ -159,7 +159,7 @@ class FakeHost {
       case 'widgets.closeAll':
       case 'widgets.list':
         return this.widgets.invoke(method, args, context);
-      case 'chat.say':
+      case 'chat.emote':
       case 'avatar.set':
       case 'wallpaper.set':
       case 'llm.wake':
@@ -240,7 +240,7 @@ const widgetMessage = (host: FakeHost, widgetId: string, message: Json) => fire(
 const game = (host: FakeHost) => host.session.get('game') as Record<string, Json> | undefined;
 const recorded = (host: FakeHost) => (host.session.get('recorded') as Array<Record<string, Json>> | undefined) ?? [];
 const labels = (host: FakeHost) => host.subs.map((s) => s.label).sort();
-const punishCalls = (host: FakeHost) => host.calls.filter((c) => c === 'chat.say' || c === 'llm.wake' || c === 'wallpaper.set' || c === 'avatar.set');
+const punishCalls = (host: FakeHost) => host.calls.filter((c) => c === 'chat.emote' || c === 'llm.wake' || c === 'wallpaper.set' || c === 'avatar.set');
 
 describe('Makima mini games (real sandbox)', () => {
   it('memoryGame: shows card faces as pack images; every wrong pair calls the loss function, running out reshuffles, matching all wins', async () => {
@@ -256,18 +256,18 @@ describe('Makima mini games (real sandbox)', () => {
     expect(labels(host)).toEqual(['game:memory']);
     expect(game(host)).toMatchObject({ game: 'memory', starter: 'memoryGame', onLose: 'punish', onWin: 'record', attempt: 1, mistakes: 0, widgetId: 'game-memory' });
 
-    // a wrong pair: the loss function runs (Makima speaks, changes expression and wallpaper, wakes), the game goes on
+    // a wrong pair: the loss function runs (Makima changes expression and wallpaper, then wakes to react), the game goes on
     const before = punishCalls(host).length;
     await widgetMessage(host, 'game-memory', { event: 'mistake', mistakes: 1, moves: 3, over: false });
-    expect(punishCalls(host).length - before).toBe(4);
-    expect(host.calls.filter((c) => c === 'chat.say')).toHaveLength(1);
+    expect(punishCalls(host).length - before).toBe(3);
+    expect(host.calls.filter((c) => c === 'llm.wake')).toHaveLength(1);
     expect(game(host)).toMatchObject({ attempt: 1, mistakes: 1 });
     expect(host.widgetHandles[0]!.closed).toBe(false);
     expect(host.widgetHtml()).toHaveLength(1); // no reshuffle for a plain mistake
 
     // one wrong pair too many: loss function again, then a fresh deck on attempt 2 with the same subscription
     await widgetMessage(host, 'game-memory', { event: 'mistake', mistakes: 2, moves: 5, over: true });
-    expect(host.calls.filter((c) => c === 'chat.say')).toHaveLength(2);
+    expect(host.calls.filter((c) => c === 'llm.wake')).toHaveLength(2);
     expect(game(host)).toMatchObject({ game: 'memory', attempt: 2, mistakes: 2, maxMistakes: 1 });
     expect(host.widgetHtml()).toHaveLength(2);
     expect(host.widgetHandles[0]!.sent.at(-1)).toMatchObject({ type: 'widget-update', title: 'Memory — attempt 2' });
@@ -275,7 +275,7 @@ describe('Makima mini games (real sandbox)', () => {
     // the timer running out does the same
     await widgetMessage(host, 'game-memory', { event: 'lost', reason: 'timeout', mistakes: 0, moves: 1 });
     expect(game(host)).toMatchObject({ attempt: 3, mistakes: 3 });
-    expect(host.calls.filter((c) => c === 'chat.say')).toHaveLength(3);
+    expect(host.calls.filter((c) => c === 'llm.wake')).toHaveLength(3);
     expect(host.widgetHandles).toHaveLength(1);
 
     // winning ends it: onWin gets the report, widget closed, subscriptions and state gone

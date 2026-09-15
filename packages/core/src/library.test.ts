@@ -67,7 +67,7 @@ describe('LibraryService helpers', () => {
     expect(functionSourceProblem('x => x')).toBeUndefined();
     expect(functionSourceProblem('')).toMatch(/function/);
     expect(functionSourceProblem('1 + 2')).toMatch(/function expression/);
-    expect(functionSourceProblem('sdk.chat.say("hi")')).toMatch(/function expression/);
+    expect(functionSourceProblem('sdk.chat.emote("hi")')).toMatch(/function expression/);
     expect(functionSourceProblem('async ( => 1')).toMatch(/does not parse/);
     expect(functionSourceProblem('x => 1); (y => 2')).toMatch(/single function expression/);
     expect(functionSourceProblem('x => 1); await sdk.state.set("k", 1); (y => 2')).toMatch(/does not parse|single function expression/);
@@ -325,7 +325,7 @@ describe('PromptBuilder <library>', () => {
       pack,
       character: pack.characters[0]!,
       registry: createStandardRegistry(),
-      allowedModules: ['chat', 'log', 'lib', 'state', 'pack', 'timers'],
+      allowedModules: ['chat', 'lib', 'state', 'pack', 'timers'],
       session: { id: 's1', characterRef: LUNA_REF, title: 'x', createdAt: 't', updatedAt: 't' } as PromptInput['session'],
       transcript: [],
       state: {},
