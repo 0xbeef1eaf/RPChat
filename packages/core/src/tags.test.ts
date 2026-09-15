@@ -30,14 +30,24 @@ const ASSETS: AssetEntry[] = [
   { path: 'media/legacy.png', kind: 'image', bytes: 5, mime: 'image/png' } as unknown as AssetEntry, // no tags field (older index)
 ];
 
+/** A pinned rng: findAssets takes one so the shuffle is reproducible in tests. */
+const seeded = (seed: number): (() => number) => {
+  let x = seed >>> 0;
+  return () => {
+    x = (x * 1_664_525 + 1_013_904_223) >>> 0;
+    return x / 0x1_0000_0000;
+  };
+};
+const paths = (list: { path: string }[]): string[] => list.map((a) => a.path).sort();
+
 describe('findAssets', () => {
-  it('filters by tags (all), anyTags (any), kind and text; ranks by matching tags then shorter path', () => {
-    // equal tag score → shorter path first
-    expect(findAssets(ASSETS, { tags: ['beach', 'summer'] }).map((a) => a.path)).toEqual(['media/images/beach/sunset.png', 'media/images/beach/morning.png']);
-    expect(findAssets(ASSETS, { anyTags: ['sunset', 'cozy'] }).map((a) => a.path)).toEqual([
-      'media/video/sunset-loop.mp4',
-      'media/images/night/stars.png',
+  it('filters by tags (all), anyTags (any), kind and text; ranks by matching tags', () => {
+    // equal tag score → both come back, in no fixed order
+    expect(paths(findAssets(ASSETS, { tags: ['beach', 'summer'] }))).toEqual(['media/images/beach/morning.png', 'media/images/beach/sunset.png']);
+    expect(paths(findAssets(ASSETS, { anyTags: ['sunset', 'cozy'] }))).toEqual([
       'media/images/beach/sunset.png',
+      'media/images/night/stars.png',
+      'media/video/sunset-loop.mp4',
     ]);
     // more matching tags rank first regardless of path length
     expect(findAssets(ASSETS, { anyTags: ['beach', 'sunset', 'summer'] }).map((a) => a.path)[0]).toBe('media/images/beach/sunset.png');
@@ -47,7 +57,7 @@ describe('findAssets', () => {
     expect(findAssets(ASSETS, { tags: ['Beach'], anyTags: ['SUNSET', 'nope'], kind: 'image', text: 'beach' }).map((a) => a.path)).toEqual(['media/images/beach/sunset.png']);
     // Nothing carries both tags: strict search is empty, the default falls back to every asset (of the kind).
     expect(findAssets(ASSETS, { tags: ['beach', 'night'], fallback: false })).toEqual([]);
-    expect(findAssets(ASSETS, { tags: ['beach', 'night'] }).map((a) => a.path)).toEqual(ASSETS.map((a) => a.path));
+    expect(paths(findAssets(ASSETS, { tags: ['beach', 'night'] }))).toEqual(paths(ASSETS));
     expect(findAssets(ASSETS, { tags: ['beach', 'night'], kind: 'image' }).every((a) => a.kind === 'image')).toBe(true);
     expect(findAssets(ASSETS, { tags: ['beach', 'night'], kind: 'image' }).length).toBe(ASSETS.filter((a) => a.kind === 'image').length);
     expect(findAssets(ASSETS, { anyTags: ['nope'], limit: 2 })).toHaveLength(2);
@@ -60,6 +70,24 @@ describe('findAssets', () => {
     const ref = findAssets(ASSETS, { text: 'waves' })[0]!;
     expect(ref).toEqual({ path: 'media/audio/waves.mp3', kind: 'audio', mime: 'x/y', bytes: 1000, tags: ['audio', 'beach', 'ambient'], description: 'Gentle waves loop' });
     expect(findAssets(ASSETS, { text: 'legacy' })[0]!.tags).toEqual([]);
+  });
+
+  it('shuffles equally good matches and the fallback list, so repeated calls do not always pick the same asset', () => {
+    // Three assets carry exactly one of these tags: the first result must not be pinned to one file.
+    const firsts = new Set(Array.from({ length: 60 }, () => findAssets(ASSETS, { anyTags: ['sunset', 'cozy'] })[0]!.path));
+    expect(firsts.size).toBeGreaterThan(1);
+    // Same for the fallback (nothing carries both tags) and for a limit that cuts the list short.
+    const fallbackFirsts = new Set(Array.from({ length: 60 }, () => findAssets(ASSETS, { tags: ['beach', 'night'], kind: 'image' })[0]!.path));
+    expect(fallbackFirsts.size).toBeGreaterThan(1);
+    const sampled = new Set(Array.from({ length: 60 }, () => findAssets(ASSETS, { anyTags: ['sunset', 'cozy'], limit: 1 })[0]!.path));
+    expect(sampled.size).toBeGreaterThan(1);
+    // A strictly better match still wins the top spot however the tie-break falls.
+    for (let i = 0; i < 20; i++) {
+      expect(findAssets(ASSETS, { anyTags: ['beach', 'sunset', 'summer'] })[0]!.path).toBe('media/images/beach/sunset.png');
+    }
+    // The shuffle is the only source of randomness: a pinned rng gives a reproducible order.
+    const pinned = findAssets(ASSETS, { anyTags: ['sunset', 'cozy'] }, seeded(7)).map((a) => a.path);
+    expect(findAssets(ASSETS, { anyTags: ['sunset', 'cozy'] }, seeded(7)).map((a) => a.path)).toEqual(pinned);
   });
 
   it('summarises the tag vocabulary with counts and meanings', () => {

@@ -81,6 +81,7 @@ state (trusted)
 pack (trusted)
 - `asset(path: string): Promise<AssetRef>` — validate & describe a file; throws NOT_FOUND / PATH_ESCAPE.
 - `listAssets(prefix?: string, kind?: AssetRef['kind']): Promise<AssetRef[]>` — like `findAssets`/`tags`, skips entries with `role: 'avatar'` (the character's avatar and expression frames); `asset(path)` still resolves them.
+- `findAssets(query): Promise<AssetRef[]>` — ranked by the number of matching tags (desc) only; assets with the same score are shuffled on every call (Fisher-Yates before a stable sort), as is the `fallback` list, so a character taking `[0]` or a small `limit` does not keep landing on the same file. `findAssets(assets, query, rng?)` in `@rp/core` takes the rng for tests.
 - `readText(path: string, maxBytes?: number): Promise<string>` — text assets only, default max 64 KiB.
 - `info(): Promise<{ id: string; name: string; version: string; description?: string; characterId: string; characterName: string }>`
 

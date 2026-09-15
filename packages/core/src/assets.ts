@@ -60,11 +60,23 @@ function normTags(list: unknown, what: string): string[] {
   return [...new Set(list.map((t) => t.trim().toLowerCase()).filter((t) => t.length > 0))];
 }
 
+/** Fisher-Yates on a copy. `rng` is injectable so tests can pin the order. */
+function shuffled<T>(list: readonly T[], rng: () => number): T[] {
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
+}
+
 /**
  * Filter + rank assets: all `tags` present AND any of `anyTags` AND `kind` AND `text` on path/description.
- * Ranked by number of matching tags (desc), then shorter path, then path.
+ * Ranked by number of matching tags (desc); assets that match equally well come back in a fresh random
+ * order, so a caller taking the first result (or the first `limit`) gets a different pick each call
+ * instead of always the same file. The fallback list is shuffled for the same reason.
  */
-export function findAssets(assets: AssetEntry[], query: FindAssetsQuery): AssetRef[] {
+export function findAssets(assets: AssetEntry[], query: FindAssetsQuery, rng: () => number = Math.random): AssetRef[] {
   const all = normTags(query.tags, 'tags');
   const any = normTags(query.anyTags, 'anyTags');
   const text = typeof query.text === 'string' ? query.text.trim().toLowerCase() : '';
@@ -85,12 +97,13 @@ export function findAssets(assets: AssetEntry[], query: FindAssetsQuery): AssetR
     if (text && !entry.path.toLowerCase().includes(text) && !(entry.description ?? '').toLowerCase().includes(text)) continue;
     scored.push({ entry, score: all.length + anyHits.length });
   }
-  const ranked = scored.sort((a, b) => b.score - a.score || a.entry.path.length - b.entry.path.length || (a.entry.path < b.entry.path ? -1 : 1));
+  // Shuffle first, then sort by score alone: Array#sort is stable, so a better match still wins while
+  // equally good ones land in a different order every call.
+  const ranked = shuffled(scored, rng).sort((a, b) => b.score - a.score);
   if (ranked.length === 0 && query.fallback !== false && (all.length > 0 || any.length > 0 || text.length > 0)) {
     // Nothing carries those tags/words (many packs are untagged): fall back to every asset of the
     // requested kind so the character can still pick something instead of concluding there is no media.
-    return assets
-      .filter((entry) => !query.kind || entry.kind === query.kind)
+    return shuffled(assets.filter((entry) => !query.kind || entry.kind === query.kind), rng)
       .slice(0, limit)
       .map(toAssetRef);
   }
