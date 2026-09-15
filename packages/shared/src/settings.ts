@@ -133,6 +133,13 @@ export interface VoiceSettings {
   steps?: number;
   /** Turn the neural path off and fall back to the platform `tts` command even when a model is installed. */
   disabled: boolean;
+  /**
+   * Fetch the speech engine (`sherpa-onnx-offline-tts`, ~25 MB) in the background on first start, so
+   * voices work without the user installing anything. Off means neural voices need an engine the
+   * user provides through `RP_SHERPA_TTS`, the app's `resources/bin`, or PATH. Nothing is fetched
+   * when one of those already has it. Default true.
+   */
+  autoDownload: boolean;
 }
 
 export interface AppSettings {
@@ -286,7 +293,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
     webcamImage: { command: '' },
     webcamVideo: { command: '' },
   },
-  voice: { defaultModel: '', numThreads: 4, disabled: false },
+  voice: { defaultModel: '', numThreads: 4, disabled: false, autoDownload: true },
   senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [], liveSnapshotAutoRefresh: false },
   web: { allowlist: [], maxBytes: 512 * 1024 },
   desktop: { launchAllowlist: [] },

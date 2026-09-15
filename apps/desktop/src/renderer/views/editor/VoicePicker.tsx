@@ -49,6 +49,15 @@ export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: Voi
     if (open && !catalogue) load();
   }, [open, catalogue, load]);
 
+  // While the speech engine is still being fetched, re-read the catalogue so the panel counts up
+  // instead of sitting on a stale percentage until the author closes and reopens it.
+  const fetching = catalogue?.engine?.state === 'downloading' || catalogue?.engine?.state === 'extracting';
+  useEffect(() => {
+    if (!open || !fetching) return;
+    const timer = window.setInterval(() => load(), 2000);
+    return () => window.clearInterval(timer);
+  }, [open, fetching, load]);
+
   // Stop any sample still playing when the panel closes or the character changes.
   useEffect(
     () => () => {
@@ -175,7 +184,10 @@ export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: Voi
 
       {open ? (
         <div className="stack" style={{ gap: 8, marginTop: 8 }}>
-          {catalogue?.previewsUnavailable ? <span className="field-hint msg-error">{catalogue.previewsUnavailable}</span> : null}
+          {catalogue?.previewsUnavailable ? (
+            // A download in progress is not a mistake the author made, so it reads as a hint.
+            <span className={`field-hint${fetching ? '' : ' msg-error'}`}>{catalogue.previewsUnavailable}</span>
+          ) : null}
           <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
             <button type="button" className={`btn btn-sm${collection === '' ? '' : ' btn-ghost'}`} onClick={() => setCollection('')}>
               All ({catalogue?.voices.length ?? 0})

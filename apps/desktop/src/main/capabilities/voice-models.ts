@@ -250,12 +250,22 @@ export function referenceFor(model: VoiceModel, characterReference?: string): st
   return characterReference ?? model.sampleReference;
 }
 
-/** Where the sherpa-onnx TTS binary may live: env override, bundled resources, PATH. */
+/**
+ * Where the sherpa-onnx TTS binary may live, most to least specific: the env override, a build
+ * bundled into the app's resources, the version the app fetched itself, then PATH.
+ *
+ * `managed` deliberately outranks PATH. Pocket TTS is recent upstream, so a distro's older
+ * `sherpa-onnx-offline-tts` may not understand `--pocket-*` at all and would fail at speaking time;
+ * the fetched build is pinned to a version whose flags are known to match. Anyone who wants their
+ * own build used regardless can point `RP_SHERPA_TTS` at it.
+ */
 export function findSherpaTts(opts: {
   env: NodeJS.ProcessEnv;
   resourcesDirs: string[];
   exists(file: string): boolean;
   onPath(name: string): boolean;
+  /** Absolute path of the app-managed install, when one has been unpacked. */
+  managed?: string;
 }): string | undefined {
   const override = opts.env[SHERPA_TTS_ENV];
   if (override && opts.exists(override)) return override;
@@ -265,6 +275,7 @@ export function findSherpaTts(opts: {
       if (opts.exists(candidate)) return candidate;
     }
   }
+  if (opts.managed && opts.exists(opts.managed)) return opts.managed;
   return opts.onPath(SHERPA_TTS_BINARY) ? SHERPA_TTS_BINARY : undefined;
 }
 

@@ -26,6 +26,7 @@ import { ScreenHandler } from './capabilities/screen.js';
 import { TTS_PACK_ID, VOICES_DIRNAME, VoiceHandler, readVoiceModels } from './capabilities/voice.js';
 import { findSherpaTts } from './capabilities/voice-models.js';
 import { VOICE_BANK_DIRNAME, VOICE_BANK_PACK_ID, VoiceBank } from './capabilities/voice-bank.js';
+import { SHERPA_INSTALL_DIRNAME, SherpaInstaller } from './capabilities/sherpa-install.js';
 import { WebHandler } from './capabilities/web.js';
 import { WidgetsHandler } from './capabilities/widgets.js';
 import { electronCapturer } from './capture.js';
@@ -296,10 +297,12 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     },
     logger,
   });
+  const sherpa = new SherpaInstaller({ dir: path.join(opts.userData, SHERPA_INSTALL_DIRNAME), logger });
   const findSherpa = (): string | undefined =>
     findSherpaTts({
       env,
       resourcesDirs,
+      managed: sherpa.binaryPath(),
       exists: (file) => {
         try {
           return fs.statSync(file).isFile();
@@ -323,9 +326,24 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     dir: voiceBankDir,
     models: () => readVoiceModels(voicesDir),
     findSherpa,
+    engineStatus: () => sherpa.status(),
     numThreads: async () => (await settingsOf()).voice.numThreads,
     logger,
   });
+  // Fetch the speech engine in the background on start, unless the user has one already or has
+  // turned the download off. Never awaited and never fatal: voices are optional, startup is not.
+  void (async () => {
+    const existing = findSherpa();
+    if (existing) {
+      sherpa.markPresent(existing);
+      return;
+    }
+    if (!(await settingsOf()).voice.autoDownload) {
+      sherpa.markDisabled();
+      return;
+    }
+    await sherpa.ensure();
+  })().catch((err: unknown) => logger.warn(`[sherpa] startup install failed: ${(err as Error).message}`));
   const desktop = new DesktopHandler({ commands, ...(hypr ? { hypr } : {}), launchAllowlist: async () => (await settingsOf()).desktop.launchAllowlist, logger });
   const files = new FilesHandler({ userData: opts.userData, openPath: (p) => shell.openPath(p) });
   const webcam = new WebcamHandler({ commands, userData: opts.userData });

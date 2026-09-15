@@ -132,6 +132,17 @@ describe('findSherpaTts', () => {
   it('ignores an env override pointing at nothing', () => {
     expect(findSherpaTts({ ...opts, env: { RP_SHERPA_TTS: '/gone' } })).toBe('/app/resources/bin/sherpa-onnx-offline-tts');
   });
+
+  it('prefers the version the app fetched over whatever is on PATH', () => {
+    // A distro's older build may predate Pocket TTS and would reject --pocket-* at speaking time;
+    // the fetched one is pinned to a version whose flags are known to match.
+    const managed = '/data/sherpa/v1.13.8/bin/sherpa-onnx-offline-tts';
+    expect(findSherpaTts({ env: {}, resourcesDirs: [], exists: (f) => f === managed, onPath: () => true, managed })).toBe(managed);
+    // Not yet fetched: PATH still serves.
+    expect(findSherpaTts({ env: {}, resourcesDirs: [], exists: () => false, onPath: () => true, managed })).toBe('sherpa-onnx-offline-tts');
+    // A bundled build and an explicit override both still outrank it.
+    expect(findSherpaTts({ ...opts, env: {}, managed })).toBe('/app/resources/bin/sherpa-onnx-offline-tts');
+  });
 });
 
 describe('supportedEngines', () => {

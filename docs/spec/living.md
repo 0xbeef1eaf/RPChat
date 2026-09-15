@@ -237,8 +237,22 @@ optional — with neither installed, `sdk.voice.speak` behaves exactly as it did
 friends), so nothing here is a hard dependency.
 
 - **Engine** (`capabilities/voice-models.ts`, pure): `sherpa-onnx-offline-tts`, found via
-  `RP_SHERPA_TTS` → the app's `resources/bin` → PATH (`findSherpaTts`, mirroring `findHelperBinary`).
-  It is not vendored: it is ~30 MB per platform and users may already have it.
+  `RP_SHERPA_TTS` → the app's `resources/bin` → the app-managed install → PATH (`findSherpaTts`,
+  mirroring `findHelperBinary`). The managed copy deliberately outranks PATH: Pocket TTS is recent
+  upstream, so a distro's older build may not understand `--pocket-*` at all.
+- **Fetching it** (`capabilities/sherpa-install.ts`): not vendored (~25 MB compressed per platform,
+  for a feature many users never enable), so the app fetches a pinned upstream release on first
+  start into `<userData>/sherpa/<version>/`, in the background, never awaited and never fatal.
+  `settings.voice.autoDownload` (default true) turns it off; nothing is fetched when an engine is
+  already present. `assetFor` maps platform/arch to the `-shared` release asset and the size GitHub
+  publishes for it — the only integrity check available, as the release ships no checksums. `tarArgs`
+  unpacks just `bin/<binary>` and `lib/*` (~34 MB, against ~150 MB for the whole archive of forty
+  demo executables) using `-xf` so both GNU tar and bsdtar sniff the bzip2, with `--wildcards` only
+  on Linux since bsdtar globs by default and rejects the flag. The archives set
+  `RPATH=$ORIGIN/../lib`, so preserving the `bin/`+`lib/` layout means no `LD_LIBRARY_PATH` at spawn
+  time. Unpacking goes to `<version>.incoming` and is renamed into place, so a crash mid-unpack
+  never leaves a half install behind. Status reaches the editor's picker through the voice-bank
+  catalogue, so a first run shows "Downloading the speech engine (45%)" rather than dead buttons.
 - **Models**: directories unpacked under `<userData>/voices/`, straight from the k2-fsa `tts-models`
   releases with nothing renamed. `detectVoiceModel` recognises them by the filenames those archives
   contain and emits the right `--<engine>-*` flags: `pocket` (Pocket TTS, clones from reference

@@ -59,6 +59,8 @@ export interface VoiceBankCatalogue {
   models: InstalledVoiceModel[];
   /** Why previews cannot be generated right now (no cloning model, no binary); absent when they can. */
   previewsUnavailable?: string;
+  /** State of the speech engine, so the picker can show a download in progress rather than dead buttons. */
+  engine?: SherpaInstallStatus;
 }
 
 /** A voice model the app found installed, as the editor lists it. */
@@ -69,6 +71,32 @@ export interface InstalledVoiceModel {
   engine: string;
   /** True when it takes its voice from reference audio rather than a speaker bank. */
   clones: boolean;
+}
+
+/**
+ * State of the bundled speech engine (`sherpa-onnx-offline-tts`). The app fetches a pinned build on
+ * first start so voices work without the user installing anything; an engine already present via
+ * `RP_SHERPA_TTS`, the app's `resources/bin`, or PATH is used instead and nothing is downloaded.
+ */
+export interface SherpaInstallStatus {
+  /**
+   * `present` — found on this machine already, nothing to do.
+   * `absent` — not installed and not yet fetched.
+   * `downloading` / `extracting` — in progress.
+   * `ready` — the managed copy is installed and usable.
+   * `failed` — the last attempt failed; `error` says why.
+   * `unsupported` — no published build for this platform and architecture.
+   * `disabled` — the user turned the automatic download off.
+   */
+  state: 'present' | 'absent' | 'downloading' | 'extracting' | 'ready' | 'failed' | 'unsupported' | 'disabled';
+  /** Pinned upstream release, e.g. `v1.13.8`. */
+  version: string;
+  /** Bytes fetched so far and the expected total, while downloading. */
+  received?: number;
+  total?: number;
+  /** Absolute path of the binary once it is usable. */
+  path?: string;
+  error?: string;
 }
 
 /** Progress of the background download of bank recordings. */

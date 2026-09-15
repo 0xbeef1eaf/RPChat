@@ -7,7 +7,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VOICE_PREVIEW_SENTENCE } from '@rp/shared';
-import { VoiceBank, buildCatalogue, nextLink, previewId } from './voice-bank.js';
+import { VoiceBank, buildCatalogue, describeMissingEngine, nextLink, previewId } from './voice-bank.js';
 import type { VoiceModel } from './voice-models.js';
 
 const logger = { warn: () => undefined, info: () => undefined, debug: () => undefined };
@@ -141,6 +141,37 @@ describe('catalogue', () => {
       { name: 'pocket', label: 'Pocket TTS', engine: 'pocket', clones: true },
       { name: 'kokoro', label: 'Kokoro', engine: 'kokoro', clones: false },
     ]);
+  });
+});
+
+describe('describeMissingEngine', () => {
+  it('reads as "wait", not "you did something wrong", while the engine is being fetched', () => {
+    expect(describeMissingEngine({ state: 'downloading', version: 'v1', received: 14_000_000, total: 28_000_000 })).toContain('50%');
+    expect(describeMissingEngine({ state: 'extracting', version: 'v1' })).toContain('Unpacking');
+  });
+
+  it('says what to do instead when the engine cannot be fetched at all', () => {
+    expect(describeMissingEngine({ state: 'failed', version: 'v1', error: 'no network' })).toContain('no network');
+    expect(describeMissingEngine({ state: 'unsupported', version: 'v1' })).toContain('RP_SHERPA_TTS');
+    expect(describeMissingEngine({ state: 'disabled', version: 'v1' })).toContain('Settings');
+    expect(describeMissingEngine(undefined)).toContain('was not found');
+  });
+
+  it('does not divide by zero before the total is known', () => {
+    expect(describeMissingEngine({ state: 'downloading', version: 'v1' })).toContain('0%');
+  });
+});
+
+describe('catalogue engine status', () => {
+  it('carries the engine state so the picker can show a download in progress', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse([{ type: 'file', path: 'vctk/a.wav', size: 1 }])) as unknown as typeof fetch;
+    const c = await bank({
+      fetchImpl,
+      findSherpa: () => undefined,
+      engineStatus: () => ({ state: 'downloading' as const, version: 'v1.13.8', received: 7_000_000, total: 28_000_000 }),
+    }).catalogue();
+    expect(c.engine).toMatchObject({ state: 'downloading' });
+    expect(c.previewsUnavailable).toContain('25%');
   });
 });
 
