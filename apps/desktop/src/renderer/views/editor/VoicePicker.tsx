@@ -4,7 +4,7 @@
  *
  * `seed` is the point of the panel. The model samples, so an unseeded character says the same line
  * with different pacing and emphasis every time. Previewing renders with a real seed and reports it
- * back, so an author can audition takes and pin the one they liked — which is the only way to make
+ * back, so an author can audition takes and lock the one they liked — which is the only way to make
  * a character sound like itself twice.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -96,12 +96,14 @@ export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: Voi
   const models = studio?.models ?? [];
   const blocked = studio?.unavailable;
   const pinned = voice?.seed !== undefined && voice.seed >= 0;
+  /** The take just heard is the one saved on the character, so the lock reads as closed. */
+  const locked = last !== null && voice?.seed === last.seed;
 
   return (
     <div className="field" style={{ marginTop: 16 }}>
       <span className="field-label">Voice (sdk.voice.speak)</span>
       <span className="field-hint">
-        A cloning model speaks this character in the voice of the recording below. Pin a seed to make it sound the same every time.
+        A cloning model speaks this character in the voice of the recording below. Lock a seed to make it sound the same every time.
       </span>
 
       {blocked ? <span className={`field-hint${fetching ? '' : ' msg-error'}`}>{blocked}</span> : null}
@@ -158,7 +160,7 @@ export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: Voi
           <label htmlFor="ch-voice-seed">Seed</label>
           <input id="ch-voice-seed" type="number" min={-1} step={1} value={voice?.seed ?? ''}
             onChange={(e) => onChange({ seed: e.target.value === '' ? undefined : Math.round(Number(e.target.value)) })} />
-          <span className="field-hint">{pinned ? 'Pinned: every line uses this take.' : 'Empty means a different delivery every time.'}</span>
+          <span className="field-hint">{pinned ? 'Locked — every line uses this take.' : 'Empty means a different delivery every time.'}</span>
         </div>
       </div>
 
@@ -174,14 +176,23 @@ export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: Voi
             Another take
           </button>
           {last ? (
-            <span className="muted small grow">
+            <span className="muted small grow row" style={{ gap: 4 }}>
               {last.duration.toFixed(2)}s · seed <code className="mono">{last.seed}</code>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                aria-pressed={locked}
+                aria-label={locked ? `Unlock seed ${last.seed}` : `Lock seed ${last.seed}`}
+                title={
+                  locked
+                    ? 'Locked — every line uses this take. Click to let it vary again.'
+                    : 'Lock this take so every line sounds the same.'
+                }
+                onClick={() => onChange({ seed: locked ? undefined : last.seed })}
+              >
+                {locked ? '🔒' : '🔓'}
+              </button>
             </span>
-          ) : null}
-          {last && last.seed !== voice?.seed ? (
-            <button type="button" className="btn btn-sm" onClick={() => onChange({ seed: last.seed })}>
-              Pin this seed
-            </button>
           ) : null}
         </div>
       </div>
