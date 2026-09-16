@@ -16,8 +16,8 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { SherpaInstallStatus } from '@rp/shared';
 import { RpError } from '@rp/shared';
-import type { CommandResult } from '../commands.js';
-import { spawnCapture } from '../commands.js';
+import type { ArchiveSpec, SpawnFn } from './archive-install.js';
+import { downloadAndUnpack, tarArgsFor } from './archive-install.js';
 import { SHERPA_TTS_BINARY } from './voice-models.js';
 
 /**
@@ -28,11 +28,6 @@ export const SHERPA_VERSION = 'v1.13.8';
 
 /** Directory under `userData` holding managed engine installs, one subdirectory per version. */
 export const SHERPA_INSTALL_DIRNAME = 'sherpa';
-
-/** Cap for the download; a 25 MB file on a slow line still fits comfortably. */
-export const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
-/** Cap for unpacking, which is CPU-bound bzip2 over ~30 MB. */
-export const EXTRACT_TIMEOUT_MS = 5 * 60_000;
 
 const RELEASE_BASE = 'https://github.com/k2-fsa/sherpa-onnx/releases/download';
 
@@ -51,11 +46,7 @@ const ASSETS: Record<string, { file: string; bytes: number }> = {
   'win32-arm64': { file: `sherpa-onnx-${SHERPA_VERSION}-win-arm64-shared-MT-Release.tar.bz2`, bytes: 23_341_583 },
 };
 
-export interface SherpaAsset {
-  file: string;
-  bytes: number;
-  url: string;
-}
+export type SherpaAsset = ArchiveSpec;
 
 /** The release asset for a platform/architecture pair, or `undefined` when upstream publishes none. */
 export function assetFor(platform: NodeJS.Platform, arch: string): SherpaAsset | undefined {
@@ -72,15 +63,9 @@ export function binaryName(platform: NodeJS.Platform): string {
 /**
  * `tar` arguments that unpack only the TTS binary and the shared libraries it links against —
  * roughly 34 MB, against ~150 MB for the whole archive of forty-odd demo executables.
- *
- * `-xf` rather than `-xjf`: both GNU tar and bsdtar detect bzip2 from the file's magic, and bsdtar
- * (macOS, and Windows since 1803) has no `-j`. GNU tar needs `--wildcards` before the patterns to
- * treat them as globs; bsdtar globs extraction patterns by default and rejects the flag.
  */
 export function tarArgs(platform: NodeJS.Platform, archive: string, dest: string): string[] {
-  const patterns = [`*/bin/${binaryName(platform)}`, '*/lib/*'];
-  const wildcards = platform === 'linux' ? ['--wildcards'] : [];
-  return ['-xf', archive, '-C', dest, '--strip-components=1', ...wildcards, ...patterns];
+  return tarArgsFor(platform, archive, dest, 1, [`*/bin/${binaryName(platform)}`, '*/lib/*']);
 }
 
 export interface SherpaInstallerDeps {
@@ -92,7 +77,7 @@ export interface SherpaInstallerDeps {
   /** Injectable for tests. */
   fetchImpl?: typeof fetch;
   /** Injectable for tests. */
-  spawn?: (file: string, args: string[], opts: { timeoutMs?: number }) => Promise<CommandResult>;
+  spawn?: SpawnFn;
 }
 
 export class SherpaInstaller {
@@ -164,32 +149,30 @@ export class SherpaInstaller {
       return undefined;
     }
     const versionDir = path.join(this.deps.dir, SHERPA_VERSION);
-    const stagingDir = `${versionDir}.incoming`;
-    const archive = path.join(this.deps.dir, `${asset.file}.part`);
     try {
       this.deps.logger.info(`[sherpa] fetching ${asset.file} (${Math.round(asset.bytes / 1e6)} MB)`);
-      await fs.mkdir(this.deps.dir, { recursive: true });
-      await this.download(asset, archive);
-
-      this.state = { state: 'extracting', version: SHERPA_VERSION };
-      await fs.rm(stagingDir, { recursive: true, force: true });
-      await fs.mkdir(stagingDir, { recursive: true });
-      const spawnFn = this.deps.spawn ?? ((f, a, o) => spawnCapture(f, a, o));
-      const result = await spawnFn('tar', tarArgs(this.platform, archive, stagingDir), { timeoutMs: EXTRACT_TIMEOUT_MS });
-      if (result.code !== 0) {
-        throw new RpError('CAPABILITY_FAILED', `tar exited with ${result.code}: ${(result.stderr.trim() || result.stdout.trim()).slice(0, 300)}`);
-      }
-
-      const staged = path.join(stagingDir, 'bin', binaryName(this.platform));
-      const stat = await fs.stat(staged).catch(() => undefined);
-      if (!stat?.isFile()) throw new RpError('CAPABILITY_FAILED', `the archive did not contain bin/${binaryName(this.platform)}`);
-      if (this.platform !== 'win32') await fs.chmod(staged, 0o755);
-
-      // Swap in whole, so a crash mid-unpack never leaves a half install that `installed()` trusts.
-      await fs.rm(versionDir, { recursive: true, force: true });
-      await fs.rename(stagingDir, versionDir);
-      await fs.rm(archive, { force: true });
-
+      await downloadAndUnpack({
+        spec: asset,
+        target: versionDir,
+        workDir: this.deps.dir,
+        platform: this.platform,
+        strip: 1,
+        patterns: [`*/bin/${binaryName(this.platform)}`, '*/lib/*'],
+        ...(this.deps.fetchImpl ? { fetchImpl: this.deps.fetchImpl } : {}),
+        ...(this.deps.spawn ? { spawn: this.deps.spawn } : {}),
+        onProgress: (received, total) => {
+          this.state = { state: 'downloading', version: SHERPA_VERSION, received, total };
+        },
+        onExtract: () => {
+          this.state = { state: 'extracting', version: SHERPA_VERSION };
+        },
+        verify: async (staging) => {
+          const staged = path.join(staging, 'bin', binaryName(this.platform));
+          const stat = await fs.stat(staged).catch(() => undefined);
+          if (!stat?.isFile()) throw new RpError('CAPABILITY_FAILED', `the archive did not contain bin/${binaryName(this.platform)}`);
+          if (this.platform !== 'win32') await fs.chmod(staged, 0o755);
+        },
+      });
       const file = this.binaryPath();
       this.state = { state: 'ready', version: SHERPA_VERSION, path: file };
       this.deps.logger.info(`[sherpa] ${SHERPA_VERSION} ready at ${file}`);
@@ -198,40 +181,7 @@ export class SherpaInstaller {
       const message = (err as Error).message;
       this.state = { state: 'failed', version: SHERPA_VERSION, error: message };
       this.deps.logger.warn(`[sherpa] could not install ${SHERPA_VERSION}: ${message}`);
-      await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
-      await fs.rm(archive, { force: true }).catch(() => undefined);
       return undefined;
     }
-  }
-
-  /** Stream the archive to `target`, reporting progress and checking the size upstream published. */
-  private async download(asset: SherpaAsset, target: string): Promise<void> {
-    const doFetch = this.deps.fetchImpl ?? fetch;
-    this.state = { state: 'downloading', version: SHERPA_VERSION, received: 0, total: asset.bytes };
-    const res = await doFetch(asset.url, { redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-    if (!res.ok) throw new RpError('CAPABILITY_FAILED', `HTTP ${res.status} fetching ${asset.file}`);
-
-    const chunks: Buffer[] = [];
-    let received = 0;
-    if (res.body) {
-      // Read incrementally so the status can show progress on a slow connection.
-      for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-        const buf = Buffer.from(chunk);
-        received += buf.byteLength;
-        if (received > asset.bytes * 2) throw new RpError('CAPABILITY_FAILED', `${asset.file} is far larger than the ${asset.bytes} bytes upstream published`);
-        chunks.push(buf);
-        this.state = { state: 'downloading', version: SHERPA_VERSION, received, total: asset.bytes };
-      }
-    } else {
-      const buf = Buffer.from(await res.arrayBuffer());
-      received = buf.byteLength;
-      chunks.push(buf);
-    }
-    const body = Buffer.concat(chunks);
-    // The release publishes no checksums, so the size is the only integrity signal available.
-    if (body.byteLength !== asset.bytes) {
-      throw new RpError('CAPABILITY_FAILED', `${asset.file} is ${body.byteLength} bytes, expected ${asset.bytes}`);
-    }
-    await fs.writeFile(target, body);
   }
 }

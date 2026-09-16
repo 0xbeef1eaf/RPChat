@@ -7,7 +7,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VOICE_PREVIEW_SENTENCE } from '@rp/shared';
-import { VoiceBank, buildCatalogue, describeMissingEngine, nextLink, previewId } from './voice-bank.js';
+import { VoiceBank, buildCatalogue, describeMissingEngine, describeMissingModel, nextLink, previewId } from './voice-bank.js';
 import type { VoiceModel } from './voice-models.js';
 
 const logger = { warn: () => undefined, info: () => undefined, debug: () => undefined };
@@ -162,6 +162,19 @@ describe('describeMissingEngine', () => {
   });
 });
 
+describe('describeMissingModel', () => {
+  it('reads as progress while the default model is being fetched', () => {
+    expect(describeMissingModel({ state: 'downloading', version: 'pocket', received: 25_000_000, total: 100_000_000 })).toContain('25%');
+    expect(describeMissingModel({ state: 'extracting', version: 'pocket' })).toContain('Unpacking');
+  });
+
+  it('falls back to telling the author what to do themselves', () => {
+    expect(describeMissingModel({ state: 'failed', version: 'pocket', error: 'disk full' })).toContain('disk full');
+    expect(describeMissingModel({ state: 'disabled', version: 'pocket' })).toContain('Settings');
+    expect(describeMissingModel(undefined)).toContain('No cloning voice model is installed');
+  });
+});
+
 describe('catalogue engine status', () => {
   it('carries the engine state so the picker can show a download in progress', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse([{ type: 'file', path: 'vctk/a.wav', size: 1 }])) as unknown as typeof fetch;
@@ -172,6 +185,18 @@ describe('catalogue engine status', () => {
     }).catalogue();
     expect(c.engine).toMatchObject({ state: 'downloading' });
     expect(c.previewsUnavailable).toContain('25%');
+  });
+
+  it('reports the model download ahead of the engine, since without weights nothing can speak', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse([{ type: 'file', path: 'vctk/a.wav', size: 1 }])) as unknown as typeof fetch;
+    const c = await bank({
+      fetchImpl,
+      models: async () => [],
+      findSherpa: () => undefined,
+      modelStatus: () => ({ state: 'downloading' as const, version: 'pocket', received: 50_000_000, total: 100_000_000 }),
+    }).catalogue();
+    expect(c.model).toMatchObject({ state: 'downloading' });
+    expect(c.previewsUnavailable).toContain('Pocket TTS voice model (50%)');
   });
 });
 

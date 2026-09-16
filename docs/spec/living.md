@@ -259,6 +259,15 @@ friends), so nothing here is a hard dependency.
   audio), `kokoro`, `kitten`, `vits`/Piper. Kokoro and Kitten have identical file shapes, so the
   directory name decides, and an `rp-voice.json` `{ "engine": … }` marker overrides both. Where a
   role has several candidates an `int8` build wins — the point is CPU speed.
+- **Fetching a model** (`capabilities/voice-model-install.ts`): the engine cannot say anything
+  without weights, so the default Pocket TTS model (`sherpa-onnx-pocket-tts-int8-2026-01-26`, 98 MB)
+  is fetched the same way and under the same `autoDownload` setting, after the engine and only when
+  no cloning model is already installed. It clones from reference audio, which is what gives each
+  character its own voice — a speaker-bank model would give them all the same handful. Both
+  installers share `capabilities/archive-install.ts` (download with progress, size check against
+  what the release publishes, `tar` into a `.incoming` directory, verify, rename into place). A
+  model missing any weight file is rejected rather than installed, and `installed()` treats a
+  truncated or zero-byte unpack as absent so the next start retries.
 - **Per character**: `character.json` → `voice: { model?, reference?, referenceText?, speaker?, rate?,
   steps?, referenceSource?, attribution? }`. `reference` is a wav **inside the character directory**,
   so a published pack carries the voice it speaks with. Resolution order for the model is

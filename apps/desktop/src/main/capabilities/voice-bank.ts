@@ -15,7 +15,7 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { InstalledVoiceModel, SherpaInstallStatus, VoiceBankCatalogue, VoiceBankCollection, VoiceBankEntry, VoiceBankProgress } from '@rp/shared';
+import type { AssetInstallStatus, InstalledVoiceModel, SherpaInstallStatus, VoiceBankCatalogue, VoiceBankCollection, VoiceBankEntry, VoiceBankProgress } from '@rp/shared';
 import { RpError, VOICE_BANK_COLLECTIONS, VOICE_BANK_REPO, VOICE_PREVIEW_SENTENCE, voiceLabel } from '@rp/shared';
 import type { CommandResult } from '../commands.js';
 import { spawnCapture } from '../commands.js';
@@ -55,6 +55,8 @@ export interface VoiceBankDeps {
   findSherpa(): string | undefined;
   /** State of the managed engine install, so a download in progress can be shown as such. */
   engineStatus?(): SherpaInstallStatus;
+  /** State of the default voice model download, likewise. */
+  modelStatus?(): AssetInstallStatus;
   /** onnxruntime threads for preview synthesis. */
   numThreads(): Promise<number>;
   /** Injectable for tests. */
@@ -146,6 +148,8 @@ export class VoiceBank {
     if (why) catalogue.previewsUnavailable = why;
     const engine = this.deps.engineStatus?.();
     if (engine) catalogue.engine = engine;
+    const model = this.deps.modelStatus?.();
+    if (model) catalogue.model = model;
     return catalogue;
   }
 
@@ -155,7 +159,7 @@ export class VoiceBank {
   }
 
   private whyNoPreviews(models: VoiceModel[]): string | undefined {
-    if (!this.previewModel(models)) return 'No cloning voice model is installed; unpack a Pocket TTS model under the voices folder to hear these voices.';
+    if (!this.previewModel(models)) return describeMissingModel(this.deps.modelStatus?.());
     if (!this.deps.findSherpa()) return describeMissingEngine(this.deps.engineStatus?.());
     return undefined;
   }
@@ -344,6 +348,27 @@ export class VoiceBank {
   /** Root served as `VOICE_BANK_PACK_ID` over `rp-asset://`, so previews can be played in the editor. */
   previewRoot(): string {
     return this.previewsDir;
+  }
+}
+
+/**
+ * Why there is no voice model yet. Like the engine, the default model is fetched on first start, so
+ * the common case is "still downloading" rather than anything the author has to go and fix.
+ */
+export function describeMissingModel(status: AssetInstallStatus | undefined): string {
+  switch (status?.state) {
+    case 'downloading': {
+      const pct = status.total ? Math.floor(((status.received ?? 0) / status.total) * 100) : 0;
+      return `Downloading the Pocket TTS voice model (${pct}%). Samples will work once it finishes.`;
+    }
+    case 'extracting':
+      return 'Unpacking the Pocket TTS voice model. Samples will work once it finishes.';
+    case 'failed':
+      return `The Pocket TTS voice model could not be downloaded (${status.error ?? 'unknown error'}); unpack one under the voices folder yourself.`;
+    case 'disabled':
+      return 'The automatic model download is switched off; turn it on in Settings, or unpack a Pocket TTS model under the voices folder.';
+    default:
+      return 'No cloning voice model is installed; unpack a Pocket TTS model under the voices folder to hear these voices.';
   }
 }
 

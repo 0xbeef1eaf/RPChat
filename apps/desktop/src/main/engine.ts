@@ -27,6 +27,7 @@ import { TTS_PACK_ID, VOICES_DIRNAME, VoiceHandler, readVoiceModels } from './ca
 import { findSherpaTts } from './capabilities/voice-models.js';
 import { VOICE_BANK_DIRNAME, VOICE_BANK_PACK_ID, VoiceBank } from './capabilities/voice-bank.js';
 import { SHERPA_INSTALL_DIRNAME, SherpaInstaller } from './capabilities/sherpa-install.js';
+import { VoiceModelInstaller } from './capabilities/voice-model-install.js';
 import { WebHandler } from './capabilities/web.js';
 import { WidgetsHandler } from './capabilities/widgets.js';
 import { electronCapturer } from './capture.js';
@@ -322,28 +323,34 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     findSherpa,
     logger,
   });
+  const voiceModel = new VoiceModelInstaller({ voicesDir, logger });
   const voiceBank = new VoiceBank({
     dir: voiceBankDir,
     models: () => readVoiceModels(voicesDir),
     findSherpa,
     engineStatus: () => sherpa.status(),
+    modelStatus: () => voiceModel.status(),
     numThreads: async () => (await settingsOf()).voice.numThreads,
     logger,
   });
-  // Fetch the speech engine in the background on start, unless the user has one already or has
-  // turned the download off. Never awaited and never fatal: voices are optional, startup is not.
+  // Fetch the speech engine and a voice model in the background on start. The engine cannot say
+  // anything without weights, so fetching one without the other leaves the feature just as
+  // unreachable as fetching neither. Never awaited and never fatal: voices are optional, startup is
+  // not. Sequential rather than parallel — together they are ~125 MB, and the model is useless until
+  // the engine can run it anyway.
   void (async () => {
-    const existing = findSherpa();
-    if (existing) {
-      sherpa.markPresent(existing);
-      return;
-    }
-    if (!(await settingsOf()).voice.autoDownload) {
-      sherpa.markDisabled();
-      return;
-    }
-    await sherpa.ensure();
-  })().catch((err: unknown) => logger.warn(`[sherpa] startup install failed: ${(err as Error).message}`));
+    const auto = (await settingsOf()).voice.autoDownload;
+    const existingEngine = findSherpa();
+    if (existingEngine) sherpa.markPresent(existingEngine);
+    else if (!auto) sherpa.markDisabled();
+    else await sherpa.ensure();
+
+    // Anything the user unpacked themselves counts, so long as it can clone a voice.
+    const cloning = (await readVoiceModels(voicesDir)).find((m) => m.clones);
+    if (cloning) voiceModel.markPresent(cloning.name);
+    else if (!auto) voiceModel.markDisabled();
+    else await voiceModel.ensure();
+  })().catch((err: unknown) => logger.warn(`[voice] startup install failed: ${(err as Error).message}`));
   const desktop = new DesktopHandler({ commands, ...(hypr ? { hypr } : {}), launchAllowlist: async () => (await settingsOf()).desktop.launchAllowlist, logger });
   const files = new FilesHandler({ userData: opts.userData, openPath: (p) => shell.openPath(p) });
   const webcam = new WebcamHandler({ commands, userData: opts.userData });

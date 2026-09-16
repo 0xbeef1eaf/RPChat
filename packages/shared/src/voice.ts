@@ -61,6 +61,8 @@ export interface VoiceBankCatalogue {
   previewsUnavailable?: string;
   /** State of the speech engine, so the picker can show a download in progress rather than dead buttons. */
   engine?: SherpaInstallStatus;
+  /** State of the default voice model, which is fetched the same way and is just as necessary. */
+  model?: AssetInstallStatus;
 }
 
 /** A voice model the app found installed, as the editor lists it. */
@@ -74,11 +76,11 @@ export interface InstalledVoiceModel {
 }
 
 /**
- * State of the bundled speech engine (`sherpa-onnx-offline-tts`). The app fetches a pinned build on
- * first start so voices work without the user installing anything; an engine already present via
- * `RP_SHERPA_TTS`, the app's `resources/bin`, or PATH is used instead and nothing is downloaded.
+ * State of one thing the app fetches for itself on first start — the speech engine, or the default
+ * voice model. Neither is vendored (together they are ~125 MB compressed, for a feature many users
+ * never enable), and anything the user already has is used instead of downloading.
  */
-export interface SherpaInstallStatus {
+export interface AssetInstallStatus {
   /**
    * `present` — found on this machine already, nothing to do.
    * `absent` — not installed and not yet fetched.
@@ -98,6 +100,9 @@ export interface SherpaInstallStatus {
   path?: string;
   error?: string;
 }
+
+/** State of the speech engine (`sherpa-onnx-offline-tts`) the app fetches for itself. */
+export type SherpaInstallStatus = AssetInstallStatus;
 
 /** Progress of the background download of bank recordings. */
 export interface VoiceBankProgress {
