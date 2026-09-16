@@ -3,7 +3,7 @@ import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import type { OverlaySpec } from './backend.js';
 import { resolveOverlayOptions } from './backend.js';
-import { HelperBackend, commandScript, helperPlacement, mergeMonitorNames } from './helper-backend.js';
+import { HelperBackend, commandScript, helperPlacement, mergeMonitorNames, pageCommand } from './helper-backend.js';
 import type { HelperChildLike } from './helper-process.js';
 import { HelperProcess, findHelperBinary } from './helper-process.js';
 import { decodeCommandHash, rewriteAssetUrl } from '../loopback.js';
@@ -232,11 +232,52 @@ describe('HelperBackend', () => {
     await backend.dispose();
   });
 
+  it('rewrites the expression frame of a later avatar-set, not just the first image', async () => {
+    const { helper, children } = makeHelper();
+    const ready = await helper.start();
+    const backend = new HelperBackend({ helper, loopback, ready });
+    const monitors = await backend.monitors();
+    const options = resolveOverlayOptions({ position: 'bottom-right' }, monitors, { layer: 'top' });
+    const spec: OverlaySpec = {
+      id: 'av-1',
+      kind: 'avatar',
+      file: '/p/characters/c/expressions/neutral.png',
+      assetUrl: 'rp-asset://com.x.p/characters/c/expressions/neutral.png',
+      packId: 'com.x.p',
+      asset: 'characters/c/expressions/neutral.png',
+      options,
+      page: {},
+      avatar: {
+        visible: true,
+        expression: 'neutral',
+        imageUrl: 'rp-asset://com.x.p/characters/c/expressions/neutral.png',
+        size: 220,
+        lookAtCursor: false,
+        overlay: { layer: 'top', opacity: 1, clickThrough: false },
+      },
+    };
+    const handle = await backend.createOverlay(spec);
+    // WebKit has no `rp-asset://` scheme: an unrewritten swap leaves the page with a broken image.
+    await handle.send({ type: 'avatar-set', id: 'av-1', patch: { expression: 'smile', imageUrl: 'rp-asset://com.x.p/characters/c/expressions/smile.png' } });
+    const script = String(children[0]?.received.at(-1)?.script);
+    expect(script).toContain('http://127.0.0.1:1234/t/tok/asset/com.x.p/characters/c/expressions/smile.png');
+    expect(script).not.toContain('rp-asset://');
+    await backend.dispose();
+  });
+
   it('pure helpers: placement payload, command script, monitor name merge', () => {
     expect(helperPlacement({ monitor: { id: '0', name: 'M', index: 0, primary: true, x: 0, y: 0, width: 10, height: 10, scale: 1, hasCursor: false }, layer: 'top', opacity: 1, clickThrough: false, anchor: 'center', marginPx: 8, width: 300, height: 200, y: 5 })).toEqual({
       layer: 'top', anchor: 'center', marginPx: 8, monitor: { index: 0, name: 'M', x: 0, y: 0 }, width: 300, height: 200, opacity: 1, clickThrough: false, y: 5,
     });
     expect(commandScript({ type: 'close-all' })).toBe(`(function(){try{if(typeof window.__rpMediaCommand==='function'){window.__rpMediaCommand("{\\"type\\":\\"close-all\\"}");}}catch(e){}})();`);
+    const rewrite = (url: string) => rewriteAssetUrl(url, 'http://127.0.0.1:1234/t/tok');
+    expect(pageCommand({ type: 'avatar-set', id: 'a', patch: { expression: 'smile', imageUrl: 'rp-asset://com.x.p/c/smile.png' } }, rewrite)).toEqual({
+      type: 'avatar-set', id: 'a', patch: { expression: 'smile', imageUrl: 'http://127.0.0.1:1234/t/tok/asset/com.x.p/c/smile.png' },
+    });
+    // Commands with no URL (and patches that only move/animate) are passed through untouched.
+    const animate = { type: 'avatar-set', id: 'a', patch: { animation: 'nod' } } as const;
+    expect(pageCommand(animate, rewrite)).toBe(animate);
+    expect(pageCommand({ type: 'show-image', id: 'm', url: 'rp-asset://com.x.p/media/i.png', options: {} }, rewrite)).toMatchObject({ url: 'http://127.0.0.1:1234/t/tok/asset/com.x.p/media/i.png' });
     const merged = mergeMonitorNames(
       [{ id: '0', name: '0', index: 0, primary: true, x: 0, y: 0, width: 100, height: 100, scale: 1, hasCursor: false }],
       [{ id: '9', name: 'DP-3', index: 0, primary: true, x: 0, y: 0, width: 100, height: 100, scale: 1, hasCursor: false }],

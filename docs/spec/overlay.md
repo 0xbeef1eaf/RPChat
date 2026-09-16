@@ -88,7 +88,9 @@ Two tiers, chosen at startup:
 1. **`wlr-layer-shell` tier** (preferred): the Rust helper described in `docs/spec/overlay-helper.md`
    is spawned once (`HelperProcess`: spawn, `hello`, JSON-lines reader, request/response by `seq`,
    restart with backoff on crash, `quit` on dispose). `createOverlay` → `show` with the loopback URL,
-   `OverlayHandle.update` → `update` (+ `js` for the visual subset), `close` → `close`; helper `message`
+   `OverlayHandle.update` → `update` (+ `js` for the visual subset), `close` → `close`. Every later command
+   passes through `pageCommand` first, which rewrites the asset URL it carries — `avatar-set`'s next
+   expression frame above all, since the helper's WebKit views cannot fetch `rp-asset://`. Helper `message`
    events map to `content-size` / `ended` / `error` / `closed`. `info()` reports all four layers,
    opacity, clickThrough, exactPosition, monitorSelection true. Monitors come from the helper
    (`monitors` op) merged with Hyprland IPC names where the helper lacks connector names (match by geometry).

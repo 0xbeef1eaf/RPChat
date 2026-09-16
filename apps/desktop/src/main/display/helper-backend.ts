@@ -45,6 +45,29 @@ export function helperPlacement(o: ResolvedOverlayOptions): Record<string, unkno
   return out;
 }
 
+/**
+ * A command as the helper's pages can load it: every asset URL it carries is rewritten (WebKit
+ * has no `rp-asset://` scheme). Only the first command of an overlay goes through `showCommand`;
+ * later ones arrive here — above all the `avatar-set` that swaps in another expression frame,
+ * which would otherwise leave the page with an `rp-asset://` src it cannot fetch.
+ */
+export function pageCommand(command: MediaCommand, rewrite: (url: string) => string): MediaCommand {
+  switch (command.type) {
+    case 'show-image':
+    case 'play-video':
+    case 'play-audio':
+      return { ...command, url: rewrite(command.url) };
+    case 'avatar-show':
+      return { ...command, state: { ...command.state, imageUrl: rewrite(command.state.imageUrl) } };
+    case 'avatar-set':
+      if (command.patch.imageUrl === undefined) return command;
+      return { ...command, patch: { ...command.patch, imageUrl: rewrite(command.patch.imageUrl) } };
+    default:
+      // Widget HTML already carries page URLs: `{{asset:…}}` is substituted through `pageAssetUrl`.
+      return command;
+  }
+}
+
 /** JS that hands a command to the page (`window.__rpMediaCommand(json)`). */
 export function commandScript(command: MediaCommand): string {
   const json = JSON.stringify(JSON.stringify(command));
@@ -239,7 +262,7 @@ export class HelperBackend implements DisplayBackend {
 
   async runScript(id: string, command: MediaCommand): Promise<void> {
     try {
-      await this.helper.request('js', { id, script: commandScript(command) });
+      await this.helper.request('js', { id, script: commandScript(pageCommand(command, (url) => this.loopback.rewriteAssetUrl(url))) });
     } catch (err) {
       this.log.debug?.(`[display:hyprland] js for ${id} failed`, err);
     }
