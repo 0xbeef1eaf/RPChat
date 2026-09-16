@@ -1,6 +1,6 @@
 import type { PolicyFile } from '@rp/shared';
 import { describe, expect, it } from 'vitest';
-import { POLICY_SETTINGS, guardPathProblem, policyDraftFrom, policyDraftProblems, policyDraftToFile, policyEffects, policyRefusals, toggleShell, userNameProblem } from './policy';
+import { POLICY_DEV, POLICY_SETTINGS, guardPathProblem, policyDraftFrom, policyDraftProblems, policyDraftToFile, policyEffects, policyRefusals, toggleShell, userNameProblem } from './policy';
 
 /**
  * A stand-in for the daemon's template: every settings key present, every block a no-op. That the
@@ -53,6 +53,16 @@ describe('policyDraftFrom', () => {
     expect(draft.app.restrictions.requireCharacterSession).toBe(true);
     expect(draft.app.restrictions.allowPackEditor).toBe(true);
     expect(draft.guard.shell).toEqual(['noctalia', 'awww']);
+  });
+
+  it('reads the dev block back, with devTools following allow when the file leaves it out', () => {
+    expect(policyDraftFrom({ version: 1 }).dev).toEqual({ allow: true, devTools: true });
+    expect(policyDraftFrom({ version: 1, dev: {} }).dev).toEqual({ allow: true, devTools: true });
+    expect(policyDraftFrom({ version: 1, dev: { allow: false } }).dev).toEqual({ allow: false, devTools: false });
+    expect(policyDraftFrom({ version: 1, dev: { allow: false, devTools: true } }).dev).toEqual({ allow: false, devTools: true });
+    expect(policyDraftFrom({ version: 1, dev: { devTools: false } }).dev).toEqual({ allow: true, devTools: false });
+    // Every switch the form shows is one the draft carries.
+    for (const { key } of POLICY_DEV) expect(typeof policyDraftFrom({ version: 1 }).dev[key]).toBe('boolean');
   });
 
   it('does not share lists or maps with the policy it was seeded from', () => {
@@ -113,6 +123,15 @@ describe('policyDraftToFile', () => {
     draft.app.restrictions.allowSandbox = false;
     const written = policyDraftToFile(draft);
     expect(written.app).toMatchObject({ allowQuit: false, allowSandbox: false, allowPackEditor: true, requireCharacterSession: false });
+  });
+
+  it('always writes the dev block, so the file says outright what development is allowed', () => {
+    const draft = policyDraftFrom(POLICY_TEMPLATE);
+    expect(policyDraftToFile(draft).dev).toEqual({ allow: true, devTools: true });
+    draft.dev = { allow: false, devTools: false };
+    expect(policyDraftToFile(draft).dev).toEqual({ allow: false, devTools: false });
+    draft.dev = { allow: false, devTools: true };
+    expect(policyDraftToFile(draft).dev).toEqual({ allow: false, devTools: true });
   });
 
   it('survives a second round trip through its own output', () => {
@@ -212,6 +231,18 @@ describe('policyEffects', () => {
       { text: 'input locking refused', strict: true },
       { text: 'session guard: enforce', strict: true },
     ]);
+  });
+
+  it('says how far the development lock goes, and mentions DevTools on their own', () => {
+    const draft = policyDraftFrom({ version: 1 });
+    draft.dev = { allow: false, devTools: false };
+    expect(policyEffects(draft)).toContainEqual({ text: 'development switches and DevTools off', strict: true });
+    draft.dev = { allow: false, devTools: true };
+    expect(policyEffects(draft)).toContainEqual({ text: 'development switches off, DevTools kept', strict: true });
+    draft.dev = { allow: true, devTools: false };
+    expect(policyEffects(draft)).toContainEqual({ text: 'DevTools off', strict: true });
+    draft.dev = { allow: true, devTools: true };
+    expect(policyEffects(draft)).toEqual([{ text: 'no settings forced', strict: false }]);
   });
 });
 

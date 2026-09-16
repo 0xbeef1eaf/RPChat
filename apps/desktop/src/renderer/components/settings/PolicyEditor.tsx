@@ -5,6 +5,7 @@ import { api, errorMessage } from '../../api';
 import { prettyJson } from '../../lib/format';
 import type { PolicyDraft, PolicySettingSpec, PolicyValue } from '../../lib/policy';
 import {
+  POLICY_DEV,
   POLICY_EMERGENCY_KEYS,
   POLICY_GROUPS,
   POLICY_RESTRICTIONS,
@@ -356,6 +357,32 @@ export function CreatePolicyDialog({ path, onClose, onCreated }: { path: string;
                   />
                 ))}
               </div>
+            </section>
+
+            <section className="stack" style={{ gap: 6 }}>
+              <h3 style={{ margin: 0 }}>Development</h3>
+              <p className="field-hint" style={{ margin: 0 }}>
+                The switches the app carries for its own development. They are read once, when the app starts, straight from this file — not through
+                any path an environment variable names — so nothing a user launches the app with can turn them back on.
+              </p>
+              <div className="stack" style={{ gap: 2 }}>
+                {POLICY_DEV.map(({ key, label, hint }) => (
+                  <SwitchRow
+                    key={key}
+                    label={label}
+                    hint={hint}
+                    checked={draft.dev[key]}
+                    disabled={busy}
+                    onChange={(v) => setDraft({ ...draft, dev: { ...draft.dev, [key]: v, ...(key === 'allow' && !v ? { devTools: false } : {}) } })}
+                  />
+                ))}
+              </div>
+              {!draft.dev.allow && draft.dev.devTools ? (
+                <div className="callout callout-warning small">
+                  DevTools stay open on a machine whose development switches are off. The inspector can reach anything the interface can, so leave it
+                  on only while you need it for support.
+                </div>
+              ) : null}
             </section>
           </div>
         ) : null}

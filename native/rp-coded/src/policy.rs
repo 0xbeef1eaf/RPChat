@@ -109,6 +109,20 @@ pub struct AppPolicy {
     pub require_character_session: Option<bool>,
 }
 
+/// `PolicyFile.dev`: whether the app honours its own development switches. Like the `allow*` keys
+/// above this is the app's to enforce, not the daemon's — the app reads it synchronously at
+/// startup, from this file's canonical path only, and drops the `RP_*` environment overrides
+/// before anything has read them. It is declared here so a policy that uses it loads, survives a
+/// round trip through `policy`, and is refused with a type error rather than an unknown field.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev_tools: Option<bool>,
+}
+
 /// Effective `app` rules with defaults: quitting allowed, nobody listed.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AppRules {
@@ -326,6 +340,8 @@ pub struct PolicyFile {
     pub app: Option<AppPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard: Option<GuardPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev: Option<DevPolicy>,
 }
 
 /// Keys allowed under `settings` (documented in `docs/spec/system.md`).
@@ -885,6 +901,10 @@ mod tests {
             json!({"version": 1, "app": {"users": ["alice", 3]}}),
             json!({"version": 1, "app": {"users": [" "]}}),
             json!({"version": 1, "app": {"theme": "dark"}}),
+            json!({"version": 1, "dev": "off"}),
+            json!({"version": 1, "dev": {"allow": "no"}}),
+            json!({"version": 1, "dev": {"devTools": 0}}),
+            json!({"version": 1, "dev": {"allowed": true}}),
         ];
         for v in bad {
             assert!(
@@ -896,6 +916,32 @@ mod tests {
             parse_policy("{not json"),
             Err(PolicyError::Invalid(_))
         ));
+    }
+
+    /// The `dev` block is the app's to act on; the daemon must load it, keep it and hand it back.
+    #[test]
+    fn keeps_the_dev_block_for_the_app() {
+        assert_eq!(policy(json!({"version": 1})).unwrap().dev, None);
+        assert_eq!(
+            policy(json!({"version": 1, "dev": {}})).unwrap().dev,
+            Some(DevPolicy::default())
+        );
+        let p = policy(json!({"version": 1, "dev": {"allow": false, "devTools": true}})).unwrap();
+        assert_eq!(
+            p.dev,
+            Some(DevPolicy {
+                allow: Some(false),
+                dev_tools: Some(true)
+            })
+        );
+        let back = serde_json::to_value(&p).unwrap();
+        assert_eq!(back["dev"], json!({"allow": false, "devTools": true}));
+        // A block that only closes the inspector round-trips without gaining an `allow` key.
+        let only_tools = policy(json!({"version": 1, "dev": {"devTools": false}})).unwrap();
+        assert_eq!(
+            serde_json::to_value(&only_tools).unwrap()["dev"],
+            json!({"devTools": false})
+        );
     }
 
     #[test]

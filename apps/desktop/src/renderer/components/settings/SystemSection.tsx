@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { AppRestrictions, GuardAttemptRecord, SystemIntegrationStatus } from '@rp/shared';
+import type { AppRestrictions, DevRules, GuardAttemptRecord, SystemIntegrationStatus } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { formatDateTime } from '../../lib/format';
 import { refreshSettings, reportError, toast } from '../../store/actions';
@@ -222,6 +222,8 @@ export function SystemSection() {
                     </span>
                   )}
                 </dd>
+                <dt>Development</dt>
+                <dd>{policy.dev.allow && policy.dev.devTools ? <span className="muted">{devLine(policy.dev)}</span> : devLine(policy.dev)}</dd>
                 <dt>Forced settings</dt>
                 <dd>
                   {policy.managed.length === 0 ? (
@@ -539,6 +541,15 @@ export function quitDisabledLine(policy: Pick<SystemIntegrationStatus['policy'],
   const by = policy.managedBy ? ` (managed by ${policy.managedBy})` : '';
   const who = policy.users.length > 0 ? ` for: ${policy.users.join(', ')}` : '; no users are listed in app.users, so the daemon relaunches nobody';
   return `Quitting is disabled by policy${by}${who}. Closing the window hides it; Ctrl+Q and the tray do not quit.`;
+}
+
+/**
+ * Pure: how the policy's `dev` block reads in Settings → System. It is the decision this process
+ * started with, so it describes the running app rather than the file as it stands now.
+ */
+export function devLine(dev: DevRules): string {
+  if (dev.allow) return dev.devTools ? 'switches available' : 'DevTools disabled';
+  return dev.devTools ? 'switches locked off, DevTools left open' : 'switches and DevTools locked off';
 }
 
 /** How each `app` restriction reads in Settings → System when it is in force. */

@@ -35,6 +35,12 @@ export interface WindowManagerOptions {
   outDir: string;
   /** Vite dev server origin when running under `electron-vite dev`. */
   rendererUrl?: string;
+  /**
+   * Whether DevTools may be opened in the windows this manager creates. `false` (the policy's
+   * `dev.devTools`, see dev-guard.ts) makes `openDevTools()` and the menu's Toggle Developer
+   * Tools no-ops in every window, the overlays and prompt windows included. Default true.
+   */
+  devTools?: boolean;
   logger: Logger;
   /** Runs in the main window when it is about to close (reject pending prompts, …). */
   onMainClosed?: () => void;
@@ -183,6 +189,7 @@ export class WindowManager {
       webSecurity: true,
       spellcheck: false,
       backgroundThrottling: false,
+      devTools: this.opts.devTools !== false,
     };
   }
 

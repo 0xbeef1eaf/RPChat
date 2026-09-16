@@ -12,16 +12,29 @@ import { handleAssetRequest } from './asset-protocol.js';
 import { isHyprland } from './display/layers.js';
 import { createApp } from './engine.js';
 import type { AppServices } from './engine.js';
+import { applyDevGuard, refusalMessage } from './dev-guard.js';
 import { isBrowserSmokeRun, isSmokeRun, runBrowserSmoke, runSmokeTurn, smokeEnableModelTraffic, smokeLoadPlugin } from './dev-mode.js';
 import { registerIpc } from './ipc.js';
 import { createLogger } from './logger.js';
 import { trayMenuTemplate } from './quit-guard.js';
 import { WindowManager } from './windows.js';
 
-const logger = createLogger();
 const OUT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 /** apps/desktop in a dev checkout, the asar root when packaged. */
 const APP_ROOT = path.resolve(OUT_DIR, '..');
+/**
+ * `dev.allow: false` in the root-owned policy (dev-guard.ts): the development switches are deleted
+ * from the environment here, and a launch asking for an inspector flag is refused (`app.exit`
+ * ends the process there and then). This runs before anything at all has read the environment —
+ * the logger's `RP_DEBUG`, `RP_USER_DATA` below, the window manager's `ELECTRON_RENDERER_URL`,
+ * the engine's paths — so everything after this line sees an environment the policy has vetted.
+ */
+const devGuard = applyDevGuard({ logger: console });
+if (devGuard.refuse) {
+  console.error(refusalMessage(devGuard.refusedFlags));
+  app.exit(1);
+}
+const logger = createLogger();
 const env = process.env;
 /** `rp-code --hidden` (autostart): start minimized to the tray, no window until Show. */
 const START_HIDDEN = process.argv.includes('--hidden');
@@ -86,6 +99,7 @@ async function main(): Promise<void> {
   const windows = new WindowManager({
     outDir: OUT_DIR,
     ...(env.ELECTRON_RENDERER_URL ? { rendererUrl: env.ELECTRON_RENDERER_URL } : {}),
+    devTools: devGuard.rules.devTools,
     logger,
     onMainClosed: () => {
       // Questions asked in windows of their own outlive the chat window; only those that fell
@@ -147,7 +161,7 @@ async function main(): Promise<void> {
 
   const version = resolveAppVersion();
   try {
-    services = await createApp({ userData: app.getPath('userData'), appRoot: APP_ROOT, appVersion: version, windows, logger, env });
+    services = await createApp({ userData: app.getPath('userData'), appRoot: APP_ROOT, appVersion: version, windows, logger, env, dev: devGuard.rules });
   } catch (err) {
     logger.error('[main] engine failed to start', err);
     app.exit(1);

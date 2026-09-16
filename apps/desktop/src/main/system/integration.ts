@@ -6,8 +6,8 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { AppSettings, DaemonEvent, DaemonStatus, GuardAttemptRecord, GuardStatus, PolicyFile, SystemInstallStatus, SystemIntegrationStatus } from '@rp/shared';
-import { DEFAULT_APP_RESTRICTIONS, RpError, SYSTEM_GROUP, SYSTEM_INSTALL_DIR } from '@rp/shared';
+import type { AppSettings, DaemonEvent, DaemonStatus, DevRules, GuardAttemptRecord, GuardStatus, PolicyFile, SystemInstallStatus, SystemIntegrationStatus } from '@rp/shared';
+import { DEFAULT_APP_RESTRICTIONS, DEFAULT_DEV_RULES, RpError, SYSTEM_GROUP, SYSTEM_INSTALL_DIR } from '@rp/shared';
 import type { DaemonClient } from './daemon-client.js';
 import type { PolicyWatcher } from './policy.js';
 import { guardMode, parsePolicy } from './policy.js';
@@ -93,6 +93,12 @@ export interface SystemIntegrationDeps {
   udevRulePath?: string;
   /** The guard-attempt log the keepalive link feeds (`guardAttempts()`); a fresh one when absent. */
   guardLog?: GuardAttemptLog;
+  /**
+   * What the dev guard decided when this process started (dev-guard.ts). Reported as it was read
+   * then, not from the policy file now: the lock is applied once, at startup. Defaults to
+   * everything allowed, which is what a test or a non-Electron caller sees.
+   */
+  dev?: DevRules;
 }
 
 /** Pure: the XDG autostart entry for the app. */
@@ -315,6 +321,7 @@ export class SystemIntegration {
       allowQuit: policyState.app.allowQuit,
       users: policyState.app.users,
       restrictions: policyState.restrictions,
+      dev: this.deps.dev ?? DEFAULT_DEV_RULES,
     };
     if (policyState.managedBy) policy.managedBy = policyState.managedBy;
     if (policyState.error) policy.error = policyState.error;

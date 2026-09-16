@@ -7,8 +7,8 @@
  * its own switch (`forced`) next to the value that would be written (`values`). The `app`,
  * `inputLock` and `guard` blocks have meaningful defaults of their own and are always written.
  */
-import type { AppRestrictions, GuardCompositorIpc, GuardMode, GuardShell, PolicyFile } from '@rp/shared';
-import { DEFAULT_APP_RESTRICTIONS } from '@rp/shared';
+import type { AppRestrictions, DevRules, GuardCompositorIpc, GuardMode, GuardShell, PolicyFile } from '@rp/shared';
+import { DEFAULT_APP_RESTRICTIONS, DEFAULT_DEV_RULES } from '@rp/shared';
 
 export type PolicyValue = number | boolean | string | string[] | Record<string, boolean>;
 export type PolicyEmergencyKey = NonNullable<NonNullable<PolicyFile['inputLock']>['emergencyKey']>;
@@ -95,6 +95,16 @@ export const POLICY_RESTRICTIONS: ReadonlyArray<{ key: keyof AppRestrictions; la
   { key: 'requireCharacterSession', label: 'Always keep a conversation open', hint: 'The app opens a session with a character and offers no way to sit on an empty chat. This one adds a rule rather than removing one, so it reads the other way round.' },
 ];
 
+/** The `dev` block, phrased the same way round as the restrictions: on = the app may do it. */
+export const POLICY_DEV: ReadonlyArray<{ key: keyof DevRules; label: string; hint: string }> = [
+  {
+    key: 'allow',
+    label: 'Development switches',
+    hint: 'The RP_* environment overrides — the mock model, the smoke runs, the example pack and plugin, and the user-data, policy-file, daemon-socket and overlay-helper paths — plus loading the interface from a dev server. Off also refuses a launch that asks for a debugger.',
+  },
+  { key: 'devTools', label: 'DevTools', hint: 'Open the inspector in the app’s windows. Follows the switch above unless you set it here.' },
+];
+
 export const POLICY_EMERGENCY_KEYS: readonly PolicyEmergencyKey[] = ['esc', 'f1', 'f12', 'pause'];
 
 /** Guard shells that stand alone: picking one clears the rest, and picking any other clears it. */
@@ -108,6 +118,7 @@ export interface PolicyDraft {
   values: Record<string, PolicyValue>;
   inputLock: { enabled: boolean; maxDurationMs: number; emergencyKey: PolicyEmergencyKey; emergencyHoldMs: number };
   app: { allowQuit: boolean; users: string[]; restrictions: AppRestrictions };
+  dev: DevRules;
   guard: {
     mode: GuardMode;
     protectApp: boolean;
@@ -162,6 +173,10 @@ export function policyDraftFrom(policy: PolicyFile): PolicyDraft {
     const v = policy.app?.[key];
     if (typeof v === 'boolean') restrictions[key] = v;
   }
+  const dev: DevRules = { ...DEFAULT_DEV_RULES };
+  if (typeof policy.dev?.allow === 'boolean') dev.allow = policy.dev.allow;
+  // The file's `devTools` follows `allow` when it is absent, exactly as the guard reads it.
+  dev.devTools = typeof policy.dev?.devTools === 'boolean' ? policy.dev.devTools : dev.allow;
   const shell = policy.guard?.shell;
   return {
     managedBy: policy.managedBy ?? '',
@@ -174,6 +189,7 @@ export function policyDraftFrom(policy: PolicyFile): PolicyDraft {
       emergencyHoldMs: policy.inputLock?.emergencyHoldMs ?? 5000,
     },
     app: { allowQuit: policy.app?.allowQuit !== false, users: [...(policy.app?.users ?? [])], restrictions },
+    dev,
     guard: {
       mode: policy.guard?.mode ?? 'off',
       protectApp: policy.guard?.protectApp !== false,
@@ -208,6 +224,7 @@ export function policyDraftToFile(draft: PolicyDraft): PolicyFile {
   out.inputLock = { ...draft.inputLock };
   out.app = { allowQuit: draft.app.allowQuit, ...draft.app.restrictions };
   if (draft.app.users.length > 0) out.app.users = [...draft.app.users];
+  out.dev = { allow: draft.dev.allow, devTools: draft.dev.devTools };
 
   const guard: NonNullable<PolicyFile['guard']> = {
     mode: draft.guard.mode,
@@ -321,6 +338,8 @@ export function policyEffects(draft: PolicyDraft): Array<{ text: string; strict:
   }
   const restricted = POLICY_RESTRICTIONS.filter(({ key }) => (key === 'requireCharacterSession' ? draft.app.restrictions[key] : !draft.app.restrictions[key])).length;
   if (restricted > 0) out.push({ text: `${restricted} app restriction${restricted === 1 ? '' : 's'}`, strict: true });
+  if (!draft.dev.allow) out.push({ text: draft.dev.devTools ? 'development switches off, DevTools kept' : 'development switches and DevTools off', strict: true });
+  else if (!draft.dev.devTools) out.push({ text: 'DevTools off', strict: true });
   if (!draft.inputLock.enabled) out.push({ text: 'input locking refused', strict: true });
   if (draft.guard.mode !== 'off') out.push({ text: `session guard: ${draft.guard.mode}`, strict: draft.guard.mode === 'enforce' });
   return out;

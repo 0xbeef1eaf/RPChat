@@ -56,7 +56,68 @@ export interface PolicyFile {
    * signal/trace rp-code — while rp-code itself may. `mode` other than `off` needs `app.users`.
    */
   guard?: GuardPolicy;
+  /**
+   * The development switches (docs/spec/system.md "Policy `dev` block"). A block of its own rather
+   * than an `app` restriction because it is decided differently: the main process reads it
+   * synchronously at startup, straight from `POLICY_FILE_PATH`, before anything else has looked at
+   * the environment — `RP_POLICY_FILE` is itself one of the switches it takes away, so the lock
+   * cannot be read through a file the locked user chose.
+   */
+  dev?: DevPolicy;
 }
+
+/** `PolicyFile.dev`: whether the app honours its development switches at all. */
+export interface DevPolicy {
+  /**
+   * `false` makes the app ignore every development switch: the `RP_*` environment overrides (the
+   * mock provider, the smoke runs, the example pack and plugin, the user-data, policy-file,
+   * daemon-socket, overlay-helper and system-install paths), `ELECTRON_RENDERER_URL` and
+   * friends, and the inspector flags — a launch that asks for one of those is refused outright.
+   * Default `true`: without this key the app behaves exactly as it always has.
+   */
+  allow?: boolean;
+  /**
+   * Whether DevTools may be opened in the app's windows. Defaults to `allow`, so `allow: false`
+   * closes the inspector too; set it explicitly to keep the inspector on a locked machine (for
+   * support) or to take it away while the environment switches stay.
+   */
+  devTools?: boolean;
+}
+
+/** The effective `dev` block with defaults applied. */
+export interface DevRules {
+  allow: boolean;
+  devTools: boolean;
+}
+
+/** What applies without a policy file: every development switch honoured, as before. */
+export const DEFAULT_DEV_RULES: DevRules = { allow: true, devTools: true };
+
+/**
+ * Environment variables a locked-down app drops before anything reads them. Every `RP_*` variable
+ * is a development override with a working default behind it (nothing in a real install sets one),
+ * so the whole prefix goes — a switch added later is covered without touching this list.
+ */
+export const DEV_ENV_PREFIX = 'RP_';
+
+/** Dropped alongside the prefix: they point the app, or a process it spawns, at foreign code. */
+export const DEV_ENV_KEYS = ['ELECTRON_RENDERER_URL', 'ELECTRON_RUN_AS_NODE', 'NODE_OPTIONS'] as const;
+
+/**
+ * Command-line flags a locked-down app refuses to start with. They open a debugging channel into
+ * the main process or the renderer, which would hand back everything the lock takes away. Matched
+ * on the part before `=`. `--no-sandbox` is deliberately not here: real installs need it.
+ */
+export const DEV_ARGV_FLAGS = [
+  '--inspect',
+  '--inspect-brk',
+  '--inspect-port',
+  '--inspect-publish-uid',
+  '--remote-debugging-port',
+  '--remote-debugging-pipe',
+  '--remote-allow-origins',
+  '--js-flags',
+] as const;
 
 export type GuardMode = 'off' | 'audit' | 'enforce';
 export type GuardCompositorIpc = 'allow' | 'shell-only' | 'deny';
@@ -306,6 +367,12 @@ export interface SystemIntegrationStatus {
     users: string[];
     /** The effective `app` restrictions (`DEFAULT_APP_RESTRICTIONS` without a policy file); not settings keys, so not in `managed`. */
     restrictions: AppRestrictions;
+    /**
+     * The `dev` block as this process read it when it started (dev-guard.ts). It is deliberately
+     * the boot decision rather than the file's current content: the lock is applied once, so a
+     * policy edited since says nothing about the app that is running.
+     */
+    dev: DevRules;
     error?: string;
   };
   /** udev rule and group membership as detected (Linux). */

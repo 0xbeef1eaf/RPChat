@@ -37,6 +37,7 @@ for whoever set the machine up; the values in `settings` override everyone's own
 | `inputLock` | object | Daemon-enforced lock limits, see below. |
 | `app` | object | How the app itself may behave: `allowQuit`/`users` keep it running, and the `allow*`/`require*` keys take operations away from it. See below. |
 | `guard` | object | The session guard: AppArmor confinement of the `app.users` login sessions, see below. |
+| `dev` | object | Whether the app honours its own development switches, see below. |
 
 ## `settings` — forced app settings
 
@@ -143,13 +144,45 @@ it can be taken apart:
 }
 ```
 
+## `dev` — the development switches
+
+The app carries a handful of switches for its own development: environment variables that swap the
+model for a scripted one, drive turns by themselves, install an example pack or plugin, point the
+app at another user-data directory, policy file, daemon socket or overlay helper binary, or load
+the interface itself from a dev server — plus DevTools and the debugger flags. On a developer's
+machine they are conveniences. On a machine you manage they are the way around everything else in
+this file, so `dev.allow: false` takes them away.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `allow` | boolean | `true` | `false` makes the app ignore every `RP_*` environment variable, `ELECTRON_RENDERER_URL`, `ELECTRON_RUN_AS_NODE` and `NODE_OPTIONS` — they are deleted before anything reads them — and **refuse to start** when the command line asks for a debugging channel (`--inspect`, `--remote-debugging-port`, `--js-flags`, …). The log line names what was ignored. |
+| `devTools` | boolean | follows `allow` | Whether DevTools may be opened in the app's windows. Set it to `true` next to `allow: false` to keep the inspector for support, or to `false` on its own to close the inspector while the environment switches stay. |
+
+How it is read matters as much as what it says: the app reads this block **synchronously at
+startup and only from `/etc/rp-code/policy.json`** — never through `RP_POLICY_FILE`, which is one
+of the switches being taken away. A policy file that exists but cannot be read or does not parse
+locks the switches too, rather than falling back to "allowed". Because it is read once, changing
+`dev` takes effect at the app's next start, not within the minute like the rest of this file.
+Settings → System shows what the running app started with, under *Development*.
+
+What it is not: a boundary against someone who can replace the app itself or run its code in
+another Electron binary (`ELECTRON_RUN_AS_NODE` set on a *different* executable, for instance).
+A system install under `/opt/rp-code` with the session guard is what makes the binary itself hard
+to swap; this keeps a normal user from launching the app you installed in a mode that ignores the
+rest of the policy.
+
+```json
+{ "version": 1, "dev": { "allow": false, "devTools": false } }
+```
+
 ## Templates
 
 - `policy.example.json` — every key with its default: nothing changes until you edit it.
 - `policy.all-on.json` — the "everything on" policy: the app cannot be quit and is relaunched
-  for the listed user, and the session guard runs in **enforce** mode. Replace `alice` with your
-  user name. For a first run set `"guard": { "mode": "audit" }`, log in, read the audit log under
-  Settings → System, then switch to `enforce`.
+  for the listed user, the development switches and DevTools are off, and the session guard runs
+  in **enforce** mode. Replace `alice` with your user name. For a first run set
+  `"guard": { "mode": "audit" }`, log in, read the audit log under Settings → System, then switch
+  to `enforce`.
 
 ## `guard` — the session guard (AppArmor)
 

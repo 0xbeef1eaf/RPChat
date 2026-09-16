@@ -9,7 +9,7 @@ import type { Logger, ProviderFactory } from '@rp/core';
 import { createStandardRegistry } from '@rp/sdk';
 import { QuickJsRunner } from '@rp/sandbox';
 import { createProvider } from '@rp/llm';
-import type { AppSettings, LoadedPack, PermissionDecision, PermissionRequest, Storage, UiPromptAnswer, UiPromptRequest } from '@rp/shared';
+import type { AppSettings, DevRules, LoadedPack, PermissionDecision, PermissionRequest, Storage, UiPromptAnswer, UiPromptRequest } from '@rp/shared';
 import { SYSTEM_INSTALL_DIR } from '@rp/shared';
 import { IPC_EVENT_CHANNELS, RpError, assetUrl, parseCharacterRef } from '@rp/shared';
 import { defaultSettings, mergeSettings } from '@rp/core';
@@ -114,6 +114,11 @@ export interface CreateAppOptions {
   windows: WindowManager;
   logger: Logger;
   env?: NodeJS.ProcessEnv;
+  /**
+   * What the dev guard decided at startup (dev-guard.ts), for Settings → System to report. When a
+   * lock is in force the switches are already gone from `env`, so nothing else here consults it.
+   */
+  dev?: DevRules;
 }
 
 export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
@@ -475,6 +480,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     appImage: Boolean(env.APPIMAGE),
     execPath: execPathReal,
     systemInstallDir,
+    ...(opts.dev ? { dev: opts.dev } : {}),
     logger,
   });
   // `app.allowQuit`: the guard mirrors the policy (index.ts applies it on every policy read) and the

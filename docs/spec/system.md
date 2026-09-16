@@ -313,6 +313,24 @@ with `pkexec` for the current user.
   a `GuardAttemptRecord` in the log and the `guard-attempt` host event (`emit` into the senses
   provider; data `{ kind, target, command, pid, blocked, profile, operation, requested? }`).
   The single-instance lock (already present) makes a duplicate relaunch exit at once.
+- **`dev.allow: false`** (`src/main/dev-guard.ts`, pure + injectable + tested; the first statement
+  of `index.ts`): the development switches are refused on a machine whose policy forbids them.
+  `readDevRules({ path, readFile })` reads **only** `POLICY_FILE_PATH` — never `env.RP_POLICY_FILE`,
+  which is one of the switches — and only the `dev` block of it, so a problem elsewhere in the file
+  is the watcher's to report; it fails closed (a file that exists but cannot be read or parsed
+  locks). `devRules(policy)` applies the defaults (`allow` true, `devTools` follows `allow`).
+  `applyDevGuard({ env, argv, logger })` then, while locked, deletes every development switch from
+  `process.env` (`devEnvKeys`/`scrubDevEnv`: the whole `DEV_ENV_PREFIX` = `RP_`, plus
+  `DEV_ENV_KEYS` = `ELECTRON_RENDERER_URL`, `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`) before the
+  logger, the window manager or the engine has read any of them — so `dev-mode.ts`, `engine.ts`,
+  `logger.ts` and `helper-process.ts` need no checks of their own and a switch added later is
+  covered by the prefix — and reports `refusedDevFlags(argv)` (`DEV_ARGV_FLAGS`: `--inspect*`,
+  `--remote-debugging-port`/`-pipe`, `--remote-allow-origins`, `--js-flags`; `--no-sandbox`
+  deliberately not), on which `index.ts` prints `refusalMessage()` and `app.exit(1)`.
+  `WindowManagerOptions.devTools` (`false` → `webPreferences.devTools: false` in every window it
+  makes) carries `rules.devTools`; `CreateAppOptions.dev` carries the decision to
+  `SystemIntegrationDeps.dev`, which `status().policy.dev` reports — the boot decision, not the
+  file as it stands now, because the lock is applied once.
 - **Updates on a system install** (`src/main/updates/service.ts`, `system-updater.ts`): engine.ts
   wires `UpdateServiceDeps.systemInstall` (`dir`, `available()` → `{ daemonConnected,
   daemonSupportsUpdates, current?, previous? }` from `daemon.status().install`, `applyUpdate`,
@@ -380,6 +398,16 @@ sets `deny_unknown_fields` — it does not act on them.
 
 `GuardPolicy` in `@rp/shared/system.ts`; validated identically by `parseGuard` (app) and `validate_guard` (daemon). `mode` `off` (default) \| `audit` \| `enforce`; `protectApp`, `wallpaper` booleans (default true); `compositorIpc` `allow` \| `shell-only` (default) \| `deny`; `shell` `auto` (default) \| `noctalia` \| `quickshell` \| `hyprpaper` \| `swww` \| `none`; `loginHelpers` (non-empty, absolute), `extraDenyPaths`/`extraDenySockets` (absolute, `~/…` or `@{HOME}/…`), `allowBinaries` (absolute) — no whitespace or quotes anywhere (they become AppArmor rules). A `mode` other than `off` without `app.users` is invalid; the listed users are the ones confined. Not a settings key; reported as `SystemIntegrationStatus.guard`.
 
+### Policy `dev` block
+
+`DevPolicy` in `@rp/shared/system.ts`, accepted by `parsePolicy` (both keys boolean, unknown keys
+ignored, `dev` itself must be an object) and by the daemon's `DevPolicy` (`deny_unknown_fields`;
+the daemon does not act on it, it keeps it and hands it back like the `app` restrictions).
+`allow` (default `true`) is the development switches; `devTools` (default: follows `allow`) is the
+inspector. Not a settings key: reported as `SystemIntegrationStatus.policy.dev`, never in
+`managed`. What enforces it, and why it is read the way it is, is the `dev.allow` bullet under
+*App (desktop main)*.
+
 ### Policy `settings` keys
 
 Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and the daemon (`SETTINGS_KEYS` + `validate()` in `policy.rs`) must know every key, so extend both together.
@@ -427,7 +455,11 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
   `lastError` callout; a warning when `pamConfigured` is false; a collapsible "What it cannot do"
   list from `residual`; **Audit log…** opens `GuardAuditDialog` with the last 50
   `system.guardAttempts()` rows (`guardAttemptLine()`); **Apply now** → `system.guardApply()`),
-  udev/group status with the "re-login required" hint,
+  a **Development** row in the policy card (`devLine(policy.dev)`: "switches available" (muted),
+  "DevTools disabled", "switches locked off, DevTools left open" or "switches and DevTools locked
+  off"), the Create-policy form's **Development** section on the App tab (`POLICY_DEV`, the two
+  switches; turning `allow` off turns `devTools` off with it, and keeping DevTools on a locked
+  machine shows a warning callout), udev/group status with the "re-login required" hint,
   "Install system integration…" (explains what it does, runs `system.install`, shows the output),
   "Start on login" toggle (`system.setAutostart`), "Installer script path" with copy button.
 - Settings → **Updates**: packaging "System install · applied by the system service", an Install
@@ -442,7 +474,8 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
 ## Docs
 
 `docs/system-integration.md`: why the daemon, what the installer changes, the policy file reference,
-emergency unlock chord, the session guard (what it blocks, the verified AppArmor facts with sources,
+emergency unlock chord, locking down development mode (`dev.allow`, what it removes and what it is
+not), the session guard (what it blocks, the verified AppArmor facts with sources,
 the login-helper/hat mechanism, audit → enforce procedure, limits, recovery), uninstall, security
 notes (group membership means "may lock input and inject keys", so treat `rp-code` group like `input`).
 

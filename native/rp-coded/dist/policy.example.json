@@ -58,6 +58,10 @@
     "allowSandbox": true,
     "requireCharacterSession": false
   },
+  "dev": {
+    "allow": true,
+    "devTools": true
+  },
   "guard": {
     "mode": "off",
     "protectApp": true,

@@ -257,6 +257,8 @@ Points worth knowing:
 - `guard: { "mode": "audit" }` confines the listed users' login sessions with AppArmor so their
   own terminals and scripts cannot reach the compositor/shell IPC, edit the wallpaper config or
   kill rp-code — see [Session guard](#session-guard).
+- `dev: { "allow": false }` takes the app's development switches away, so nobody can start the
+  app in a mode that ignores the rest of this file. Details below.
 
 ### Keeping the app running (`app.allowQuit`)
 
@@ -309,6 +311,55 @@ child of the daemon's service, so the unit is less sandboxed than a pure device 
 (no `ProtectHome`, `PrivateTmp`, syscall filter or device policy; see the comments in
 `rp-coded.service`), and it runs with *no new privileges*, so Chromium uses its user-namespace
 sandbox (which the AppImage does anyway).
+
+### Locking down development mode (`dev.allow`)
+
+```json
+{ "version": 1, "managedBy": "family PC", "dev": { "allow": false, "devTools": false } }
+```
+
+The app has switches it uses while it is being built: `RP_MOCK_LLM=1` replaces every provider with
+a scripted one, `RP_SMOKE=1` drives turns by itself, `RP_EXAMPLE_PLUGIN` installs a plugin from any
+directory, `RP_OVERLAY_HELPER` runs any binary as the overlay helper, `RP_DAEMON_SOCKET` points the
+app at something pretending to be `rp-coded`, `RP_USER_DATA` gives it another profile,
+`RP_POLICY_FILE` gives it another policy, and `ELECTRON_RENDERER_URL` loads the interface itself
+from a dev server. Add `--inspect` or `--remote-debugging-port` and the main process and the
+renderer are open to anyone. Every one of them is a way to start *your* app with *their* rules.
+
+`dev.allow: false` ends that. At startup — before it has read the environment for anything else —
+the app deletes every `RP_*` variable, `ELECTRON_RENDERER_URL`, `ELECTRON_RUN_AS_NODE` and
+`NODE_OPTIONS` from its own process, and refuses to start at all when the command line asks for a
+debugging channel:
+
+```
+[dev-guard] development switches are locked off by policy; ignoring RP_MOCK_LLM, RP_POLICY_FILE
+[dev-guard] refusing to start: --remote-debugging-port=9222 would open a debugging channel, and the system policy locks development switches off
+```
+
+DevTools follow `allow` unless you say otherwise: `"dev": { "allow": false, "devTools": true }`
+keeps the inspector (for support on a machine you manage), `"dev": { "devTools": false }` closes
+the inspector and leaves the rest alone. Settings → System shows what the running app started with,
+under *Development*.
+
+Two details make this a lock rather than a suggestion:
+
+- **It is read from `/etc/rp-code/policy.json` itself**, synchronously, never through
+  `RP_POLICY_FILE` — reading the lock through a file the locked user chose would be no lock at all.
+- **It fails closed**: a policy file that exists but cannot be read or does not parse locks the
+  switches, rather than falling back to "allowed". The cost of being wrong that way is a
+  convenience; the other way it is the lock.
+
+Because it is read once at startup, a change to `dev` applies at the app's next start rather than
+within the minute like `app.allowQuit`. The daemon's relaunch cannot reintroduce a switch either:
+a registration carries only the whitelisted session variables (`DISPLAY`, `WAYLAND_DISPLAY`, …),
+and no `RP_*` variable is in that list.
+
+**What it is not**: a boundary against someone who can replace the app itself, or who runs the
+app's code in an Electron binary of their own — nothing inside a process can defend against that.
+Install the app to `/opt/rp-code` (root-owned, [System install](#system-install)) and turn the
+[session guard](#session-guard) on if that is the threat you have in mind. What this does is keep
+a normal user from launching the app you installed in a mode where the rest of this file does not
+apply.
 
 ### Creating the policy from the app (write once)
 

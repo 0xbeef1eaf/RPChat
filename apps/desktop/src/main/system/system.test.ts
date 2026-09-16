@@ -418,6 +418,21 @@ describe('policy', () => {
     expect(() => parsePolicy({ version: 1, app: [] })).toThrow(/app must be an object/);
   });
 
+  it('parses the dev block, leaves it absent by default and rejects wrong types', () => {
+    expect(parsePolicy({ version: 1 }).dev).toBeUndefined();
+    expect(parsePolicy({ version: 1, dev: {} }).dev).toEqual({});
+    expect(parsePolicy({ version: 1, dev: { allow: false } }).dev).toEqual({ allow: false });
+    expect(parsePolicy({ version: 1, dev: { allow: false, devTools: true } }).dev).toEqual({ allow: false, devTools: true });
+    // Unknown keys are ignored here, as everywhere else; the daemon is the one that refuses them.
+    expect(parsePolicy({ version: 1, dev: { allow: true, nonsense: 1 } }).dev).toEqual({ allow: true });
+    // Not a settings key, so it never shows up as managed.
+    expect(managedPaths(parsePolicy({ version: 1, dev: { allow: false } }))).toEqual([]);
+    expect(() => parsePolicy({ version: 1, dev: { allow: 'no' } })).toThrow(/dev.allow must be a boolean/);
+    expect(() => parsePolicy({ version: 1, dev: { devTools: 0 } })).toThrow(/dev.devTools must be a boolean/);
+    expect(() => parsePolicy({ version: 1, dev: 'off' })).toThrow(/dev must be an object/);
+    expect(() => parsePolicy({ version: 1, dev: [] })).toThrow(/dev must be an object/);
+  });
+
   it('parses the guard block like the daemon and rejects what it rejects', () => {
     const full = parsePolicy({
       version: 1,

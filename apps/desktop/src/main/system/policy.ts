@@ -170,6 +170,20 @@ export function parsePolicy(json: unknown): PolicyFile {
       out.app = appBlock;
     }
   }
+  if (raw.dev !== undefined) {
+    if (!raw.dev || typeof raw.dev !== 'object' || Array.isArray(raw.dev)) problems.push('dev must be an object');
+    else {
+      const d = raw.dev as Record<string, unknown>;
+      const devBlock: NonNullable<PolicyFile['dev']> = {};
+      for (const k of ['allow', 'devTools'] as const) {
+        const v = d[k];
+        if (v === undefined) continue;
+        if (typeof v === 'boolean') devBlock[k] = v;
+        else problems.push(`dev.${k} must be a boolean`);
+      }
+      out.dev = devBlock;
+    }
+  }
   if (raw.guard !== undefined) {
     const guard = parseGuard(raw.guard, problems);
     if (guard) out.guard = guard;
