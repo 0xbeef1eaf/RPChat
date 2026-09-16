@@ -26,7 +26,7 @@ import { notConfigured } from './commands.js';
 import type { AppServices } from './engine.js';
 import { phase2, unavailable } from './phase2.js';
 import type { ChainAuthor } from './system/chain-author.js';
-import { isRestrictable, refusalFor } from './system/restrictions.js';
+import { isRestrictable, refusalFor, refusalForStoppingTurn, stopsRunningTurn } from './system/restrictions.js';
 import type { WindowManager } from './windows.js';
 
 /** The memory service surface main needs (`engine.memories`, added by @rp/core). */
@@ -387,6 +387,8 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       const channel = `${ns}:${method}`;
       // Resolved once per channel: an unguarded one never reads the policy at call time.
       const guarded = isRestrictable(channel);
+      // Channels that cut a reply short on their way to what they do; checked only when one runs.
+      const mayStopTurn = stopsRunningTurn(channel);
       ipcMain.handle(channel, async (event, ...args) => {
         if (!windows.isOurs(event.sender)) {
           logger.warn(`[ipc] rejected ${channel} from an unknown sender (webContents ${event.sender.id})`);
@@ -396,6 +398,17 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
         if (guarded) {
           const state = await services.policy.current();
           const refusal = refusalFor(channel, state.restrictions, state.managedBy);
+          if (refusal) {
+            logger.info(`[ipc] refused ${channel}: ${refusal}`);
+            throw new RpError('PERMISSION_DENIED', refusal);
+          }
+        }
+        // `allowStopGeneration` off: retrying, resetting or editing the history is refused while a
+        // reply is in flight, since each of those aborts it first. Every such channel takes the
+        // session id first, so the policy is only read when that session is actually running.
+        if (mayStopTurn && typeof args[0] === 'string' && engine.chat.isRunning(args[0])) {
+          const state = await services.policy.current();
+          const refusal = refusalForStoppingTurn(state.restrictions, state.managedBy);
           if (refusal) {
             logger.info(`[ipc] refused ${channel}: ${refusal}`);
             throw new RpError('PERMISSION_DENIED', refusal);

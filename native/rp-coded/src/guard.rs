@@ -402,6 +402,19 @@ fn guarded(mode: GuardMode, rule: &str) -> String {
     }
 }
 
+/// [`guarded`] for a rule whose permissions include exec, which the two modes have to spell
+/// differently. An **allow** rule — what audit mode emits — must say how the exec transitions:
+/// a bare `x` is a parse error (`Invalid perms, 'x' must be preceded by exec qualifier`). A
+/// **deny** rule must not, because a denied exec has no transition to describe. So audit mode
+/// allows the exec with `ix` and logs it, which is what audit mode means for every other rule
+/// here too, and enforce mode denies it outright.
+fn guarded_exec(mode: GuardMode, path: &str, perms: &str) -> String {
+    match mode {
+        GuardMode::Enforce => format!("  audit deny {path} {perms},\n"),
+        _ => format!("  audit {path} {},\n", perms.replace('x', "ix")),
+    }
+}
+
 fn flags(extra: &[&str]) -> String {
     let mut all = vec!["attach_disconnected"];
     all.extend_from_slice(extra);
@@ -504,10 +517,10 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     // --- the guarded rules (session; shell/compositor get the parts that apply) -------
     let mut guard_rules = String::new();
     for p in &deny_all {
-        guard_rules.push_str(&guarded(mode, &format!("{p} rwklx")));
+        guard_rules.push_str(&guarded_exec(mode, p, "rwklx"));
     }
     for b in &deny_exec {
-        guard_rules.push_str(&guarded(mode, &format!("{b} x")));
+        guard_rules.push_str(&guarded_exec(mode, b, "x"));
     }
     for s in &deny_sockets {
         guard_rules.push_str(&guarded(mode, &format!("{s} rw")));
@@ -2734,20 +2747,30 @@ garbage line\n";
         } else {
             None
         };
-        for (mode, ipc) in [
-            ("audit", "shell-only"),
-            ("enforce", "deny"),
-            ("enforce", "allow"),
+        // The `lock` cases matter as much as the rest: a sealed policy adds the only rules in
+        // this file whose permissions include exec, and those have to be spelled differently per
+        // mode. Rendering them here is what stops that being discovered on somebody's machine.
+        for (mode, ipc, lock) in [
+            ("audit", "shell-only", false),
+            ("enforce", "deny", false),
+            ("enforce", "allow", false),
+            ("audit", "shell-only", true),
+            ("enforce", "shell-only", true),
         ] {
-            let r = rules(
-                serde_json::json!({"version":1,"app":{"users":["work","o'neil"]},"guard":{"mode":mode,"compositorIpc":ipc,"allowBinaries":["/usr/bin/free"],"extraDenyPaths":["~/.config/hypr/hyprpaper.conf"],"extraDenySockets":["/run/user/1000/extra.sock"]}}),
-            );
+            let mut policy = serde_json::json!({"version":1,"app":{"users":["work","o'neil"]},"guard":{"mode":mode,"compositorIpc":ipc,"allowBinaries":["/usr/bin/free"],"extraDenyPaths":["~/.config/hypr/hyprpaper.conf"],"extraDenySockets":["/run/user/1000/extra.sock"]}});
+            if lock {
+                policy
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("lock".into(), serde_json::json!({}));
+            }
+            let r = rules(policy);
             let mut ctx = noctalia_hyprland_ctx(&["work", "o'neil"]);
             ctx.abi = abi.clone();
             let plan = render(&r, &ctx);
             let mut files = Vec::new();
             for f in &plan.files {
-                let path = dir.path().join(format!("{}-{mode}-{ipc}", f.name));
+                let path = dir.path().join(format!("{}-{mode}-{ipc}-{lock}", f.name));
                 std::fs::write(&path, &f.text).unwrap();
                 files.push(path);
             }
@@ -2764,7 +2787,8 @@ garbage line\n";
                 .unwrap();
             assert!(
                 out.status.success(),
-                "apparmor_parser -Q failed for {mode}/{ipc}:\n{}\n{}",
+                "apparmor_parser -Q failed for {mode}/{ipc}{}:\n{}\n{}",
+                if lock { " (sealed)" } else { "" },
                 String::from_utf8_lossy(&out.stderr),
                 plan.files
                     .iter()

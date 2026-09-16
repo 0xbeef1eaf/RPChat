@@ -576,6 +576,7 @@ const RESTRICTION_LABELS: Record<keyof AppRestrictions, string> = {
   allowPackEditor: 'pack editor disabled',
   allowPackRemove: 'packs cannot be removed',
   allowPackInstall: 'packs cannot be installed or replaced',
+  allowStopGeneration: 'a reply cannot be stopped once it starts',
   allowDeleteSession: 'sessions cannot be deleted',
   allowDeleteHistory: 'chat history cannot be deleted',
   allowDeleteMemories: 'memories cannot be deleted',

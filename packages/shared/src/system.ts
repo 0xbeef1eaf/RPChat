@@ -243,6 +243,13 @@ export interface AppRestrictions {
    * are refused, so no pack is added, replaced or rewritten in the pack store.
    */
   allowPackInstall: boolean;
+  /**
+   * `false` refuses `chat.abort` — a reply already being generated has to finish. The channels
+   * that abort the turn in flight on their way to doing something else (`chat.retry`,
+   * `sessions.resetState`, `sessions.removeMessage`, `sessions.clearMessages`) are refused too,
+   * but only *while* a reply is running, so those features still work the rest of the time.
+   */
+  allowStopGeneration: boolean;
   /** `false` refuses `sessions.remove` — a conversation cannot be deleted. */
   allowDeleteSession: boolean;
   /** `false` refuses `sessions.clearMessages` and `sessions.removeMessage` — the chat history cannot be erased. */
@@ -267,6 +274,7 @@ export const DEFAULT_APP_RESTRICTIONS: AppRestrictions = {
   allowPackEditor: true,
   allowPackRemove: true,
   allowPackInstall: true,
+  allowStopGeneration: true,
   allowDeleteSession: true,
   allowDeleteHistory: true,
   allowDeleteMemories: true,
@@ -280,6 +288,7 @@ export const APP_ALLOW_KEYS = [
   'allowPackEditor',
   'allowPackRemove',
   'allowPackInstall',
+  'allowStopGeneration',
   'allowDeleteSession',
   'allowDeleteHistory',
   'allowDeleteMemories',

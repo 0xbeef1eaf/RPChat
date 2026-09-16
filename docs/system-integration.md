@@ -426,8 +426,10 @@ else. **Sealing** replaces it with a lock, and there are two, which are mutually
 ### A code, for a machine you can walk up to
 
 Settings → System → **Policy lock** → *Lock policy*. The daemon generates a TOTP secret, pins the
-current policy to it, and shows you — **once** — the secret and an `otpauth://` URI to enrol an
-authenticator app with. Enrol before closing that dialog and keep a copy somewhere safe.
+current policy to it, and shows you — **once** — a QR code to scan with your authenticator app.
+*Can't scan it?* opens the secret to type in by hand and the `otpauth://` URI behind the code, for
+a phone that is not to hand or an app that takes a URI. Enrol before closing that dialog, and keep
+a copy of the secret somewhere safe: nothing shows it again.
 
 From then on *Edit policy…* opens the policy form seeded from what is on disk and asks for the
 current code before writing, and *Unlock…* (or `sudo rp-coded --unseal <code>`) releases the

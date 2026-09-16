@@ -88,6 +88,7 @@ export const POLICY_RESTRICTIONS: ReadonlyArray<{ key: keyof AppRestrictions; la
   { key: 'allowPackInstall', label: 'Install packs', hint: 'Add, replace or rewrite packs in the store. Off freezes what is installed.' },
   { key: 'allowPackRemove', label: 'Remove packs', hint: 'Uninstall a pack.' },
   { key: 'allowSandbox', label: 'Sandbox', hint: 'Run code by hand in the Sandbox tab. Off hides the tab.' },
+  { key: 'allowStopGeneration', label: 'Stop a reply', hint: 'Cut a reply short while it is being written. Off also blocks retrying, resetting or editing the history while one is running, since those stop it too.' },
   { key: 'allowDeleteSession', label: 'Delete conversations', hint: 'Remove a whole conversation.' },
   { key: 'allowDeleteHistory', label: 'Delete chat history', hint: 'Clear a conversation or remove single messages from it.' },
   { key: 'allowDeleteMemories', label: 'Delete memories', hint: 'Remove what a character remembers.' },

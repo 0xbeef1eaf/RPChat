@@ -11,6 +11,7 @@ import { api, errorMessage } from '../../api';
 import { formatDateTime } from '../../lib/format';
 import { toast } from '../../store/actions';
 import { Modal } from '../common/Modal';
+import { QrCode } from '../common/QrCode';
 import { keyLine, lockoutLine, packLine, remoteLine, runtimeLine, sealLine } from '../../lib/seal';
 
 export function SealCard({ status, onChanged, disabled }: { status: SystemIntegrationStatus; onChanged(next: SystemIntegrationStatus): void; disabled?: boolean }) {
@@ -119,16 +120,24 @@ export function SealCard({ status, onChanged, disabled }: { status: SystemIntegr
       {enrolment ? (
         <Modal title="Enrol your authenticator app" onClose={() => setEnrolment(null)}>
           <div className="stack">
-            <p className="small">Add this secret to your authenticator app now. It is not stored anywhere you can read it again.</p>
-            <label className="field">
-              <span className="field-label">Secret</span>
-              <input className="input mono" readOnly value={enrolment.secret} onFocus={(e) => e.currentTarget.select()} />
-            </label>
-            <label className="field">
-              <span className="field-label">Enrolment URI (paste into your app, or make a QR code from it)</span>
-              <input className="input mono" readOnly value={enrolment.otpauth} onFocus={(e) => e.currentTarget.select()} />
-            </label>
-            <div className="callout callout-warning small">Closing this dialog is the last time these are on screen.</div>
+            <p className="small">Scan this with your authenticator app now. It is not stored anywhere you can read it again.</p>
+            <div className="row" style={{ justifyContent: 'center' }}>
+              <QrCode value={enrolment.otpauth} size={220} label="Scan to enrol this machine's policy lock" />
+            </div>
+            <details className="small">
+              <summary>Can’t scan it?</summary>
+              <div className="stack" style={{ marginTop: 8 }}>
+                <label className="field">
+                  <span className="field-label">Secret — type this into your app by hand</span>
+                  <input className="input mono" readOnly value={enrolment.secret} onFocus={(e) => e.currentTarget.select()} />
+                </label>
+                <label className="field">
+                  <span className="field-label">Enrolment URI — the same thing the code above encodes</span>
+                  <input className="input mono" readOnly value={enrolment.otpauth} onFocus={(e) => e.currentTarget.select()} />
+                </label>
+              </div>
+            </details>
+            <div className="callout callout-warning small">Closing this dialog is the last time any of this is on screen.</div>
           </div>
           <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
             <button type="button" className="btn btn-primary" onClick={() => setEnrolment(null)}>

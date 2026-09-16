@@ -204,7 +204,10 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   sockets guarded with `compositorIpc: deny`); `rp-code-compositor` (children `px -> rp-code-session`);
   `rp-code-login` (attached to the login helpers, always complain, `^<user>` hats with `/** px ->
   rp-code-session`, `^DEFAULT` with `/** ux`). Audit mode = `audit <rule>` + `flags=(complain)`,
-  enforce = `audit deny <rule>` (explicit deny is enforced even in complain mode). Header line
+  enforce = `audit deny <rule>` (explicit deny is enforced even in complain mode). A rule whose
+  permissions include exec goes through `guarded_exec` instead: an *allow* rule has to say how the
+  exec transitions, so a bare `x` is a parse error — audit mode emits `ix` (allowed, logged) and
+  enforce mode the bare `x` that a deny rule needs. Header line
   `# rp-code-guard <sha256[..16]>` makes re-engages idempotent. `apply(policy, hooks, paths)`:
   off → `apparmor_parser -R` + remove files; else resolve context (existing helpers/binaries,
   cached + fresh discovery), write changed files, `-Q -K` then `-r -K`, state to
@@ -471,11 +474,18 @@ and its own and is refused when either forbids it. `isRestrictable` resolves the
 at registration so unguarded channels never read the policy. The renderer hides the matching
 controls (nav entries, Uninstall, Clear history, Forget, Remove, Delete session) — cosmetic only.
 
+`allowStopGeneration` needs one thing a channel table cannot express: whether a turn is in flight.
+`TURN_STOPPING_CHANNELS` names the channels that abort the running turn on their way to what they
+actually do, and the dispatch loop checks `engine.chat.isRunning(sessionId)` (every one of them
+takes the session id first) before asking `refusalForStoppingTurn` — so the policy is read only
+when a reply is genuinely being cut short, and retry/reset/delete keep working otherwise.
+
 | Key | Default | Effect | Channels refused |
 |---|---|---|---|
 | `allowPackEditor` | `true` | Pack editor closed; nav entry hidden, `navigate('editor')` is a no-op. | `editor:*` |
 | `allowPackRemove` | `true` | No *Uninstall* on a pack card. | `packs:uninstall` |
 | `allowPackInstall` | `true` | Installed packs frozen on disk — nothing added, replaced or rewritten. The editor still opens and still exports. | `packs:install`, `editor:installToApp` |
+| `allowStopGeneration` | `true` | *Stop* in the composer is disabled: a reply runs to the end. | `chat:abort`, plus `chat:retry`, `sessions:resetState`, `sessions:removeMessage`, `sessions:clearMessages` **only while a turn is running** (each aborts it first) |
 | `allowDeleteSession` | `true` | No *Delete session* in the session panel. | `sessions:remove` |
 | `allowDeleteHistory` | `true` | No *Clear history*, no per-message delete. | `sessions:clearMessages`, `sessions:removeMessage` |
 | `allowDeleteMemories` | `true` | No *Forget* in the memories panel; add/edit still work. | `memories:remove` |
@@ -519,6 +529,13 @@ inspector. Not a settings key: reported as `SystemIntegrationStatus.policy.dev`,
 - IPC: `system.setRemoteLink(blob, code?)` and `system.author*` (`authorStatus`, `authorCreateKey`,
   `authorImportKey`, `authorExportKey`, `authorForget`, `authorConfigure`, `authorRemoteLink`,
   `authorAppendLink`, `authorDropLastLink`, `authorChain`, `authorSignPack`).
+- `renderer/lib/qr.ts` + `components/common/QrCode.tsx`: the enrolment QR. `qrMatrix` wraps
+  `qrcode-generator` into a boolean matrix and `qrPath` merges each row's dark runs into one SVG
+  path (a version-7 code is ~2000 modules; one node per module makes a dialog feel slow). Drawn as
+  React elements, never `dangerouslySetInnerHTML`, and always black on white whatever the theme —
+  a theme-tinted code photographed off a screen is the kind of thing that scans on one phone only.
+  Tested by rasterising the matrix and decoding it with `jsqr`, so the assertion is that a scanner
+  reads the right URI back rather than that a matrix exists.
 - Renderer: `components/settings/RemoteLinkSection.tsx` — the *Remote Link* card (paste box,
   gated by the code on a `totp` machine and refused on a `chain` one, with the enrolment dialog
   when a `totp` blob seals the machine) and the *Publish a chain* dialog (key, Remote Link,

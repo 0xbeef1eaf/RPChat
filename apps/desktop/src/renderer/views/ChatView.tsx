@@ -190,6 +190,7 @@ export function ChatView() {
         running={running}
         onSend={onSend}
         onAbort={onAbort}
+        canAbort={restrictions.allowStopGeneration}
       />
       {confirmReset ? (
         <ConfirmDialog
@@ -197,7 +198,8 @@ export function ChatView() {
           message={
             <>
               This forgets what <strong>{characterName}</strong> stored for this session (scratch state, pending timers, event subscriptions,
-              the rolling history summary and the status line). Messages, long-term state and memories stay. A running reply is stopped.
+              the rolling history summary and the status line). Messages, long-term state and memories stay.{' '}
+              {restrictions.allowStopGeneration ? 'A running reply is stopped.' : 'A reply already being written has to finish first.'}
             </>
           }
           confirmLabel="Reset"

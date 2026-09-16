@@ -114,6 +114,14 @@ export class ChatService {
     });
   }
 
+  /**
+   * Whether a turn is in flight for this session. The app's `allowStopGeneration` restriction
+   * reads it to tell a plain retry or reset from one that would cut a reply short.
+   */
+  isRunning(sessionId: string): boolean {
+    return this.controllers.has(sessionId);
+  }
+
   /** Abort the running turn of a session (provider request and sandbox run). */
   async abort(sessionId: string): Promise<void> {
     this.controllers.get(sessionId)?.abort();

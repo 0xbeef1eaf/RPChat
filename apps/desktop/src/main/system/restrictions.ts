@@ -1,8 +1,9 @@
 /**
  * The app-enforced half of the policy's `app` block (docs/spec/system.md "Restrictions"):
  * operations a household admin can take away from this machine — the pack editor, removing or
- * rewriting packs, deleting sessions/history/memories, unsubscribing event handlers, the sandbox
- * — plus `requireCharacterSession`, which keeps the app inside a conversation.
+ * rewriting packs, stopping a reply mid-generation, deleting sessions/history/memories,
+ * unsubscribing event handlers, the sandbox — plus `requireCharacterSession`, which keeps the
+ * app inside a conversation.
  *
  * The `guard` block confines the session *around* the app with AppArmor; this confines the app
  * itself. Enforcement is one table consulted in `registerIpc`'s dispatch loop, so every guarded
@@ -34,14 +35,16 @@ export const RESTRICTED_CHANNELS: Readonly<Record<string, ChannelRule>> = {
   // 3. Writing packs to disk — installing one is how a pack is added *or replaced*.
   'packs:install': { key: 'allowPackInstall', what: 'Installing a pack' },
   'editor:installToApp': { key: 'allowPackInstall', what: 'Installing a pack' },
-  // 4. Delete Session / Delete History / Delete Memories.
+  // 4. Stopping a reply that is already being generated.
+  'chat:abort': { key: 'allowStopGeneration', what: 'Stopping a reply' },
+  // 5. Delete Session / Delete History / Delete Memories.
   'sessions:remove': { key: 'allowDeleteSession', what: 'Deleting a session' },
   'sessions:clearMessages': { key: 'allowDeleteHistory', what: 'Deleting the chat history' },
   'sessions:removeMessage': { key: 'allowDeleteHistory', what: 'Deleting a message' },
   'memories:remove': { key: 'allowDeleteMemories', what: 'Deleting a memory' },
-  // 7. Event handlers.
+  // 6. Event handlers.
   'events:remove': { key: 'allowRemoveEvents', what: 'Removing an event handler' },
-  // 6. The sandbox.
+  // 7. The sandbox.
   'sandbox:run': { key: 'allowSandbox', what: 'Running a sandbox script' },
   'sandbox:cancel': { key: 'allowSandbox', what: 'Running a sandbox script' },
 } as const;
@@ -63,6 +66,11 @@ export function isRestrictable(channel: string): boolean {
   return rulesFor(channel).length > 0;
 }
 
+/** Pure: the one sentence every refusal here is phrased as, so they all read alike. */
+function denial(what: string, managedBy?: string): string {
+  return `${what} is disabled by the system policy${managedBy ? ` (managed by ${managedBy})` : ''}`;
+}
+
 /**
  * Pure: why `channel` must be refused under `restrictions`, or `null` when it may proceed.
  * `managedBy` (the policy's free-text owner line) is appended so the UI can say who to ask.
@@ -70,9 +78,37 @@ export function isRestrictable(channel: string): boolean {
 export function refusalFor(channel: string, restrictions: AppRestrictions, managedBy?: string): string | null {
   for (const rule of rulesFor(channel)) {
     if (restrictions[rule.key]) continue;
-    return `${rule.what} is disabled by the system policy${managedBy ? ` (managed by ${managedBy})` : ''}`;
+    return denial(rule.what, managedBy);
   }
   return null;
+}
+
+/**
+ * The side doors out of `allowStopGeneration`. None of these channels is *for* stopping a reply,
+ * but each aborts the turn in flight on its way to what it does do — so under a policy that says
+ * a reply has to finish, each is refused while one is running, and works as usual otherwise.
+ * `chat:abort` is not here: it exists only to stop, so it is refused outright by the table above.
+ */
+export const TURN_STOPPING_CHANNELS: ReadonlySet<string> = new Set([
+  'chat:retry',
+  'sessions:resetState',
+  'sessions:removeMessage',
+  'sessions:clearMessages',
+]);
+
+/** Pure: whether `channel` aborts a running turn as a side effect (so the dispatcher checks it). */
+export function stopsRunningTurn(channel: string): boolean {
+  return TURN_STOPPING_CHANNELS.has(channel);
+}
+
+/**
+ * Pure: why a channel must be refused *because a reply is running*, or `null` when it may
+ * proceed. Only meaningful for a `TURN_STOPPING_CHANNELS` member with a turn actually in flight;
+ * the caller checks both, since whether a turn runs is not something this file can know.
+ */
+export function refusalForStoppingTurn(restrictions: AppRestrictions, managedBy?: string): string | null {
+  if (restrictions.allowStopGeneration) return null;
+  return `${denial('Stopping a reply', managedBy)}: wait for this one to finish`;
 }
 
 /** Pure: the restriction keys currently in force, sorted (for the policy log line and the UI). */

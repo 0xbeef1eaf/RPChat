@@ -99,6 +99,8 @@ pub struct AppPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_pack_install: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_stop_generation: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_delete_session: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_delete_history: Option<bool>,

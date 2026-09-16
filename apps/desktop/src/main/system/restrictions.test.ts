@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_APP_RESTRICTIONS } from '@rp/shared';
 import type { AppRestrictions } from '@rp/shared';
-import { RESTRICTED_CHANNELS, activeRestrictions, isRestrictable, refusalFor, rulesFor } from './restrictions.js';
+import { RESTRICTED_CHANNELS, TURN_STOPPING_CHANNELS, activeRestrictions, isRestrictable, refusalFor, refusalForStoppingTurn, rulesFor, stopsRunningTurn } from './restrictions.js';
 import { appRestrictions, parsePolicy } from './policy.js';
 import { INVOKE_METHODS } from '../../preload/api.js';
 import * as fs from 'node:fs';
@@ -124,9 +124,43 @@ describe('the restriction table matches the real IPC surface', () => {
     }
   });
 
-  it('guards every channel the seven guards name', () => {
-    const mustBeGuarded = ['packs:uninstall', 'packs:install', 'sessions:remove', 'sessions:clearMessages', 'sessions:removeMessage', 'memories:remove', 'events:remove', 'sandbox:run', 'sandbox:cancel', 'editor:installToApp'];
+  it('guards every channel the guards name', () => {
+    const mustBeGuarded = ['packs:uninstall', 'packs:install', 'chat:abort', 'sessions:remove', 'sessions:clearMessages', 'sessions:removeMessage', 'memories:remove', 'events:remove', 'sandbox:run', 'sandbox:cancel', 'editor:installToApp'];
     for (const c of mustBeGuarded) expect(isRestrictable(c), c).toBe(true);
+  });
+
+  it('names only real channels among the ones that stop a running turn', () => {
+    const real = new Set<string>();
+    for (const [ns, methods] of Object.entries(INVOKE_METHODS)) for (const m of methods) real.add(`${ns}:${m}`);
+    for (const channel of TURN_STOPPING_CHANNELS) expect(real.has(channel), `${channel} is not an IpcApi channel`).toBe(true);
+  });
+});
+
+describe('allowStopGeneration', () => {
+  it('refuses the Stop button outright', () => {
+    expect(refusalFor('chat:abort', withOff('allowStopGeneration'))).toMatch(/Stopping a reply is disabled/);
+    expect(refusalFor('chat:abort', DEFAULT_APP_RESTRICTIONS)).toBeNull();
+    // Sending and retrying are not stopping, so the table itself leaves them alone.
+    expect(refusalFor('chat:send', withOff('allowStopGeneration'))).toBeNull();
+    expect(refusalFor('chat:retry', withOff('allowStopGeneration'))).toBeNull();
+  });
+
+  it('knows which channels cut a reply short on their way past', () => {
+    for (const c of ['chat:retry', 'sessions:resetState', 'sessions:removeMessage', 'sessions:clearMessages']) {
+      expect(stopsRunningTurn(c), c).toBe(true);
+    }
+    // `chat:abort` is refused by the table instead; nothing else is in the set.
+    expect(stopsRunningTurn('chat:abort')).toBe(false);
+    expect(stopsRunningTurn('chat:send')).toBe(false);
+    expect(stopsRunningTurn('sessions:remove')).toBe(false);
+  });
+
+  it('refuses those only when the restriction is in force, and says to wait', () => {
+    expect(refusalForStoppingTurn(DEFAULT_APP_RESTRICTIONS)).toBeNull();
+    // Another restriction being off does not make a running reply untouchable.
+    expect(refusalForStoppingTurn(withOff('allowDeleteHistory'))).toBeNull();
+    expect(refusalForStoppingTurn(withOff('allowStopGeneration'))).toBe('Stopping a reply is disabled by the system policy: wait for this one to finish');
+    expect(refusalForStoppingTurn(withOff('allowStopGeneration'), 'the household admin')).toMatch(/managed by the household admin\): wait for this one to finish$/);
   });
 });
 

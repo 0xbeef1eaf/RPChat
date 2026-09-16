@@ -51,6 +51,7 @@
     "allowPackEditor": true,
     "allowPackRemove": true,
     "allowPackInstall": true,
+    "allowStopGeneration": true,
     "allowDeleteSession": true,
     "allowDeleteHistory": true,
     "allowDeleteMemories": true,

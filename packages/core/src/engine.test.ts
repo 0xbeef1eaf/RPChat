@@ -322,6 +322,23 @@ describe('ChatService turns', () => {
     expect(reply.error).toBeUndefined();
   });
 
+  it('isRunning tells a turn in flight from a finished one', async () => {
+    t = await createTestEngine({
+      script: [{ text: 'slow reply', delayMs: 200 }],
+    });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    // This is what the app's `allowStopGeneration` restriction reads to tell a plain retry or
+    // reset from one that would cut a reply short.
+    expect(t.engine.chat.isRunning(session.id)).toBe(false);
+    const sending = t.engine.chat.send(session.id, 'hi');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(t.engine.chat.isRunning(session.id)).toBe(true);
+    expect(t.engine.chat.isRunning('some-other-session')).toBe(false);
+    await sending;
+    expect(t.engine.chat.isRunning(session.id)).toBe(false);
+  });
+
   it('fails with NOT_FOUND after the pack was uninstalled', async () => {
     t = await createTestEngine();
     await t.engine.packs.install(MINIMAL_DIR);

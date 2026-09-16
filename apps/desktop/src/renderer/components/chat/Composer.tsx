@@ -5,11 +5,13 @@ interface ComposerProps {
   running: boolean;
   onSend: (text: string) => void;
   onAbort: () => void;
+  /** `false` under `allowStopGeneration`: the Stop button stays visible but refuses to be pressed. */
+  canAbort: boolean;
   /** Changes whenever the target session changes so the draft is reset. */
   sessionKey: string;
 }
 
-export function Composer({ disabled, running, onSend, onAbort, sessionKey }: ComposerProps) {
+export function Composer({ disabled, running, onSend, onAbort, canAbort, sessionKey }: ComposerProps) {
   const [text, setText] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -56,7 +58,13 @@ export function Composer({ disabled, running, onSend, onAbort, sessionKey }: Com
           aria-label="Message"
         />
         {running ? (
-          <button type="button" className="btn btn-danger" onClick={onAbort}>
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={onAbort}
+            disabled={!canAbort}
+            title={canAbort ? 'Stop this reply' : 'The system policy does not allow stopping a reply once it has started'}
+          >
             Stop
           </button>
         ) : (

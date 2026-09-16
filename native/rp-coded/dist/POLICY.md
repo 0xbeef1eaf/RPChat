@@ -39,9 +39,10 @@ two mutually exclusive modes — a machine with both would be only as strong as 
 ### `totp` — a code opens it
 
 Settings → System → *Lock policy* (or the `seal-policy` request) makes the daemon generate a TOTP
-secret, pin the current policy to it, and answer **once** with the secret and an `otpauth://` URI
-to enrol an authenticator app with. Nothing shows it again: it exists in
-`/etc/rp-code/policy.seal`, `0600 root:root`, and nowhere else. Afterwards:
+secret, pin the current policy to it, and answer **once** with the secret and an `otpauth://` URI.
+The app renders that URI as a QR code to scan, with the secret and the URI behind a *Can't scan
+it?* disclosure. Nothing shows either again: the secret exists in `/etc/rp-code/policy.seal`,
+`0600 root:root`, and nowhere else. Afterwards:
 
 - `set-policy` **replaces** the policy when it carries a valid `code`, and re-pins the seal to
   what was written. Without one, or with a wrong one, the answer is `code: "CODE"`.
@@ -306,6 +307,7 @@ operation is refused whoever asks: a devtools console or a character's own scrip
 | `allowPackEditor` | boolean | `true` | `false` closes the pack editor: the *Pack editor* entry disappears and the whole `editor:*` IPC namespace is refused. |
 | `allowPackRemove` | boolean | `true` | `false` removes *Uninstall* from every pack card and refuses `packs.uninstall`. |
 | `allowPackInstall` | boolean | `true` | `false` freezes the installed packs on disk: no pack can be added, replaced or rewritten. Refuses `packs.install` and the editor's *Install to app*. The editor itself still opens (unless `allowPackEditor` is false) and can still export a `.rppack`. |
+| `allowStopGeneration` | boolean | `true` | `false` makes a reply finish once it has started: *Stop* in the composer is greyed out and `chat.abort` is refused. Retrying, resetting the session and deleting a message or the history are refused too **while a reply is running** — each of those aborts it first — and work as usual the rest of the time. |
 | `allowDeleteSession` | boolean | `true` | `false` removes *Delete session* from the session panel and refuses `sessions.remove`. |
 | `allowDeleteHistory` | boolean | `true` | `false` removes *Clear history* and the per-message delete, and refuses `sessions.clearMessages` / `sessions.removeMessage`. |
 | `allowDeleteMemories` | boolean | `true` | `false` removes *Forget* from the memories panel and refuses `memories.remove`. Adding and editing memories still work. |
@@ -329,6 +331,7 @@ it can be taken apart:
     "allowPackEditor": false,
     "allowPackRemove": false,
     "allowPackInstall": false,
+    "allowStopGeneration": false,
     "allowDeleteSession": false,
     "allowDeleteHistory": false,
     "allowDeleteMemories": false,
