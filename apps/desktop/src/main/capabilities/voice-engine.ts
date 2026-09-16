@@ -320,6 +320,13 @@ export class VoiceEngine {
     const audio = await entry.tts.generateAsync({
       text: req.text,
       generationConfig: buildGenerationConfig(model, req, reference),
+      // The addon's default (`enableExternalBuffer: true`) hands the native audio buffer to an
+      // ArrayBuffer finalizer and then keeps reading `audio->n` and `audio->sample_rate` through the
+      // pointer it just gave away. Once the finalizer owns that memory, a GC at the wrong moment
+      // frees it under those reads, and the addon turns the resulting throw into a bare
+      // "TTS settlement failed". It only bites in a long-lived process under real GC pressure, which
+      // is why it shows up in the app and never in a short script. Copying costs one memcpy.
+      enableExternalBuffer: false,
     });
     if (!audio?.samples?.length) throw new Error(`${model.name} produced no audio`);
     return { samples: audio.samples, sampleRate: audio.sampleRate };

@@ -264,6 +264,19 @@ describe('VoiceEngine', () => {
     expect(createAsync).toHaveBeenCalledTimes(1);
   });
 
+  it('never asks the addon for an external buffer', async () => {
+    // Electron builds V8 with pointer compression and the sandbox, which reject an ArrayBuffer
+    // whose backing store lives outside the cage. The addon defaults to exactly that and reports
+    // the refusal as a bare "TTS settlement failed" — 100% reproducible in Electron, never in node.
+    const generateAsync = vi.fn(async () => ({ samples: new Float32Array([0.1]), sampleRate: 24000 }));
+    const engine = new VoiceEngine({
+      logger,
+      loadAddon: () => ({ OfflineTts: { createAsync: async () => ({ generateAsync }) } }) as never,
+    });
+    await engine.synthesize(KOKORO, { text: 'hi', numThreads: 2 });
+    expect(generateAsync).toHaveBeenCalledWith(expect.objectContaining({ enableExternalBuffer: false }));
+  });
+
   it('treats empty audio as a failure instead of playing silence', async () => {
     const engine = new VoiceEngine({
       logger,
