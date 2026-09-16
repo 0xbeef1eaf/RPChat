@@ -104,7 +104,7 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
       definition: {
         ...dr.definition,
         avatar: saved.definition.avatar,
-        // `useVoice` copies the wav and writes the reference itself; the rest of the block is draft state.
+        // `pickVoice` copies the recording and writes the reference itself; the rest is draft state.
         voice: saved.definition.voice ? { ...dr.definition.voice, reference: saved.definition.voice.reference, referenceSource: saved.definition.voice.referenceSource, attribution: saved.definition.voice.attribution } : dr.definition.voice,
         avatarSet: saved.definition.avatarSet
           ? { ...saved.definition.avatarSet, ...(dr.definition.avatarSet ? { defaultExpression: dr.definition.avatarSet.defaultExpression, size: dr.definition.avatarSet.size } : {}), expressions: saved.definition.avatarSet.expressions }

@@ -24,6 +24,8 @@ import { commandFailed, isConfigured, notConfigured, spawnCapture } from '../com
 import type { CommandResult } from '../commands.js';
 import type { OverlayWindowLike } from '../display/backend.js';
 import type { VoiceModel } from './voice-models.js';
+import type { VoiceEngine } from './voice-engine.js';
+import { writeWavFile } from './voice-engine.js';
 import {
   SAMPLE_DIRNAME,
   SHERPA_TTS_BINARY,
@@ -65,6 +67,8 @@ export interface VoiceHandlerDeps {
   packs?: { getLoaded(packId: string): LoadedPack };
   /** App-level voice settings (default model, thread count, kill switch). */
   voiceSettings?: () => Promise<VoiceSettings>;
+  /** In-process synthesis. Preferred over the command line; absent leaves only the CLI path. */
+  engine?: VoiceEngine;
   /** Injectable for tests. */
   spawn?: (file: string, args: string[], opts: { signal?: AbortSignal; timeoutMs?: number }) => Promise<CommandResult>;
 }
@@ -76,12 +80,17 @@ export function speechSynthesisScript(text: string, rate: number | undefined, vo
 
 /** A voice model plus everything one utterance needs from the character and the settings. */
 interface NeuralVoice {
-  binary: string;
+  /** The command-line engine, when one was found. Absent when only the in-process addon is usable. */
+  binary?: string;
   model: VoiceModel;
   reference?: string;
   referenceText?: string;
   speaker?: number;
   steps?: number;
+  /** Sampling seed; omitted or -1 leaves every utterance different. */
+  seed?: number;
+  /** Sampling temperature; the model's own default is 0.7. */
+  temperature?: number;
   numThreads: number;
   /** The character's own baseline speed, used when the call passes no `rate`. */
   rate?: number;
@@ -210,6 +219,35 @@ export class VoiceHandler implements CapabilityHandler {
   private async speakWithSherpa(voice: NeuralVoice, text: string, rate: number | undefined, wait: boolean, abort: AbortController): Promise<void> {
     await fs.mkdir(this.deps.ttsDir, { recursive: true });
     const file = path.join(this.deps.ttsDir, `${randomUUID()}.wav`);
+
+    // In process when the addon is usable: the model stays loaded, and `seed`/`temperature` are
+    // reachable at all — the CLI forwards neither, so a character cannot sound the same twice.
+    const engine = this.deps.engine;
+    if (engine?.available()) {
+      const started = Date.now();
+      const audio = await engine.synthesize(voice.model, {
+        text,
+        numThreads: voice.numThreads,
+        ...(rate ?? voice.rate ? { rate: rate ?? voice.rate } : {}),
+        ...(voice.speaker !== undefined ? { speaker: voice.speaker } : {}),
+        ...(voice.steps !== undefined ? { steps: voice.steps } : {}),
+        ...(voice.seed !== undefined ? { seed: voice.seed } : {}),
+        ...(voice.temperature !== undefined ? { temperature: voice.temperature } : {}),
+        ...(voice.reference ? { reference: voice.reference } : {}),
+        ...(voice.referenceText ? { referenceText: voice.referenceText } : {}),
+      });
+      if (abort.signal.aborted) return;
+      await writeWavFile(file, audio);
+      this.deps.logger.debug?.(`[voice] ${voice.model.name} synthesised ${text.length} chars in ${Date.now() - started} ms (in process)`);
+      await this.play(file, wait, abort);
+      return;
+    }
+
+    if (!voice.binary) {
+      throw new RpError('CAPABILITY_FAILED', `Voice model "${voice.model.name}" cannot be used: neither the in-process engine nor ${SHERPA_TTS_BINARY} is available`, {
+        model: voice.model.name,
+      });
+    }
     const args = buildSherpaArgs(voice.model, {
       text,
       outFile: file,
@@ -272,10 +310,11 @@ export class VoiceHandler implements CapabilityHandler {
     if (!model) return undefined;
 
     const binary = this.deps.findSherpa();
-    if (!binary) {
+    const inProcess = this.deps.engine?.available() === true;
+    if (!binary && !inProcess) {
       throw new RpError(
         'CAPABILITY_FAILED',
-        `Voice model "${model.name}" is installed but ${SHERPA_TTS_BINARY} was not found (${SHERPA_TTS_ENV}, the app's resources/bin, or PATH); install sherpa-onnx or set a Speak command in Settings → Commands → Speak`,
+        `Voice model "${model.name}" is installed but no speech engine is available: the bundled one failed to load and ${SHERPA_TTS_BINARY} was not found (${SHERPA_TTS_ENV}, the app's resources/bin, or PATH)`,
         { model: model.name, binary: SHERPA_TTS_BINARY },
       );
     }
@@ -291,7 +330,7 @@ export class VoiceHandler implements CapabilityHandler {
     const numThreads = settings?.numThreads ?? 4;
     const steps = character?.steps ?? settings?.steps;
     return {
-      binary,
+      ...(binary ? { binary } : {}),
       model,
       numThreads,
       ...(reference ? { reference } : {}),
@@ -299,6 +338,8 @@ export class VoiceHandler implements CapabilityHandler {
       ...(character?.speaker !== undefined ? { speaker: character.speaker } : {}),
       ...(steps !== undefined ? { steps } : {}),
       ...(character?.rate !== undefined ? { rate: character.rate } : {}),
+      ...(character?.seed !== undefined ? { seed: character.seed } : {}),
+      ...(character?.temperature !== undefined ? { temperature: character.temperature } : {}),
     };
   }
 

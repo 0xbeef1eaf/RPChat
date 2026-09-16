@@ -3,7 +3,7 @@ import type { AuditEntry, ChatEvent, ChatMessage, CreateSessionInput, Session } 
 import type { ModelInfo, ProviderConfig } from './llm.js';
 import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo } from './media.js';
 import type { CharacterSummary, InstalledPackRecord, MediaManifest, PackManifest, TagSummary } from './pack.js';
-import type { VoiceBankCatalogue, VoiceBankProgress } from './voice.js';
+import type { VoicePreview, VoiceStudioState } from './voice.js';
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
@@ -352,25 +352,31 @@ export interface IpcApi {
     installToApp(key: string): Promise<InstalledPackView>;
     revealInFolder(key: string): Promise<void>;
     behaviourTemplates(): Promise<BehaviourTemplate[]>;
+    /** Installed voice models, plus how the engine and default model downloads are getting on. */
+    voiceStudio(): Promise<VoiceStudioState>;
     /**
-     * Reference voices from `kyutai/tts-voices` plus the voice models installed locally. The
-     * listing is cached on disk and refetched at most daily; `refresh` forces a re-list.
+     * Native picker → copies the chosen recording into the character directory and points
+     * `voice.reference` at it, so the pack carries the voice it speaks with. The file must be a
+     * 16-bit PCM wav, which is what the models read.
      */
-    voiceBank(refresh?: boolean): Promise<VoiceBankCatalogue>;
+    pickVoice(key: string, dir: string): Promise<EditorProject>;
     /**
-     * Download the recording if needed, synthesise the shared sample sentence in that voice, and
-     * return the `rp-asset://` URL of the cached wav. Repeated calls reuse the cached file.
+     * Speak a line in the character's voice and return the `rp-asset://` URL of the result, so an
+     * author can hear a `seed` or `temperature` change before saving it. Values in `opts` override
+     * the saved ones for this preview only; nothing is written.
      */
-    voicePreview(repoPath: string): Promise<string>;
-    /** Queue recordings for download in the background (the editor calls this for the visible page). */
-    voicePrefetch(repoPaths: string[]): Promise<VoiceBankProgress>;
-    /**
-     * Copy a bank recording into the character directory and point `voice.reference` at it, so the
-     * pack carries the voice it speaks with. Records the source and, for attributed licences, a
-     * credit line.
-     */
-    useVoice(key: string, dir: string, repoPath: string): Promise<EditorProject>;
+    previewVoice(key: string, dir: string, opts?: VoicePreviewOptions): Promise<VoicePreview>;
   };
+}
+
+/** Per-preview overrides, so the editor can audition unsaved settings. */
+export interface VoicePreviewOptions {
+  text?: string;
+  model?: string;
+  seed?: number;
+  temperature?: number;
+  steps?: number;
+  rate?: number;
 }
 
 /** Channel names. Request/response calls use `${ns}:${method}`; push events use these constants. */

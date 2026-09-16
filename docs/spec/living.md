@@ -205,7 +205,8 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   only by the iframe sandbox; `postMessage` → page → iframe; iframe messages → `widget-message` events),
   `voice` (four tiers, first available wins: (1) a `tts` template the **user** set (`{text}`/`{file}`:
   if it writes `{file}` play that in the audio window); (2) a neural voice model under
-  `<userData>/voices/` driven by `sherpa-onnx-offline-tts` — see §4a; (3) the platform default
+  `<userData>/voices/`, spoken in process by the sherpa-onnx addon (command line as fallback)
+  — see §4a; (3) the platform default
   `tts` (Linux `espeak-ng "{text}"` if on PATH, macOS `say "{text}"`, Windows PowerShell SAPI
   one-liner); (4) `speechSynthesis` in the hidden audio window. `wait` awaits
   completion; `stop` kills/cancels; `listen`: `stt` template printing the transcript), `desktop`
@@ -230,64 +231,53 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
 - Tests: presence edge detection with a fake sampler, ICS parser, RSS parser, allowlist matcher,
   files path guard, messaging payload builders, desktop Hyprland command builders, avatar placement.
 
-### 4a. Voice models and the voice bank
+### 4a. Voice
 
-Neural TTS runs on the CPU, deliberately: the GPU is for text generation. Both pieces below are
-optional — with neither installed, `sdk.voice.speak` behaves exactly as it did before (espeak-ng and
-friends), so nothing here is a hard dependency.
+Neural TTS runs on the CPU, deliberately: the GPU is for text generation. All of it is optional —
+with no engine and no model, `sdk.voice.speak` behaves as it always did (espeak-ng and friends).
 
-- **Engine** (`capabilities/voice-models.ts`, pure): `sherpa-onnx-offline-tts`, found via
-  `RP_SHERPA_TTS` → the app's `resources/bin` → the app-managed install → PATH (`findSherpaTts`,
-  mirroring `findHelperBinary`). The managed copy deliberately outranks PATH: Pocket TTS is recent
-  upstream, so a distro's older build may not understand `--pocket-*` at all.
-- **Fetching it** (`capabilities/sherpa-install.ts`): not vendored (~25 MB compressed per platform,
-  for a feature many users never enable), so the app fetches a pinned upstream release on first
-  start into `<userData>/sherpa/<version>/`, in the background, never awaited and never fatal.
-  `settings.voice.autoDownload` (default true) turns it off; nothing is fetched when an engine is
-  already present. `assetFor` maps platform/arch to the `-shared` release asset and the size GitHub
-  publishes for it — the only integrity check available, as the release ships no checksums. `tarArgs`
-  unpacks just `bin/<binary>` and `lib/*` (~34 MB, against ~150 MB for the whole archive of forty
-  demo executables) using `-xf` so both GNU tar and bsdtar sniff the bzip2, with `--wildcards` only
-  on Linux since bsdtar globs by default and rejects the flag. The archives set
-  `RPATH=$ORIGIN/../lib`, so preserving the `bin/`+`lib/` layout means no `LD_LIBRARY_PATH` at spawn
-  time. Unpacking goes to `<version>.incoming` and is renamed into place, so a crash mid-unpack
-  never leaves a half install behind. Status reaches the editor's picker through the voice-bank
-  catalogue, so a first run shows "Downloading the speech engine (45%)" rather than dead buttons.
-- **Models**: directories unpacked under `<userData>/voices/`, straight from the k2-fsa `tts-models`
-  releases with nothing renamed. `detectVoiceModel` recognises them by the filenames those archives
-  contain and emits the right `--<engine>-*` flags: `pocket` (Pocket TTS, clones from reference
-  audio), `kokoro`, `kitten`, `vits`/Piper. Kokoro and Kitten have identical file shapes, so the
-  directory name decides, and an `rp-voice.json` `{ "engine": … }` marker overrides both. Where a
-  role has several candidates an `int8` build wins — the point is CPU speed.
-- **Fetching a model** (`capabilities/voice-model-install.ts`): the engine cannot say anything
-  without weights, so the default Pocket TTS model (`sherpa-onnx-pocket-tts-int8-2026-01-26`, 98 MB)
-  is fetched the same way and under the same `autoDownload` setting, after the engine and only when
-  no cloning model is already installed. It clones from reference audio, which is what gives each
-  character its own voice — a speaker-bank model would give them all the same handful. Both
-  installers share `capabilities/archive-install.ts` (download with progress, size check against
-  what the release publishes, `tar` into a `.incoming` directory, verify, rename into place). A
-  model missing any weight file is rejected rather than installed, and `installed()` treats a
-  truncated or zero-byte unpack as absent so the next start retries.
-- **Per character**: `character.json` → `voice: { model?, reference?, referenceText?, speaker?, rate?,
-  steps?, referenceSource?, attribution? }`. `reference` is a wav **inside the character directory**,
-  so a published pack carries the voice it speaks with. Resolution order for the model is
-  `speak({ voice })` → the character's `voice.model` → `settings.voice.defaultModel` → the only
-  installed model when there is exactly one. A model that is named but missing, or a model present
-  with no binary, is a `CAPABILITY_FAILED` — never a silent drop to espeak.
-- **Voice bank** (`capabilities/voice-bank.ts`): a mirror of `kyutai/tts-voices` under
-  `<userData>/voice-bank/` (`catalogue.json`, `files/<repo path>`, `previews/<model>/<id>.wav`). The
-  Hugging Face tree endpoint is paged through its `Link: rel="next"` cursor and cached for a day; a
-  failed refresh falls back to the cached listing rather than emptying the picker. Downloads run
-  three at a time in the background, are written via a `.part` rename, and anything that does not
-  start with `RIFF` is rejected. Previews synthesise one fixed sentence (`VOICE_PREVIEW_SENTENCE`)
-  with the first installed cloning model and are cached per (voice, model). The previews directory is
-  served over `rp-asset://` as `app.rp-code.voice-bank`.
-- **Licensing**: collection licences are transcribed into `VOICE_BANK_COLLECTIONS` and shown in the
-  picker, because `expresso` and `ears` are CC BY-NC and copying one into a pack is the moment that
-  starts to matter. Choosing a CC-BY voice records an `attribution` line in `character.json`.
-- **Editor**: `editor.voiceBank / voicePreview / voicePrefetch / useVoice`. `useVoice` copies the
-  recording into the character directory and writes `voice.reference` plus its provenance; the
-  picker itself is `renderer/views/editor/VoicePicker.tsx`.
+- **Engine** (`capabilities/voice-engine.ts`): the `sherpa-onnx-node` addon, held in process. The
+  model is loaded once (~450 ms) instead of on every utterance, and generation goes through
+  `generateAsync` so it runs on a worker thread — `generate()` would block Electron's main process
+  for over a second per line and freeze the window. The addon is required lazily and every failure
+  caught: a prebuilt native module that will not load somewhere must fall back, not take the app
+  down. `MAX_RESIDENT_MODELS` bounds how many sets of weights stay in memory.
+- **Why in process at all.** `sherpa-onnx-offline-tts` forwards only `emotion_id` and `lang` to the
+  model, so `seed` and `temperature` are unreachable from the command line. Without a seed the model
+  resamples its delivery every time and a character cannot sound like itself twice. The CLI path
+  (`voice-models.ts`, `sherpa-install.ts`) is kept as a fallback for machines where the addon will
+  not load, and the command-line engine is only downloaded when the addon is unavailable.
+- **Models**: directories unpacked under `<userData>/voices/`, straight from the k2-fsa
+  `tts-models` releases with nothing renamed. `detectVoiceModel` recognises them from the filenames
+  those archives contain: `pocket` (Pocket TTS, clones from reference audio), `kokoro`, `kitten`,
+  `vits`/Piper. Kokoro and Kitten have identical file shapes, so the directory name decides and an
+  `rp-voice.json` `{ "engine": … }` marker overrides it. `flagToConfigPath` maps a CLI flag onto the
+  addon's config key (`pocket-text-conditioner` → `pocket.textConditioner`), so one table serves
+  both paths.
+- **Fetching** (`sherpa-install.ts`, `voice-model-install.ts`, sharing `archive-install.ts`): the
+  default Pocket TTS model is fetched in the background on first start under
+  `settings.voice.autoDownload`, never awaited and never fatal, and skipped when any cloning model
+  is already installed. Size is checked against what the release publishes — the only integrity
+  signal, as neither release ships checksums — and the unpack goes to a `.incoming` directory that
+  is renamed into place, so a crash cannot leave a half install that `installed()` would trust.
+- **Per character**: `character.json` → `voice: { model?, reference?, referenceText?, speaker?,
+  rate?, steps?, seed?, temperature?, referenceSource?, attribution? }`. `reference` is a 16-bit PCM
+  wav **inside the character directory**, so a published pack carries the voice it speaks with.
+  Model resolution: `speak({ voice })` → the character's `voice.model` → `settings.voice.defaultModel`
+  → the only installed model when there is exactly one. A model named but missing, or a model with
+  no engine at all, is a `CAPABILITY_FAILED` — never a silent drop to espeak.
+- **The 10-second rule.** Pocket TTS reads only the first 10 seconds of the reference and discards
+  the rest (`max_reference_audio_len` in `offline-tts-pocket-impl.h`; passing it through the addon's
+  `extra` was measured to have no effect). A longer clip is not better — the opening ten seconds are
+  the entire voice, so silence or throat-clearing at the head is spent budget.
+- **Editor** (`voice-studio.ts`, `renderer/views/editor/VoicePicker.tsx`): `editor.voiceStudio`
+  lists installed models and download progress; `editor.pickVoice` copies a chosen recording into the
+  character (validating it is readable 16-bit PCM first, since the engine would otherwise fail
+  later and less clearly); `editor.previewVoice` renders a line with the *draft* settings so an
+  author can audition a seed before saving it. A preview always uses a real seed and reports it
+  back, because an unseeded take cannot be recovered once it has played — that is what makes
+  "pin this seed" possible, and it is the only way to give a character a consistent voice.
+  Previews are served over `rp-asset://` as `app.rp-code.voice-preview` and pruned to `MAX_PREVIEWS`.
 
 ## 5. Renderer
 

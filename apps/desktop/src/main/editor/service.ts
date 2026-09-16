@@ -24,9 +24,10 @@ import type {
   SaveCharacterInput,
   TagMediaOptions,
 } from '@rp/shared';
-import { CHARACTER_MANIFEST_FILENAME, MEDIA_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME, RpError, VOICE_BANK_COLLECTIONS, VOICE_BANK_REPO, assetUrl } from '@rp/shared';
-import type { VoiceBankCatalogue, VoiceBankProgress } from '@rp/shared';
-import { VOICE_BANK_PACK_ID } from '../capabilities/voice-bank.js';
+import { CHARACTER_MANIFEST_FILENAME, MEDIA_MANIFEST_FILENAME, PACK_MANIFEST_FILENAME, RpError, assetUrl } from '@rp/shared';
+import type { VoicePreview, VoicePreviewOptions, VoiceStudioState } from '@rp/shared';
+import type { VoicePreviewRequest } from '../capabilities/voice-studio.js';
+import { readWavFile } from '../capabilities/voice-engine.js';
 import {
   ASSET_KIND_BY_EXTENSION,
   CHARACTER_ID_PATTERN,
@@ -82,17 +83,14 @@ export interface EditorServiceDeps {
   writers?: PackWriters;
   /** Vision-model tagging for the Media section; absent in builds/tests without an LLM. */
   tagger?: MediaTagger;
-  /** The kyutai voice bank behind the character's voice picker; absent in tests. */
-  voiceBank?: VoiceBankLike;
+  /** Renders voice previews for the character's voice panel; absent in tests. */
+  voiceStudio?: VoiceStudioLike;
 }
 
-/** The slice of `VoiceBank` the editor uses. */
-export interface VoiceBankLike {
-  catalogue(opts?: { refresh?: boolean }): Promise<VoiceBankCatalogue>;
-  ensurePreview(repoPath: string): Promise<string>;
-  ensureVoice(repoPath: string): Promise<string>;
-  prefetch(repoPaths: string[]): void;
-  progress(): VoiceBankProgress;
+/** The slice of `VoiceStudio` the editor uses. */
+export interface VoiceStudioLike {
+  state(): Promise<VoiceStudioState>;
+  preview(req: VoicePreviewRequest): Promise<VoicePreview>;
 }
 
 /** Assets asked for in one `suggestMediaTags` call, so a stray loop cannot hammer the model. */
@@ -541,57 +539,68 @@ export class EditorService {
     return this.read(key);
   }
 
-  // ---- voice bank ------------------------------------------------------------------
-  // Auditioning happens against the app's shared bank; choosing a voice copies the wav into the
-  // character so the pack stays self-contained (docs/spec/living.md §4 "Voice").
+  // ---- voice ---------------------------------------------------------------------
+  // The character's voice is a recording the author supplies and that lives in the pack, so a
+  // published pack carries the voice it speaks with (docs/spec/living.md §4a).
 
-  private bank(): VoiceBankLike {
-    const bank = this.deps.voiceBank;
-    if (!bank) throw new RpError('CAPABILITY_FAILED', 'The voice bank is not available in this build');
-    return bank;
+  private studio(): VoiceStudioLike {
+    const studio = this.deps.voiceStudio;
+    if (!studio) throw new RpError('CAPABILITY_FAILED', 'Voice previews are not available in this build');
+    return studio;
   }
 
-  async voiceBank(refresh?: boolean): Promise<VoiceBankCatalogue> {
-    return this.bank().catalogue({ refresh: refresh === true });
-  }
-
-  /** `rp-asset://` URL of the cached sample sentence, generating it on first ask. */
-  async voicePreview(repoPath: string): Promise<string> {
-    if (typeof repoPath !== 'string' || repoPath.trim().length === 0) throw new RpError('INVALID_ARGUMENT', 'repoPath is required');
-    const rel = await this.bank().ensurePreview(repoPath.trim());
-    return assetUrl(VOICE_BANK_PACK_ID, rel);
-  }
-
-  async voicePrefetch(repoPaths: string[]): Promise<VoiceBankProgress> {
-    const bank = this.bank();
-    if (Array.isArray(repoPaths)) bank.prefetch(repoPaths.filter((p): p is string => typeof p === 'string' && p.length > 0).slice(0, 200));
-    return bank.progress();
+  async voiceStudio(): Promise<VoiceStudioState> {
+    return this.studio().state();
   }
 
   /**
-   * Copy a bank recording into the character directory and point `voice.reference` at it. The
-   * source path and, where the licence asks for it, a credit line are recorded alongside, so the
-   * pack can be published without losing track of where the voice came from.
+   * Copy a recording the author picks into the character directory and point `voice.reference` at
+   * it. The file is read before it is copied: a model can only use 16-bit PCM, and failing here
+   * with a clear message beats failing later inside the engine.
    */
-  async useVoice(key: string, charDir: string, repoPath: string): Promise<EditorProject> {
+  async pickVoice(key: string, charDir: string): Promise<EditorProject> {
     const { dir } = this.entry(key);
-    if (typeof repoPath !== 'string' || repoPath.trim().length === 0) throw new RpError('INVALID_ARGUMENT', 'repoPath is required');
     const ch = await this.characterOf(dir, charDir, key);
-    const bank = this.bank();
-    const source = await bank.ensureVoice(repoPath.trim());
-    const rel = await this.copyIntoCharacter(dir, ch.dir, source);
-    const collectionId = repoPath.split('/')[0] ?? '';
-    const collection = VOICE_BANK_COLLECTIONS[collectionId];
-    const voice = {
-      ...(ch.definition.voice ?? {}),
-      reference: rel,
-      referenceSource: `${VOICE_BANK_REPO}:${repoPath.trim()}`,
-      ...(collection && collection.license.startsWith('CC-BY')
-        ? { attribution: `${collection.label} (${collection.license}) via ${VOICE_BANK_REPO}` }
-        : {}),
-    };
+    const [file] = await this.deps.dialogs.openFiles('Choose a voice recording', [{ name: 'Audio', extensions: ['wav'] }], false);
+    if (!file) return this.read(key);
+    let seconds: number;
+    try {
+      const audio = await readWavFile(file);
+      seconds = audio.samples.length / audio.sampleRate;
+    } catch (err) {
+      throw new RpError('INVALID_ARGUMENT', `That file cannot be used as a voice reference: ${(err as Error).message}`);
+    }
+    if (seconds < 1) throw new RpError('INVALID_ARGUMENT', `That recording is ${seconds.toFixed(1)}s; a voice reference needs at least a second of speech`);
+    const rel = await this.copyIntoCharacter(dir, ch.dir, file);
+    const voice = { ...(ch.definition.voice ?? {}), reference: rel };
+    delete (voice as { referenceSource?: string }).referenceSource;
+    delete (voice as { attribution?: string }).attribution;
     await this.writers.writeCharacter(dir, ch.dir, { ...ch.definition, voice }, ch.personaText, ch.behaviours);
     return this.read(key);
+  }
+
+  /**
+   * Speak a line in the character's voice. `opts` overrides the saved settings for this render
+   * only, so an author can audition a seed or temperature before committing to it.
+   */
+  async previewVoice(key: string, charDir: string, opts: VoicePreviewOptions = {}): Promise<VoicePreview> {
+    const { dir } = this.entry(key);
+    const ch = await this.characterOf(dir, charDir, key);
+    const saved = ch.definition.voice ?? {};
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const reference = saved.reference ? path.join(dir, ...ch.dir.split('/'), saved.reference) : undefined;
+    const merged: VoicePreviewRequest = {
+      ...(o.text !== undefined ? { text: o.text } : {}),
+      ...(reference ? { reference } : {}),
+      ...(saved.referenceText ? { referenceText: saved.referenceText } : {}),
+      ...(o.model ?? saved.model ? { model: o.model ?? saved.model } : {}),
+      ...(o.seed ?? saved.seed) !== undefined ? { seed: (o.seed ?? saved.seed) as number } : {},
+      ...(o.temperature ?? saved.temperature) !== undefined ? { temperature: (o.temperature ?? saved.temperature) as number } : {},
+      ...(o.steps ?? saved.steps) !== undefined ? { steps: (o.steps ?? saved.steps) as number } : {},
+      ...(o.rate ?? saved.rate) !== undefined ? { rate: (o.rate ?? saved.rate) as number } : {},
+      ...(saved.speaker !== undefined ? { speaker: saved.speaker } : {}),
+    };
+    return this.studio().preview(merged);
   }
 
   async addMedia(key: string, options: AddMediaOptions = {}): Promise<EditorProject> {

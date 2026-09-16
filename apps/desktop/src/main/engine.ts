@@ -25,9 +25,10 @@ import { PresenceHandler } from './capabilities/presence.js';
 import { ScreenHandler } from './capabilities/screen.js';
 import { TTS_PACK_ID, VOICES_DIRNAME, VoiceHandler, readVoiceModels } from './capabilities/voice.js';
 import { findSherpaTts } from './capabilities/voice-models.js';
-import { VOICE_BANK_DIRNAME, VOICE_BANK_PACK_ID, VoiceBank } from './capabilities/voice-bank.js';
+import { VOICE_PREVIEW_DIRNAME, VOICE_PREVIEW_PACK_ID, VoiceStudio } from './capabilities/voice-studio.js';
 import { SHERPA_INSTALL_DIRNAME, SherpaInstaller } from './capabilities/sherpa-install.js';
 import { VoiceModelInstaller } from './capabilities/voice-model-install.js';
+import { VoiceEngine } from './capabilities/voice-engine.js';
 import { WebHandler } from './capabilities/web.js';
 import { WidgetsHandler } from './capabilities/widgets.js';
 import { electronCapturer } from './capture.js';
@@ -133,9 +134,9 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const ttsDir = path.join(opts.userData, 'tts');
   /** Unpacked sherpa-onnx voice models, one subdirectory each (docs/spec/living.md §4). */
   const voicesDir = path.join(opts.userData, VOICES_DIRNAME);
-  /** Downloaded kyutai reference clips and their cached sample sentences (the editor's voice picker). */
-  const voiceBankDir = path.join(opts.userData, VOICE_BANK_DIRNAME);
-  const extraRoots: Record<string, string> = { [TTS_PACK_ID]: ttsDir, [VOICE_BANK_PACK_ID]: path.join(voiceBankDir, 'previews') };
+  /** Voice previews rendered for the pack editor. */
+  const voicePreviewDir = path.join(opts.userData, VOICE_PREVIEW_DIRNAME);
+  const extraRoots: Record<string, string> = { [TTS_PACK_ID]: ttsDir, [VOICE_PREVIEW_PACK_ID]: voicePreviewDir };
   const registry = new ProjectRegistry(path.join(dataDir, 'editor-projects.json'));
   const packRootFor = (packId: string): string | undefined => {
     const editorKey = keyFromAssetHost(packId);
@@ -313,6 +314,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       },
       onPath: (name) => hasExecutable(name, env),
     });
+  const voiceEngine = new VoiceEngine({ logger });
   const voice = new VoiceHandler({
     commands,
     audioWindow: () => windows.audioWindow(),
@@ -321,13 +323,14 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     packs,
     voiceSettings: async () => (await settingsOf()).voice,
     findSherpa,
+    engine: voiceEngine,
     logger,
   });
   const voiceModel = new VoiceModelInstaller({ voicesDir, logger });
-  const voiceBank = new VoiceBank({
-    dir: voiceBankDir,
+  const voiceStudio = new VoiceStudio({
+    dir: voicePreviewDir,
     models: () => readVoiceModels(voicesDir),
-    findSherpa,
+    engine: voiceEngine,
     engineStatus: () => sherpa.status(),
     modelStatus: () => voiceModel.status(),
     numThreads: async () => (await settingsOf()).voice.numThreads,
@@ -340,10 +343,15 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   // the engine can run it anyway.
   void (async () => {
     const auto = (await settingsOf()).voice.autoDownload;
-    const existingEngine = findSherpa();
-    if (existingEngine) sherpa.markPresent(existingEngine);
-    else if (!auto) sherpa.markDisabled();
-    else await sherpa.ensure();
+    // The bundled addon speaks in process, so the command-line engine is only worth fetching when
+    // the addon will not load here — otherwise it would be 25 MB nothing ever runs.
+    if (voiceEngine.available()) sherpa.markPresent('bundled (sherpa-onnx-node)');
+    else {
+      const existingEngine = findSherpa();
+      if (existingEngine) sherpa.markPresent(existingEngine);
+      else if (!auto) sherpa.markDisabled();
+      else await sherpa.ensure();
+    }
 
     // Anything the user unpacked themselves counts, so long as it can clone a voice.
     const cloning = (await readVoiceModels(voicesDir)).find((m) => m.clones);
@@ -392,7 +400,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     reveal: (absolute) => shell.showItemInFolder(absolute),
     logger,
     tagger,
-    voiceBank,
+    voiceStudio,
   });
 
   engine = new Engine({

@@ -1,64 +1,53 @@
 /**
- * The character's voice: which model speaks it, and which reference recording it is cloned from.
+ * The character's voice: the recording it is cloned from, and the settings that decide how steady
+ * it sounds.
  *
- * Voices come from `kyutai/tts-voices` — several hundred clips — so the list is filtered and paged
- * rather than rendered whole. Auditioning one downloads it and synthesises a fixed sample sentence
- * in the background, cached from then on; choosing one copies the wav into the character directory
- * so the published pack carries its own voice.
+ * `seed` is the point of the panel. The model samples, so an unseeded character says the same line
+ * with different pacing and emphasis every time. Previewing renders with a real seed and reports it
+ * back, so an author can audition takes and pin the one they liked — which is the only way to make
+ * a character sound like itself twice.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CharacterVoice, VoiceBankCatalogue, VoiceBankEntry } from '@rp/shared';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { CharacterVoice, VoicePreview, VoiceStudioState } from '@rp/shared';
+import { VOICE_PREVIEW_SENTENCE } from '@rp/shared';
 import { api } from '../../api';
 import { reportError } from '../../store/actions';
 
 interface VoicePickerProps {
-  /** Project key and character dir, for the `useVoice` write. */
   projectKey: string;
   dir: string;
   voice: CharacterVoice | undefined;
-  /** Patch the character draft (model/rate/steps live in the draft like any other field). */
+  /** Patch the character draft (everything but the reference, which is written on disk by the picker). */
   onChange(patch: Partial<CharacterVoice>): void;
-  /** A disk write returned a new project; the parent re-reads it. */
+  /** A disk write returned a new project. */
   onProject(project: unknown): void;
 }
 
-/** Voices shown per page. The bank is ~750 clips; rendering them all would jank the panel. */
-const PAGE = 40;
-
 export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: VoicePickerProps) {
-  const [catalogue, setCatalogue] = useState<VoiceBankCatalogue | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(false);
-  const [collection, setCollection] = useState<string>('');
-  const [query, setQuery] = useState('');
-  const [limit, setLimit] = useState(PAGE);
-  const [playing, setPlaying] = useState<string | null>(null);
+  const [studio, setStudio] = useState<VoiceStudioState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [line, setLine] = useState('');
+  const [last, setLast] = useState<VoicePreview | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
 
-  const load = useCallback((refresh = false) => {
-    setLoading(true);
+  const load = useCallback(() => {
     api()
-      .editor.voiceBank(refresh)
-      .then(setCatalogue)
-      .catch((err) => reportError('Could not load the voice bank', err))
-      .finally(() => setLoading(false));
+      .editor.voiceStudio()
+      .then(setStudio)
+      .catch((err) => reportError('Could not read the voice settings', err));
   }, []);
 
-  useEffect(() => {
-    if (open && !catalogue) load();
-  }, [open, catalogue, load]);
+  useEffect(() => load(), [load]);
 
-  // While the speech engine is still being fetched, re-read the catalogue so the panel counts up
-  // instead of sitting on a stale percentage until the author closes and reopens it.
-  const fetching = catalogue?.engine?.state === 'downloading' || catalogue?.engine?.state === 'extracting';
+  // Keep polling only while something is still downloading, so the panel counts up on a first run.
+  const fetching = studio?.engine?.state === 'downloading' || studio?.engine?.state === 'extracting'
+    || studio?.model?.state === 'downloading' || studio?.model?.state === 'extracting';
   useEffect(() => {
-    if (!open || !fetching) return;
-    const timer = window.setInterval(() => load(), 2000);
-    return () => window.clearInterval(timer);
-  }, [open, fetching, load]);
+    if (!fetching) return;
+    const t = window.setInterval(load, 2000);
+    return () => window.clearInterval(t);
+  }, [fetching, load]);
 
-  // Stop any sample still playing when the panel closes or the character changes.
   useEffect(
     () => () => {
       audio.current?.pause();
@@ -67,66 +56,74 @@ export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: Voi
     [dir],
   );
 
-  const visible = useMemo(() => {
-    const all = catalogue?.voices ?? [];
-    const q = query.trim().toLowerCase();
-    return all.filter((v) => (collection === '' || v.collection === collection) && (q === '' || v.label.toLowerCase().includes(q) || v.path.toLowerCase().includes(q)));
-  }, [catalogue, collection, query]);
-
-  const page = useMemo(() => visible.slice(0, limit), [visible, limit]);
-
-  // Pull the recordings on screen down in the background, so pressing play is usually instant.
-  useEffect(() => {
-    const pending = page.filter((v) => !v.ready).map((v) => v.path);
-    if (pending.length === 0) return;
-    api()
-      .editor.voicePrefetch(pending)
-      .catch(() => undefined); // best effort: a failed prefetch just means play downloads on demand
-  }, [page]);
-
-  useEffect(() => setLimit(PAGE), [collection, query]);
-
-  const play = async (entry: VoiceBankEntry) => {
-    audio.current?.pause();
-    setPlaying(entry.path);
+  const pick = async () => {
+    setBusy('pick');
     try {
-      const url = await api().editor.voicePreview(entry.path);
-      const el = new Audio(url);
-      audio.current = el;
-      el.onended = () => setPlaying((p) => (p === entry.path ? null : p));
-      el.onerror = () => setPlaying((p) => (p === entry.path ? null : p));
-      await el.play();
+      onProject(await api().editor.pickVoice(projectKey, dir));
     } catch (err) {
-      setPlaying(null);
-      reportError(`Could not play ${entry.label}`, err);
-    }
-  };
-
-  const use = async (entry: VoiceBankEntry) => {
-    setBusy(entry.path);
-    try {
-      const project = await api().editor.useVoice(projectKey, dir, entry.path);
-      onProject(project);
-      setOpen(false);
-    } catch (err) {
-      reportError(`Could not use ${entry.label}`, err);
+      reportError('Could not use that recording', err);
     } finally {
       setBusy(null);
     }
   };
 
-  const models = catalogue?.models ?? [];
-  const collections = catalogue?.collections ?? [];
-  const licenseOf = (id: string) => collections.find((c) => c.id === id);
+  /** Render with the *draft* settings, so unsaved changes can be heard before they are committed. */
+  const speak = async (seed?: number) => {
+    setBusy('preview');
+    try {
+      const opts: Record<string, unknown> = {};
+      if (line.trim()) opts.text = line.trim();
+      if (voice?.model) opts.model = voice.model;
+      if (voice?.steps !== undefined) opts.steps = voice.steps;
+      if (voice?.rate !== undefined) opts.rate = voice.rate;
+      if (voice?.temperature !== undefined) opts.temperature = voice.temperature;
+      const useSeed = seed ?? voice?.seed;
+      if (useSeed !== undefined && useSeed >= 0) opts.seed = useSeed;
+
+      const preview = await api().editor.previewVoice(projectKey, dir, opts);
+      setLast(preview);
+      audio.current?.pause();
+      const el = new Audio(preview.url);
+      audio.current = el;
+      await el.play();
+    } catch (err) {
+      reportError('Could not preview the voice', err);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const models = studio?.models ?? [];
+  const blocked = studio?.unavailable;
+  const pinned = voice?.seed !== undefined && voice.seed >= 0;
 
   return (
     <div className="field" style={{ marginTop: 16 }}>
       <span className="field-label">Voice (sdk.voice.speak)</span>
       <span className="field-hint">
-        A cloning model such as Pocket TTS speaks this character in the voice of the reference clip below. Leave the model empty to use the app default.
+        A cloning model speaks this character in the voice of the recording below. Pin a seed to make it sound the same every time.
       </span>
 
-      <div className="field-grid" style={{ marginTop: 4 }}>
+      {blocked ? <span className={`field-hint${fetching ? '' : ' msg-error'}`}>{blocked}</span> : null}
+
+      <div className="expr-row" style={{ marginTop: 8 }}>
+        <div className="item-text">
+          <span className="item-title">{voice?.reference ?? 'No recording'}</span>
+          <span className="item-sub mono">
+            {voice?.reference ? 'Cloned from this file, which ships inside the pack.' : 'Pick a 16-bit PCM wav — around ten seconds of clean speech.'}
+          </span>
+        </div>
+        <button type="button" className="btn btn-sm" onClick={pick} disabled={busy !== null}>
+          {busy === 'pick' ? 'Copying…' : voice?.reference ? 'Replace…' : 'Choose a recording…'}
+        </button>
+        {voice?.reference ? (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => onChange({ reference: undefined })}>
+            Clear
+          </button>
+        ) : null}
+      </div>
+
+      <div className="field-grid" style={{ marginTop: 8 }}>
         <div className="field">
           <label htmlFor="ch-voice-model">Model</label>
           <select id="ch-voice-model" value={voice?.model ?? ''} onChange={(e) => onChange({ model: e.target.value || undefined })}>
@@ -136,118 +133,58 @@ export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: Voi
                 {m.name} — {m.label}
               </option>
             ))}
-            {/* A model named by the pack but not installed here must still survive a save. */}
+            {/* A model named by the pack but missing here must still survive a save. */}
             {voice?.model && !models.some((m) => m.name === voice.model) ? <option value={voice.model}>{voice.model} (not installed)</option> : null}
           </select>
         </div>
         <div className="field">
           <label htmlFor="ch-voice-rate">Speed</label>
-          <input
-            id="ch-voice-rate"
-            type="number"
-            min={0.5}
-            max={2}
-            step={0.05}
-            value={voice?.rate ?? ''}
-            onChange={(e) => onChange({ rate: e.target.value === '' ? undefined : Number(e.target.value) })}
-          />
+          <input id="ch-voice-rate" type="number" min={0.5} max={2} step={0.05} value={voice?.rate ?? ''}
+            onChange={(e) => onChange({ rate: e.target.value === '' ? undefined : Number(e.target.value) })} />
         </div>
         <div className="field">
           <label htmlFor="ch-voice-steps">Steps</label>
-          <input
-            id="ch-voice-steps"
-            type="number"
-            min={1}
-            max={64}
-            step={1}
-            value={voice?.steps ?? ''}
-            onChange={(e) => onChange({ steps: e.target.value === '' ? undefined : Math.round(Number(e.target.value)) })}
-          />
+          <input id="ch-voice-steps" type="number" min={1} max={64} step={1} value={voice?.steps ?? ''}
+            onChange={(e) => onChange({ steps: e.target.value === '' ? undefined : Math.round(Number(e.target.value)) })} />
+          <span className="field-hint">Smoothness. Cheap here — 32 costs little more than 8.</span>
+        </div>
+        <div className="field">
+          <label htmlFor="ch-voice-temp">Temperature</label>
+          <input id="ch-voice-temp" type="number" min={0} max={2} step={0.05} value={voice?.temperature ?? ''}
+            onChange={(e) => onChange({ temperature: e.target.value === '' ? undefined : Number(e.target.value) })} />
+          <span className="field-hint">Model default 0.7. Lower is steadier, higher more expressive.</span>
+        </div>
+        <div className="field">
+          <label htmlFor="ch-voice-seed">Seed</label>
+          <input id="ch-voice-seed" type="number" min={-1} step={1} value={voice?.seed ?? ''}
+            onChange={(e) => onChange({ seed: e.target.value === '' ? undefined : Math.round(Number(e.target.value)) })} />
+          <span className="field-hint">{pinned ? 'Pinned: every line uses this take.' : 'Empty means a different delivery every time.'}</span>
         </div>
       </div>
 
-      <div className="expr-row" style={{ marginTop: 8 }}>
-        <div className="item-text">
-          <span className="item-title">{voice?.reference ? voice.reference : 'No reference clip'}</span>
-          <span className="item-sub mono">{voice?.referenceSource ?? 'A cloning model needs one; models with a speaker bank do not.'}</span>
-          {voice?.attribution ? <span className="item-sub">{voice.attribution}</span> : null}
-        </div>
-        <button type="button" className="btn btn-sm" onClick={() => setOpen((v) => !v)}>
-          {open ? 'Close' : voice?.reference ? 'Change…' : 'Choose a voice…'}
-        </button>
-        {voice?.reference ? (
-          <button type="button" className="btn btn-sm btn-ghost" onClick={() => onChange({ reference: undefined, referenceSource: undefined, attribution: undefined })}>
-            Clear
+      <div className="field" style={{ marginTop: 8 }}>
+        <label htmlFor="ch-voice-line">Try a line</label>
+        <input id="ch-voice-line" type="text" placeholder={VOICE_PREVIEW_SENTENCE} value={line} onChange={(e) => setLine(e.target.value)} />
+        <div className="row" style={{ marginTop: 4 }}>
+          <button type="button" className="btn btn-sm" onClick={() => speak()} disabled={busy !== null || Boolean(blocked)}>
+            {busy === 'preview' ? 'Speaking…' : 'Speak it'}
           </button>
-        ) : null}
-      </div>
-
-      {open ? (
-        <div className="stack" style={{ gap: 8, marginTop: 8 }}>
-          {catalogue?.previewsUnavailable ? (
-            // A download in progress is not a mistake the author made, so it reads as a hint.
-            <span className={`field-hint${fetching ? '' : ' msg-error'}`}>{catalogue.previewsUnavailable}</span>
-          ) : null}
-          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-            <button type="button" className={`btn btn-sm${collection === '' ? '' : ' btn-ghost'}`} onClick={() => setCollection('')}>
-              All ({catalogue?.voices.length ?? 0})
-            </button>
-            {collections.map((c) => (
-              <button key={c.id} type="button" className={`btn btn-sm${collection === c.id ? '' : ' btn-ghost'}`} onClick={() => setCollection(c.id)} title={`${c.note} — ${c.license}`}>
-                {c.label} ({c.count})
-              </button>
-            ))}
-          </div>
-          {collection ? (
-            <span className="field-hint">
-              {licenseOf(collection)?.note} Licence: <code className="mono">{licenseOf(collection)?.license}</code>
-              {licenseOf(collection)?.nonCommercial ? ' — non-commercial use only.' : null}
-            </span>
-          ) : null}
-          <input type="search" placeholder="Search voices…" value={query} onChange={(e) => setQuery(e.target.value)} />
-          {loading ? <span className="muted small">Loading the catalogue…</span> : null}
-          {!loading && visible.length === 0 ? <span className="muted small">No voices match.</span> : null}
-          <div className="stack" style={{ gap: 4 }}>
-            {page.map((entry) => {
-              const lic = licenseOf(entry.collection);
-              return (
-                <div key={entry.path} className="expr-row">
-                  <div className="item-text">
-                    <span className="item-title">
-                      {entry.label}
-                      {entry.enhanced ? <span className="muted small"> · cleaned</span> : null}
-                    </span>
-                    <span className="item-sub mono">
-                      {entry.collection}
-                      {lic ? ` · ${lic.license}` : ''}
-                      {entry.ready ? '' : ' · downloading'}
-                    </span>
-                  </div>
-                  <button type="button" className="btn btn-sm" onClick={() => play(entry)} disabled={playing === entry.path || Boolean(catalogue?.previewsUnavailable)}>
-                    {playing === entry.path ? 'Playing…' : 'Play'}
-                  </button>
-                  <button type="button" className="btn btn-sm" onClick={() => use(entry)} disabled={busy !== null}>
-                    {busy === entry.path ? 'Copying…' : 'Use'}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          {visible.length > page.length ? (
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setLimit((l) => l + PAGE)}>
-              Show more ({visible.length - page.length} left)
-            </button>
-          ) : null}
-          <div className="row">
+          {/* Auditioning ignores a pinned seed, so an author can shop for a better take. */}
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => speak(-1)} disabled={busy !== null || Boolean(blocked)}>
+            Another take
+          </button>
+          {last ? (
             <span className="muted small grow">
-              {catalogue ? `${catalogue.voices.length} voices from ${catalogue.repo}` : ''}
+              {last.duration.toFixed(2)}s · seed <code className="mono">{last.seed}</code>
             </span>
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => load(true)} disabled={loading}>
-              Refresh
+          ) : null}
+          {last && last.seed !== voice?.seed ? (
+            <button type="button" className="btn btn-sm" onClick={() => onChange({ seed: last.seed })}>
+              Pin this seed
             </button>
-          </div>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }

@@ -160,6 +160,9 @@ const voiceSchema = z
     speaker: z.number().int().min(0).optional(),
     rate: z.number().min(0.5).max(2).optional(),
     steps: z.number().int().min(1).max(64).optional(),
+    // -1 is the model's own "random each time"; anything below that is meaningless.
+    seed: z.number().int().min(-1).optional(),
+    temperature: z.number().min(0).max(2).optional(),
   })
   .check((ctx) => {
     if (ctx.value.referenceText !== undefined && ctx.value.reference === undefined) {

@@ -29,6 +29,7 @@
     "quickjs-emscripten": "^0.32.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "sherpa-onnx-node": "^1.13.8",
     "ws": "^8.21.3"
   },
   "devDependencies": {
@@ -98,7 +99,11 @@
       "**/quickjs-emscripten*/**",
       "**/esbuild/**",
       "**/@esbuild/**",
-      "**/@jitl/quickjs-*/**"
+      "**/@jitl/quickjs-*/**",
+      "**/sherpa-onnx-node/**",
+      "**/sherpa-onnx-linux-*/**",
+      "**/sherpa-onnx-darwin-*/**",
+      "**/sherpa-onnx-win-*/**"
     ],
     "npmRebuild": false,
     "win": {

@@ -59,12 +59,11 @@ export interface CharacterVoice {
   /** Transcript of `reference`. ZipVoice requires it; PocketTTS ignores it. */
   referenceText?: string;
   /**
-   * Where `reference` came from, when it was copied in from the voice bank, e.g.
-   * `kyutai/tts-voices:vctk/p329_022.wav`. Kept so the editor can show what a character's voice is
-   * and so an attributed licence (CC BY) can be traced back to its source.
+   * Where `reference` came from, for authors who want the provenance recorded alongside the clip.
+   * Never set by the app; purely informational.
    */
   referenceSource?: string;
-  /** Credit line for `reference`, filled in for collections whose licence requires attribution. */
+  /** Credit line for `reference`, when its licence asks for attribution. */
   attribution?: string;
   /** Speaker id for multi-speaker models (Kokoro, VITS/VCTK). Ignored by cloning models. */
   speaker?: number;
@@ -72,6 +71,17 @@ export interface CharacterVoice {
   rate?: number;
   /** Flow-matching steps for PocketTTS/Supertonic: fewer is faster, more is smoother. */
   steps?: number;
+  /**
+   * Sampling seed. The model samples, so the same line comes out with different pacing and
+   * emphasis every time; pinning a seed makes a character sound like itself from one run to the
+   * next. Omit (or -1) to let every utterance vary.
+   */
+  seed?: number;
+  /**
+   * Sampling temperature (model default 0.7). Lower is steadier and flatter, higher is more
+   * expressive and less predictable.
+   */
+  temperature?: number;
 }
 
 export interface ModelHints {
