@@ -96,7 +96,9 @@ Characters, their behaviours and their media are distributed as shareable
   landed in Downloads, a time of day) that run their code without a turn.
 - **A body and a voice**: a persistent avatar overlay with expressions, speech
   bubbles and animations; on-screen drawing; character-built widgets; text to
-  speech and push-to-talk through your own commands.
+  speech in the character's own cloned voice (or through your own commands) and
+  push-to-talk. See [docs/voice.md](docs/voice.md) for the measured behaviour and
+  the traps.
 - **Desktop control**: launch apps, move and focus windows, switch workspaces,
   volume, brightness, do-not-disturb, theme; a per-character home folder; typed
   input and clicks unless you switch them off; outbound messages via webhooks.

@@ -236,6 +236,10 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
 Neural TTS runs on the CPU, deliberately: the GPU is for text generation. All of it is optional —
 with no engine and no model, `sdk.voice.speak` behaves as it always did (espeak-ng and friends).
 
+This section is the design. `docs/voice.md` is the companion: what was measured, which assumptions
+turned out to be wrong, and the traps worth knowing before touching any of it — most importantly
+that voice bugs must be reproduced under Electron, because the addon behaves differently there.
+
 - **Engine** (`capabilities/voice-engine.ts`): the `sherpa-onnx-node` addon, held in process. The
   model is loaded once (~450 ms) instead of on every utterance, and generation goes through
   `generateAsync` so it runs on a worker thread — `generate()` would block Electron's main process
