@@ -6,6 +6,8 @@ import { refreshSettings, reportError, toast } from '../../store/actions';
 import { Modal } from '../common/Modal';
 import { Toggle } from '../common/Toggle';
 import { CreatePolicyDialog } from './PolicyEditor';
+import { RemoteConfigCard, SealCard } from './SealSection';
+import { RemoteLinkCard } from './RemoteLinkSection';
 
 export function SystemSection() {
   const [status, setStatus] = useState<SystemIntegrationStatus | null>(null);
@@ -245,6 +247,18 @@ export function SystemSection() {
                   </>
                 ) : null}
               </dl>
+              {policy.seal.sealed || (policy.present && daemon.connected) ? (
+                <div style={{ marginTop: 8 }}>
+                  <button type="button" className="btn btn-sm" onClick={() => setPolicyDialog(true)} disabled={running || !policy.seal.sealed}>
+                    Edit policy…
+                  </button>
+                  {!policy.seal.sealed ? (
+                    <p className="field-hint">
+                      The policy was written once and only root can change it now. Lock it behind an authenticator code below and it becomes editable again — with the code.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
             </>
           ) : (
             <div className="stack" style={{ gap: 8 }}>
@@ -261,6 +275,10 @@ export function SystemSection() {
             </div>
           )}
         </div>
+
+        {linux && (policy.present || policy.seal.sealed) ? <SealCard status={status} onChanged={setStatus} disabled={running} /> : null}
+        {linux ? <RemoteLinkCard status={status} onChanged={setStatus} disabled={running} /> : null}
+        {linux && (status.remote?.daemon.configured || (status.remote?.app.packs.length ?? 0) > 0) ? <RemoteConfigCard status={status} onChanged={setStatus} disabled={running} /> : null}
 
         <div className="card">
           <div className="row" style={{ marginBottom: 6 }}>
@@ -388,6 +406,7 @@ export function SystemSection() {
       {policyDialog ? (
         <CreatePolicyDialog
           path={policy.path ?? '/etc/rp-code/policy.json'}
+          sealed={policy.seal.sealed}
           onClose={() => setPolicyDialog(false)}
           onCreated={async (next) => {
             setPolicyDialog(false);

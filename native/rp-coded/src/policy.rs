@@ -13,6 +13,9 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::remote::{PackRules, PacksPolicy, RemotePolicy, RemoteRules};
+use crate::seal::{LockPolicy, LockRules};
+
 /// Default policy file location (`POLICY_FILE_PATH` in `@rp/shared`).
 pub const DEFAULT_POLICY_PATH: &str = "/etc/rp-code/policy.json";
 
@@ -279,6 +282,14 @@ pub struct GuardRules {
     pub extra_deny_paths: Vec<String>,
     pub extra_deny_sockets: Vec<String>,
     pub allow_binaries: Vec<String>,
+    /// The policy is locked (`lock` block, `seal.rs`): the guarded sessions lose every path the
+    /// seal lives in, so a terminal inside one — including one under `sudo`, which stays in the
+    /// profile — cannot read the TOTP secret or delete the policy.
+    pub protect_policy: bool,
+    /// Also take away the binaries that would leave the profile behind (`run0`, `systemd-run`,
+    /// `machinectl`, `pkexec`) and the ones that would undo the lock (`chattr`,
+    /// `apparmor_parser`). `lock.denyEscapes`, on by default with a `lock` block.
+    pub deny_escapes: bool,
 }
 
 impl Default for GuardRules {
@@ -293,6 +304,8 @@ impl Default for GuardRules {
             extra_deny_paths: Vec::new(),
             extra_deny_sockets: Vec::new(),
             allow_binaries: Vec::new(),
+            protect_policy: false,
+            deny_escapes: false,
         }
     }
 }
@@ -316,6 +329,10 @@ impl GuardRules {
             extra_deny_paths: g.extra_deny_paths.clone().unwrap_or_default(),
             extra_deny_sockets: g.extra_deny_sockets.clone().unwrap_or_default(),
             allow_binaries: g.allow_binaries.clone().unwrap_or_default(),
+            // Set by `PolicyFile::guard_rules`, which is the only place that can see the `lock`
+            // block these two come from.
+            protect_policy: d.protect_policy,
+            deny_escapes: d.deny_escapes,
         }
     }
 
@@ -342,6 +359,17 @@ pub struct PolicyFile {
     pub guard: Option<GuardPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dev: Option<DevPolicy>,
+    /// Where this machine's policy comes from (`remote.rs`). A policy that names a `remote.url`
+    /// is refreshed from it; the daemon verifies what comes back before it replaces anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemotePolicy>,
+    /// The packs this machine is meant to have, and where to download them (`remote.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packs: Option<PacksPolicy>,
+    /// How the policy is locked down once it is sealed (`seal.rs`). The TOTP secret is never
+    /// here — this file is world-readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<LockPolicy>,
 }
 
 /// Keys allowed under `settings` (documented in `docs/spec/system.md`).
@@ -472,6 +500,15 @@ impl PolicyFile {
                 }
             }
         }
+        if let Some(remote) = &self.remote {
+            crate::remote::validate_remote(remote)?;
+        }
+        if let Some(packs) = &self.packs {
+            crate::remote::validate_packs(packs)?;
+        }
+        if let Some(lock) = &self.lock {
+            crate::seal::validate_lock(lock)?;
+        }
         if let Some(guard) = &self.guard {
             validate_guard(guard)?;
             let listed = self
@@ -514,9 +551,31 @@ impl PolicyFile {
         rules
     }
 
-    /// The `guard` rules with defaults applied (off without a `guard` block).
+    /// The `guard` rules with defaults applied (off without a `guard` block). A policy with a
+    /// `lock` block also guards the seal's own files, and — unless `lock.denyEscapes` says
+    /// otherwise — the binaries a confined session would use to get out of the profile.
     pub fn guard_rules(&self) -> GuardRules {
-        GuardRules::from_policy(self.guard.as_ref())
+        let mut rules = GuardRules::from_policy(self.guard.as_ref());
+        if self.lock.is_some() {
+            rules.protect_policy = true;
+            rules.deny_escapes = self.lock_rules().deny_escapes;
+        }
+        rules
+    }
+
+    /// The `remote` rules, or `None` when the policy names no address of its own.
+    pub fn remote_rules(&self) -> Option<RemoteRules> {
+        RemoteRules::from_policy(self.remote.as_ref())
+    }
+
+    /// The `packs` rules with defaults applied (nothing pinned without a `packs` block).
+    pub fn pack_rules(&self) -> PackRules {
+        PackRules::from_policy(self.packs.as_ref())
+    }
+
+    /// The `lock` rules with defaults applied (every protection on once the machine is sealed).
+    pub fn lock_rules(&self) -> LockRules {
+        LockRules::from_policy(self.lock.as_ref())
     }
 }
 
@@ -706,6 +765,45 @@ pub fn create_policy_file(path: &Path, policy: &Value) -> Result<(), CreateError
     Ok(())
 }
 
+/// Replace the policy file at `path` with `policy`, atomically (temp file + rename) and with the
+/// immutable attribute cleared first. This is the sealed machine's write path: unlike
+/// [`create_policy_file`] it *does* replace what is there, which is why it is only reachable
+/// behind a verified TOTP code, a verified remote configuration, or the seal's own self-heal.
+pub fn write_policy_file(path: &Path, policy: &Value) -> Result<(), CreateError> {
+    if let Some(dir) = path.parent() {
+        if !dir.exists() {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o755)
+                .create(dir)
+                .map_err(|e| CreateError::Io(format!("mkdir {}: {e}", dir.display())))?;
+        }
+    }
+    let mut text = serde_json::to_string_pretty(policy)
+        .map_err(|e| CreateError::Invalid(format!("cannot serialise policy: {e}")))?;
+    text.push('\n');
+    let tmp = path.with_extension("json.tmp");
+    let _ = crate::seal::set_immutable(path, false);
+    let _ = crate::seal::set_immutable(&tmp, false);
+    let _ = fs::remove_file(&tmp);
+    let io_err = |e: io::Error| CreateError::Io(format!("write {}: {e}", tmp.display()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o644)
+        .open(&tmp)
+        .map_err(io_err)?;
+    file.set_permissions(fs::Permissions::from_mode(0o644))
+        .map_err(io_err)?;
+    file.write_all(text.as_bytes()).map_err(io_err)?;
+    file.sync_all().map_err(io_err)?;
+    drop(file);
+    fs::rename(&tmp, path)
+        .map_err(|e| CreateError::Io(format!("rename onto {}: {e}", path.display())))?;
+    Ok(())
+}
+
 /// Parse and validate policy JSON text.
 pub fn parse_policy(text: &str) -> Result<PolicyFile, PolicyError> {
     let policy: PolicyFile =
@@ -790,6 +888,12 @@ impl PolicyStore {
     /// `settings.updates.allowDowngrade`; false without a (readable) file.
     pub fn allow_downgrade(&mut self) -> bool {
         matches!(self.load(), Ok(Some(p)) if p.allow_downgrade())
+    }
+
+    /// Drop the cache so the next `load` re-reads the file (used after a write that went around
+    /// this store: a sealed replacement, a remote configuration or the self-heal).
+    pub fn invalidate(&mut self) {
+        self.cache = None;
     }
 
     /// Validate `value` and create the policy file once (see [`create_policy_file`]). The

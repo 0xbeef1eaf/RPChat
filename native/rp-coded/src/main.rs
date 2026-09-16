@@ -61,6 +61,7 @@ mod logging {
     macro_rules! log_debug { ($($arg:tt)*) => { $crate::logging::log($crate::logging::Level::Debug, format!($($arg)*)) }; }
 }
 
+mod chain;
 mod devices;
 mod guard;
 mod inject;
@@ -68,7 +69,11 @@ mod keepalive;
 mod lock;
 mod policy;
 mod protocol;
+mod remote;
+mod runtime;
+mod seal;
 mod sysinstall;
+mod totp;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -82,6 +87,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
+use chain::ChainError;
 use guard::{AttemptLimiter, GuardAttempt, GuardHooks, GuardInfo, GuardPaths, ParserOp};
 use inject::Injector;
 use keepalive::{
@@ -89,17 +95,23 @@ use keepalive::{
 };
 use lock::{DeviceSource, LockEngine, UnlockCause, TICK_INTERVAL};
 use logging::Level;
-use policy::{CreateError, PolicyStore, DEFAULT_POLICY_PATH};
+use policy::{CreateError, PolicyFile, PolicyStore, DEFAULT_POLICY_PATH};
 use protocol::{
-    DaemonError, DaemonResult, ErrorCode, Event, Ok as OkPayload, Request, Response, EVENT_NAMES,
-    PROTOCOL_VERSION,
+    DaemonError, DaemonResult, ErrorCode, Event, Ok as OkPayload, RemoteInfo, Request, Response,
+    SealInfo, EVENT_NAMES, PROTOCOL_VERSION,
 };
+use runtime::{RuntimeDoc, RuntimeFs, RuntimeInfo, DEFAULT_RUNTIME_DIR};
+use seal::{ChainState, LockRules, Seal, SealError, SealMode, SealPaths, SealStore, TamperRecord};
+use serde_json::Value;
 use sysinstall::{ApplyHooks, ApplyRequest, DEFAULT_INSTALL_ROOT};
+use totp::TotpConfig;
 
 /// `DAEMON_SOCKET_PATH` in `@rp/shared`.
 pub const DEFAULT_SOCKET_PATH: &str = "/run/rp-code/daemon.sock";
 /// `SYSTEM_GROUP` in `@rp/shared`: owner group of the socket directory and socket.
 pub const SYSTEM_GROUP: &str = "rp-code";
+/// Where the drop-in that refuses a manual stop is written while the policy is sealed.
+pub const DEFAULT_DROP_IN_DIR: &str = "/etc/systemd/system/rp-coded.service.d";
 /// The crate version; `RP_CODED_VERSION` at build time overrides it (test builds that must look
 /// newer than the running daemon to exercise the self-update path).
 pub const VERSION: &str = match option_env!("RP_CODED_VERSION") {
@@ -114,6 +126,7 @@ USAGE:
     rp-coded [--socket <path>] [--policy <path>] [--log-level <error|warn|info|debug>]
     rp-coded --check-devices
     rp-coded --guard-apply | --guard-off [--policy <path>] [--profile-dir <p>] [--guard-state <p>]
+    rp-coded --seal-status | --unseal <code> [--policy <path>]
     rp-coded --help | --version
 
 OPTIONS:
@@ -137,6 +150,10 @@ OPTIONS:
     --guard-apply       Engage the session guard from the policy now (what the daemon does at
                         start and on policy changes), print the status as JSON and exit
     --guard-off         Unload the session guard whatever the policy says, print the status, exit
+    --seal-status       Print the policy seal, the runtime policy filesystem and the
+                        remote-configuration state as JSON, then exit
+    --unseal <code>     Remove the policy seal with a code from the enrolled authenticator app
+                        (the way back in when the app cannot be started), then exit
     --check-devices     Print which input devices and /dev/uinput can be opened, then exit 0
     --log-level <lvl>   stderr verbosity (default info)
 
@@ -156,6 +173,8 @@ struct Args {
     guard_state: PathBuf,
     guard_apply: bool,
     guard_off: bool,
+    seal_status: bool,
+    unseal: Option<String>,
     log_level: Level,
     help: bool,
     version: bool,
@@ -189,6 +208,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             .unwrap_or_else(|| PathBuf::from(guard::DEFAULT_STATE_FILE)),
         guard_apply: false,
         guard_off: false,
+        seal_status: false,
+        unseal: None,
         log_level: Level::Info,
         help: false,
         version: false,
@@ -222,6 +243,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             }
             "--guard-apply" => args.guard_apply = true,
             "--guard-off" => args.guard_off = true,
+            "--seal-status" => args.seal_status = true,
+            "--unseal" => args.unseal = Some(iter.next().ok_or("--unseal needs a code")?.clone()),
             "--log-level" => {
                 let v = iter.next().ok_or("--log-level needs a value")?;
                 args.log_level =
@@ -345,6 +368,17 @@ pub struct Daemon {
     limiter: Mutex<AttemptLimiter>,
     /// Connections that asked for pushed events.
     subscribers: Mutex<Vec<Subscriber>>,
+    /// Seal copies that were missing at the last tick, so a location the daemon cannot write to
+    /// (a read-only `/usr`, say) is reported once rather than every five seconds.
+    seal_gaps: Mutex<Vec<PathBuf>>,
+    /// The policy seal: the TOTP lock, its copies and the sealed policy (`seal.rs`).
+    seal_store: SealStore,
+    /// Where the effective policy is published for the app (`runtime.rs`).
+    runtime: RuntimeFs,
+    /// Reporting around the last remote configuration (`remote.rs`).
+    remote_state: Mutex<RemoteState>,
+    /// Directory of the systemd drop-in written while sealed.
+    drop_in_dir: PathBuf,
 }
 
 /// A connection receiving pushed `{ "ev": … }` lines.
@@ -361,6 +395,7 @@ impl Daemon {
         injector: Box<dyn Injector>,
         policy_path: impl Into<PathBuf>,
     ) -> Self {
+        let scratch = test_scratch();
         Daemon {
             engine: Mutex::new(LockEngine::new(source)),
             injector: Mutex::new(injector),
@@ -382,7 +417,24 @@ impl Daemon {
             tailer_started: AtomicBool::new(false),
             limiter: Mutex::new(AttemptLimiter::default()),
             subscribers: Mutex::new(Vec::new()),
+            seal_gaps: Mutex::new(Vec::new()),
+            seal_store: SealStore::new(default_seal_paths(&scratch)),
+            runtime: RuntimeFs::real(
+                default_runtime_dir(&scratch),
+                system_group_gid(),
+                !cfg!(test),
+            ),
+            remote_state: Mutex::new(RemoteState::default()),
+            drop_in_dir: default_drop_in_dir(&scratch),
         }
+    }
+
+    /// Where the seal, the runtime filesystem and the drop-in live (a temp tree in tests).
+    pub fn with_seal(mut self, seal: SealStore, runtime: RuntimeFs, drop_in_dir: PathBuf) -> Self {
+        self.seal_store = seal;
+        self.runtime = runtime;
+        self.drop_in_dir = drop_in_dir;
+        self
     }
 
     /// The session guard's OS hooks and locations (fakes and a temp dir in tests).
@@ -433,8 +485,10 @@ impl Daemon {
             log_info!("lock ended: {cause}");
         }
         self.keepalive_tick(Instant::now());
-        // Every ~5 s: re-engage the guard when the policy file changed (a stat).
+        // Every ~5 s: put back what was taken away and re-engage the guard when the policy
+        // file changed (a stat each).
         if self.ticks.fetch_add(1, Ordering::Relaxed) % 100 == 99 {
+            self.seal_tick();
             self.guard_tick();
         }
     }
@@ -460,6 +514,15 @@ impl Daemon {
             let mut store = self.policy();
             let stamp = store.stamp();
             (store.load(), stamp)
+        };
+        // A sealed machine is confined from the sealed policy, not from whatever is on disk: the
+        // guard's denials are most of what makes the seal hold, so an edited file must not be
+        // able to loosen them even for the seconds before the self-heal undoes it.
+        let policy = match self.effective_policy() {
+            (Some(value), "seal") => serde_json::from_value::<PolicyFile>(value)
+                .map(Some)
+                .map_err(|e| policy::PolicyError::Invalid(e.to_string())),
+            _ => policy,
         };
         let info = match &policy {
             Ok(p) => guard::apply(p.as_ref(), &self.guard_hooks, &self.guard_paths),
@@ -759,11 +822,25 @@ impl Daemon {
                 })
             }
             Request::Policy => {
-                let mut store = self.policy();
-                let path = store.path().to_string_lossy().into_owned();
-                match store.load() {
-                    Ok(policy) => Ok(OkPayload::Policy { policy, path }),
-                    Err(e) => Err(DaemonError::new(ErrorCode::Policy, e.to_string())),
+                // The *effective* policy, which on a sealed machine is the sealed copy rather
+                // than whatever is on disk: a caller must never act on an edit the daemon is
+                // about to undo.
+                let path = self.policy().path().to_string_lossy().into_owned();
+                match self.effective_policy() {
+                    (Some(value), _) => match serde_json::from_value::<PolicyFile>(value) {
+                        Ok(policy) => Ok(OkPayload::Policy {
+                            policy: Some(policy),
+                            path,
+                        }),
+                        Err(e) => Err(DaemonError::new(ErrorCode::Policy, e.to_string())),
+                    },
+                    (None, _) => {
+                        let mut store = self.policy();
+                        match store.load() {
+                            Ok(policy) => Ok(OkPayload::Policy { policy, path }),
+                            Err(e) => Err(DaemonError::new(ErrorCode::Policy, e.to_string())),
+                        }
+                    }
                 }
             }
             Request::Lock {
@@ -773,8 +850,7 @@ impl Daemon {
             } => {
                 let devices = devices.unwrap_or_default();
                 let limits = self
-                    .policy()
-                    .lock_limits()
+                    .effective_lock_limits()
                     .map_err(|e| DaemonError::new(ErrorCode::Policy, e.to_string()))?;
                 if !limits.enabled {
                     return Err(DaemonError::new(
@@ -843,33 +919,20 @@ impl Daemon {
                 log_debug!("move to {x},{y} for {peer}");
                 Ok(OkPayload::Move)
             }
-            Request::SetPolicy { policy } => {
-                let mut store = self.policy();
-                let path = store.path().to_string_lossy().into_owned();
-                match store.create(policy) {
-                    Ok(created) => {
-                        log_info!(
-                            "policy created at {path} by {peer}{}",
-                            created
-                                .managed_by
-                                .as_deref()
-                                .filter(|m| !m.is_empty())
-                                .map(|m| format!(" (managedBy: {m:?})"))
-                                .unwrap_or_default()
-                        );
-                        Ok(OkPayload::SetPolicy { path })
-                    }
-                    Err(e @ CreateError::Exists(_)) => {
-                        log_warn!("set-policy from {peer} refused: {e}");
-                        Err(DaemonError::new(ErrorCode::Exists, e.to_string()))
-                    }
-                    Err(CreateError::Invalid(m)) => Err(DaemonError::invalid(m)),
-                    Err(e @ CreateError::Io(_)) => {
-                        log_error!("set-policy from {peer} failed: {e}");
-                        Err(DaemonError::internal(e.to_string()))
-                    }
-                }
-            }
+            Request::SetPolicy { policy, code } => self.set_policy(ctx, policy, code),
+            Request::SealPolicy { policy, totp } => self.seal_policy(ctx, policy, totp),
+            Request::UnsealPolicy {
+                code,
+                remove_policy,
+            } => self.unseal_policy(ctx, &code, remove_policy.unwrap_or(false)),
+            Request::SealStatus => Ok(OkPayload::SealStatus {
+                seal: self.seal_info(),
+                runtime: self.runtime.info(),
+                remote: self.remote_info(),
+            }),
+            Request::RemoteApply { document } => self.remote_apply(ctx, &document),
+            Request::SetRemoteLink { blob, code } => self.set_remote_link(ctx, &blob, code),
+            Request::VerifyPack { id, sha256 } => self.verify_pack(&id, &sha256),
             Request::Register {
                 exec,
                 args,
@@ -1090,6 +1153,1079 @@ impl Daemon {
         }
         ctx.registration = Some(reg);
         Ok(OkPayload::Register)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The policy seal, the runtime policy filesystem and remote configuration
+// ---------------------------------------------------------------------------
+
+/// What the daemon remembers about the last remote configuration it was handed. The serial
+/// itself lives in the seal (it must survive a restart and cannot be reset by the app); this is
+/// the reporting around it.
+#[derive(Debug, Clone, Default)]
+pub struct RemoteState {
+    pub last_applied_at: Option<String>,
+    pub last_error: Option<String>,
+    pub signed: bool,
+    /// Serial floor for an unsealed machine, where there is no seal to keep it in.
+    pub serial: u64,
+}
+
+impl Daemon {
+    /// The seal, or `None` when this machine is not sealed. A damaged seal is logged and treated
+    /// as "sealed but unusable" by the callers that must fail closed.
+    pub fn seal(&self) -> Option<Seal> {
+        match self.seal_store.load() {
+            Ok(seal) => seal,
+            Err(e) => {
+                log_warn!("policy seal: {e}");
+                None
+            }
+        }
+    }
+
+    /// The input-lock limits of the policy currently in force. On a sealed machine that is the
+    /// sealed policy: an edit to the file on disk must not raise a limit for the seconds before
+    /// the self-heal undoes it.
+    fn effective_lock_limits(&self) -> Result<policy::LockLimits, policy::PolicyError> {
+        match self.effective_policy() {
+            (Some(value), "seal") => serde_json::from_value::<PolicyFile>(value)
+                .map(|p| p.lock_limits())
+                .map_err(|e| policy::PolicyError::Invalid(e.to_string())),
+            _ => self.policy().lock_limits(),
+        }
+    }
+
+    /// The `lock` rules of the policy currently in force (defaults when there is none).
+    fn lock_rules(&self) -> LockRules {
+        match self.effective_policy() {
+            (Some(value), _) => serde_json::from_value::<PolicyFile>(value)
+                .map(|p| p.lock_rules())
+                .unwrap_or_default(),
+            _ => LockRules::default(),
+        }
+    }
+
+    /// The policy this machine enforces and where it came from. A sealed machine enforces the
+    /// sealed copy — the file on disk is a cache of it, not the source of truth — so an edit
+    /// there changes nothing until the daemon is given a code.
+    fn effective_policy(&self) -> (Option<Value>, &'static str) {
+        if let Some(seal) = self.seal() {
+            return (Some(seal.policy), "seal");
+        }
+        let mut store = self.policy();
+        match store.load() {
+            Ok(Some(_)) => match fs::read_to_string(store.path())
+                .ok()
+                .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            {
+                Some(value) => (Some(value), "local"),
+                None => (None, "local"),
+            },
+            _ => (None, "local"),
+        }
+    }
+
+    /// Publish the effective policy into the runtime filesystem.
+    pub fn publish_policy(&self, source: &str) -> RuntimeInfo {
+        let (policy, default_source) = self.effective_policy();
+        let seal = self.seal();
+        let managed_by = policy
+            .as_ref()
+            .and_then(|p| p.get("managedBy"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let doc = RuntimeDoc {
+            policy,
+            source: if source.is_empty() {
+                default_source.to_string()
+            } else {
+                source.to_string()
+            },
+            sealed: seal.is_some(),
+            managed_by,
+            published_at: seal::iso_secs(seal::now_secs()),
+        };
+        let info = self.runtime.publish(&doc);
+        for problem in &info.degraded {
+            log_warn!("runtime policy filesystem: {problem}");
+        }
+        info
+    }
+
+    /// Tell subscribers the effective policy changed, so the app re-reads it without polling.
+    fn announce_policy(&self, source: &str, hash: &str) {
+        self.broadcast(&Event::PolicyChanged {
+            at: seal::iso_secs(seal::now_secs()),
+            source: source.to_string(),
+            policy_hash: hash.to_string(),
+        });
+    }
+
+    /// The seal as the app may see it, plus the residual risks of this configuration.
+    pub fn seal_info(&self) -> SealInfo {
+        let rules = self.lock_rules();
+        let paths: Vec<String> = self
+            .seal_store
+            .paths
+            .all()
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        let Some(seal) = self.seal() else {
+            return SealInfo {
+                sealed: false,
+                paths,
+                ..SealInfo::default()
+            };
+        };
+        let chain_mode = seal.mode == SealMode::Chain;
+        let immutable = self
+            .seal_store
+            .paths
+            .all()
+            .iter()
+            .all(|p| seal::is_immutable(p));
+        let guard_enforcing = self.guard_status().mode == policy::GuardMode::Enforce;
+        let runtime = self.runtime.info();
+        let mut residual = vec![if chain_mode {
+            "nothing on this machine can authorise a policy change, but a root shell the session guard does not confine can still stop the daemon and delete what it protects".to_string()
+        } else {
+            "a root shell that the session guard does not confine can read the seal and generate its own codes; the guard in enforce mode with lock.denyEscapes is what closes that".to_string()
+        },
+            "booting the machine from other media bypasses the daemon entirely; only full-disk encryption with a firmware password stops that".to_string(),
+        ];
+        if !guard_enforcing {
+            residual.push(
+                "the session guard is not in enforce mode, so a terminal in a managed session can still reach /etc/rp-code and systemctl".into(),
+            );
+        }
+        if !immutable {
+            residual.push(
+                "the seal files do not carry the immutable attribute (the filesystem may not support it), so root can delete them without running chattr first".into(),
+            );
+        }
+        if !runtime.mounted {
+            residual.push(
+                "the runtime policy filesystem is not a mount of its own, so the published policy is an ordinary directory root can write to".into(),
+            );
+        }
+        if !rules.self_heal {
+            residual.push("lock.selfHeal is off, so an edited policy file is not put back".into());
+        }
+        SealInfo {
+            sealed: true,
+            mode: seal.mode,
+            sealed_at: Some(seal.sealed_at.clone()),
+            managed_by: seal.managed_by.clone(),
+            policy_hash: Some(seal.policy_hash.clone()),
+            totp: seal.totp,
+            failures: seal.failures,
+            locked_until: seal.locked_until.map(seal::iso_secs),
+            paths,
+            immutable,
+            self_heal: rules.self_heal,
+            deny_escapes: rules.deny_escapes && guard_enforcing,
+            refuse_manual_stop: rules.refuse_manual_stop && self.drop_in_present(),
+            tampers: seal.tampers.clone(),
+            residual,
+        }
+    }
+
+    /// Where the `RefuseManualStop=yes` drop-in lives and whether it is there.
+    fn drop_in_path(&self) -> PathBuf {
+        self.drop_in_dir.join("50-rp-code-sealed.conf")
+    }
+
+    fn drop_in_present(&self) -> bool {
+        self.drop_in_path().is_file()
+    }
+
+    /// Write or remove the systemd drop-in that refuses `systemctl stop rp-coded`. It is not a
+    /// wall — `systemctl kill` and a plain `kill` still work, and root can delete the file — but
+    /// it takes away the one command an administrator reaches for first, and combined with the
+    /// guard's exec denials there is no unconfined shell in the session to run the others from.
+    fn apply_drop_in(&self, wanted: bool) {
+        let path = self.drop_in_path();
+        if wanted == path.is_file() {
+            return;
+        }
+        if wanted {
+            let text =
+                "# Written by rp-coded while the policy is sealed; removed when it is unsealed.\n\
+                        [Unit]\n\
+                        RefuseManualStop=yes\n\
+                        \n\
+                        [Service]\n\
+                        Restart=always\n\
+                        RestartSec=1\n";
+            if let Err(e) = fs::create_dir_all(&self.drop_in_dir) {
+                log_warn!("cannot create {}: {e}", self.drop_in_dir.display());
+                return;
+            }
+            let _ = seal::set_immutable(&path, false);
+            match fs::write(&path, text) {
+                Ok(()) => {
+                    log_info!(
+                        "wrote {} (the unit now refuses a manual stop)",
+                        path.display()
+                    );
+                    self.reload_systemd();
+                }
+                Err(e) => log_warn!("cannot write {}: {e}", path.display()),
+            }
+        } else {
+            let _ = seal::set_immutable(&path, false);
+            match fs::remove_file(&path) {
+                Ok(()) => {
+                    log_info!("removed {}", path.display());
+                    self.reload_systemd();
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => log_warn!("cannot remove {}: {e}", path.display()),
+            }
+        }
+    }
+
+    fn reload_systemd(&self) {
+        if !Path::new("/run/systemd/system").exists() {
+            return;
+        }
+        match std::process::Command::new("systemctl")
+            .arg("daemon-reload")
+            .status()
+        {
+            Ok(status) if status.success() => {}
+            Ok(status) => log_warn!("systemctl daemon-reload exited with {status}"),
+            Err(e) => log_warn!("cannot run systemctl daemon-reload: {e}"),
+        }
+    }
+
+    /// What the app needs to know about the policy chain: where it is fetched from, which key
+    /// signs it, and how far along this machine is.
+    pub fn remote_info(&self) -> RemoteInfo {
+        let seal = self.seal();
+        let policy: Option<PolicyFile> = self
+            .effective_policy()
+            .0
+            .and_then(|v| serde_json::from_value(v).ok());
+        let state = self
+            .remote_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let packs = policy.as_ref().map(|p| p.pack_rules()).unwrap_or_default();
+        // The policy may move the address and the schedule; the key and the position never come
+        // from it, only from the seal.
+        let from_policy = policy.as_ref().and_then(|p| p.remote_rules());
+        let Some(chain) = seal.as_ref().and_then(|s| s.chain.clone()) else {
+            return RemoteInfo {
+                configured: false,
+                url: from_policy.as_ref().map(|r| r.url.clone()),
+                enabled: false,
+                interval_minutes: from_policy
+                    .as_ref()
+                    .map(|r| r.interval_minutes)
+                    .unwrap_or(remote::DEFAULT_INTERVAL_MINUTES),
+                last_error: state.last_error,
+                packs: packs.sources,
+                remove_unlisted: packs.remove_unlisted,
+                pack_refresh_minutes: packs.refresh_minutes,
+                ..RemoteInfo::default()
+            };
+        };
+        RemoteInfo {
+            configured: true,
+            url: Some(
+                from_policy
+                    .as_ref()
+                    .map(|r| r.url.clone())
+                    .unwrap_or_else(|| chain.url.clone()),
+            ),
+            enabled: from_policy.as_ref().map(|r| r.enabled).unwrap_or(true),
+            interval_minutes: from_policy
+                .as_ref()
+                .map(|r| r.interval_minutes)
+                .or(chain.interval_minutes)
+                .unwrap_or(remote::DEFAULT_INTERVAL_MINUTES),
+            key: Some(chain.key.clone()),
+            key_id: chain.key_id.clone(),
+            seq: chain.seq,
+            head: (!chain.head.is_empty()).then(|| chain.head.clone()),
+            linked_at: Some(chain.linked_at.clone()),
+            rotations: chain.rotations.clone(),
+            last_applied_at: state.last_applied_at,
+            last_error: state.last_error,
+            packs: packs.sources,
+            remove_unlisted: packs.remove_unlisted,
+            pack_refresh_minutes: packs.refresh_minutes,
+        }
+    }
+
+    /// Verify a code against the seal and turn a refusal into the wire error. `Ok` carries the
+    /// seal as it stands after the successful check (counters updated and persisted).
+    fn require_code(&self, code: Option<&str>, what: &str) -> DaemonResult<Option<Seal>> {
+        let Some(seal) = self.seal() else {
+            return Ok(None);
+        };
+        if seal.mode == SealMode::Chain {
+            return Err(DaemonError::new(
+                ErrorCode::Code,
+                format!(
+                    "this machine is held by a signed policy chain, so {what} is not something it can be asked to do locally: publish a link that unseals it"
+                ),
+            ));
+        }
+        let rules = self.lock_rules();
+        let Some(code) = code else {
+            return Err(DaemonError::new(
+                ErrorCode::Code,
+                format!(
+                    "this machine is sealed; {what} needs the current code from the authenticator app enrolled at {}",
+                    seal.sealed_at
+                ),
+            ));
+        };
+        if code.chars().count() > protocol::CODE_MAX_CHARS {
+            return Err(DaemonError::invalid("the code is too long"));
+        }
+        match self
+            .seal_store
+            .verify(code, seal::now_secs(), rules.immutable)
+        {
+            Ok(seal) => Ok(Some(seal)),
+            Err(e @ (SealError::Code(_) | SealError::LockedOut(_))) => {
+                log_warn!("{what} refused: {e}");
+                Err(DaemonError::new(ErrorCode::Code, e.to_string()))
+            }
+            Err(SealError::Missing) => Ok(None),
+            Err(e) => Err(DaemonError::internal(e.to_string())),
+        }
+    }
+
+    /// `set-policy`: create the policy while unsealed, or replace it with a valid code.
+    fn set_policy(
+        &self,
+        ctx: &ConnCtx,
+        value: Value,
+        code: Option<String>,
+    ) -> DaemonResult<OkPayload> {
+        let peer = ctx.label.as_str();
+        let path = self.policy().path().to_string_lossy().into_owned();
+        // Validate before the code is checked: a typo in the policy must not spend a code, and a
+        // wrong code must not be blamed on a policy that was never going to be accepted.
+        let parsed = policy::policy_from_value(value.clone()).map_err(create_error)?;
+        let sealed = self.require_code(code.as_deref(), "changing the policy")?;
+        match sealed {
+            // Sealed: replace the file and re-pin the seal to what was written.
+            Some(seal) => {
+                let rules = parsed.lock_rules();
+                policy::write_policy_file(Path::new(&path), &value).map_err(create_error)?;
+                self.policy().invalidate();
+                let managed_by = parsed.managed_by.clone();
+                self.seal_store
+                    .reseal(seal, value, managed_by, rules.immutable, seal::now_secs())
+                    .map_err(|e| DaemonError::internal(e.to_string()))?;
+                if rules.immutable {
+                    let _ = seal::set_immutable(Path::new(&path), true);
+                }
+                self.apply_drop_in(rules.refuse_manual_stop);
+                let info = self.publish_policy("local");
+                log_info!("policy replaced at {path} by {peer} (code accepted)");
+                self.announce_policy("local", info.policy_hash.as_deref().unwrap_or_default());
+                self.guard_apply();
+                Ok(OkPayload::SetPolicy {
+                    path,
+                    replaced: true,
+                })
+            }
+            // Unsealed: unchanged write-once behaviour.
+            None => {
+                let mut store = self.policy();
+                match store.create(value) {
+                    Ok(created) => {
+                        drop(store);
+                        log_info!(
+                            "policy created at {path} by {peer}{}",
+                            created
+                                .managed_by
+                                .as_deref()
+                                .filter(|m| !m.is_empty())
+                                .map(|m| format!(" (managedBy: {m:?})"))
+                                .unwrap_or_default()
+                        );
+                        let info = self.publish_policy("local");
+                        self.announce_policy(
+                            "local",
+                            info.policy_hash.as_deref().unwrap_or_default(),
+                        );
+                        Ok(OkPayload::SetPolicy {
+                            path,
+                            replaced: false,
+                        })
+                    }
+                    Err(e @ CreateError::Exists(_)) => {
+                        log_warn!("set-policy from {peer} refused: {e}");
+                        Err(DaemonError::new(ErrorCode::Exists, e.to_string()))
+                    }
+                    Err(CreateError::Invalid(m)) => Err(DaemonError::invalid(m)),
+                    Err(e @ CreateError::Io(_)) => {
+                        log_error!("set-policy from {peer} failed: {e}");
+                        Err(DaemonError::internal(e.to_string()))
+                    }
+                }
+            }
+        }
+    }
+
+    /// `seal-policy`: pin a policy to a fresh TOTP secret. The secret is in the answer and
+    /// nowhere else the app can reach, so it must be shown to the administrator right away.
+    fn seal_policy(
+        &self,
+        ctx: &ConnCtx,
+        policy: Option<Value>,
+        cfg: Option<TotpConfig>,
+    ) -> DaemonResult<OkPayload> {
+        let peer = ctx.label.as_str();
+        if self.seal_store.sealed() {
+            return Err(DaemonError::new(
+                ErrorCode::Exists,
+                "this machine is already sealed; use set-policy with a code to change the policy, or unseal-policy to remove the lock",
+            ));
+        }
+        let path = self.policy().path().to_string_lossy().into_owned();
+        // Either the caller brought a policy, or there is one on disk to seal.
+        let value = match policy {
+            Some(value) => {
+                policy::policy_from_value(value.clone()).map_err(create_error)?;
+                match policy::write_policy_file(Path::new(&path), &value) {
+                    Ok(()) => {}
+                    Err(e) => return Err(create_error(e)),
+                }
+                self.policy().invalidate();
+                value
+            }
+            None => {
+                let text = fs::read_to_string(&path).map_err(|e| {
+                    DaemonError::invalid(format!(
+                        "there is no policy at {path} to seal, and none was sent ({e})"
+                    ))
+                })?;
+                let value: Value = serde_json::from_str(&text)
+                    .map_err(|e| DaemonError::invalid(format!("{path} is not valid JSON: {e}")))?;
+                policy::policy_from_value(value.clone()).map_err(create_error)?;
+                value
+            }
+        };
+        // A sealed policy always carries a `lock` block: it is what turns on the seal's other
+        // layers (the self-heal, the immutable attributes, the drop-in and the guard's escape
+        // denials), and having it in the file means an administrator can read what is in force
+        // instead of having to know the defaults.
+        let mut value = value;
+        if value.get("lock").is_none() {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("lock".into(), Value::Object(Default::default()));
+            }
+            policy::write_policy_file(Path::new(&path), &value).map_err(create_error)?;
+            self.policy().invalidate();
+        }
+        let parsed = policy::policy_from_value(value.clone()).map_err(create_error)?;
+        let rules = parsed.lock_rules();
+        let cfg = cfg.unwrap_or(rules.totp).sanitised();
+        let managed_by = parsed.managed_by.clone();
+        let (seal, otpauth) = self
+            .seal_store
+            .create(value, cfg, managed_by, rules.immutable, seal::now_secs())
+            .map_err(seal_error)?;
+        if rules.immutable {
+            let _ = seal::set_immutable(Path::new(&path), true);
+        }
+        self.apply_drop_in(rules.refuse_manual_stop);
+        let runtime = self.publish_policy("seal");
+        log_info!(
+            "policy sealed by {peer}: {} digit codes every {} s, {} copies of the seal{}",
+            cfg.digits,
+            cfg.period,
+            self.seal_store.paths.all().len(),
+            if rules.immutable { ", immutable" } else { "" }
+        );
+        self.announce_policy("seal", &seal.policy_hash);
+        self.guard_apply();
+        Ok(OkPayload::SealPolicy {
+            path,
+            // A seal made this way is always in code mode, so the secret is there.
+            secret: seal.secret.clone().unwrap_or_default(),
+            otpauth,
+            seal: self.seal_info(),
+            runtime,
+        })
+    }
+
+    /// `unseal-policy`: remove the lock after a valid code, and the policy too when asked.
+    fn unseal_policy(
+        &self,
+        ctx: &ConnCtx,
+        code: &str,
+        remove_policy: bool,
+    ) -> DaemonResult<OkPayload> {
+        let peer = ctx.label.as_str();
+        let path = self.policy().path().to_string_lossy().into_owned();
+        if self.require_code(Some(code), "unsealing")?.is_none() {
+            return Err(DaemonError::new(
+                ErrorCode::Invalid,
+                "this machine is not sealed",
+            ));
+        }
+        self.seal_store
+            .remove()
+            .map_err(|e| DaemonError::internal(e.to_string()))?;
+        let _ = seal::set_immutable(Path::new(&path), false);
+        let mut removed = false;
+        if remove_policy {
+            match fs::remove_file(&path) {
+                Ok(()) => removed = true,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(DaemonError::internal(format!("cannot remove {path}: {e}"))),
+            }
+            self.policy().invalidate();
+        }
+        self.apply_drop_in(false);
+        let info = self.publish_policy("local");
+        log_info!(
+            "policy unsealed by {peer}{}",
+            if removed {
+                " (the policy file was removed too)"
+            } else {
+                ""
+            }
+        );
+        self.announce_policy("local", info.policy_hash.as_deref().unwrap_or_default());
+        self.guard_apply();
+        Ok(OkPayload::UnsealPolicy { path, removed })
+    }
+
+    /// `remote-apply`: walk the policy chain the app fetched and, if every link on the way checks
+    /// out, put the last one in force. A link that says `unseal` releases the machine.
+    fn remote_apply(&self, ctx: &ConnCtx, document: &str) -> DaemonResult<OkPayload> {
+        let peer = ctx.label.as_str();
+        let Some(seal) = self.seal() else {
+            return Err(DaemonError::new(
+                ErrorCode::Policy,
+                "this machine has no Remote Link, so there is no key to check a policy chain against",
+            ));
+        };
+        let Some(state) = seal.chain.clone() else {
+            return Err(DaemonError::new(
+                ErrorCode::Policy,
+                "this machine is sealed with a code, not linked to a policy chain",
+            ));
+        };
+        let policy: Option<PolicyFile> = self
+            .effective_policy()
+            .0
+            .and_then(|v| serde_json::from_value(v).ok());
+        if policy
+            .as_ref()
+            .and_then(|p| p.remote_rules())
+            .is_some_and(|r| !r.enabled)
+        {
+            return Err(DaemonError::new(
+                ErrorCode::Policy,
+                "remote configuration is switched off for this machine (remote.enabled: false)",
+            ));
+        }
+
+        let walk = chain::ChainContext {
+            key: &state.key,
+            key_id: state.key_id.as_deref(),
+            head: &state.head,
+            seq: state.seq,
+        };
+        let applied = match chain::apply(document, &walk) {
+            Ok(applied) => applied,
+            Err(e) => {
+                self.note_remote_error(&e.to_string());
+                log_warn!("remote-apply from {peer} refused: {e}");
+                return Err(DaemonError::new(
+                    match e {
+                        // A chain that does not reach this machine is the administrator's to fix,
+                        // not a malformed request.
+                        ChainError::NoContinuation { .. }
+                        | ChainError::BadSignature { .. }
+                        | ChainError::WrongKey { .. }
+                        | ChainError::Broken { .. }
+                        | ChainError::OutOfOrder { .. } => ErrorCode::Policy,
+                        _ => ErrorCode::Invalid,
+                    },
+                    e.to_string(),
+                ));
+            }
+        };
+
+        let mut state = state;
+        state.head = applied.head.clone();
+        state.seq = applied.seq;
+        state.key = applied.key.clone();
+        for rotation in &applied.rotations {
+            state.rotations.push(rotation.clone());
+            log_warn!(
+                "policy chain: the signing key was rotated to {}… by a link signed with the key it replaces",
+                &rotation[..rotation.len().min(16)]
+            );
+        }
+
+        if applied.applied == 0 {
+            // Already at the tip. Record that the fetch worked and leave everything alone.
+            let mut remote = self.remote_state.lock().unwrap_or_else(|e| e.into_inner());
+            remote.last_applied_at = Some(seal::iso_secs(seal::now_secs()));
+            remote.last_error = None;
+            drop(remote);
+            log_debug!("remote-apply from {peer}: already at link {}", applied.seq);
+            return Ok(OkPayload::RemoteApply {
+                changed: false,
+                applied: 0,
+                seq: applied.seq,
+                unsealed: false,
+                policy_hash: seal.policy_hash.clone(),
+                runtime: self.runtime.info(),
+                remote: self.remote_info(),
+            });
+        }
+
+        // The policy the walk landed on; a link that carried none leaves the sealed one standing.
+        let value = applied
+            .policy
+            .clone()
+            .unwrap_or_else(|| seal.policy.clone());
+        let parsed = match policy::policy_from_value(value.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                self.note_remote_error(&e.to_string());
+                return Err(create_error(e));
+            }
+        };
+        let lock_rules = parsed.lock_rules();
+        let hash = seal::policy_hash(&value);
+        let path = self.policy().path().to_string_lossy().into_owned();
+        policy::write_policy_file(Path::new(&path), &value).map_err(create_error)?;
+        self.policy().invalidate();
+
+        if applied.unseal {
+            // The chain let go of this machine: the seal goes, the policy it last set stays, and
+            // the machine is an ordinary one again.
+            self.seal_store
+                .remove()
+                .map_err(|e| DaemonError::internal(e.to_string()))?;
+            let _ = seal::set_immutable(Path::new(&path), false);
+            self.apply_drop_in(false);
+            log_info!(
+                "policy chain: link {} unsealed this machine (from {peer}); the policy stays but is no longer held",
+                applied.seq
+            );
+        } else {
+            let mut next = seal;
+            next.chain = Some(state);
+            let managed_by = parsed.managed_by.clone();
+            self.seal_store
+                .reseal(
+                    next,
+                    value,
+                    managed_by,
+                    lock_rules.immutable,
+                    seal::now_secs(),
+                )
+                .map_err(|e| DaemonError::internal(e.to_string()))?;
+            if lock_rules.immutable {
+                let _ = seal::set_immutable(Path::new(&path), true);
+            }
+            self.apply_drop_in(lock_rules.refuse_manual_stop);
+        }
+
+        {
+            let mut remote = self.remote_state.lock().unwrap_or_else(|e| e.into_inner());
+            remote.last_applied_at = Some(seal::iso_secs(seal::now_secs()));
+            remote.last_error = None;
+        }
+        let runtime = self.publish_policy(if applied.unseal { "local" } else { "remote" });
+        log_info!(
+            "policy chain: {} link(s) applied from {peer}, now at {}{}",
+            applied.applied,
+            applied.seq,
+            if applied.unseal { " (unsealed)" } else { "" }
+        );
+        self.announce_policy("remote", &hash);
+        self.guard_apply();
+        Ok(OkPayload::RemoteApply {
+            changed: true,
+            applied: applied.applied as u32,
+            seq: applied.seq,
+            unsealed: applied.unseal,
+            policy_hash: hash,
+            runtime,
+            remote: self.remote_info(),
+        })
+    }
+
+    /// `set-remote-link`: point this machine at a policy chain, and seal it in the mode the blob
+    /// names. On an already-linked machine this is a change of trust root, so it is gated: a
+    /// `totp` machine wants its code, and a `chain` machine refuses outright — moving one of those
+    /// is something only its own chain can authorise.
+    fn set_remote_link(
+        &self,
+        ctx: &ConnCtx,
+        blob: &str,
+        code: Option<String>,
+    ) -> DaemonResult<OkPayload> {
+        let peer = ctx.label.as_str();
+        let link = chain::parse_remote_link(blob)
+            .map_err(|e| DaemonError::new(ErrorCode::Invalid, e.to_string()))?;
+        let mode = link
+            .mode
+            .as_deref()
+            .and_then(SealMode::parse)
+            .unwrap_or(SealMode::Chain);
+        let existing = self.seal();
+        if existing.is_some() {
+            // Replacing a link is exactly as serious as replacing the policy, and gated the same.
+            self.require_code(code.as_deref(), "changing the Remote Link")?;
+        }
+        let now = seal::now_secs();
+        let state = ChainState {
+            url: link.url.clone(),
+            key: link.key.clone(),
+            key_id: link.key_id.clone(),
+            head: String::new(),
+            seq: 0,
+            interval_minutes: link.interval_minutes,
+            linked_at: seal::iso_secs(now),
+            managed_by: link.managed_by.clone(),
+            rotations: Vec::new(),
+        };
+
+        let (seal, secret, otpauth) = match self.seal() {
+            // Already sealed (with a code, or we would not be here): keep the mode and the
+            // secret, and point the machine at the new chain.
+            Some(mut seal) => {
+                seal.chain = Some(state);
+                let rules = self.lock_rules();
+                let managed_by = seal.managed_by.clone();
+                let policy = seal.policy.clone();
+                let seal = self
+                    .seal_store
+                    .reseal(seal, policy, managed_by, rules.immutable, now)
+                    .map_err(|e| DaemonError::internal(e.to_string()))?;
+                (seal, None, None)
+            }
+            // Not sealed: this link is what seals the machine.
+            None => {
+                let path = self.policy().path().to_path_buf();
+                let value = match fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+                {
+                    Some(value) => {
+                        policy::policy_from_value(value.clone()).map_err(create_error)?;
+                        value
+                    }
+                    // No policy yet: the chain will bring one. Seal a minimal policy so the
+                    // machine is held from this moment rather than from the first fetch.
+                    None => serde_json::json!({ "version": 1, "lock": {} }),
+                };
+                let rules = policy::policy_from_value(value.clone())
+                    .map_err(create_error)?
+                    .lock_rules();
+                let managed_by = link.managed_by.clone();
+                match mode {
+                    SealMode::Chain => {
+                        let seal = self
+                            .seal_store
+                            .create_chain(value, state, managed_by, rules.immutable, now)
+                            .map_err(seal_error)?;
+                        (seal, None, None)
+                    }
+                    SealMode::Totp => {
+                        let (mut seal, uri) = self
+                            .seal_store
+                            .create(value, rules.totp, managed_by, rules.immutable, now)
+                            .map_err(seal_error)?;
+                        seal.chain = Some(state);
+                        let secret = seal.secret.clone();
+                        let managed_by = seal.managed_by.clone();
+                        let policy = seal.policy.clone();
+                        let seal = self
+                            .seal_store
+                            .reseal(seal, policy, managed_by, rules.immutable, now)
+                            .map_err(|e| DaemonError::internal(e.to_string()))?;
+                        (seal, secret, Some(uri))
+                    }
+                }
+            }
+        };
+
+        let rules = self.lock_rules();
+        if rules.immutable {
+            let _ = seal::set_immutable(self.policy().path(), true);
+        }
+        self.apply_drop_in(rules.refuse_manual_stop);
+        let runtime = self.publish_policy("seal");
+        log_info!(
+            "Remote Link set by {peer}: {} in {} mode{}",
+            link.url,
+            mode.as_str(),
+            link.key_id
+                .as_deref()
+                .map(|k| format!(" (key {k})"))
+                .unwrap_or_default()
+        );
+        self.announce_policy("seal", &seal.policy_hash);
+        self.guard_apply();
+        Ok(OkPayload::SetRemoteLink {
+            mode,
+            url: link.url,
+            secret,
+            otpauth,
+            seal: self.seal_info(),
+            runtime,
+            remote: self.remote_info(),
+        })
+    }
+
+    /// `verify-pack`: whether a download the app hashed may be installed.
+    fn verify_pack(&self, id: &str, sha256: &str) -> DaemonResult<OkPayload> {
+        let policy: Option<PolicyFile> = self
+            .effective_policy()
+            .0
+            .and_then(|v| serde_json::from_value(v).ok());
+        let packs = policy.map(|p| p.pack_rules()).unwrap_or_default();
+        let Some(source) = packs.sources.iter().find(|s| s.id == id) else {
+            return Err(DaemonError::new(
+                ErrorCode::Policy,
+                remote::PackError::Unknown(id.to_string()).to_string(),
+            ));
+        };
+        let key = self.seal().and_then(|s| s.chain.map(|c| c.key));
+        remote::verify_pack(source, sha256, key.as_deref())
+            .map_err(|e| DaemonError::new(ErrorCode::Policy, e.to_string()))?;
+        Ok(OkPayload::VerifyPack {
+            signed: key.is_some() && source.signature.is_some(),
+        })
+    }
+
+    fn note_remote_error(&self, message: &str) {
+        let mut state = self.remote_state.lock().unwrap_or_else(|e| e.into_inner());
+        state.last_error = Some(message.to_string());
+    }
+
+    /// Every tick: put back what was taken away. Restores missing seal copies, rewrites a policy
+    /// file that no longer matches the seal, re-arms the immutable attributes and republishes the
+    /// runtime filesystem when what is published has drifted.
+    pub fn seal_tick(&self) {
+        let Some(mut seal) = self.seal() else {
+            // Not sealed: keep the runtime copy in step with the file, nothing else.
+            if self.runtime.published_hash()
+                != self.effective_policy().0.as_ref().map(seal::policy_hash)
+            {
+                self.publish_policy("");
+            }
+            return;
+        };
+        let rules = self.lock_rules();
+        let now = seal::now_secs();
+
+        // 1. Seal copies. A missing one is written back from the copy that survived. The same
+        //    gap on the next tick is not a second attempt: a location the daemon cannot write to
+        //    would otherwise fill the tamper log five seconds at a time.
+        if let Ok(Some((_, gaps))) = self.seal_store.load_with_gaps() {
+            let news = {
+                let mut last = self.seal_gaps.lock().unwrap_or_else(|e| e.into_inner());
+                let news = gaps != *last;
+                *last = gaps.clone();
+                news
+            };
+            if !gaps.is_empty() && news {
+                log_warn!(
+                    "policy seal missing from {}; restoring it",
+                    gaps.iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                let record = TamperRecord {
+                    at: seal::iso_secs(now),
+                    kind: "seal-removed".into(),
+                    path: gaps[0].to_string_lossy().into_owned(),
+                    healed: true,
+                };
+                self.broadcast(&Event::PolicyTamper {
+                    at: record.at.clone(),
+                    tamper: record.clone(),
+                });
+                self.seal_store
+                    .note_tamper(&mut seal, record, rules.immutable);
+            }
+        }
+
+        // 2. The policy file itself.
+        let path = self.policy().path().to_path_buf();
+        let on_disk = fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok());
+        let matches = on_disk.as_ref().map(seal::policy_hash) == Some(seal.policy_hash.clone());
+        if !matches && rules.self_heal {
+            let kind = if on_disk.is_none() {
+                "policy-removed"
+            } else {
+                "policy-edited"
+            };
+            match policy::write_policy_file(&path, &seal.policy) {
+                Ok(()) => {
+                    self.policy().invalidate();
+                    if rules.immutable {
+                        let _ = seal::set_immutable(&path, true);
+                    }
+                    log_warn!(
+                        "{} was {}; restored from the seal",
+                        path.display(),
+                        if on_disk.is_none() {
+                            "removed"
+                        } else {
+                            "edited"
+                        }
+                    );
+                    let record = TamperRecord {
+                        at: seal::iso_secs(now),
+                        kind: kind.into(),
+                        path: path.to_string_lossy().into_owned(),
+                        healed: true,
+                    };
+                    self.broadcast(&Event::PolicyTamper {
+                        at: record.at.clone(),
+                        tamper: record.clone(),
+                    });
+                    self.seal_store
+                        .note_tamper(&mut seal, record, rules.immutable);
+                    self.publish_policy("seal");
+                    self.guard_apply();
+                }
+                Err(e) => {
+                    log_error!("cannot restore {} from the seal: {e}", path.display());
+                    let record = TamperRecord {
+                        at: seal::iso_secs(now),
+                        kind: kind.into(),
+                        path: path.to_string_lossy().into_owned(),
+                        healed: false,
+                    };
+                    self.broadcast(&Event::PolicyTamper {
+                        at: record.at.clone(),
+                        tamper: record.clone(),
+                    });
+                    self.seal_store
+                        .note_tamper(&mut seal, record, rules.immutable);
+                }
+            }
+        }
+
+        // 3. The runtime filesystem: republish when it no longer carries the sealed policy, which
+        //    also remounts it read-only if someone made it writable.
+        let published = self.runtime.published_hash();
+        let info = self.runtime.info();
+        if published.as_deref() != Some(seal.policy_hash.as_str())
+            || (self.runtime.mount && !info.read_only)
+        {
+            self.publish_policy("seal");
+        }
+
+        // 4. The drop-in and the immutable attributes, in case something removed them.
+        self.apply_drop_in(rules.refuse_manual_stop);
+        if rules.immutable {
+            for p in self.seal_store.paths.all() {
+                let _ = seal::set_immutable(&p, true);
+            }
+            let _ = seal::set_immutable(&self.seal_store.paths.marker, true);
+            let _ = seal::set_immutable(&path, true);
+        }
+    }
+}
+
+/// The real locations, or — under `cargo test` — a scratch tree of this process's own, so a
+/// `Daemon::new` in a unit test never mounts anything or touches `/etc` and `/run`. The
+/// socket-level tests that exercise sealing pass their own paths through `with_seal`.
+#[cfg(not(test))]
+fn test_scratch() -> PathBuf {
+    PathBuf::new()
+}
+
+#[cfg(test)]
+fn test_scratch() -> PathBuf {
+    // One directory per `Daemon`, not per process: the tests run in parallel threads and a
+    // shared runtime directory would have them publishing over each other.
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let dir = std::env::temp_dir().join(format!(
+        "rp-coded-test-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
+fn default_seal_paths(scratch: &Path) -> SealPaths {
+    if cfg!(test) {
+        SealPaths::under(scratch)
+    } else {
+        SealPaths::default()
+    }
+}
+
+fn default_runtime_dir(scratch: &Path) -> PathBuf {
+    if cfg!(test) {
+        scratch.join("runtime")
+    } else {
+        PathBuf::from(DEFAULT_RUNTIME_DIR)
+    }
+}
+
+fn default_drop_in_dir(scratch: &Path) -> PathBuf {
+    if cfg!(test) {
+        scratch.join("dropin")
+    } else {
+        PathBuf::from(DEFAULT_DROP_IN_DIR)
+    }
+}
+
+/// The gid of the `rp-code` group, so the runtime policy is readable by the app and nobody else.
+fn system_group_gid() -> Option<u32> {
+    nix::unistd::Group::from_name(SYSTEM_GROUP)
+        .ok()
+        .flatten()
+        .map(|g| g.gid.as_raw())
+}
+
+/// A `SealError` as the wire error it deserves.
+fn seal_error(e: SealError) -> DaemonError {
+    match e {
+        SealError::Exists(p) => DaemonError::new(
+            ErrorCode::Exists,
+            format!("this machine is already sealed ({})", p.display()),
+        ),
+        SealError::Code(_) | SealError::LockedOut(_) | SealError::NotTotp => {
+            DaemonError::new(ErrorCode::Code, e.to_string())
+        }
+        SealError::Missing => DaemonError::new(ErrorCode::Invalid, e.to_string()),
+        other => DaemonError::internal(other.to_string()),
+    }
+}
+
+/// A `CreateError` as the wire error it deserves.
+fn create_error(e: CreateError) -> DaemonError {
+    match e {
+        CreateError::Exists(p) => DaemonError::new(
+            ErrorCode::Exists,
+            format!("a policy already exists at {}", p.display()),
+        ),
+        CreateError::Invalid(m) => DaemonError::invalid(m),
+        CreateError::Io(m) => DaemonError::internal(m),
     }
 }
 
@@ -2115,6 +3251,40 @@ fn guard_paths(args: &Args) -> GuardPaths {
 
 /// `--guard-apply` / `--guard-off`: one engage (or unload) from the command line — what
 /// `install.sh --guard` / `--no-guard` run. Prints the `GuardInfo` JSON; exit 1 on an error.
+/// `--seal-status` / `--unseal <code>`: the way in from a root terminal when the app cannot be
+/// started. `--unseal` needs a valid code exactly like the app's button does — being root is not
+/// enough, which is the whole point of the seal.
+fn run_seal_cli(args: &Args) -> ExitCode {
+    let _ = &args.policy;
+    let store = SealStore::new(SealPaths::default());
+    let seal = match store.load() {
+        Ok(seal) => seal,
+        Err(e) => {
+            eprintln!("rp-coded: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let runtime = RuntimeFs::real(DEFAULT_RUNTIME_DIR, system_group_gid(), true).info();
+    let report = serde_json::json!({
+        "sealed": seal.is_some(),
+        "sealedAt": seal.as_ref().map(|s| s.sealed_at.clone()),
+        "managedBy": seal.as_ref().and_then(|s| s.managed_by.clone()),
+        "policyHash": seal.as_ref().map(|s| s.policy_hash.clone()),
+        "totp": seal.as_ref().map(|s| s.totp),
+        "mode": seal.as_ref().map(|s| s.mode.as_str()),
+        "failures": seal.as_ref().map(|s| s.failures).unwrap_or(0),
+        "chain": seal.as_ref().and_then(|s| s.chain.clone()),
+        "tampers": seal.as_ref().map(|s| s.tampers.clone()).unwrap_or_default(),
+        "paths": store.paths.all().iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        "runtime": runtime,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".into())
+    );
+    ExitCode::SUCCESS
+}
+
 fn run_guard_cli(args: &Args, off: bool) -> ExitCode {
     let hooks = os::guard_hooks();
     let paths = guard_paths(args);
@@ -2165,6 +3335,9 @@ fn main() -> ExitCode {
     }
     if args.guard_apply || args.guard_off {
         return run_guard_cli(&args, args.guard_off);
+    }
+    if args.seal_status || args.unseal.is_some() {
+        return run_seal_cli(&args);
     }
     run(args)
 }
@@ -2223,6 +3396,13 @@ mod tests {
                             unit_dir: dir.path().join("systemd"),
                             daemon_version: VERSION.to_string(),
                         },
+                    )
+                    .with_seal(
+                        SealStore::new(SealPaths::under(&dir.path().join("seal"))),
+                        // No tmpfs in a unit test: the publish falls back to a plain directory
+                        // and says so, which is the degraded path worth exercising anyway.
+                        RuntimeFs::real(dir.path().join("runtime"), None, false),
+                        dir.path().join("dropin"),
                     ),
             );
             let listener = bind_socket(&socket).unwrap();
@@ -2284,6 +3464,529 @@ mod tests {
 
     fn fake_devices() -> FakeSource {
         FakeSource::with_devices(&[("event0", true, false), ("event1", false, true)])
+    }
+
+    // ---- the policy seal, the runtime filesystem and remote configuration ----------------
+
+    /// The code an enrolled authenticator app will show `steps` time steps from now. A code is
+    /// spent once used, so a test that needs two in a row asks for the next one rather than
+    /// replaying the current one (the seal accepts one step of drift either way).
+    fn code_in(server: &TestServer, steps: u64) -> String {
+        let seal = server.daemon.seal().expect("sealed");
+        let cfg = seal.totp.expect("a code-mode seal");
+        let secret =
+            totp::base32_decode(seal.secret.as_deref().expect("a code-mode seal")).unwrap();
+        totp::code_at(&secret, cfg.counter(seal::now_secs()) + steps, cfg)
+    }
+
+    /// The code an enrolled authenticator app would be showing right now.
+    fn current_code(server: &TestServer) -> String {
+        let seal = server.daemon.seal().expect("sealed");
+        let cfg = seal.totp.expect("a code-mode seal");
+        let secret =
+            totp::base32_decode(seal.secret.as_deref().expect("a code-mode seal")).unwrap();
+        totp::code_at(&secret, cfg.counter(seal::now_secs()), cfg)
+    }
+
+    /// Seal a fresh server with `policy`. The immutable attribute is switched off unless the
+    /// policy asks for it: these tests have to play the part of a root user editing the sealed
+    /// files, which is exactly what the attribute is there to stop (and which of the two happens
+    /// otherwise depends on whether the test runs as root and on the filesystem under /tmp).
+    fn sealed_server(policy: Value) -> (TestServer, Value) {
+        let mut policy = policy;
+        if policy.get("lock").is_none() {
+            policy
+                .as_object_mut()
+                .unwrap()
+                .insert("lock".into(), json!({ "immutable": false }));
+        }
+        let server = TestServer::start(fake_devices(), FakeInjector::default(), None);
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        let sealed = c.send(json!({"op":"seal-policy","policy":policy}));
+        assert_eq!(sealed["ok"], json!(true), "{sealed}");
+        (server, sealed)
+    }
+
+    /// A second connection that only receives pushed events, so a request's response is never
+    /// behind an event line on the same socket.
+    fn subscriber(server: &TestServer, events: &[&str]) -> Client {
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        let ok = c.send(json!({"op":"subscribe","events":events}));
+        assert_eq!(ok["ok"], json!(true), "{ok}");
+        c
+    }
+
+    #[test]
+    fn seal_policy_pins_the_policy_and_hands_back_the_secret_once() {
+        let policy =
+            json!({"version":1,"managedBy":"Acme IT","app":{"allowQuit":false,"users":["alice"]}});
+        let (server, sealed) = sealed_server(policy.clone());
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+
+        // The secret comes back exactly here and nowhere else.
+        let secret = sealed["secret"].as_str().expect("a secret");
+        assert!(totp::base32_decode(secret).is_some());
+        assert!(sealed["otpauth"]
+            .as_str()
+            .unwrap()
+            .starts_with("otpauth://totp/"));
+        assert_eq!(sealed["seal"]["sealed"], json!(true));
+        assert_eq!(sealed["seal"]["mode"], json!("totp"));
+        assert_eq!(sealed["seal"]["managedBy"], json!("Acme IT"));
+        assert!(
+            !sealed["seal"]["residual"].as_array().unwrap().is_empty(),
+            "the gaps are stated"
+        );
+
+        // `seal-status` never carries the secret, whatever else it says.
+        let status = c.send(json!({"op":"seal-status"}));
+        let text = status.to_string();
+        assert!(!text.contains(secret), "seal-status leaked the secret");
+        assert_eq!(status["seal"]["sealed"], json!(true));
+        assert_eq!(status["seal"]["totp"]["digits"], json!(6));
+        assert_eq!(status["seal"]["failures"], json!(0));
+        assert_eq!(status["runtime"]["present"], json!(true));
+
+        // Sealing a policy adds the `lock` block, so what is in force is readable in the file.
+        let on_disk: Value =
+            serde_json::from_str(&fs::read_to_string(server.daemon.policy().path()).unwrap())
+                .unwrap();
+        assert!(on_disk.get("lock").is_some(), "{on_disk}");
+
+        // The effective policy is published where the app reads it.
+        let published: Value =
+            serde_json::from_str(&fs::read_to_string(server.daemon.runtime.policy_path()).unwrap())
+                .unwrap();
+        assert_eq!(published["managedBy"], json!("Acme IT"));
+
+        // Sealing twice is refused.
+        let again = c.send(json!({"op":"seal-policy","policy":policy}));
+        assert_eq!(again["code"], json!("EXISTS"), "{again}");
+    }
+
+    #[test]
+    fn a_sealed_policy_cannot_be_changed_without_a_code() {
+        let (server, _) = sealed_server(json!({"version":1,"managedBy":"Acme IT"}));
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        let next = json!({"version":1,"managedBy":"Not Acme"});
+
+        // No code at all.
+        let refused = c.send(json!({"op":"set-policy","policy":next}));
+        assert_eq!(refused["code"], json!("CODE"), "{refused}");
+        assert!(refused["error"].as_str().unwrap().contains("authenticator"));
+
+        // A wrong code.
+        let wrong = c.send(json!({"op":"set-policy","policy":next,"code":"000000"}));
+        assert_eq!(wrong["code"], json!("CODE"), "{wrong}");
+        assert_eq!(server.daemon.seal().unwrap().failures, 1);
+        assert_eq!(
+            server.daemon.seal().unwrap().managed_by.as_deref(),
+            Some("Acme IT")
+        );
+
+        // The right one goes through and re-pins the seal to what was written.
+        let ok = c.send(json!({"op":"set-policy","policy":next,"code":current_code(&server)}));
+        assert_eq!(ok["ok"], json!(true), "{ok}");
+        assert_eq!(ok["replaced"], json!(true));
+        let seal = server.daemon.seal().unwrap();
+        assert_eq!(seal.managed_by.as_deref(), Some("Not Acme"));
+        assert_eq!(seal.failures, 0, "a good code clears the ladder");
+        assert_eq!(seal.policy_hash, seal::policy_hash(&seal.policy));
+
+        // And unsealing needs one too.
+        let refused = c.send(json!({"op":"unseal-policy","code":"000000"}));
+        assert_eq!(refused["code"], json!("CODE"), "{refused}");
+        assert!(server.daemon.seal().is_some());
+    }
+
+    #[test]
+    fn unsealing_with_a_code_releases_the_machine() {
+        let (server, _) = sealed_server(json!({"version":1,"managedBy":"Acme IT"}));
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        let ok =
+            c.send(json!({"op":"unseal-policy","code":current_code(&server),"removePolicy":true}));
+        assert_eq!(ok["ok"], json!(true), "{ok}");
+        assert_eq!(ok["removed"], json!(true));
+        assert!(server.daemon.seal().is_none());
+        for p in server.daemon.seal_store.paths.all() {
+            assert!(!p.exists(), "{} survived the unseal", p.display());
+        }
+        assert!(!server.daemon.seal_store.paths.marker.exists());
+        assert!(!server.daemon.policy().path().exists());
+        // Back to write-once behaviour.
+        let created = c.send(json!({"op":"set-policy","policy":{"version":1}}));
+        assert_eq!(created["ok"], json!(true), "{created}");
+        assert_eq!(created["replaced"], json!(false));
+    }
+
+    #[test]
+    fn an_edited_or_deleted_policy_file_is_restored_from_the_seal() {
+        let (server, _) = sealed_server(json!({"version":1,"managedBy":"Acme IT"}));
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        let mut events = subscriber(&server, &["policy-tamper"]);
+        let path = server.daemon.policy().path().to_path_buf();
+
+        // Someone with root edits the file behind the daemon's back.
+        fs::write(&path, r#"{"version":1,"managedBy":"Mine now"}"#).unwrap();
+        server.daemon.seal_tick();
+        let event = events.next_line();
+        assert_eq!(event["ev"], json!("policy-tamper"));
+        assert_eq!(event["kind"], json!("policy-edited"));
+        assert_eq!(event["healed"], json!(true));
+        let back: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(back["managedBy"], json!("Acme IT"), "the edit was undone");
+
+        // Or removes it entirely.
+        fs::remove_file(&path).unwrap();
+        server.daemon.seal_tick();
+        let event = events.next_line();
+        assert_eq!(event["kind"], json!("policy-removed"));
+        assert!(path.exists(), "the policy was put back");
+
+        // The tamper record is kept in the seal and reported.
+        let status = c.send(json!({"op":"seal-status"}));
+        let tampers = status["seal"]["tampers"].as_array().unwrap();
+        assert!(tampers.len() >= 2, "{status}");
+        assert_eq!(tampers.last().unwrap()["kind"], json!("policy-removed"));
+    }
+
+    #[test]
+    fn editing_a_sealed_policy_does_not_loosen_what_the_daemon_enforces() {
+        let (server, _) = sealed_server(json!({
+            "version": 1,
+            "managedBy": "Acme IT",
+            "inputLock": { "maxDurationMs": 5000 },
+        }));
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        // Someone with root raises the cap in the file.
+        fs::write(
+            server.daemon.policy().path(),
+            r#"{"version":1,"managedBy":"Acme IT","inputLock":{"maxDurationMs":300000},"lock":{"immutable":false}}"#,
+        )
+        .unwrap();
+        // The daemon still clamps to the sealed policy — before the self-heal has even run.
+        let locked = c.send(json!({"op":"lock","durationMs":300000}));
+        assert_eq!(locked["durationMs"], json!(5000), "{locked}");
+        c.send(json!({"op":"unlock"}));
+        // And `policy` reports the sealed copy, not the edit.
+        let policy = c.send(json!({"op":"policy"}));
+        assert_eq!(
+            policy["policy"]["inputLock"]["maxDurationMs"],
+            json!(5000.0),
+            "{policy}"
+        );
+    }
+
+    #[test]
+    fn a_deleted_seal_copy_is_restored_from_a_mirror_and_reported_once() {
+        let (server, _) = sealed_server(json!({"version":1,"managedBy":"Acme IT"}));
+        let mut events = subscriber(&server, &["policy-tamper"]);
+        let primary = server.daemon.seal_store.paths.seal.clone();
+        fs::remove_file(&primary).unwrap();
+        assert!(server.daemon.seal().is_some(), "a mirror still holds it");
+        server.daemon.seal_tick();
+        assert!(primary.exists(), "the primary copy came back");
+        let event = events.next_line();
+        assert_eq!(event["kind"], json!("seal-removed"));
+        // Ticking again with everything in place reports nothing: a location the daemon cannot
+        // write to must not fill the log five seconds at a time.
+        server.daemon.seal_tick();
+        server.daemon.seal_tick();
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        let tampers = c.send(json!({"op":"seal-status"}))["seal"]["tampers"]
+            .as_array()
+            .unwrap()
+            .len();
+        assert_eq!(tampers, 1, "one record, not one per tick");
+    }
+
+    #[test]
+    fn the_runtime_filesystem_carries_the_effective_policy() {
+        let (server, _) = sealed_server(json!({"version":1,"managedBy":"Acme IT"}));
+        let runtime = &server.daemon.runtime;
+        let state: Value =
+            serde_json::from_str(&fs::read_to_string(runtime.state_path()).unwrap()).unwrap();
+        assert_eq!(state["sealed"], json!(true));
+        assert_eq!(state["source"], json!("seal"));
+        assert_eq!(
+            state["policyHash"],
+            json!(server.daemon.seal().unwrap().policy_hash)
+        );
+        // Without a tmpfs the publish says so rather than pretending to be protected.
+        assert!(
+            state["degraded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d.as_str().unwrap().contains("switched off")),
+            "{state}"
+        );
+        // Anything written over the published policy is put back on the next tick.
+        fs::write(runtime.policy_path(), "{}").unwrap();
+        server.daemon.seal_tick();
+        let published: Value =
+            serde_json::from_str(&fs::read_to_string(runtime.policy_path()).unwrap()).unwrap();
+        assert_eq!(published["managedBy"], json!("Acme IT"));
+    }
+
+    /// A Remote Link blob, signed by `key`, as an administrator would hand one out.
+    fn remote_link(key: &chain::tests::TestKey, url: &str, mode: &str) -> String {
+        let body = json!({
+            "version": 1,
+            "url": url,
+            "key": key.public(),
+            "managedBy": "Acme IT",
+            "mode": mode,
+            "intervalMinutes": 60,
+        });
+        chain::encode_remote_link(&key.sign(&body, None))
+    }
+
+    /// A chain file whose links carry `policy` values, signed by one key.
+    fn chain_file(key: &chain::tests::TestKey, links: Vec<Value>) -> (String, Vec<String>) {
+        let signers: Vec<&chain::tests::TestKey> = vec![key; links.len()];
+        let (chain, hashes) = chain::tests::chain_of(&signers, links);
+        (chain.to_string(), hashes)
+    }
+
+    fn policy_link(seq: u64, managed_by: &str) -> Value {
+        json!({
+            "seq": seq,
+            "issuedAt": "2026-09-16T09:00:00Z",
+            "policy": {
+                "version": 1,
+                "managedBy": managed_by,
+                "remote": { "url": "https://example.com/chain.json", "intervalMinutes": 60 },
+                "lock": { "immutable": false },
+            },
+        })
+    }
+
+    #[test]
+    fn a_remote_link_seals_the_machine_in_chain_mode_with_no_code_at_all() {
+        let server = TestServer::start(fake_devices(), FakeInjector::default(), None);
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        let key = chain::tests::TestKey::from_seed(11);
+        let linked = c.send(json!({
+            "op": "set-remote-link",
+            "blob": remote_link(&key, "https://example.com/chain.json", "chain"),
+        }));
+        assert_eq!(linked["ok"], json!(true), "{linked}");
+        assert_eq!(linked["mode"], json!("chain"));
+        // A chain-mode machine has no secret to hand back, because it has none at all.
+        assert_eq!(linked["secret"], Value::Null);
+        assert_eq!(linked["seal"]["sealed"], json!(true));
+        assert_eq!(linked["seal"]["totp"], Value::Null);
+        assert_eq!(linked["remote"]["key"], json!(key.public()));
+        assert_eq!(linked["remote"]["seq"], json!(0));
+        let seal = server.daemon.seal().unwrap();
+        assert_eq!(seal.mode, SealMode::Chain);
+        assert_eq!(seal.secret, None);
+
+        // There is no code to offer, and offering one says so rather than failing vaguely.
+        let refused = c.send(json!({"op":"set-policy","policy":{"version":1},"code":"123456"}));
+        assert_eq!(refused["code"], json!("CODE"), "{refused}");
+        assert!(refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("signed policy chain"));
+        let refused = c.send(json!({"op":"unseal-policy","code":"123456"}));
+        assert_eq!(refused["code"], json!("CODE"), "{refused}");
+        // And a second Remote Link cannot be pasted over it either.
+        let other = chain::tests::TestKey::from_seed(12);
+        let refused = c.send(json!({
+            "op": "set-remote-link",
+            "blob": remote_link(&other, "https://evil.example.com/chain.json", "chain"),
+        }));
+        assert_eq!(refused["code"], json!("CODE"), "{refused}");
+        assert_eq!(
+            server.daemon.seal().unwrap().chain.unwrap().key,
+            key.public()
+        );
+    }
+
+    #[test]
+    fn a_chain_machine_follows_its_chain_and_refuses_everything_else() {
+        let server = TestServer::start(fake_devices(), FakeInjector::default(), None);
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        let key = chain::tests::TestKey::from_seed(11);
+        c.send(json!({"op":"set-remote-link","blob":remote_link(&key, "https://example.com/chain.json", "chain")}));
+        // Subscribe after linking: setting the link is itself a policy change, and this test is
+        // about what the chain does afterwards.
+        let mut events = subscriber(&server, &["policy-changed"]);
+
+        let (chain_text, hashes) =
+            chain_file(&key, vec![policy_link(1, "one"), policy_link(2, "two")]);
+        let applied = c.send(json!({"op":"remote-apply","document":chain_text}));
+        assert_eq!(applied["ok"], json!(true), "{applied}");
+        assert_eq!(applied["changed"], json!(true));
+        assert_eq!(applied["applied"], json!(2));
+        assert_eq!(applied["seq"], json!(2));
+        assert_eq!(applied["remote"]["head"], json!(hashes[1]));
+        let event = events.next_line();
+        assert_eq!(event["source"], json!("remote"));
+        assert_eq!(
+            server.daemon.seal().unwrap().managed_by.as_deref(),
+            Some("two")
+        );
+
+        // The same file again moves nothing and is not an error.
+        let again = c.send(json!({"op":"remote-apply","document":chain_file(&key, vec![policy_link(1, "one"), policy_link(2, "two")]).0}));
+        assert_eq!(again["changed"], json!(false), "{again}");
+
+        // A chain from another key is refused even though it is internally consistent.
+        let evil = chain::tests::TestKey::from_seed(12);
+        let (forged, _) = chain_file(&evil, vec![policy_link(1, "Evil Corp")]);
+        let refused = c.send(json!({"op":"remote-apply","document":forged}));
+        assert_eq!(refused["code"], json!("POLICY"), "{refused}");
+        assert_eq!(
+            server.daemon.seal().unwrap().managed_by.as_deref(),
+            Some("two")
+        );
+
+        // An edited link breaks its own signature.
+        let (tampered, _) = chain_file(
+            &key,
+            vec![
+                policy_link(1, "one"),
+                policy_link(2, "two"),
+                policy_link(3, "three"),
+            ],
+        );
+        let tampered = tampered.replace("\"three\"", "\"mine now\"");
+        let refused = c.send(json!({"op":"remote-apply","document":tampered}));
+        assert_eq!(refused["code"], json!("POLICY"), "{refused}");
+    }
+
+    #[test]
+    fn a_chain_link_can_let_the_machine_go() {
+        let server = TestServer::start(fake_devices(), FakeInjector::default(), None);
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        let key = chain::tests::TestKey::from_seed(11);
+        c.send(json!({"op":"set-remote-link","blob":remote_link(&key, "https://example.com/chain.json", "chain")}));
+        let release = json!({ "seq": 2, "issuedAt": "t", "unseal": true });
+        let (chain_text, _) = chain_file(&key, vec![policy_link(1, "Acme IT"), release]);
+        let applied = c.send(json!({"op":"remote-apply","document":chain_text}));
+        assert_eq!(applied["ok"], json!(true), "{applied}");
+        assert_eq!(applied["unsealed"], json!(true));
+        assert!(server.daemon.seal().is_none(), "the seal is gone");
+        // The policy the chain last set is still there — letting go is not wiping.
+        let on_disk: Value =
+            serde_json::from_str(&fs::read_to_string(server.daemon.policy().path()).unwrap())
+                .unwrap();
+        assert_eq!(on_disk["managedBy"], json!("Acme IT"));
+        // And the machine is an ordinary one again: write-once applies.
+        let refused = c.send(json!({"op":"set-policy","policy":{"version":1}}));
+        assert_eq!(refused["code"], json!("EXISTS"), "{refused}");
+    }
+
+    #[test]
+    fn a_totp_remote_link_keeps_the_code_and_adds_the_chain() {
+        let server = TestServer::start(fake_devices(), FakeInjector::default(), None);
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        let key = chain::tests::TestKey::from_seed(11);
+        let linked = c.send(json!({
+            "op": "set-remote-link",
+            "blob": remote_link(&key, "https://example.com/chain.json", "totp"),
+        }));
+        assert_eq!(linked["mode"], json!("totp"), "{linked}");
+        // A code-mode link hands back the secret exactly once, like the Lock policy button.
+        let secret = linked["secret"].as_str().expect("a secret");
+        assert!(totp::base32_decode(secret).is_some());
+        assert!(linked["otpauth"]
+            .as_str()
+            .unwrap()
+            .starts_with("otpauth://totp/"));
+        let seal = server.daemon.seal().unwrap();
+        assert_eq!(seal.mode, SealMode::Totp);
+        assert_eq!(seal.chain.as_ref().unwrap().key, key.public());
+
+        // The chain delivers updates without a code…
+        let (chain_text, _) = chain_file(&key, vec![policy_link(1, "from the chain")]);
+        let applied = c.send(json!({"op":"remote-apply","document":chain_text}));
+        assert_eq!(applied["ok"], json!(true), "{applied}");
+        assert_eq!(
+            server.daemon.seal().unwrap().managed_by.as_deref(),
+            Some("from the chain")
+        );
+        // …and the code is still what changes the policy locally.
+        let refused = c.send(json!({"op":"set-policy","policy":{"version":1}}));
+        assert_eq!(refused["code"], json!("CODE"), "{refused}");
+        let ok = c.send(json!({"op":"set-policy","policy":{"version":1,"managedBy":"by hand"},"code":current_code(&server)}));
+        assert_eq!(ok["ok"], json!(true), "{ok}");
+        // A new Remote Link also goes through the code, and replaces the trust root.
+        let next = chain::tests::TestKey::from_seed(12);
+        let relinked = c.send(json!({
+            "op": "set-remote-link",
+            "blob": remote_link(&next, "https://example.com/other.json", "chain"),
+            // The code above was spent on the policy; this is the one the app shows next.
+            "code": code_in(&server, 1),
+        }));
+        assert_eq!(relinked["ok"], json!(true), "{relinked}");
+        assert_eq!(
+            server.daemon.seal().unwrap().chain.unwrap().key,
+            next.public()
+        );
+    }
+
+    #[test]
+    fn a_pack_is_installed_only_when_the_pinned_key_vouched_for_it() {
+        let server = TestServer::start(fake_devices(), FakeInjector::default(), None);
+        let mut c = server.connect();
+        c.send(json!({"op":"hello","version":1}));
+        let key = chain::tests::TestKey::from_seed(11);
+        c.send(json!({"op":"set-remote-link","blob":remote_link(&key, "https://example.com/chain.json", "chain")}));
+
+        let hash = seal::sha256_hex(b"a pack file");
+        let signature = seal::base64_encode(
+            &key.sign_raw(remote::pack_message("luna", Some("1.2.0"), &hash).as_bytes()),
+        );
+        let link = json!({
+            "seq": 1,
+            "issuedAt": "t",
+            "policy": {
+                "version": 1,
+                "managedBy": "Acme IT",
+                "lock": { "immutable": false },
+                "packs": { "sources": [
+                    { "id": "luna", "url": "https://example.com/luna.rppack", "version": "1.2.0", "signature": signature },
+                    { "id": "bare", "url": "https://example.com/bare.rppack" }
+                ] },
+            },
+        });
+        let (chain_text, _) = chain_file(&key, vec![link]);
+        assert_eq!(
+            c.send(json!({"op":"remote-apply","document":chain_text}))["ok"],
+            json!(true)
+        );
+
+        let ok = c.send(json!({"op":"verify-pack","id":"luna","sha256":hash}));
+        assert_eq!(ok["ok"], json!(true), "{ok}");
+        assert_eq!(ok["signed"], json!(true));
+        // Other bytes under the same name do not pass.
+        let other = c.send(
+            json!({"op":"verify-pack","id":"luna","sha256":seal::sha256_hex(b"something else")}),
+        );
+        assert_eq!(other["code"], json!("POLICY"), "{other}");
+        // A pack the policy pins without a signature is refused on a machine that has a key.
+        let unsigned = c.send(json!({"op":"verify-pack","id":"bare","sha256":hash}));
+        assert_eq!(unsigned["code"], json!("POLICY"), "{unsigned}");
+        assert!(unsigned["error"].as_str().unwrap().contains("signed"));
+        // And a pack nobody pinned is not installable at all.
+        let unknown = c.send(json!({"op":"verify-pack","id":"stranger","sha256":hash}));
+        assert_eq!(unknown["code"], json!("POLICY"), "{unknown}");
     }
 
     #[test]
@@ -2524,7 +4227,7 @@ mod tests {
         let ok = c.send(json!({"op":"set-policy","policy":policy}));
         assert_eq!(
             ok,
-            json!({"ok":true,"op":"set-policy","path":path.to_string_lossy()})
+            json!({"ok":true,"op":"set-policy","path":path.to_string_lossy(),"replaced":false})
         );
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
@@ -2576,6 +4279,7 @@ mod tests {
         let res = daemon.handle(
             Request::SetPolicy {
                 policy: json!({"version":1}),
+                code: None,
             },
             &mut ctx,
         );
@@ -2594,6 +4298,7 @@ mod tests {
             daemon.handle(
                 Request::SetPolicy {
                     policy: json!({"version":1}),
+                    code: None,
                 },
                 &mut ctx,
             ),

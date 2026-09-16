@@ -42,6 +42,9 @@ UDEV_DST=/etc/udev/rules.d/70-rp-code.rules
 MODULES_DST=/etc/modules-load.d/rp-code.conf
 POLICY_DIR=/etc/rp-code
 POLICY_DST="$POLICY_DIR/policy.json"
+# Where the policy seal keeps a mirror copy (see POLICY.md "Sealing the policy"): outside /etc,
+# so removing one directory does not unseal the machine.
+STATE_DIR=/var/lib/rp-code
 RUN_DIR=/run/rp-code
 MENU_DST=/usr/local/share/applications/rp-code.desktop
 ICON_DST=/usr/local/share/icons/hicolor/512x512/apps/rp-code.png
@@ -141,7 +144,8 @@ if [ -n "$PREFIX" ]; then
   # Relocate every system path (tests run the real steps against a scratch directory).
   LIBEXEC="$PREFIX$LIBEXEC"; DAEMON_DST="$LIBEXEC/rp-coded"; UNIT_DST="$PREFIX$UNIT_DST"
   UDEV_DST="$PREFIX$UDEV_DST"; MODULES_DST="$PREFIX$MODULES_DST"; POLICY_DIR="$PREFIX$POLICY_DIR"
-  POLICY_DST="$POLICY_DIR/policy.json"; RUN_DIR="$PREFIX$RUN_DIR"; MENU_DST="$PREFIX$MENU_DST"
+  POLICY_DST="$POLICY_DIR/policy.json"; STATE_DIR="$PREFIX$STATE_DIR"
+  RUN_DIR="$PREFIX$RUN_DIR"; MENU_DST="$PREFIX$MENU_DST"
   ICON_DST="$PREFIX$ICON_DST"; INSTALL_ROOT="$PREFIX$INSTALL_ROOT"; BIN_LINK="$PREFIX$BIN_LINK"
   PAM_FILES="$PREFIX/etc/pam.d/system-login $PREFIX/etc/pam.d/common-session"
   SYSTEM_CMDS=false
@@ -791,6 +795,8 @@ install_file "$DIST/rp-coded.service" "$UNIT_DST" 0644 && unit_changed=true || t
 # The policy directory must exist before the unit starts: it is the one path under /etc the
 # hardened service may write to (write-once policy creation from the app, see POLICY.md).
 if [ -d "$POLICY_DIR" ]; then skip "$POLICY_DIR exists"; else run install -d -m 0755 -o root -g root "$POLICY_DIR"; ok "created $POLICY_DIR"; fi
+# The seal's mirror directory, for the same reason: it must exist before the daemon writes one.
+if [ -d "$STATE_DIR" ]; then skip "$STATE_DIR exists"; else run install -d -m 0750 -o root -g root "$STATE_DIR"; ok "created $STATE_DIR"; fi
 if ! $SYSTEM_CMDS; then
   skip "systemd service (--prefix)"
 elif have systemctl && [ -d /run/systemd/system ]; then

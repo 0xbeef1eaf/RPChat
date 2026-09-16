@@ -22,6 +22,75 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
 - **Policy**: reads `/etc/rp-code/policy.json` at start and on every `policy` request (mtime cache);
   validates shape; refuses `lock` when `inputLock.enabled === false`; clamps `lock` durations to
   `inputLock.maxDurationMs` (default 300 000). Never trusts the app's numbers.
+- **The policy seal** (`src/seal.rs`, `src/totp.rs`, `src/runtime.rs`, `src/remote.rs`; user guide
+  `native/rp-coded/dist/POLICY.md` "Locking the policy behind a code"): sealing turns the
+  write-once policy into one that can be replaced and removed with a TOTP code and nothing else.
+  A seal is in one of two mutually exclusive `mode`s — `totp` (a code unlocks it locally) or
+  `chain` (no secret exists; only a signed policy chain can change anything). `seal-policy`
+  generates a 160-bit secret (`/dev/urandom`) and writes `Seal { version, sealedAt, managedBy,
+  mode, totp?, secret?, chain?, policyHash, policy, lastCounter, failures, lockedUntil, tampers }`
+  to `/etc/rp-code/policy.seal`
+  (`0600`) plus the mirrors `/var/lib/rp-code/policy.seal` and
+  `/usr/local/libexec/rp-code/policy.seal`, and a world-readable `policy.sealed` marker (`0644`)
+  carrying everything but the secret, and answers **once** with the secret and the `otpauth://`
+  URI. A `chain` seal (`create_chain`, reached through `set-remote-link`) generates nothing: it
+  holds `ChainState { url, key, keyId?, head, seq, intervalMinutes?, linkedAt, managedBy?,
+  rotations }` — a public key and a position — so there is nothing on the machine to steal or to
+  mint an unlock with, and `set-policy`/`unseal-policy` are refused with `CODE`. A policy with no `lock` block gets an empty one written into it first,
+  so what is in force is readable in the file. `set-policy` with a valid `code` replaces the
+  policy and re-pins the seal; `unseal-policy` removes it (`removePolicy` takes the file too);
+  `seal-status` reports `SealInfo`/`RuntimeInfo`/`RemoteInfo` without secrets. Codes are RFC 6238
+  (SHA-1/256/512, 6–8 digits, 15–300 s, ±`window` steps), spent once (`lastCounter`), and after
+  `FREE_ATTEMPTS` (3) failures the lock refuses everything for 30 s doubling to 15 min
+  (`lockout_secs`, pure + tested). `--seal-status`, `--unseal <code>` and
+  do the same from a root terminal — being root is not enough for the unseal. `totp.rs` is self-contained (SHA-1, HMAC, base32, `otpauth` URI) and tested against
+  the RFC 2202/4231/6238 vectors.
+- **The runtime policy filesystem** (`src/runtime.rs`): the effective policy is published into
+  `/run/rp-code/policy` — a tmpfs the daemon mounts (`MS_NOSUID|MS_NODEV|MS_NOEXEC`,
+  `mode=0750,size=1m`), writes `policy.json` (`0640 root:rp-code`) and `state.json` into, then
+  remounts read-only. The app reads it from there in preference to `/etc/rp-code/policy.json`, so
+  on a sealed machine editing the file changes nothing. Every failure (no `CAP_SYS_ADMIN`, no
+  tmpfs, a container) degrades to a plain directory and is reported in `RuntimeInfo.degraded`,
+  which surfaces as a residual rather than a silent loss. `mount_state` parses
+  `/proc/self/mountinfo` (pure); `MountOps` is a trait so the tests need no privileges. The unit
+  gains `MountFlags=shared` (a sandboxed unit's namespace is `slave` by default, which would keep
+  the mount invisible to the app), `CAP_SYS_ADMIN` and `CAP_LINUX_IMMUTABLE`.
+- **Self-heal and tamper events**: every ~5 s (the tick that already re-engages the guard) a
+  sealed daemon restores missing seal copies, compares the policy file against `seal.policyHash`
+  and rewrites it from the sealed copy when it differs (`lock.selfHeal`), re-arms the immutable
+  attributes (`lock.immutable`, `FS_IOC_SETFLAGS`), rewrites the `RefuseManualStop=yes` drop-in
+  (`lock.refuseManualStop`) and republishes the runtime filesystem when what is there has drifted
+  or been remounted writable. Each noticed change is kept in the seal (capped at 20) and pushed as
+  `policy-tamper`; a changed effective policy is pushed as `policy-changed`.
+- **The policy chain** (`src/chain.rs`, pure + tested): a hash-linked, signed sequence of policies
+  and the only way into a `chain`-mode machine. A link is `{ seq, prev, issuedAt?, policy?,
+  nextKey?, unseal?, signature }`; `prev` is the SHA-256 of the previous link's canonical bytes
+  (the link minus `signature`, compact JSON with sorted keys — what `serde_json` writes and what
+  `JSON.stringify` over recursively sorted entries writes). Signing is Ed25519
+  (`ed25519-dalek`, `verify_strict`) over `rp-code-chain/v1\n` + those bytes. `apply(text, ctx)`
+  finds the link whose `prev` is the machine's head, walks forward verifying `seq`, `prev`,
+  `keyId` and the signature of each, and returns `Applied { policy, head, seq, key, unseal,
+  applied, rotations }`; links at or before the head are skipped (the head commits to them),
+  a file that does not reach the machine is `NoContinuation`, and being already at the tip is
+  `applied: 0` rather than an error. `nextKey` rotates the trusted key and is signed by the key it
+  replaces, so a successor cannot introduce itself. Replay and reordering are structurally
+  impossible: an old link's `prev` no longer matches.
+- **Remote Link** (`chain::RemoteLink`): the base64 blob that establishes all of it — `{ version,
+  url, key, keyId?, intervalMinutes?, managedBy?, mode?, signature }`, self-signed by the key it
+  carries, so a blob mangled in transit is refused. `set-remote-link` applies it: on an unlinked
+  machine it seals in the named mode (`chain` by default; `totp` also generates the secret and
+  returns it once), on a `totp` machine it needs the code, on a `chain` machine it is refused.
+- **Packs the policy pins** (`policy.packs`): pinned by an Ed25519 **signature** over
+  `rp-code-pack/v1\n<id>\n<version>\n<sha256>` rather than a bare checksum — on a managed machine
+  the policy itself arrived over the network, so a checksum in it proves only that policy and pack
+  agree. Validated by the daemon (pack-id shape, https/loopback URLs, 64-hex checksums, 64-byte
+  signatures, no duplicates, ≤ 64 entries); the app downloads and hashes and the daemon decides
+  (`verify-pack`), which keeps the payload off the socket and the decision with the side holding
+  the key. A signature is required where the machine has a Remote Link and `sha256` is the
+  fallback where it does not. `src/main/system/remote-config.ts` then installs through
+  `PackService`, refuses an archive whose id or version is not the pinned one, and — with
+  `removeUnlisted` — uninstalls everything not listed. Independent of `remote`: a local policy can
+  pin packs too.
 - **`set-policy` (write once)**: `{ op: 'set-policy', policy: PolicyFile }` → `{ ok, op, path }`.
   Validates `policy` exactly like the file (`deny_unknown_fields` + `validate()`; failures →
   `INVALID` with the message), answers `EXISTS` when anything (file, symlink, directory) is already
@@ -166,7 +235,13 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   (engage, idempotent re-engage with cached sockets, enforce rewrite, parser failure, off, no
   LSM), socket-level `guard-apply`/`guard-status`/policy-change and `subscribe` + pushed events,
   and the generated profiles through `apparmor_parser -Q` when it is installed (CI installs it).
-- Layout: `src/main.rs` (socket server, signals, keepalive and update OS glue, self-restart),
+- Layout: `src/chain.rs` (the policy chain and the Remote Link: canonical bytes, Ed25519
+  verification, the walk, rotation — all pure),
+  `src/seal.rs` (the seal, its modes, its mirrors, the lockout ladder, the immutable attribute),
+  `src/totp.rs` (SHA-1/HMAC/base32/RFC 6238, pure), `src/runtime.rs` (the published policy
+  filesystem behind `MountOps`), `src/remote.rs` (the `remote`/`packs` blocks and
+  pack-signature verification — pure),
+  `src/main.rs` (socket server, signals, keepalive and update OS glue, self-restart),
   `src/protocol.rs` (serde types + tests), `src/policy.rs` (load/validate/clamp + tests, `app`
   rules, `allow_downgrade`, `guard` rules), `src/guard.rs` (session guard: table, profile
   rendering, audit parsing, discovery parsing, state, `apply` behind `GuardHooks`),
@@ -253,7 +328,12 @@ with `pkexec` for the current user.
   resolves with whether the daemon is back)), unit-tested with a fake socket server. `rpErrorCodeFor`/`toRpError` map daemon codes for every caller: `REFUSED`/`POLICY` →
   `PERMISSION_DENIED`, `INVALID`/`EXISTS` → `INVALID_ARGUMENT` (`details.daemonCode` keeps the
   original), others → `CAPABILITY_FAILED`.
-- `src/main/system/policy.ts`: `loadPolicy(path)` → `{ policy, managed: ManagedSettingsPaths, app }`;
+- `src/main/system/policy.ts`: `loadPolicy(path, sources)` reads, in order, the daemon's runtime
+  filesystem (`/run/rp-code/policy/policy.json`), the policy file, the seal's world-readable
+  marker (`/etc/rp-code/policy.sealed`) and the app's own cache of a sealed policy, reporting
+  which through `PolicyState.source` (`runtime`/`file`/`seal`/`cache`/`none`) plus `sealed`,
+  `policyHash` and `fromCache`. `PolicyWatcher` stamps all three files, so a republished runtime
+  copy is noticed although the file did not change. → `{ policy, managed: ManagedSettingsPaths, app }`;
   `applyPolicy(settings, policy)` (pure, tested) forces the listed keys; `appPolicy(policy)` →
   `{ allowQuit, users }` with defaults (`app.allowQuit` is not a settings key: it is reported as
   `SystemIntegrationStatus.policy.allowQuit`/`.users`, never in `managed`). `parsePolicy` accepts
@@ -350,9 +430,22 @@ with `pkexec` for the current user.
 - Bundling: `resources/bin/rp-coded` (built by `scripts/build-native.mjs` alongside the helper) and
   `resources/system/{install.sh,rp-coded.service,70-rp-code.rules,...}`; electron-builder
   `extraResources` + `deb.afterInstall` script that calls the installer.
+- `src/main/system/seal-cache.ts`: the app's own copy of a sealed policy (`<userData>/sealed-policy.json`,
+  `{ version, seenAt, sealedAt?, managedBy?, policyHash, policy }`), written by `status()` whenever a
+  sealed machine is seen and dropped **only** when a connected daemon reports an unsealed one — so
+  wiping `/etc/rp-code` with the daemon stopped leaves the app managed and reports `policy.fromCache`
+  rather than quietly freeing it. `canonicalJson`/`policyHash` match the daemon's hash.
+- `src/main/system/remote-config.ts`: `RemoteConfigService` (`start`/`check`/`syncPacks`/`status`,
+  `FIRST_CHECK_DELAY_MS` 20 s then `remote.intervalMinutes`, rescheduled whatever the outcome):
+  fetches the document (≤ 1 MiB, 30 s), `daemon.remoteApply(text)` with the body untouched, and
+  brings `policy.packs` into line — download (≤ 512 MiB, 30 min), check `sha256`, install, refuse a
+  mismatched id or version, uninstall the unlisted ones. `packNeedsInstall`, `packsToRemove` and
+  `nextCheckDelayMs` are pure. Reported as `RemoteConfigStatus`.
 - IPC `system.*` (`status`, `install`, `setAutostart`, `installerPath`, `createPolicy(text)`,
-  `policyTemplate()` — the latter reads the current settings in main —, `guardApply()`,
-  `guardAttempts()`), `settings.managed` and
+  `sealPolicy(text?)` — the only place the secret, the `otpauth://` URI and the remote key exist —,
+  `replacePolicy(text, code)`, `unsealPolicy(code, removePolicy?)`, `remoteRefresh()`,
+  `policyTemplate()` — the current policy when there is one, else a template from the current
+  settings —, `guardApply()`, `guardAttempts()`), `settings.managed` and
   `updates.*` (the update service reads `settings.updates` from the same policy state).
 
 ### Policy `app` block
@@ -407,6 +500,56 @@ the daemon does not act on it, it keeps it and hands it back like the `app` rest
 inspector. Not a settings key: reported as `SystemIntegrationStatus.policy.dev`, never in
 `managed`. What enforces it, and why it is read the way it is, is the `dev.allow` bullet under
 *App (desktop main)*.
+
+### Remote Link, the chain and the authoring side (app)
+
+- `src/main/system/chain-author.ts`: the **publishing** half, on every platform — writing a policy
+  for a fleet is not something you should have to do on a managed machine. `ChainAuthor` holds the
+  Ed25519 private key in `<userData>/policy-chain/key.bin` (OS keyring via `safeStorage`, else a
+  `0600` file with a header naming which) and the chain being built in `chain.json`, so a new
+  version is one button rather than bookkeeping. `createKey`/`importKey`/`exportKey`/`forget`,
+  `configure` (url, keyId, interval, managedBy, mode), `remoteLink()` → the base64 blob
+  self-signed with the key, `appendLink({ policy?, unseal?, rotateTo? })` → the next link,
+  hash-linked and signed, `dropLastLink()`, `publishedChain()`, `signPack({ id, version?, sha256 })`.
+  `linkMessage`/`linkHash`/`packMessage` are pure and pinned against the daemon by a shared test
+  vector (`a_link_signed_by_the_app_verifies_here` in `chain.rs`).
+- `scripts/rp-policy-chain.mjs` (`keygen`, `link`, `sign`, `pack`) does the same from a terminal
+  for an administrator who keeps the key on a build server, and doubles as the written
+  specification; it is held to the same vector.
+- IPC: `system.setRemoteLink(blob, code?)` and `system.author*` (`authorStatus`, `authorCreateKey`,
+  `authorImportKey`, `authorExportKey`, `authorForget`, `authorConfigure`, `authorRemoteLink`,
+  `authorAppendLink`, `authorDropLastLink`, `authorChain`, `authorSignPack`).
+- Renderer: `components/settings/RemoteLinkSection.tsx` — the *Remote Link* card (paste box,
+  gated by the code on a `totp` machine and refused on a `chain` one, with the enrolment dialog
+  when a `totp` blob seals the machine) and the *Publish a chain* dialog (key, Remote Link,
+  sign-a-version, sign-a-release, the chain file). `lib/seal.ts` gains `keyLine` and `sealLine`
+  reads differently per mode.
+
+### Policy `remote`, `packs` and `lock` blocks
+
+`RemotePolicy`, `PacksPolicy`/`PackSource` and `PolicyLock` in `@rp/shared/system.ts`, validated
+identically by `parseRemote`/`parsePacks`/`parseLock` (app, `src/main/system/policy.ts`) and
+`validate_remote`/`validate_packs`/`validate_lock` (daemon) — the form would otherwise let someone
+build a file the daemon refuses.
+
+| Key | Type | Effect |
+|---|---|---|
+| `remote.url` | https:// (or http:// on 127.0.0.1) | Where the policy chain is fetched from. The key that signs it is pinned by the Remote Link, never named here: a policy must not name the key that authorises it. |
+| `remote.enabled` | boolean, default `true` | `false` stops the fetching without forgetting the address. |
+| `remote.intervalMinutes` | 5..1440, default 60 | How often the app fetches. |
+| `packs.sources[]` | `{ id, url, signature?, sha256?, version? }`, ≤ 64 | Packs the machine gets, installed without the user choosing a file. `signature` is required where the machine has a Remote Link. |
+| `packs.removeUnlisted` | boolean, default `false` | Uninstall everything not listed. |
+| `packs.refreshMinutes` | 5..1440, default 360 | How often the pinned packs are re-checked. |
+| `lock.algorithm`/`digits`/`period`/`window` | SHA1\|SHA256\|SHA512, 6..8, 15..300, 0..10 | TOTP parameters to enrol with (`totp` mode only). |
+| `lock.selfHeal` | boolean, default `true` | Rewrite the policy file from the seal when it changes. |
+| `lock.immutable` | boolean, default `true` | `FS_IMMUTABLE_FL` on the policy, the seal and its mirrors. |
+| `lock.refuseManualStop` | boolean, default `true` | The `RefuseManualStop=yes` drop-in for the unit. |
+| `lock.denyEscapes` | boolean, default `true` | With the guard enforcing, deny `run0`, `systemd-run`, `machinectl`, `pkexec`, `chattr`, `apparmor_parser`, `aa-teardown`. `sudo` stays: its children stay confined. |
+
+A `lock` block also makes `PolicyFile::guard_rules()` set `protectPolicy` (every path the seal
+lives in is denied to the guarded sessions, read as well as write) and `denyEscapes`. None of the
+three are settings keys, so none appear in `managed`; `remote` and `packs` are reported through
+`SystemIntegrationStatus.remote`, `lock` through `.policy.seal`.
 
 ### Policy `settings` keys
 
@@ -478,6 +621,13 @@ emergency unlock chord, locking down development mode (`dev.allow`, what it remo
 not), the session guard (what it blocks, the verified AppArmor facts with sources,
 the login-helper/hat mechanism, audit → enforce procedure, limits, recovery), uninstall, security
 notes (group membership means "may lock input and inject keys", so treat `rp-code` group like `input`).
+
+## Host events and pushed daemon events
+
+`DaemonEventName` is `guard-attempt`, `policy-tamper` and `policy-changed`. The keepalive link
+subscribes to all three: `policy-tamper` goes into `SystemIntegration.noteTamper` (Settings →
+System → *Tamper log*), `policy-changed` invalidates the policy watcher and re-reads settings, so a
+remote configuration or a restore from the seal reaches the managed badges at once.
 
 ## Host event `guard-attempt`
 

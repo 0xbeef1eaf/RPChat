@@ -6,11 +6,14 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { AppSettings, DaemonEvent, DaemonStatus, DevRules, GuardAttemptRecord, GuardStatus, PolicyFile, SystemInstallStatus, SystemIntegrationStatus } from '@rp/shared';
-import { DEFAULT_APP_RESTRICTIONS, DEFAULT_DEV_RULES, RpError, SYSTEM_GROUP, SYSTEM_INSTALL_DIR } from '@rp/shared';
+import type { AppSettings, DaemonEvent, DaemonStatus, DevRules, GuardAttempt, GuardAttemptRecord, GuardStatus, PolicyFile, RemoteInfo, RuntimeInfo, SealInfo, SealMode, SystemInstallStatus, SystemIntegrationStatus, TamperRecord } from '@rp/shared';
+import { DEFAULT_APP_RESTRICTIONS, DEFAULT_DEV_RULES, DEFAULT_SEAL_INFO, RpError, SYSTEM_GROUP, SYSTEM_INSTALL_DIR } from '@rp/shared';
 import type { DaemonClient } from './daemon-client.js';
 import type { PolicyWatcher } from './policy.js';
 import { guardMode, parsePolicy } from './policy.js';
+import type { SealCache } from './seal-cache.js';
+import type { RemoteConfigService } from './remote-config.js';
+import { ChainAuthor } from './chain-author.js';
 
 /** How many `guard-attempt` events the app keeps for Settings → System → Audit log. */
 export const GUARD_ATTEMPT_LOG_SIZE = 50;
@@ -44,9 +47,9 @@ export class GuardAttemptLog {
 
   constructor(private readonly size: number = GUARD_ATTEMPT_LOG_SIZE) {}
 
-  push(event: DaemonEvent): GuardAttemptRecord {
+  push(event: Extract<DaemonEvent, { ev: 'guard-attempt' }>): GuardAttemptRecord {
     const { ev: _ev, ...rest } = event;
-    const record: GuardAttemptRecord = { ...rest };
+    const record: GuardAttemptRecord = { ...(rest as GuardAttempt & { at: string }) };
     this.entries.unshift(record);
     if (this.entries.length > this.size) this.entries.length = this.size;
     return record;
@@ -93,6 +96,20 @@ export interface SystemIntegrationDeps {
   udevRulePath?: string;
   /** The guard-attempt log the keepalive link feeds (`guardAttempts()`); a fresh one when absent. */
   guardLog?: GuardAttemptLog;
+  /**
+   * The app's memory of a sealed policy (`seal-cache.ts`). `status()` keeps it in step: it is
+   * written whenever a sealed machine is seen, and dropped only when a *connected* daemon says the
+   * machine is not sealed — which is the one thing that cannot happen without a code.
+   */
+  sealCache?: SealCache;
+  /** Remote configuration, when the app runs one (Linux with a daemon). */
+  remote?: RemoteConfigService;
+  /**
+   * The authoring side: the administrator's signing key and the chain they publish. Present on
+   * every platform — writing a policy for a fleet is not something you have to do on a managed
+   * machine, and often should not be.
+   */
+  author?: ChainAuthor;
   /**
    * What the dev guard decided when this process started (dev-guard.ts). Reported as it was read
    * then, not from the policy file now: the lock is applied once, at startup. Defaults to
@@ -225,12 +242,23 @@ export class SystemIntegration {
   private readonly homeDir: string;
   private readonly udevRulePath: string;
   readonly guardLog: GuardAttemptLog;
+  /** The administrator's own key and chain (`chain-author.ts`). */
+  readonly author: ChainAuthor;
+  /** Tamper records pushed by the daemon this session, newest first (the seal keeps its own). */
+  private readonly tampers: TamperRecord[] = [];
 
   constructor(private readonly deps: SystemIntegrationDeps) {
     this.run = deps.run ?? defaultRunner();
     this.homeDir = deps.homeDir ?? os.homedir();
     this.udevRulePath = deps.udevRulePath ?? UDEV_RULE_PATH;
     this.guardLog = deps.guardLog ?? new GuardAttemptLog();
+    this.author =
+      deps.author ??
+      new ChainAuthor({
+        dir: path.join(this.homeDir, '.config', 'rp-code', 'policy-chain'),
+        safeStorage: { isEncryptionAvailable: () => false, encryptString: () => Buffer.alloc(0), decryptString: () => '' },
+        logger: deps.logger,
+      });
   }
 
   get autostartPath(): string {
@@ -305,6 +333,39 @@ export class SystemIntegration {
     return { enabled: false, method: 'none' };
   }
 
+  /**
+   * The seal as the daemon reports it, and what the app knows on its own when there is no daemon
+   * to ask. Without one, a policy that came from the seal marker or from the app's cache still
+   * means "this machine is sealed" — the app must not present itself as unmanaged just because
+   * the thing enforcing the lock has been stopped.
+   */
+  private async sealStatus(daemon: DaemonStatus, sealed: boolean): Promise<{ seal: SealInfo; runtime?: RuntimeInfo; remote?: RemoteInfo }> {
+    if (daemon.connected) {
+      try {
+        const status = await this.deps.daemon.sealStatus();
+        // A daemon that predates the seal answers `INVALID`, but a stub or a future daemon could
+        // answer something else again: only a well-shaped answer replaces what the app knows.
+        if (status && typeof status.seal?.sealed === 'boolean') {
+          const out: { seal: SealInfo; runtime?: RuntimeInfo; remote?: RemoteInfo } = { seal: status.seal };
+          if (status.runtime) out.runtime = status.runtime;
+          if (status.remote) out.remote = status.remote;
+          return out;
+        }
+      } catch (err) {
+        // An older daemon does not know `seal-status`; that is not an error worth showing.
+        this.deps.logger.debug(`[system] seal-status unavailable: ${(err as Error).message}`);
+      }
+    }
+    if (!sealed) return { seal: { ...DEFAULT_SEAL_INFO } };
+    return {
+      seal: {
+        ...DEFAULT_SEAL_INFO,
+        sealed: true,
+        residual: ['the daemon is not running, so nothing is putting the policy back if it is changed; the app is enforcing the copy it has'],
+      },
+    };
+  }
+
   async status(): Promise<SystemIntegrationStatus> {
     const [daemon, policyState, inGroup, autostart, installer] = await Promise.all([
       this.deps.daemon.status(),
@@ -313,19 +374,38 @@ export class SystemIntegration {
       this.autostartStatus(),
       this.installerPath(),
     ]);
+    const { seal, runtime, remote } = await this.sealStatus(daemon, policyState.sealed);
+    const sealed = seal.sealed || policyState.sealed;
+    // Keep the app's memory of the seal in step. It is dropped only for a connected daemon that
+    // says the machine is not sealed — i.e. after a code was accepted somewhere.
+    if (this.deps.sealCache) {
+      if (sealed && policyState.policy) {
+        const meta: { sealedAt?: string; managedBy?: string } = {};
+        if (seal.sealedAt !== undefined) meta.sealedAt = seal.sealedAt;
+        if (policyState.managedBy !== undefined) meta.managedBy = policyState.managedBy;
+        await this.deps.sealCache.remember(policyState.policy, meta).catch((err) => this.deps.logger.warn(`[system] cannot cache the sealed policy: ${(err as Error).message}`));
+      } else if (daemon.connected && !seal.sealed) {
+        if (await this.deps.sealCache.read()) await this.deps.sealCache.clear();
+      }
+    }
     const policy: SystemIntegrationStatus['policy'] = {
       present: policyState.present,
-      canCreate: daemon.connected && !policyState.present,
+      // A sealed machine is not "waiting for its first policy": replacing one needs a code, which
+      // is a different button.
+      canCreate: daemon.connected && !policyState.present && !sealed,
       path: policyState.path,
       managed: policyState.managed,
       allowQuit: policyState.app.allowQuit,
       users: policyState.app.users,
       restrictions: policyState.restrictions,
       dev: this.deps.dev ?? DEFAULT_DEV_RULES,
+      seal: { ...seal, sealed, tampers: [...this.tampers].reverse().concat(seal.tampers).slice(-20) },
     };
+    if (runtime) policy.runtime = runtime;
+    if (policyState.fromCache) policy.fromCache = true;
     if (policyState.managedBy) policy.managedBy = policyState.managedBy;
     if (policyState.error) policy.error = policyState.error;
-    return {
+    const out: SystemIntegrationStatus = {
       platform: this.deps.platform,
       daemon,
       policy,
@@ -335,6 +415,97 @@ export class SystemIntegration {
       install: systemInstallStatus({ execPath: this.deps.execPath, dir: this.systemInstallDir, appImage: this.deps.appImage === true, daemon }),
       guard: guardStatusOf({ policy: policyState.policy, daemon }),
     };
+    if (remote && this.deps.remote) out.remote = { daemon: remote, app: await this.deps.remote.status() };
+    return out;
+  }
+
+  /** Record a `policy-tamper` the daemon pushed, for Settings → System. */
+  noteTamper(record: TamperRecord): void {
+    this.tampers.unshift(record);
+    if (this.tampers.length > GUARD_ATTEMPT_LOG_SIZE) this.tampers.length = GUARD_ATTEMPT_LOG_SIZE;
+  }
+
+  /**
+   * Seal this machine: the daemon pins `text` (or the policy already on disk) to a fresh TOTP
+   * secret and answers with the secret, the enrolment URI and the remote-configuration signing
+   * key. **They are readable exactly once** — this is the only moment they exist outside the
+   * root-only seal file, so the caller must show them to the administrator before doing anything
+   * else with the result.
+   */
+  async sealPolicy(text?: string): Promise<{ secret: string; otpauth: string; status: SystemIntegrationStatus }> {
+    let policy: PolicyFile | undefined;
+    if (text !== undefined && text.trim().length > 0) {
+      let json: unknown;
+      try {
+        json = JSON.parse(text);
+      } catch (err) {
+        const problem = `not valid JSON: ${(err as Error).message}`;
+        throw new RpError('INVALID_ARGUMENT', `Invalid policy file:\n${problem}`, { problems: [problem] });
+      }
+      parsePolicy(json);
+      policy = json as PolicyFile;
+    }
+    const sealed = await this.deps.daemon.sealPolicy(policy ? { policy } : {});
+    this.deps.logger.info(`[system] policy sealed at ${sealed.path}: changing it now needs a code from the enrolled authenticator app`);
+    this.deps.policy.invalidate();
+    return { secret: sealed.secret, otpauth: sealed.otpauth, status: await this.status() };
+  }
+
+  /**
+   * Replace a sealed policy. `code` is the current code from the enrolled app; a missing, wrong,
+   * replayed or locked-out code comes back as `PERMISSION_DENIED` with `details.daemonCode: 'CODE'`.
+   */
+  async replacePolicy(text: string, code: string): Promise<SystemIntegrationStatus> {
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch (err) {
+      const problem = `not valid JSON: ${(err as Error).message}`;
+      throw new RpError('INVALID_ARGUMENT', `Invalid policy file:\n${problem}`, { problems: [problem] });
+    }
+    parsePolicy(json);
+    const { path: written } = await this.deps.daemon.setPolicy(json as PolicyFile, code);
+    this.deps.logger.info(`[system] policy replaced at ${written} (code accepted)`);
+    this.deps.policy.invalidate();
+    return this.status();
+  }
+
+  /** Remove the seal with a code; `removePolicy` takes the policy file with it. */
+  async unsealPolicy(code: string, removePolicy = false): Promise<SystemIntegrationStatus> {
+    const res = await this.deps.daemon.unsealPolicy(code, removePolicy);
+    this.deps.logger.info(`[system] policy unsealed${res.removed ? ' and the policy file removed' : ''} (code accepted)`);
+    this.deps.policy.invalidate();
+    await this.deps.sealCache?.clear();
+    return this.status();
+  }
+
+  /**
+   * Paste a Remote Link: point this machine at a policy chain and seal it in the mode the blob
+   * names. `secret`/`otpauth` come back only when the blob asked for `totp` and this was the paste
+   * that sealed the machine — the one time either is readable.
+   */
+  async setRemoteLink(blob: string, code?: string): Promise<{ mode: SealMode; url: string; secret?: string; otpauth?: string; status: SystemIntegrationStatus }> {
+    const linked = await this.deps.daemon.setRemoteLink(blob, code);
+    this.deps.logger.info(`[system] Remote Link set: ${linked.url} in ${linked.mode} mode`);
+    this.deps.policy.invalidate();
+    const out: { mode: SealMode; url: string; secret?: string; otpauth?: string; status: SystemIntegrationStatus } = {
+      mode: linked.mode,
+      url: linked.url,
+      status: await this.status(),
+    };
+    if (linked.secret !== undefined) out.secret = linked.secret;
+    if (linked.otpauth !== undefined) out.otpauth = linked.otpauth;
+    // The chain may already have something for this machine; do not make them wait an interval.
+    void this.deps.remote?.check().catch(() => undefined);
+    return out;
+  }
+
+  /** Fetch the policy chain now instead of waiting for the interval. */
+  async remoteRefresh(): Promise<SystemIntegrationStatus> {
+    if (!this.deps.remote) throw new RpError('CAPABILITY_FAILED', 'Remote configuration is not available on this platform');
+    await this.deps.remote.check();
+    this.deps.policy.invalidate();
+    return this.status();
   }
 
   /** Session guard: ask the daemon to (re)generate and load the profiles now; resolves with the new status. */
@@ -428,8 +599,15 @@ export class SystemIntegration {
     }
   }
 
-  /** `policyTemplate()` for the given settings (see the pure function). */
-  policyTemplate(settings: AppSettings): string {
+  /**
+   * What the policy form starts from. On a machine that already has a policy that is the policy
+   * itself — replacing one is an edit, and seeding from the settings would quietly drop every
+   * block the settings do not carry (`app`, `guard`, `lock`, `remote`, `packs`). Otherwise it is
+   * `policyTemplate()` over the user's current settings, as before.
+   */
+  async policyTemplate(settings: AppSettings): Promise<string> {
+    const state = await this.deps.policy.current();
+    if (state.policy) return `${JSON.stringify(state.policy, null, 2)}\n`;
     return policyTemplate(settings, this.userName());
   }
 

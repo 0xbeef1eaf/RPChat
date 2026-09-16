@@ -358,6 +358,42 @@ fn header(hash: &str, version: &str, name: &str, abi: Option<&str>) -> String {
     s
 }
 
+/// Everything the policy seal lives in. A guarded session may not go near any of it: the TOTP
+/// secret is in `policy.seal`, and reading it is as good as owning the lock.
+pub const SEALED_PATHS: [&str; 6] = [
+    "/etc/rp-code/**",
+    "/var/lib/rp-code/**",
+    "/usr/local/libexec/rp-code/**",
+    "/run/rp-code/**",
+    "/etc/systemd/system/rp-coded.service",
+    "/etc/systemd/system/rp-coded.service.d/**",
+];
+
+/// The binaries that would put a shell outside this profile, or undo the lock from inside it.
+///
+/// `sudo` is deliberately **not** here: a `sudo` child is a child, so it stays in the profile and
+/// gains nothing. `run0`, `systemd-run` and `machinectl` are different — they ask PID 1 (or the
+/// machine manager) to start the shell, so it is born outside the confinement, which is exactly
+/// the hole `sudo` does not open. `chattr` and the AppArmor tools are here because they undo the
+/// other two layers. Both spellings of each path are listed: distributions disagree about
+/// `/usr/bin` and `/usr/sbin`, and a rule for a path that does not exist costs nothing.
+pub const ESCAPE_BINARIES: [&str; 14] = [
+    "/usr/bin/run0",
+    "/bin/run0",
+    "/usr/bin/systemd-run",
+    "/bin/systemd-run",
+    "/usr/bin/machinectl",
+    "/usr/bin/pkexec",
+    "/bin/pkexec",
+    "/usr/bin/chattr",
+    "/usr/sbin/chattr",
+    "/bin/chattr",
+    "/usr/bin/apparmor_parser",
+    "/usr/sbin/apparmor_parser",
+    "/usr/bin/aa-teardown",
+    "/usr/sbin/aa-teardown",
+];
+
 /// `audit <rule>` in audit mode (allowed, logged), `audit deny <rule>` in enforce mode.
 fn guarded(mode: GuardMode, rule: &str) -> String {
     match mode {
@@ -425,6 +461,20 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     for p in &rules.extra_deny_paths {
         deny_files.insert(normalise_glob(p));
     }
+    // A sealed policy: the session loses the directories the seal lives in outright — read as
+    // well as write, because the secret is in there and reading it is enough to mint codes.
+    let mut deny_all: BTreeSet<String> = BTreeSet::new();
+    if rules.protect_policy {
+        for p in SEALED_PATHS {
+            deny_all.insert((*p).to_string());
+        }
+    }
+    let mut deny_exec: BTreeSet<String> = BTreeSet::new();
+    if rules.deny_escapes {
+        for b in ESCAPE_BINARIES {
+            deny_exec.insert((*b).to_string());
+        }
+    }
     deny_sockets.extend(shell_sockets.iter().cloned());
     deny_sockets.extend(compositor_sockets.iter().cloned());
 
@@ -453,6 +503,12 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
 
     // --- the guarded rules (session; shell/compositor get the parts that apply) -------
     let mut guard_rules = String::new();
+    for p in &deny_all {
+        guard_rules.push_str(&guarded(mode, &format!("{p} rwklx")));
+    }
+    for b in &deny_exec {
+        guard_rules.push_str(&guarded(mode, &format!("{b} x")));
+    }
     for s in &deny_sockets {
         guard_rules.push_str(&guarded(mode, &format!("{s} rw")));
     }
@@ -1727,6 +1783,68 @@ pub mod tests {
 
     fn text_of<'a>(plan: &'a GuardPlan, name: &str) -> &'a str {
         &plan.files.iter().find(|f| f.name == name).unwrap().text
+    }
+
+    #[test]
+    fn a_sealed_policy_takes_the_seal_and_the_escape_hatches_away_from_the_session() {
+        // No `lock` block: nothing changes, so an existing policy behaves exactly as before.
+        let open = rules(
+            serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":"enforce"}}),
+        );
+        assert!(!open.protect_policy && !open.deny_escapes);
+        let session = text_of(
+            &render(&open, &noctalia_hyprland_ctx(&["work"])),
+            "rp-code-session",
+        )
+        .to_string();
+        assert!(!session.contains("/etc/rp-code/**"));
+        assert!(!session.contains("run0"));
+
+        let sealed = rules(
+            serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":"enforce"},"lock":{}}),
+        );
+        assert!(sealed.protect_policy && sealed.deny_escapes);
+        let plan = render(&sealed, &noctalia_hyprland_ctx(&["work"]));
+        let session = text_of(&plan, "rp-code-session");
+        // Everywhere the seal lives, read as well as write: the secret is in there.
+        for path in SEALED_PATHS {
+            assert!(
+                session.contains(&format!("  audit deny {path} rwklx,\n")),
+                "{path} is not guarded:\n{session}"
+            );
+        }
+        // The binaries that would start a shell outside this profile, or undo the lock.
+        for binary in [
+            "/usr/bin/run0",
+            "/usr/bin/systemd-run",
+            "/usr/bin/machinectl",
+            "/usr/bin/pkexec",
+            "/usr/bin/chattr",
+            "/usr/sbin/apparmor_parser",
+        ] {
+            assert!(
+                session.contains(&format!("  audit deny {binary} x,\n")),
+                "{binary}:\n{session}"
+            );
+        }
+        // `sudo` stays available on purpose: its children stay inside the profile, so it gains
+        // nobody anything, and taking it away would break the machine for its administrator.
+        assert!(!session.contains("audit deny /usr/bin/sudo"));
+        // The same denials reach the shell and compositor profiles' parent, the session, not the
+        // app: rp-code itself must still read its own policy.
+        assert!(!text_of(&plan, "rp-code-app").contains("/etc/rp-code/**"));
+
+        // `lock.denyEscapes: false` keeps the paths guarded but leaves the binaries alone.
+        let softer = rules(
+            serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":"enforce"},"lock":{"denyEscapes":false}}),
+        );
+        let session = text_of(
+            &render(&softer, &noctalia_hyprland_ctx(&["work"])),
+            "rp-code-session",
+        )
+        .to_string();
+        assert!(session.contains("audit deny /etc/rp-code/** rwklx,"));
+        assert!(!session.contains("run0"));
     }
 
     #[test]

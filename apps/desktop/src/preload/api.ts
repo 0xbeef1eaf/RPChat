@@ -32,7 +32,12 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   memories: ['list', 'add', 'update', 'remove', 'consolidate'],
   prompts: ['pending'],
   ui: ['respondPrompt'],
-  system: ['status', 'install', 'setAutostart', 'installerPath', 'createPolicy', 'policyTemplate', 'guardApply', 'guardAttempts'],
+  system: [
+    'status', 'install', 'setAutostart', 'installerPath', 'createPolicy', 'sealPolicy', 'replacePolicy', 'unsealPolicy', 'setRemoteLink', 'remoteRefresh', 'policyTemplate',
+    'guardApply', 'guardAttempts',
+    'authorStatus', 'authorCreateKey', 'authorImportKey', 'authorExportKey', 'authorForget', 'authorConfigure', 'authorRemoteLink', 'authorAppendLink', 'authorDropLastLink',
+    'authorChain', 'authorSignPack',
+  ],
   browser: ['status', 'setPort', 'trust', 'untrust', 'installPolicy', 'removePolicy', 'extensionDir', 'blocks', 'clearBlocks', 'setHomePage'],
   updates: ['status', 'check', 'download', 'install', 'setToken'],
   plugins: ['pluginsDir', 'list', 'install', 'remove', 'setEnabled', 'reload', 'openFolder'],

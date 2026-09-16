@@ -3,6 +3,7 @@ import type { PolicyFile, SystemIntegrationStatus } from '@rp/shared';
 import { GUARD_SHELLS } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { prettyJson } from '../../lib/format';
+import type { PackSource } from '@rp/shared';
 import type { PolicyDraft, PolicySettingSpec, PolicyValue } from '../../lib/policy';
 import {
   POLICY_DEV,
@@ -11,6 +12,7 @@ import {
   POLICY_RESTRICTIONS,
   POLICY_SETTINGS,
   guardPathProblem,
+  packSourceProblem,
   policyDraftFrom,
   policyDraftProblems,
   policyDraftToFile,
@@ -24,12 +26,14 @@ import { toast } from '../../store/actions';
 import { Modal } from '../common/Modal';
 import { StringListEditor } from '../common/StringListEditor';
 import { Toggle } from '../common/Toggle';
+import { CodeDialog } from './SealSection';
 
-type TabId = 'app' | 'guard' | 'lock' | 'settings' | 'review';
+type TabId = 'app' | 'guard' | 'lock' | 'settings' | 'remote' | 'review';
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'app', label: 'The app' },
   { id: 'settings', label: 'Forced settings' },
+  { id: 'remote', label: 'Remote & packs' },
   { id: 'guard', label: 'Session guard' },
   { id: 'lock', label: 'Input lock' },
   { id: 'review', label: 'Review' },
@@ -207,8 +211,20 @@ function SettingRow({ spec, draft, onDraft, disabled }: { spec: PolicySettingSpe
  * write-once, so everything it would refuse is caught here and the exact JSON is shown before it
  * goes to the daemon.
  */
-export function CreatePolicyDialog({ path, onClose, onCreated }: { path: string; onClose: () => void; onCreated: (status: SystemIntegrationStatus) => void | Promise<void> }) {
+export function CreatePolicyDialog({
+  path,
+  sealed,
+  onClose,
+  onCreated,
+}: {
+  path: string;
+  /** The machine is locked behind a code: this writes a *replacement*, which needs one. */
+  sealed?: boolean;
+  onClose: () => void;
+  onCreated: (status: SystemIntegrationStatus) => void | Promise<void>;
+}) {
   const [draft, setDraft] = useState<PolicyDraft | null>(null);
+  const [codeDialog, setCodeDialog] = useState(false);
   const [tab, setTab] = useState<TabId>('app');
   const [loading, setLoading] = useState(true);
   const [understood, setUnderstood] = useState(false);
@@ -240,17 +256,24 @@ export function CreatePolicyDialog({ path, onClose, onCreated }: { path: string;
   const effects = useMemo(() => (draft ? policyEffects(draft) : []), [draft]);
   const forcedCount = draft ? POLICY_SETTINGS.filter((s) => draft.forced[s.path]).length : 0;
 
-  const submit = async () => {
+  const write = async (code?: string) => {
     if (!file) return;
     setWriting(true);
     setRefused(null);
     try {
-      await onCreated(await api().system.createPolicy(`${prettyJson(file)}\n`));
+      const text = `${prettyJson(file)}\n`;
+      await onCreated(code ? await api().system.replacePolicy(text, code) : await api().system.createPolicy(text));
+      setCodeDialog(false);
     } catch (err) {
       setRefused(policyRefusals(errorMessage(err)));
     } finally {
       setWriting(false);
     }
+  };
+
+  const submit = () => {
+    if (sealed) setCodeDialog(true);
+    else void write();
   };
 
   const loadPasted = () => {
@@ -274,10 +297,19 @@ export function CreatePolicyDialog({ path, onClose, onCreated }: { path: string;
   };
 
   return (
-    <Modal title="Create the policy file" onClose={writing ? undefined : onClose} className="policy-modal">
+    <Modal title={sealed ? 'Replace the policy file' : 'Create the policy file'} onClose={writing ? undefined : onClose} className="policy-modal">
       <div className="callout callout-warning small">
-        Writes <code className="nowrap">{path}</code> through the rp-code daemon — no password needed, but <strong>only once</strong>. Afterwards only
-        root can change or remove it, and what it says overrides the settings of every user on this machine.
+        {sealed ? (
+          <>
+            Replaces <code className="nowrap">{path}</code> through the rp-code daemon. This machine is locked, so the code your authenticator app is showing is asked for before
+            anything is written, and the lock is re-pinned to whatever you write here.
+          </>
+        ) : (
+          <>
+            Writes <code className="nowrap">{path}</code> through the rp-code daemon — no password needed, but <strong>only once</strong>. Afterwards only root can change or remove
+            it, and what it says overrides the settings of every user on this machine. Lock it behind an authenticator code afterwards and you can change it again from here.
+          </>
+        )}
       </div>
 
       <div className="field">
@@ -484,6 +516,64 @@ export function CreatePolicyDialog({ path, onClose, onCreated }: { path: string;
           </div>
         ) : null}
 
+        {draft && tab === 'remote' ? (
+          <div className="stack" style={{ gap: 12 }}>
+            <p className="field-hint" style={{ margin: 0 }}>
+              Where this machine's policy chain is published, and which packs it is meant to have. The key that signs the chain is not set here — it is pinned by the Remote Link, so
+              that a policy cannot name the key that authorises it. A signed link may move the address and the schedule below.
+            </p>
+            <SwitchRow
+              label="Fetch the policy from a URL"
+              hint="Off keeps this machine's policy local. On, the app re-reads the address on the interval and hands what it finds to the daemon."
+              checked={draft.remote.enabled}
+              disabled={busy}
+              onChange={(enabled) => setDraft({ ...draft, remote: { ...draft.remote, enabled } })}
+            />
+            {draft.remote.enabled ? (
+              <>
+                <div className="field">
+                  <label htmlFor="policy-remote-url">Address</label>
+                  <input
+                    id="policy-remote-url"
+                    type="text"
+                    placeholder="https://example.com/rp-code/policy.json"
+                    value={draft.remote.url}
+                    disabled={busy}
+                    onChange={(e) => setDraft({ ...draft, remote: { ...draft.remote, url: e.target.value } })}
+                  />
+                  <span className="field-hint">https:// anywhere, or http:// on 127.0.0.1 for an agent running on this machine.</span>
+                </div>
+                <div className="field">
+                  <label htmlFor="policy-remote-interval">Check every</label>
+                  <div className="row" style={{ gap: 6 }}>
+                    <input
+                      id="policy-remote-interval"
+                      type="number"
+                      min={5}
+                      max={1440}
+                      value={draft.remote.intervalMinutes}
+                      disabled={busy}
+                      style={{ width: 90 }}
+                      onChange={(e) => setDraft({ ...draft, remote: { ...draft.remote, intervalMinutes: Number(e.target.value) } })}
+                    />
+                    <span className="muted small">minutes (5 to 1440)</span>
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            <hr className="rule" />
+            <PackSources sources={draft.packs.sources} disabled={busy} onChange={(sources) => setDraft({ ...draft, packs: { ...draft.packs, sources } })} />
+            <SwitchRow
+              label="Remove packs that are not listed"
+              hint="The machine ends up with exactly the packs above. Anything a user installed themselves is uninstalled on the next check."
+              checked={draft.packs.removeUnlisted}
+              disabled={busy}
+              onChange={(removeUnlisted) => setDraft({ ...draft, packs: { ...draft.packs, removeUnlisted } })}
+            />
+          </div>
+        ) : null}
+
         {draft && tab === 'lock' ? (
           <div className="stack" style={{ gap: 12 }}>
             <p className="field-hint" style={{ margin: 0 }}>
@@ -505,6 +595,46 @@ export function CreatePolicyDialog({ path, onClose, onCreated }: { path: string;
                 <DurationInput ms={draft.inputLock.emergencyHoldMs} min={500} disabled={busy || !draft.inputLock.enabled} label="Emergency hold" onChange={(emergencyHoldMs) => setDraft({ ...draft, inputLock: { ...draft.inputLock, emergencyHoldMs } })} />
               </div>
             </div>
+
+            <hr className="rule" />
+            <p className="field-hint" style={{ margin: 0 }}>
+              <strong>The policy lock.</strong> These decide how hard the policy holds once you lock it behind an authenticator code (Settings → System → <em>Lock policy</em>).
+              Locking adds this block by itself if you leave it off, so it is here to change the defaults, not to turn the lock on.
+            </p>
+            <SwitchRow
+              label="Write the lock settings into the file"
+              hint="Off leaves the block out and the defaults below apply anyway. On writes them, so anyone reading the policy can see what is in force."
+              checked={draft.lock.enabled}
+              disabled={busy}
+              onChange={(enabled) => setDraft({ ...draft, lock: { ...draft.lock, enabled } })}
+            />
+            {draft.lock.enabled ? (
+              <>
+                <div className="row" style={{ gap: 12 }}>
+                  <div className="field">
+                    <label htmlFor="policy-lock-digits">Code length</label>
+                    <input id="policy-lock-digits" type="number" min={6} max={8} style={{ width: 80 }} value={draft.lock.digits} disabled={busy} onChange={(e) => setDraft({ ...draft, lock: { ...draft.lock, digits: Number(e.target.value) } })} />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="policy-lock-period">Code lasts</label>
+                    <div className="row" style={{ gap: 6 }}>
+                      <input id="policy-lock-period" type="number" min={15} max={300} style={{ width: 80 }} value={draft.lock.period} disabled={busy} onChange={(e) => setDraft({ ...draft, lock: { ...draft.lock, period: Number(e.target.value) } })} />
+                      <span className="muted small">seconds</span>
+                    </div>
+                  </div>
+                </div>
+                <SwitchRow label="Put the policy back when it is edited" hint="The daemon compares the file against the locked copy every few seconds and rewrites it, logging the attempt." checked={draft.lock.selfHeal} disabled={busy} onChange={(selfHeal) => setDraft({ ...draft, lock: { ...draft.lock, selfHeal } })} />
+                <SwitchRow label="Mark the files immutable" hint="Sets the immutable attribute, so a plain delete or editor save fails until someone runs chattr -i first." checked={draft.lock.immutable} disabled={busy} onChange={(immutable) => setDraft({ ...draft, lock: { ...draft.lock, immutable } })} />
+                <SwitchRow label="Refuse a manual stop of the service" hint="Writes a systemd drop-in with RefuseManualStop, so `systemctl stop rp-coded` is declined." checked={draft.lock.refuseManualStop} disabled={busy} onChange={(refuseManualStop) => setDraft({ ...draft, lock: { ...draft.lock, refuseManualStop } })} />
+                <SwitchRow
+                  label="Take away the ways out of the session guard"
+                  hint="With the guard in enforce mode, the confined users lose run0, systemd-run, machinectl, pkexec, chattr and apparmor_parser — the commands that would start a shell outside the confinement or undo the lock. sudo stays: its children stay confined."
+                  checked={draft.lock.denyEscapes}
+                  disabled={busy}
+                  onChange={(denyEscapes) => setDraft({ ...draft, lock: { ...draft.lock, denyEscapes } })}
+                />
+              </>
+            ) : null}
           </div>
         ) : null}
 
@@ -574,17 +704,70 @@ export function CreatePolicyDialog({ path, onClose, onCreated }: { path: string;
 
       <label className="check">
         <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} disabled={writing} />
-        I understand this cannot be undone without root
+        {sealed ? 'I understand this replaces what this machine enforces' : 'I understand this cannot be undone without root'}
       </label>
       <div className="form-actions">
         <button type="button" className="btn" onClick={onClose} disabled={writing}>
           Cancel
         </button>
         <button type="button" className="btn btn-primary" onClick={submit} disabled={!understood || busy || !draft || problems.length > 0}>
-          {writing ? 'Writing…' : 'Write policy'}
+          {writing ? 'Writing…' : sealed ? 'Replace policy…' : 'Write policy'}
         </button>
       </div>
+      {codeDialog ? <CodeDialog title="Replace the policy" what="replace" busy={writing} onClose={() => setCodeDialog(false)} onSubmit={(code) => void write(code)} /> : null}
     </Modal>
+  );
+}
+
+/** The pinned packs: an id, where to download it, and optionally a checksum and a version. */
+function PackSources({ sources, disabled, onChange }: { sources: PackSource[]; disabled?: boolean; onChange: (sources: PackSource[]) => void }) {
+  const [id, setId] = useState('');
+  const [url, setUrl] = useState('');
+  const [sha256, setSha256] = useState('');
+  const [version, setVersion] = useState('');
+  const candidate: PackSource = { id: id.trim(), url: url.trim(), ...(sha256.trim() ? { sha256: sha256.trim() } : {}), ...(version.trim() ? { version: version.trim() } : {}) };
+  const problem = id.trim() || url.trim() ? packSourceProblem(candidate) : null;
+  const add = () => {
+    if (problem || !candidate.id || !candidate.url) return;
+    onChange([...sources, candidate]);
+    setId('');
+    setUrl('');
+    setSha256('');
+    setVersion('');
+  };
+  return (
+    <div className="field">
+      <span className="field-label">Packs this machine gets</span>
+      <span className="field-hint">
+        Each one is downloaded and installed without the user choosing a file. A checksum is optional but strongly recommended: without it the machine installs whatever the address
+        serves that day.
+      </span>
+      {sources.length === 0 ? <p className="muted small">None — users install their own packs.</p> : null}
+      <ul className="stack small" style={{ gap: 4, marginTop: 6 }}>
+        {sources.map((s, i) => (
+          <li key={`${s.id}-${i}`} className="row" style={{ gap: 8 }}>
+            <span className="grow">
+              <span className="mono">{s.id}</span>
+              {s.version ? <span className="muted"> {s.version}</span> : null} <span className="muted">— {s.url}</span>
+              {s.sha256 ? <span className="muted"> (checksum pinned)</span> : <span className="msg-warning"> (no checksum)</span>}
+            </span>
+            <button type="button" className="btn btn-sm btn-ghost" disabled={disabled} onClick={() => onChange(sources.filter((_, n) => n !== i))}>
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+        <input type="text" placeholder="pack id" aria-label="Pack id" value={id} disabled={disabled} style={{ width: 130 }} onChange={(e) => setId(e.target.value)} />
+        <input type="text" placeholder="https://example.com/luna.rppack" aria-label="Pack address" value={url} disabled={disabled} style={{ minWidth: 260, flex: 1 }} onChange={(e) => setUrl(e.target.value)} />
+        <input type="text" placeholder="version (optional)" aria-label="Pack version" value={version} disabled={disabled} style={{ width: 130 }} onChange={(e) => setVersion(e.target.value)} />
+        <input type="text" placeholder="sha256 (optional)" aria-label="Pack checksum" value={sha256} disabled={disabled} style={{ width: 170 }} onChange={(e) => setSha256(e.target.value)} />
+        <button type="button" className="btn btn-sm" disabled={disabled || !candidate.id || !candidate.url || problem !== null} onClick={add}>
+          Add
+        </button>
+      </div>
+      {problem ? <span className="field-hint msg-error">{problem}</span> : null}
+    </div>
   );
 }
 

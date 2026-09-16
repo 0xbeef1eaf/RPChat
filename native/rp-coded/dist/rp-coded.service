@@ -41,7 +41,11 @@ SystemCallArchitectures=native
 # CAP_SETGID: drop to the user (setgid, initgroups, setuid) before exec'ing a relaunched app.
 # CAP_MAC_ADMIN: load/unload the session-guard AppArmor profiles (apparmor_parser writes
 # /sys/kernel/security/apparmor/.replace, which the kernel gates on this capability).
-CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID CAP_MAC_ADMIN
+# CAP_SYS_ADMIN: mount and remount the runtime policy filesystem (/run/rp-code/policy) — the
+# one thing here that needs it, and the reason the seal can publish a policy root cannot edit
+# in place. CAP_LINUX_IMMUTABLE: set FS_IMMUTABLE_FL on the policy, the seal and its mirrors
+# (`lock.immutable`), which the kernel gates on that capability alone.
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID CAP_MAC_ADMIN CAP_SYS_ADMIN CAP_LINUX_IMMUTABLE
 # The bounding set is not enough. NoNewPrivileges=yes together with any option that installs a
 # seccomp filter (ProtectClock, ProtectKernelTunables/Modules/Logs, ProtectHostname,
 # RestrictRealtime, RestrictSUIDSGID, LockPersonality, SystemCallArchitectures — this unit has
@@ -52,7 +56,7 @@ CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGI
 # them back in the permitted set. They do not leak into the relaunched app: the pre_exec does
 # setgid/initgroups/setuid before execve, which clears the permitted, effective and ambient
 # sets (only the inheritable bits remain, and those grant nothing under NoNewPrivileges).
-AmbientCapabilities=CAP_SETUID CAP_SETGID
+AmbientCapabilities=CAP_SETUID CAP_SETGID CAP_SYS_ADMIN CAP_LINUX_IMMUTABLE
 # AF_UNIX for the daemon; the rest for the relaunched app (Chromium needs netlink too).
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 KillMode=process
@@ -64,6 +68,17 @@ RuntimeDirectory=rp-code
 RuntimeDirectoryMode=0750
 ReadWritePaths=/run/rp-code
 ReadWritePaths=-/etc/rp-code
+# The policy seal (README "Sealing the policy"): its mirror copies live outside /etc so that
+# removing one place does not unseal the machine. Both "-": created on the first seal.
+ReadWritePaths=-/var/lib/rp-code
+# The runtime policy filesystem (/run/rp-code/policy) is a tmpfs the daemon mounts itself and
+# remounts read-only after each publish. A unit with sandboxing options runs in its own mount
+# namespace whose propagation systemd sets to `slave` by default, which would keep that mount
+# invisible to the rest of the machine — including the app that has to read it. `shared` lets
+# the mounts this daemon makes propagate out to the host, which is what this setting is for.
+# The sandbox mounts systemd sets up are made before the propagation mode is applied, so they
+# stay inside the namespace; only the daemon's own later mounts travel.
+MountFlags=shared
 # System install (`apply-update`): the unpacked app under /opt/rp-code (current/, previous/,
 # versions.json, per-user staging), and — when the new bundle ships a newer daemon — the
 # daemon's own files: the binary directory, this unit, the udev rule, the module list and the

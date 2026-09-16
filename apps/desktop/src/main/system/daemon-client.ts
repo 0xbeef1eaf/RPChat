@@ -4,13 +4,20 @@
  * 10 s timeout (`apply-update`: 5 min), reconnect on the next request after the socket drops.
  */
 import * as net from 'node:net';
-import type { DaemonRequest, DaemonResponse, DaemonStatus, GuardInfo, PolicyFile, RpErrorCode } from '@rp/shared';
+import type { DaemonRequest, DaemonResponse, DaemonStatus, GuardInfo, PolicyFile, RemoteInfo, RpErrorCode, RuntimeInfo, SealInfo, SealMode, TotpConfig } from '@rp/shared';
 import { DAEMON_SOCKET_PATH, RpError } from '@rp/shared';
 
 export type HelloResponse = Extract<DaemonResponse, { op: 'hello' }>;
 export type StatusResponse = Extract<DaemonResponse, { op: 'status' }>;
 export type GuardResponse = Extract<DaemonResponse, { op: 'guard-apply' | 'guard-status' }>;
 export type SetPolicyResponse = Extract<DaemonResponse, { op: 'set-policy' }>;
+export type SealPolicyResponse = Extract<DaemonResponse, { op: 'seal-policy' }>;
+export type UnsealPolicyResponse = Extract<DaemonResponse, { op: 'unseal-policy' }>;
+export type SealStatusResponse = Extract<DaemonResponse, { op: 'seal-status' }>;
+export type RemoteApplyResponse = Extract<DaemonResponse, { op: 'remote-apply' }>;
+export type SetRemoteLinkResponse = Extract<DaemonResponse, { op: 'set-remote-link' }>;
+export type VerifyPackResponse = Extract<DaemonResponse, { op: 'verify-pack' }>;
+export type PolicyResponse = Extract<DaemonResponse, { op: 'policy' }>;
 export type ApplyUpdateResponse = Extract<DaemonResponse, { op: 'apply-update' }>;
 
 /** `apply-update` extracts a few hundred MB and may copy the daemon: give it minutes, not seconds. */
@@ -37,6 +44,10 @@ export function rpErrorCodeFor(code: DaemonErrorResponse['code']): RpErrorCode {
     case 'INVALID':
     case 'EXISTS':
       return 'INVALID_ARGUMENT';
+    // A missing, wrong, replayed or locked-out TOTP code: the caller may try again with a new
+    // one, so it is a permission problem rather than a bad argument.
+    case 'CODE':
+      return 'PERMISSION_DENIED';
     default:
       return 'CAPABILITY_FAILED';
   }
@@ -198,16 +209,112 @@ export class DaemonClient {
   }
 
   /**
-   * Create the policy file once through the daemon. Rejects with `RpError` `INVALID_ARGUMENT`
-   * when the daemon rejects the object (`INVALID`) or a policy already exists (`EXISTS`,
-   * `details.daemonCode`), `PERMISSION_DENIED`/`CAPABILITY_FAILED` like the other ops.
+   * Create the policy file through the daemon, or — on a sealed machine, with `code` — replace it.
+   * Rejects with `RpError` `INVALID_ARGUMENT` when the daemon rejects the object (`INVALID`) or a
+   * policy already exists on an unsealed machine (`EXISTS`, `details.daemonCode`),
+   * `PERMISSION_DENIED` for a missing or wrong code (`CODE`), `CAPABILITY_FAILED` otherwise.
    */
-  async setPolicy(policy: PolicyFile): Promise<{ path: string }> {
+  async setPolicy(policy: PolicyFile, code?: string): Promise<{ path: string; replaced: boolean }> {
     try {
-      const res = await this.request<SetPolicyResponse>({ op: 'set-policy', policy });
-      return { path: res.path };
+      const res = await this.request<SetPolicyResponse>(code ? { op: 'set-policy', policy, code } : { op: 'set-policy', policy });
+      return { path: res.path, replaced: res.replaced };
     } catch (err) {
       throw toRpError(err, 'set-policy');
+    }
+  }
+
+  /** The policy the daemon has, as it parsed it (`null` when the machine has none). */
+  async policy(): Promise<{ policy: PolicyFile | null; path: string }> {
+    try {
+      const res = await this.request<PolicyResponse>({ op: 'policy' });
+      return { policy: res.policy, path: res.path };
+    } catch (err) {
+      throw toRpError(err, 'policy');
+    }
+  }
+
+  /**
+   * Seal the machine: the daemon generates a TOTP secret, pins the policy to it and answers with
+   * the secret, the `otpauth://` URI to enrol with and the remote-configuration signing key. They
+   * are readable exactly once — the caller must show them before the answer is thrown away.
+   */
+  async sealPolicy(input: { policy?: PolicyFile; totp?: TotpConfig } = {}): Promise<{ path: string; secret: string; otpauth: string; seal: SealInfo; runtime: RuntimeInfo }> {
+    const req: DaemonRequest = { op: 'seal-policy' };
+    if (input.policy) req.policy = input.policy;
+    if (input.totp) req.totp = input.totp;
+    try {
+      const res = await this.request<SealPolicyResponse>(req);
+      return { path: res.path, secret: res.secret, otpauth: res.otpauth, seal: res.seal, runtime: res.runtime };
+    } catch (err) {
+      throw toRpError(err, 'seal-policy');
+    }
+  }
+
+  /** Remove the seal with a code from the enrolled app; `removePolicy` takes the policy with it. */
+  async unsealPolicy(code: string, removePolicy = false): Promise<{ path: string; removed: boolean }> {
+    try {
+      const res = await this.request<UnsealPolicyResponse>({ op: 'unseal-policy', code, removePolicy });
+      return { path: res.path, removed: res.removed };
+    } catch (err) {
+      throw toRpError(err, 'unseal-policy');
+    }
+  }
+
+  /** The seal, the runtime policy filesystem and the remote-configuration state. */
+  async sealStatus(): Promise<{ seal: SealInfo; runtime: RuntimeInfo; remote: RemoteInfo }> {
+    try {
+      const res = await this.request<SealStatusResponse>({ op: 'seal-status' });
+      return { seal: res.seal, runtime: res.runtime, remote: res.remote };
+    } catch (err) {
+      throw toRpError(err, 'seal-status');
+    }
+  }
+
+  /**
+   * Hand a fetched policy chain to the daemon. `document` must be the response body byte for
+   * byte: the signatures cover those bytes, so re-serialising it would break them.
+   */
+  async remoteApply(document: string): Promise<{ changed: boolean; applied: number; seq: number; unsealed: boolean; policyHash: string; runtime: RuntimeInfo; remote: RemoteInfo }> {
+    try {
+      const res = await this.request<RemoteApplyResponse>({ op: 'remote-apply', document });
+      return { changed: res.changed, applied: res.applied, seq: res.seq, unsealed: res.unsealed, policyHash: res.policyHash, runtime: res.runtime, remote: res.remote };
+    } catch (err) {
+      throw toRpError(err, 'remote-apply');
+    }
+  }
+
+  /**
+   * Paste a Remote Link. `code` is needed when the machine is already linked in `totp` mode; a
+   * machine in `chain` mode refuses outright, because only its own chain can move its trust root.
+   */
+  async setRemoteLink(blob: string, code?: string): Promise<{ mode: SealMode; url: string; secret?: string; otpauth?: string; seal: SealInfo; runtime: RuntimeInfo; remote: RemoteInfo }> {
+    try {
+      const res = await this.request<SetRemoteLinkResponse>(code ? { op: 'set-remote-link', blob, code } : { op: 'set-remote-link', blob });
+      const out: { mode: SealMode; url: string; secret?: string; otpauth?: string; seal: SealInfo; runtime: RuntimeInfo; remote: RemoteInfo } = {
+        mode: res.mode,
+        url: res.url,
+        seal: res.seal,
+        runtime: res.runtime,
+        remote: res.remote,
+      };
+      if (res.secret !== undefined) out.secret = res.secret;
+      if (res.otpauth !== undefined) out.otpauth = res.otpauth;
+      return out;
+    } catch (err) {
+      throw toRpError(err, 'set-remote-link');
+    }
+  }
+
+  /**
+   * Whether a downloaded pack may be installed. The app hashes the bytes; the daemon checks that
+   * hash against what the policy pins and, where the machine has a key, against the
+   * administrator's signature. Resolves with whether a signature vouched for it.
+   */
+  async verifyPack(id: string, sha256: string): Promise<boolean> {
+    try {
+      return (await this.request<VerifyPackResponse>({ op: 'verify-pack', id, sha256 })).signed;
+    } catch (err) {
+      throw toRpError(err, 'verify-pack');
     }
   }
 

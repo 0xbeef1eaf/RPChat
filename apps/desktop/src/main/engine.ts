@@ -41,6 +41,9 @@ import { PluginService } from './plugins/service.js';
 import { DaemonClient } from './system/daemon-client.js';
 import { SystemIntegration } from './system/integration.js';
 import { PolicyWatcher, applyPolicy, stripManagedPatch } from './system/policy.js';
+import { SealCache } from './system/seal-cache.js';
+import { RemoteConfigService } from './system/remote-config.js';
+import { ChainAuthor } from './system/chain-author.js';
 import { KeepaliveLink } from './system/keepalive-link.js';
 import { QuitGuard, launchSpec } from './quit-guard.js';
 import { UpdateService } from './updates/service.js';
@@ -281,7 +284,15 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   };
   // ---- system integration (Linux daemon + root-owned policy) --------------------
   const daemon = new DaemonClient({ ...(env.RP_DAEMON_SOCKET ? { socketPath: env.RP_DAEMON_SOCKET } : {}), logger });
-  const policy = new PolicyWatcher(env.RP_POLICY_FILE, logger);
+  // The app's memory of a sealed policy, so a wiped /etc/rp-code does not leave it unmanaged
+  // (seal-cache.ts). The watcher reads it last, after the daemon's runtime filesystem, the policy
+  // file and the seal's marker.
+  const sealCache = SealCache.inUserData(opts.userData, logger);
+  const policy = new PolicyWatcher(env.RP_POLICY_FILE, logger, {
+    cache: sealCache,
+    ...(env.RP_RUNTIME_POLICY_FILE ? { runtime: env.RP_RUNTIME_POLICY_FILE } : {}),
+    ...(env.RP_SEAL_MARKER_FILE ? { marker: env.RP_SEAL_MARKER_FILE } : {}),
+  });
   const input = new InputHandler({ maxLockMs: async () => (await settingsOf()).maxInputLockMs, logger, ...(process.platform === 'linux' ? { daemon } : {}) });
 
   // ---- phase 2: handlers ---------------------------------------------------
@@ -471,10 +482,35 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   })();
   const systemInstallDir = env.RP_SYSTEM_INSTALL_DIR ?? SYSTEM_INSTALL_DIR;
   const systemInstalled = process.platform === 'linux' && app.isPackaged && isSystemInstallExec(execPathReal, systemInstallDir);
+  // Remote configuration and the packs a policy pins (remote-config.ts). Linux only: it needs
+  // the daemon to verify what it fetches.
+  const remoteConfig =
+    process.platform === 'linux'
+      ? new RemoteConfigService({
+          daemon,
+          policy,
+          packs: {
+            install: (source) => engine.packs.install(source),
+            uninstall: (packId) => engine.packs.uninstall(packId),
+            installed: async () => (await engine.storage.packs.list()).map((p) => ({ id: p.packId, version: p.version })),
+          },
+          logger,
+          downloadDir: path.join(opts.userData, 'tmp', 'remote-packs'),
+          onPolicyChanged: async () => {
+            await engine.settings.get();
+          },
+        })
+      : undefined;
   const system = new SystemIntegration({
     platform: process.platform,
     daemon,
     policy,
+    sealCache,
+    // The administrator's own signing key and chain, protected by the OS keyring where there is
+    // one (chain-author.ts). Not Linux-only: writing a policy for a fleet is not something you
+    // have to do on a managed machine.
+    author: new ChainAuthor({ dir: path.join(opts.userData, 'policy-chain'), safeStorage, logger }),
+    ...(remoteConfig ? { remote: remoteConfig } : {}),
     resourcesDirs,
     appBin: env.APPIMAGE ?? process.execPath,
     appImage: Boolean(env.APPIMAGE),
@@ -494,12 +530,28 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   // Session guard attempts arrive on the keepalive link: keep the last few for Settings → System
   // and hand each one to the characters as a `guard-attempt` host event.
   keepalive.onEvent((event) => {
-    if (event.ev !== 'guard-attempt') return;
+    if (event.ev === 'policy-tamper') {
+      const { ev: _ev, ...record } = event;
+      system.noteTamper(record);
+      logger.warn(`[policy] ${record.kind} at ${record.path}: ${record.healed ? 'restored from the seal' : 'could not be restored'}`);
+      return;
+    }
+    if (event.ev === 'policy-changed') {
+      // The daemon publishes a new effective policy; re-read it so managed settings follow at
+      // once rather than on the next stat.
+      logger.info(`[policy] the effective policy changed (${event.source}); re-reading it`);
+      policy.invalidate();
+      void engine.settings.get();
+      return;
+    }
     const record = system.guardLog.push(event);
     logger.info(`[guard] ${record.blocked ? 'blocked' : 'logged'} ${record.kind} ${record.operation} on ${record.target} by ${record.command} (pid ${record.pid})`);
     const { at, ...data } = record;
     emit({ name: 'guard-attempt', data, at });
   });
+  // Start fetching once the engine is up; the service finds out for itself whether this machine
+  // has a remote source, and keeps the pinned packs in step either way.
+  remoteConfig?.start();
   /** An update restart is an authorised quit: let it through and make sure the daemon does not race the updater's relaunch. */
   const beforeRestart = async (): Promise<void> => {
     quitGuard.allowQuitOnce();
@@ -639,6 +691,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       if (stopped) return;
       stopped = true;
       updates.stop();
+      remoteConfig?.stop();
       permissionPrompts.rejectAll();
       uiPrompts.rejectAll();
       await senses.dispose().catch((err: unknown) => logger.warn('[senses] dispose failed', err));

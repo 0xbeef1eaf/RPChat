@@ -378,9 +378,12 @@ fill in), in five tabs:
   policy*. *Force all* / *Force none* set them in one go, and the tab shows how many are on.
   `permissions.moduleAllow` is a three-way per module — *user's choice*, *allow*, *deny* — since
   a module left out of the map keeps the user's setting.
+- **Remote & packs** — the address the policy is fetched from (`remote`) and the packs this
+  machine is meant to have (`packs`), each with an optional checksum and version.
 - **Session guard** — `guard.mode`, the protection switches, `compositorIpc`, the shell picker
   (`auto` and `none` are exclusive; named shells stack), and the path lists under *Extra rules*.
-- **Input lock** — the daemon's own `inputLock` limits.
+- **Input lock** — the daemon's own `inputLock` limits, and below them the `lock` switches that
+  decide how hard the policy holds once you lock it behind a code.
 - **Review** — the exact JSON that will be written, a *Copy* button, and *Load a policy from
   JSON* to fill the form in from a policy prepared elsewhere.
 
@@ -410,6 +413,134 @@ Rules of the flow:
   the file is written with `O_CREAT|O_EXCL`, so two people cannot both succeed.
 - Without the daemon (not installed, or you are not in the group yet) the button is not shown;
   the policy card says so.
+
+Write-once is the default because it needs nothing but the daemon. If you are setting this up for
+somebody else, read the next section first: locking the policy behind a code gives you the thing
+write-once cannot — the ability to change your mind.
+
+## Locking the policy
+
+Write-once-then-root's is right for a machine you own and wrong for one you manage for somebody
+else. **Sealing** replaces it with a lock, and there are two, which are mutually exclusive.
+
+### A code, for a machine you can walk up to
+
+Settings → System → **Policy lock** → *Lock policy*. The daemon generates a TOTP secret, pins the
+current policy to it, and shows you — **once** — the secret and an `otpauth://` URI to enrol an
+authenticator app with. Enrol before closing that dialog and keep a copy somewhere safe.
+
+From then on *Edit policy…* opens the policy form seeded from what is on disk and asks for the
+current code before writing, and *Unlock…* (or `sudo rp-coded --unseal <code>`) releases the
+machine. Being root is not enough for either. Three wrong codes are free; after that the lock
+refuses everything for 30 seconds, doubling per failure up to 15 minutes, and a code is spent once
+used.
+
+### A signed chain, for a fleet
+
+Paste a **Remote Link** whose mode is *chain only* and the machine is sealed differently: **no
+secret is generated at all.** It pins a public key and the hash of the last policy version it
+applied, and the only thing that can change anything is a new version signed by that key. There is
+no code to type, none to steal, and nothing on the machine that could mint one — *Edit policy* and
+*Unlock* are simply not offered, and asking for them over the socket is refused.
+
+Releasing such a machine is also a signed version, one that carries *unseal*. That is the trade:
+you never have to visit the machine, and you can never get in without the key.
+
+This is also the answer to "can the code be asymmetric?" — it cannot. TOTP is HMAC over a time
+counter, so anything that can check a code can generate one. The chain is the asymmetric version
+of the same idea: the machine holds only public material.
+
+### What is actually holding it shut
+
+The honest answer is "several things, none of them absolute", and the app says which are in place
+— Settings → System lists the rest under *What the lock cannot do*.
+
+1. **The policy the app obeys is not the file.** The daemon publishes it into
+   `/run/rp-code/policy`, a filesystem it mounts itself and remounts read-only after each write.
+   Editing `/etc/rp-code/policy.json` changes nothing until the daemon agrees.
+2. **It puts the file back.** Every few seconds the daemon compares the file against the locked
+   copy and rewrites it, recording the attempt in a tamper log you can read in Settings → System.
+3. **It keeps spare copies** in `/var/lib/rp-code` and `/usr/local/libexec/rp-code`, so deleting
+   one does not unlock anything.
+4. **The files are immutable**, so `rm` and an editor's save fail until someone runs `chattr -i`.
+5. **The session guard takes the ways out away.** In `enforce` mode a locked policy also denies
+   the confined sessions everything under `/etc/rp-code`, `/var/lib/rp-code` and `/run/rp-code` —
+   reading included, because in code mode the secret is in there — and the binaries that would
+   start a shell outside the confinement or undo it: `run0`, `systemd-run`, `machinectl`,
+   `pkexec`, `chattr`, `apparmor_parser`, `aa-teardown`. **`sudo` is deliberately left alone**:
+   what `sudo` starts is its child, so it stays inside the profile and gains nothing. `run0` and
+   `systemd-run` are the interesting ones, because they ask systemd to start the shell and it is
+   born unconfined.
+6. **The service refuses to stop.** A drop-in with `RefuseManualStop=yes` and `Restart=always`
+   turns `systemctl stop rp-coded` into a refusal and brings a killed daemon back.
+7. **The app fails closed.** It keeps its own copy of a locked policy. Once it has seen one it
+   keeps enforcing it even if `/etc/rp-code` and the daemon are both gone — that case is reported
+   as tampering, not as freedom — and forgets it only when a *running* daemon says the machine is
+   unlocked.
+
+### What it cannot do
+
+- In code mode, a root shell the session guard does **not** confine can read the secret and mint
+  its own codes. Without the guard in `enforce`, locking raises the bar; it does not set one. In
+  chain mode there is nothing to read — the same shell can stop the daemon and delete what it
+  protects, but it cannot produce a policy the machine would accept.
+- Booting from other media bypasses the daemon entirely. Only full-disk encryption with a
+  firmware password answers that.
+- The app's cached copy lives in the user's own data directory, so the user can delete it. It is
+  the difference between "you need the key" and "you need one command off a forum".
+
+## Remote Link: following a policy chain
+
+A machine follows a chain by being given a **Remote Link** — a base64 blob carrying the address,
+the public key that signs the chain, and the mode the machine gets. Settings → System → **Remote
+Link** → *Paste a link…*. The first one is free; replacing it hands the machine to a different
+key, so a code-mode machine asks for its code and a chain-mode machine refuses outright (publish a
+release on its current chain first).
+
+A chain is a list of versions, each committing to the one before it by hash and signed. A machine
+finds its own position in the file, verifies every version after it, and applies the last — so a
+machine that was off for a month catches up by checking each signature on the way. An old version
+cannot be replayed, because its `prev` no longer matches. Rotating the signing key is itself a
+signed version, authorised by the key it replaces.
+
+### Publishing one
+
+Settings → System → **Remote Link** → *Publish a chain…*, on whichever machine you write policies
+on. It generates the signing key (protected by the OS keyring where there is one), gives you the
+Remote Link blob to hand out, and signs each new version of the policy as the next link. Paste the
+JSON from the policy form's *Review* tab, press *Sign it as the next version*, and publish the
+chain file at the address in the link.
+
+To do the same from a terminal — a build server, say, where you would rather the key lived:
+
+```bash
+node scripts/rp-policy-chain.mjs keygen --out key.pem
+node scripts/rp-policy-chain.mjs link --key key.pem --url https://policies.example.com/chain.json \
+     --managed-by "Acme IT" --mode chain             # the blob to hand out
+node scripts/rp-policy-chain.mjs sign --key key.pem --chain chain.json --policy policy.json
+node scripts/rp-policy-chain.mjs sign --key key.pem --chain chain.json --unseal   # let them go
+```
+
+Serve `chain.json` at that address, including every version from your oldest machine's position
+onwards. A machine that cannot find its position says so rather than guessing.
+
+**Back up the private key.** Losing it strands every machine on the chain: nothing else can sign a
+version they will accept, including the one that would release them.
+
+### Packs
+
+The same policy names the packs a machine should have. Each is pinned by a **signature**, not a
+checksum — on a managed machine the policy itself arrived over the network, so a checksum in it
+proves only that the policy and the pack agree, not that either came from you:
+
+```bash
+node scripts/rp-policy-chain.mjs pack --key key.pem --id luna --version 1.2.0 --file luna.rppack
+```
+
+That prints the `packs.sources` entry to paste into the policy. The app downloads and hashes; the
+daemon checks the signature, because the daemon is the side holding the key. A machine with no
+Remote Link has no key to check against and uses `sha256` instead. `removeUnlisted: true`
+uninstalls everything the list does not name.
 
 ## Session guard
 
@@ -690,9 +821,28 @@ removed or changed (it re-reads the file within a minute). The packaged app ship
 - **The daemon does not trust the app.** Durations are clamped server-side, the policy can
   disable locking, and the policy file lives in `/etc` where the app cannot write. The one
   exception is deliberate: `set-policy` lets a group member *create* the file when none exists
-  (write once, logged with uid/pid); an existing file is never changed by anything but root.
-  Nothing the app sends can read your input; the daemon drains grabbed events and only looks
-  for the emergency key.
+  (write once, logged with uid/pid); an existing file is never changed by anything but root, or
+  by a code on a locked machine. Nothing the app sends can read your input; the daemon drains
+  grabbed events and only looks for the emergency key.
+- **A locked policy is layered, not absolute, and says so.** The gate, the self-heal, the spare
+  copies, the immutable attribute, the guard's denials, the drop-in and the app's cached copy each
+  close one route; `seal-status` returns what they do not close, and Settings → System shows it.
+  Nothing about locking a policy resists a root shell the session guard is not confining, or a
+  machine booted from other media.
+- **In chain mode the machine holds no secret at all.** It pins a public key and a hash. That is
+  the whole security argument for a fleet: there is nothing on the machine to read, bribe out of a
+  user, or recover from a stolen disk that would let anyone produce a policy it accepts. The
+  private key's safety is now the administrator's problem, which is where it can actually be
+  managed.
+- **A chain is trusted through its signatures, not its address.** HTTPS decides who you are
+  talking to; the signatures decide whether the machine believes the answer. Each version commits
+  to the one before it, so a machine at version *n* has verified a signature over every version
+  that got it there, and an old one cannot be re-served. The app does the fetching and can forge
+  none of it.
+- **A pinned pack is code a character runs on this machine.** Sign every one. A bare `sha256` is
+  only as trustworthy as the policy that carries it, and on a managed machine that policy came
+  over the network. Packs still run inside the usual sandbox and the usual permission intersection
+  — pinning a pack does not grant it anything.
 - **Least privilege for a root process.** The systemd unit runs with a closed device policy
   (input devices and `/dev/uinput` only), read-only file system, no new privileges, a system-call
   allow-list and just the capabilities needed to hand the socket to the group. Every lock is

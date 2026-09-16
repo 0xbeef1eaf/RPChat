@@ -66,6 +66,7 @@ rp-coded [--socket <path>] [--policy <path>] [--sessions-dir <path>] [--install-
          [--no-restart] [--no-uinput] [--log-level error|warn|info|debug]
 rp-coded --check-devices
 rp-coded --guard-apply | --guard-off [--policy <path>] [--profile-dir <path>] [--guard-state <path>]
+rp-coded --seal-status | --unseal <code> [--policy <path>]
 rp-coded --help | --version
 ```
 
@@ -86,6 +87,11 @@ rp-coded --help | --version
 - `--guard-apply` / `--guard-off`: one engage (from the policy) or unload of the session guard
   from the command line — what `install.sh --guard`/`--no-guard` run. Prints the `GuardInfo`
   JSON; exit 1 when it reports an error.
+- `--seal-status`: the policy seal, the runtime policy filesystem and the last remote
+  configuration, as JSON. Never prints the secret or the signing key.
+- `--unseal <code>`: remove the policy lock with a code from the enrolled authenticator app —
+  the way back in when the app cannot be started. Being root is not enough; a wrong code exits 1
+  and counts towards the lockout, exactly as over the socket.
 - `--check-devices`: lists the keyboards/pointers it can open, whether `/dev/uinput` is
   writable, and the screen size it would use. Exit 0 even with no devices.
 - Logs go to stderr (`rp-coded [level] message`), i.e. the journal under systemd. Every lock
@@ -112,13 +118,19 @@ created it. Unknown fields in requests are ignored; a malformed line gets
 | `{ "op": "key", "combo" }` | `{ "ok": true, "op": "key" }` |
 | `{ "op": "click", "x", "y", "button"? }` | `{ "ok": true, "op": "click" }` |
 | `{ "op": "move", "x", "y" }` | `{ "ok": true, "op": "move" }` |
-| `{ "op": "set-policy", "policy": PolicyFile }` | `{ "ok": true, "op": "set-policy", "path" }` — creates the policy file **once** (see below) |
+| `{ "op": "set-policy", "policy": PolicyFile, "code"? }` | `{ "ok": true, "op": "set-policy", "path", "replaced" }` — creates the policy file **once**, or replaces it on a sealed machine with a valid `code` (see below) |
+| `{ "op": "seal-policy", "policy"?, "totp"? }` | `{ "ok": true, "op": "seal-policy", "path", "secret", "otpauth", "seal": SealInfo, "runtime": RuntimeInfo }` — lock the policy behind a TOTP code; the secret is readable **once**. A *chain* seal is `set-remote-link`, not this |
+| `{ "op": "unseal-policy", "code", "removePolicy"? }` | `{ "ok": true, "op": "unseal-policy", "path", "removed" }` — remove the lock (and the policy, if asked) |
+| `{ "op": "seal-status" }` | `{ "ok": true, "op": "seal-status", "seal": SealInfo, "runtime": RuntimeInfo, "remote": RemoteInfo }` — no secrets |
+| `{ "op": "remote-apply", "document" }` | `{ "ok": true, "op": "remote-apply", "changed", "applied", "seq", "unsealed", "policyHash", "runtime", "remote" }` — walk the policy chain the app fetched; `document` must be the body verbatim |
+| `{ "op": "set-remote-link", "blob", "code"? }` | `{ "ok": true, "op": "set-remote-link", "mode", "url", "secret"?, "otpauth"?, "seal", "runtime", "remote" }` — point the machine at a chain and seal it in the blob's mode; `code` when already linked with one |
+| `{ "op": "verify-pack", "id", "sha256" }` | `{ "ok": true, "op": "verify-pack", "signed" }` — whether a download the app hashed may be installed |
 | `{ "op": "register", "exec", "args", "cwd", "env" }` | `{ "ok": true, "op": "register" }` — keepalive registration on this connection (see below) |
 | `{ "op": "unregister" }` | `{ "ok": true, "op": "unregister" }` — forget it (also when nothing was registered) |
 | `{ "op": "apply-update", "file", "version", "sha512" }` | `{ "ok": true, "op": "apply-update", "version", "restartDaemon" }` — system install: verify, extract as the user, swap in, self-update (see below; may take a minute) |
 | `{ "op": "guard-apply" }` | `{ "ok": true, "op": "guard-apply", "guard": GuardInfo }` — session guard: (re)generate and load the profiles from the policy now (see below) |
 | `{ "op": "guard-status" }` | `{ "ok": true, "op": "guard-status", "guard": GuardInfo }` — what is engaged, without touching anything |
-| `{ "op": "subscribe", "events": ["guard-attempt"] }` | `{ "ok": true, "op": "subscribe", "events": [...] }` — receive pushed `{ "ev": … }` lines on this connection (see below); `[]` unsubscribes |
+| `{ "op": "subscribe", "events": ["guard-attempt", "policy-tamper", "policy-changed"] }` | `{ "ok": true, "op": "subscribe", "events": [...] }` — receive pushed `{ "ev": … }` lines on this connection (see below); `[]` unsubscribes |
 
 `status` also carries `"keepalive": { "registered", "relaunches", "allowQuit" }`,
 `"install": { "systemInstall", "current"?, "previous"?, "daemonVersion" }` and
@@ -250,7 +262,12 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 |---|---|
 | `src/main.rs` | CLI, socket server (one thread per connection, `ConnCtx` with peer credentials and registration), ticker thread (lock timers + due relaunches), signal thread, keepalive OS glue behind `KeepaliveHooks` (`/proc`, logind, getpwuid, `Command::spawn` + reaper), socket-level and pipeline tests with fakes |
 | `src/protocol.rs` | serde types mirroring `DaemonRequest`/`DaemonResponse`, `iso_millis`, round-trip tests for every op and error code |
-| `src/policy.rs` | `PolicyFile` parsing/validation, `LockLimits` defaults and clamping, `AppRules` (`app.allowQuit`/`users`), `GuardRules` (`guard`), mtime/size-cached `PolicyStore` |
+| `src/policy.rs` | `PolicyFile` parsing/validation, `LockLimits` defaults and clamping, `AppRules` (`app.allowQuit`/`users`), `GuardRules` (`guard`, plus the seal's denials), `RemoteRules`/`PackRules`/`LockRules`, mtime/size-cached `PolicyStore`, `write_policy_file` (the replace path) |
+| `src/seal.rs` | The policy seal: its two modes (`totp`, `chain`), the seal file and its mirrors, the world-readable marker, the lockout ladder, the tamper log, the immutable attribute (`FS_IOC_SETFLAGS`), `LockPolicy`/`LockRules`; pure parts tested |
+| `src/chain.rs` | The policy chain and the Remote Link: canonical bytes, link hashing, Ed25519 verification (`verify_strict`), the walk from the machine's head to the tip, key rotation; pure, with a test vector shared with the app and `scripts/rp-policy-chain.mjs` |
+| `src/totp.rs` | RFC 6238 codes: SHA-1, HMAC, base32, `otpauth://` URIs, replay-checked verification; tested against the RFC 2202/4231/6238 vectors |
+| `src/runtime.rs` | The runtime policy filesystem (`/run/rp-code/policy`): tmpfs mount, read-only remount, published policy and state, `mountinfo` parsing; `MountOps` is injectable so the tests need no privileges |
+| `src/remote.rs` | The `remote`/`packs` policy blocks and pack-signature verification (Ed25519 over id + version + hash); pure |
 | `src/guard.rs` | Session guard: shell/compositor table, profile rendering (`render`), audit-line parsing, per-target rate limiting, `/proc` discovery parsing and socket-path generalisation, `GuardState` file, `apply`/`current_info` behind `GuardHooks` (fakes in tests, `apparmor_parser -Q` when installed) |
 | `src/keepalive.rs` | Pure relaunch logic: registration validation, the gate (policy, users, active session, process), `RelaunchTracker` backoff/give-up, logind session-file and `loginctl` parsing, `command_spec`/`build_command`; all tested |
 | `src/sysinstall.rs` | System install: `versions.json`, semver + downgrade rule, SHA-512 decoding, tree checks/normalisation, atomic swap, `apply_update` behind injectable `ApplyHooks` (home lookup, extraction as the user, bundled daemon version, `install.sh --refresh-daemon-files`); tested on a temp root with a fake AppImage |
@@ -267,9 +284,25 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 - The daemon never trusts the app's numbers: the policy clamps durations and can disable locking
   entirely; the policy file must be root-owned and lives outside the user's reach.
 - No request can read input: grabbed events are drained and discarded, only the emergency key is
-  inspected. No request can change an existing policy: `set-policy` only ever creates the file
-  when none exists (write once), so the first member of the group to do it seeds the policy for
-  everyone; edits and removal need root.
+  inspected. On an unsealed machine no request can change an existing policy: `set-policy` only
+  ever creates the file when none exists (write once), so the first member of the group to do it
+  seeds the policy for everyone; edits and removal need root.
+- **Sealing** trades that for a lock. In `totp` mode (`seal-policy`) the policy can be replaced
+  and removed again, but only with a code from the enrolled authenticator app. In `chain` mode
+  (`set-remote-link`) the daemon holds **no secret at all** — only an Ed25519 public key and the
+  hash of the last policy it applied — and nothing local can authorise a change. Either way the
+  daemon then defends the policy actively: it publishes the effective copy into a read-only tmpfs
+  it mounts, restores an edited file, keeps mirrors of the seal, sets the immutable attribute,
+  writes a `RefuseManualStop` drop-in, and (with the guard enforcing) denies the confined sessions
+  `/etc/rp-code` and the binaries that would escape the profile. It is layered, not absolute: in
+  code mode an unconfined root shell can read the secret, and in either mode another boot medium
+  bypasses the daemon entirely. `seal-status` returns exactly that list.
+- **The chain is verified, not trusted.** The app fetches; the daemon verifies an Ed25519
+  signature over every link between where the machine is and where the chain ends, each committing
+  to the one before it by hash. A replayed or reordered version cannot match the head the machine
+  holds. Key rotation is signed by the key it replaces, so a successor cannot introduce itself.
+  The daemon holds no private key of any kind, so nothing on the machine — the app included —
+  can produce something it would accept.
 - Updates (`apply-update`) install only files that match the release manifest's SHA-512, are
   extracted with the requesting user's privileges (never root), pass the tree checks, and only
   then become root-owned; the previous version is kept for `install.sh --rollback`. Release

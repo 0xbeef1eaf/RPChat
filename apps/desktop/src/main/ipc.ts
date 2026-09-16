@@ -25,6 +25,7 @@ import type { Engine, Logger } from '@rp/core';
 import { notConfigured } from './commands.js';
 import type { AppServices } from './engine.js';
 import { phase2, unavailable } from './phase2.js';
+import type { ChainAuthor } from './system/chain-author.js';
 import { isRestrictable, refusalFor } from './system/restrictions.js';
 import type { WindowManager } from './windows.js';
 
@@ -282,6 +283,22 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       setAutostart: (_e, enabled) => services.system.setAutostart(Boolean(enabled)),
       installerPath: () => services.system.installerPath(),
       createPolicy: (_e, text) => services.system.createPolicy(requireString(text, 'text')),
+      sealPolicy: (_e, text) => services.system.sealPolicy(typeof text === 'string' ? text : undefined),
+      setRemoteLink: (_e, blob, code) => services.system.setRemoteLink(requireString(blob, 'blob'), typeof code === 'string' ? code : undefined),
+      replacePolicy: (_e, text, code) => services.system.replacePolicy(requireString(text, 'text'), requireString(code, 'code')),
+      unsealPolicy: (_e, code, removePolicy) => services.system.unsealPolicy(requireString(code, 'code'), Boolean(removePolicy)),
+      remoteRefresh: () => services.system.remoteRefresh(),
+      authorStatus: () => services.system.author.status(),
+      authorCreateKey: (_e, replace) => services.system.author.createKey(Boolean(replace)),
+      authorImportKey: (_e, pem) => services.system.author.importKey(requireString(pem, 'pem')),
+      authorExportKey: () => services.system.author.exportKey(),
+      authorForget: () => services.system.author.forget(),
+      authorConfigure: (_e, settings) => services.system.author.configure((settings ?? {}) as Parameters<ChainAuthor['configure']>[0]),
+      authorRemoteLink: () => services.system.author.remoteLink(),
+      authorAppendLink: (_e, input) => services.system.author.appendLink((input ?? {}) as Parameters<ChainAuthor['appendLink']>[0]),
+      authorDropLastLink: () => services.system.author.dropLastLink(),
+      authorChain: () => services.system.author.publishedChain(),
+      authorSignPack: (_e, input) => services.system.author.signPack((input ?? {}) as Parameters<ChainAuthor['signPack']>[0]),
       policyTemplate: async () => services.system.policyTemplate(await engine.settings.get()),
       guardApply: () => services.system.guardApply(),
       guardAttempts: () => services.system.guardAttempts(),

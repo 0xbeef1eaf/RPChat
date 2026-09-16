@@ -8,7 +8,9 @@ The policy file is owned by root (`root:root 0644`) and read by two parties:
 - **The desktop app** reads `settings` and forces those values over the user's own settings;
   the affected controls show a "managed by policy" badge and cannot be changed from the UI.
 
-`policy.example.json` next to this file contains every field. Delete the keys you do not want to
+`policy.example.json` next to this file contains every field; its `sha256` and `signature` are
+all-zero placeholders, so replace them with real ones (`rp-policy-chain.mjs pack`) before using
+the pack entry. Delete the keys you do not want to
 manage — anything absent keeps the user's own setting / the daemon default. The file must be
 strict JSON (no comments, no trailing commas) and at most 256 KiB. **Unknown top-level or
 `inputLock` keys make the whole file invalid**, and an invalid or unreadable file makes the
@@ -27,6 +29,196 @@ and **only root can edit or delete the file** — there is no undo from the app.
 first person in the group to do it sets the policy for every user of the machine, this is meant
 for whoever set the machine up; the values in `settings` override everyone's own settings.
 
+## Locking the policy (the seal)
+
+Write-once-then-root's is the right shape for a machine you own and the wrong one for a machine
+you manage for somebody else: you cannot change your mind, and the person sitting at it can undo
+everything with one `sudo rm`. **Sealing** replaces that with a lock. A seal is in exactly one of
+two mutually exclusive modes — a machine with both would be only as strong as the weaker one.
+
+### `totp` — a code opens it
+
+Settings → System → *Lock policy* (or the `seal-policy` request) makes the daemon generate a TOTP
+secret, pin the current policy to it, and answer **once** with the secret and an `otpauth://` URI
+to enrol an authenticator app with. Nothing shows it again: it exists in
+`/etc/rp-code/policy.seal`, `0600 root:root`, and nowhere else. Afterwards:
+
+- `set-policy` **replaces** the policy when it carries a valid `code`, and re-pins the seal to
+  what was written. Without one, or with a wrong one, the answer is `code: "CODE"`.
+- `unseal-policy` removes the lock with a code, optionally taking the policy file with it.
+  `rp-coded --unseal <code>` does the same from a root terminal — being root is not enough.
+- Three wrong codes are free; after that the lock refuses everything for 30 s, doubling per
+  failure to 15 minutes. A code is spent once it is used, so watching someone type one is
+  worthless.
+
+This is the mode for a machine you will stand in front of.
+
+### `chain` — only a signature opens it
+
+Pasting a **Remote Link** whose `mode` is `chain` (the default) seals the machine differently:
+**no secret is generated, because there is nothing for one to authorise.** The seal holds an
+Ed25519 *public* key and the hash of the last policy link it applied, and the only thing that can
+change the policy is a new link, signed by that key, continuing that chain. Letting the machine go
+is also a link — one with `unseal: true` — so even release is an act the key authorises. There is
+no code to type, no code to steal, and nothing on the machine that could mint one; `set-policy`
+and `unseal-policy` are refused outright with `code: "CODE"` and a message saying so.
+
+This is the mode for a fleet. It is also the answer to "can TOTP be asymmetric": it cannot —
+RFC 6238 is HMAC over a time counter, so anything that can check a code can generate one — but
+the *lock* can be, and this is it.
+
+### What holds it shut
+
+Sealing is layered rather than absolute, and the app says so — `seal-status` returns a
+`residual` list that Settings → System shows under *What the lock cannot do*. The layers:
+
+1. **The policy that counts is not the file.** The daemon publishes the sealed policy into
+   `/run/rp-code/policy`, a tmpfs it mounts itself and remounts read-only after each write
+   (`0750 root:rp-code`, the policy `0640`), and the app reads it from there. Editing
+   `/etc/rp-code/policy.json` therefore changes nothing until the daemon agrees.
+2. **Self-heal.** Every few seconds the daemon compares the file against the sealed copy. An
+   edited or deleted policy is rewritten and the attempt is pushed to the app as a
+   `policy-tamper` event, which Settings → System keeps in a tamper log (`lock.selfHeal`).
+3. **Mirrors.** The seal is kept in `/etc/rp-code`, `/var/lib/rp-code` and
+   `/usr/local/libexec/rp-code`. Removing one copy restores it from the next.
+4. **Immutability.** `lock.immutable` sets the ext2/4 immutable attribute on the policy, the
+   seal and its mirrors, so a plain `rm` or editor save fails until someone runs `chattr -i`.
+5. **The session guard.** With `guard.mode: "enforce"`, a policy that has a `lock` block also
+   denies the confined sessions everything under `/etc/rp-code`, `/var/lib/rp-code`,
+   `/run/rp-code` and the unit files — read as well as write, because in `totp` mode reading the
+   secret is as good as owning the lock — and, with `lock.denyEscapes`, the binaries that would
+   leave the confinement behind or undo it: `run0`, `systemd-run`, `machinectl`, `pkexec`,
+   `chattr`, `apparmor_parser`, `aa-teardown`. **`sudo` is deliberately still there**: a `sudo`
+   child is a child, so it stays inside the profile and gains nothing. `run0` and `systemd-run`
+   are the ones that matter, because they ask PID 1 to start the shell and it is born outside.
+6. **`RefuseManualStop`.** `lock.refuseManualStop` writes
+   `/etc/systemd/system/rp-coded.service.d/50-rp-code-sealed.conf` with `RefuseManualStop=yes`
+   and `Restart=always`, so `systemctl stop rp-coded` is declined and a killed daemon comes back.
+7. **The app fails closed.** The app keeps its own copy of a sealed policy in its user data.
+   Once it has seen a seal it keeps enforcing it even if `/etc/rp-code` and the daemon are both
+   gone, and reports that as tampering (Settings → System) rather than as freedom. It drops
+   that copy only when a *connected* daemon reports an unsealed machine — which cannot happen
+   without a code.
+
+### What it does not do
+
+- In `totp` mode, a root shell the session guard does **not** confine can read `policy.seal` and
+  generate its own codes. The guard in `enforce` with `denyEscapes` is what closes that; without
+  it, sealing raises the bar rather than setting one. **In `chain` mode there is nothing to
+  read**: the seal holds only a public key and a hash, so the same shell can stop the daemon and
+  delete what it protects, but it cannot produce a policy the machine would accept.
+- Booting the machine from other media bypasses the daemon entirely. Only full-disk encryption
+  with a firmware password answers that.
+- The app's cached copy lives in the user's own data directory, so the user can delete it too.
+  It is the difference between "unlocking needs the code" and "unlocking needs one command from
+  a forum", not a boundary of its own.
+
+Keep the secret — or the private key — somewhere safe. Without it, and without root on a machine
+where the guard is not enforcing, the only way back is reinstalling.
+
+## Remote Link and the policy chain
+
+A machine follows a chain by being given a **Remote Link**: a base64 blob carrying the address of
+the chain, the Ed25519 public key that signs it, and the mode the machine gets. Paste it into
+Settings → System → *Remote Link*, or send `set-remote-link`. The first one is free; replacing it
+is a change of trust root, so a `totp` machine asks for its code and a `chain` machine refuses —
+only its own chain can move it. The blob is signed by the key it carries, so one mangled by a chat
+app or swapped in transit is refused rather than trusted for arriving in the right box.
+
+The **app** fetches the chain — it has the network stack, the proxy configuration and the user's
+session — and hands the bytes to the daemon, which decides whether to believe them. The daemon
+therefore needs no TLS stack of its own and holds no private key of any kind; a patched app cannot
+loosen a machine, because it has nothing to sign with.
+
+A chain file is a list of links:
+
+```jsonc
+{
+  "version": 1,
+  "links": [
+    { "seq": 1, "prev": "",          "issuedAt": "…", "policy": { … }, "signature": { "alg": "ed25519", "value": "…" } },
+    { "seq": 2, "prev": "<sha256 of link 1>",         "policy": { … }, "signature": { … } }
+  ]
+}
+```
+
+- **`prev`** is the SHA-256 of the previous link's canonical bytes. A machine finds its own head
+  in the file, verifies every link after it, and applies the last. It does not need to have seen
+  the intermediate ones: a machine that was off for a month walks the tail, checking each
+  signature. Links before its head are not re-verified — the head hash already commits to them.
+- **Replay and reordering are impossible.** An old link's `prev` no longer matches what the
+  machine holds, and two links claiming the same position have different hashes, so only one can
+  continue the chain the machine is on.
+- **`nextKey`** rotates the signing key. The rotation is signed by the key it *replaces*, which is
+  what keeps the chain verifiable end to end — a stolen key cannot introduce itself. Every
+  rotation is logged and shown in Settings → System.
+- **`unseal: true`** releases every machine that takes the link: the seal is lifted, the policy the
+  chain last set stays in place, and the machine is an ordinary one again.
+- **`policy` may be omitted** — a link that only rotates the key or unseals leaves the policy alone.
+
+Signing is Ed25519 over `rp-code-chain/v1\n` followed by the link's canonical bytes: the link
+without its `signature`, as compact JSON with object keys sorted. That is what `serde_json` writes
+for a value and what `JSON.stringify` writes over recursively sorted entries, so both ends agree
+without either implementing a canonicalisation spec.
+
+Three implementations produce it and are pinned to one shared test vector: the daemon
+(`chain.rs`, verifying), the app (Settings → System → *Publish a chain*), and
+`scripts/rp-policy-chain.mjs`, which does the same from a terminal and doubles as the
+specification for a management system written in something else.
+
+```bash
+node scripts/rp-policy-chain.mjs keygen --out key.pem
+node scripts/rp-policy-chain.mjs link --key key.pem --url https://policies.example.com/chain.json \
+     --managed-by "Acme IT" --mode chain           # the blob to hand out
+node scripts/rp-policy-chain.mjs sign --key key.pem --chain chain.json --policy policy.json
+node scripts/rp-policy-chain.mjs sign --key key.pem --chain chain.json --unseal   # let them go
+```
+
+Serve `chain.json` at the address in the link, including at least every link from your oldest
+machine's position onwards. A machine that cannot find its head in the file says so rather than
+guessing, and an administrator serves a longer window.
+
+## Packs the policy pins
+
+```jsonc
+"packs": {
+  "sources": [
+    { "id": "luna", "url": "https://example.com/luna.rppack", "signature": "…", "version": "1.2.0" }
+  ],
+  "removeUnlisted": false,
+  "refreshMinutes": 360
+}
+```
+
+A pack is pinned by a **signature**, not a checksum. A checksum says only "these are the bytes the
+policy named" — and on a managed machine the policy itself arrived over the network, so whoever
+can change the policy can change the checksum with it. The signature is the administrator's key
+vouching for the pack, which is a claim the machine can check against a key it already trusts. It
+covers the id, the version and the SHA-256 of the file **together**
+(`rp-code-pack/v1\n<id>\n<version>\n<sha256>`), so a signed pack cannot be re-labelled as a
+different one. Produce it with:
+
+```bash
+node scripts/rp-policy-chain.mjs pack --key key.pem --id luna --version 1.2.0 --file luna.rppack
+```
+
+On a machine with a Remote Link a signature is **required** and an unsigned entry is refused. On
+one with no link there is no key to check against, and `sha256` is used instead — the only
+integrity signal available, and enough, because a machine with no link already trusts its local
+policy.
+
+The app downloads and hashes; the daemon verifies (`verify-pack`), which keeps hundreds of
+megabytes off the socket while leaving the decision with the side that holds the key. An archive
+whose `id` or version turns out not to be the pinned one is refused rather than installed under
+the wrong name. With a `version`, an installed pack of another version is replaced; without one,
+an installed pack of that id is left alone (re-downloading hundreds of megabytes on every tick to
+learn nothing would be worse). `removeUnlisted: true` uninstalls everything the list does not
+name. This half works from a local policy too — no Remote Link needed, with `sha256` doing the
+work.
+
+Pinned packs are installed even where `app.allowPackInstall` is `false`: that restriction is
+about the person at the machine, not about the policy.
+
 ## Top level
 
 | Field | Type | Meaning |
@@ -38,6 +230,9 @@ for whoever set the machine up; the values in `settings` override everyone's own
 | `app` | object | How the app itself may behave: `allowQuit`/`users` keep it running, and the `allow*`/`require*` keys take operations away from it. See below. |
 | `guard` | object | The session guard: AppArmor confinement of the `app.users` login sessions, see below. |
 | `dev` | object | Whether the app honours its own development switches, see below. |
+| `remote` | object | Where the policy chain is fetched from, see *Remote Link and the policy chain*. |
+| `packs` | object | The packs this machine is meant to have, see *Packs the policy pins*. |
+| `lock` | object | How hard the policy holds once the machine is sealed, see *Locking the policy behind a code*. |
 
 ## `settings` — forced app settings
 
@@ -179,10 +374,11 @@ rest of the policy.
 
 - `policy.example.json` — every key with its default: nothing changes until you edit it.
 - `policy.all-on.json` — the "everything on" policy: the app cannot be quit and is relaunched
-  for the listed user, the development switches and DevTools are off, and the session guard runs
-  in **enforce** mode. Replace `alice` with your user name. For a first run set
-  `"guard": { "mode": "audit" }`, log in, read the audit log under Settings → System, then switch
-  to `enforce`.
+  for the listed user, the development switches and DevTools are off, the session guard runs in
+  **enforce** mode, and the `lock` block is ready for sealing. Replace `alice` with your user
+  name. For a first run set `"guard": { "mode": "audit" }`, log in, read the audit log under
+  Settings → System, then switch to `enforce` — and only then seal it, because the guard's
+  denials are most of what makes the lock hold.
 
 ## `guard` — the session guard (AppArmor)
 
@@ -238,6 +434,34 @@ Keep the app at the version the administrator installed (no update checks, no to
 
 ```json
 { "version": 1, "settings": { "updates": { "enabled": false } } }
+```
+
+A machine somebody else manages: the policy comes from a chain, two packs are pinned, anything
+else is removed. Publish this as link 1 and hand out the Remote Link; nobody types anything into
+the machine except that blob.
+
+```json
+{
+  "version": 1,
+  "managedBy": "Acme IT",
+  "app": { "allowQuit": false, "users": ["alice"] },
+  "guard": { "mode": "enforce" },
+  "remote": { "url": "https://policies.example.com/chain.json", "intervalMinutes": 60 },
+  "packs": {
+    "sources": [
+      { "id": "luna", "url": "https://packs.example.com/luna-1.2.0.rppack", "signature": "…", "version": "1.2.0" },
+      { "id": "onboarding", "url": "https://packs.example.com/onboarding.rppack", "signature": "…" }
+    ],
+    "removeUnlisted": true
+  },
+  "lock": {}
+}
+```
+
+Install one pack and leave everything else alone (no Remote Link, so the checksum does the work):
+
+```json
+{ "version": 1, "packs": { "sources": [{ "id": "luna", "url": "https://packs.example.com/luna.rppack", "sha256": "…" }] } }
 ```
 
 Cap locks at 30 s with F12 as the panic key, and forbid the `desktop` module:

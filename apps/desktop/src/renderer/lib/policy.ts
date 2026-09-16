@@ -7,7 +7,7 @@
  * its own switch (`forced`) next to the value that would be written (`values`). The `app`,
  * `inputLock` and `guard` blocks have meaningful defaults of their own and are always written.
  */
-import type { AppRestrictions, DevRules, GuardCompositorIpc, GuardMode, GuardShell, PolicyFile } from '@rp/shared';
+import type { AppRestrictions, DevRules, GuardCompositorIpc, GuardMode, GuardShell, PackSource, PolicyFile } from '@rp/shared';
 import { DEFAULT_APP_RESTRICTIONS, DEFAULT_DEV_RULES } from '@rp/shared';
 
 export type PolicyValue = number | boolean | string | string[] | Record<string, boolean>;
@@ -110,6 +110,31 @@ export const POLICY_EMERGENCY_KEYS: readonly PolicyEmergencyKey[] = ['esc', 'f1'
 /** Guard shells that stand alone: picking one clears the rest, and picking any other clears it. */
 export const EXCLUSIVE_GUARD_SHELLS: readonly GuardShell[] = ['auto', 'none'];
 
+/** The `remote`, `packs` and `lock` blocks as the form holds them. */
+export interface PolicyRemoteDraft {
+  /** Off leaves the whole `remote` block out of the file. */
+  enabled: boolean;
+  url: string;
+  intervalMinutes: number;
+}
+
+export interface PolicyPacksDraft {
+  sources: PackSource[];
+  removeUnlisted: boolean;
+  refreshMinutes: number;
+}
+
+export interface PolicyLockDraft {
+  /** Off leaves the `lock` block out; sealing the machine adds one with these defaults anyway. */
+  enabled: boolean;
+  digits: number;
+  period: number;
+  selfHeal: boolean;
+  immutable: boolean;
+  refuseManualStop: boolean;
+  denyEscapes: boolean;
+}
+
 export interface PolicyDraft {
   managedBy: string;
   /** Dotted path under `settings` → whether the policy forces it. */
@@ -130,7 +155,15 @@ export interface PolicyDraft {
     extraDenySockets: string[];
     allowBinaries: string[];
   };
+  remote: PolicyRemoteDraft;
+  packs: PolicyPacksDraft;
+  lock: PolicyLockDraft;
 }
+
+/** What the form starts from when the policy has no `remote`/`packs`/`lock` block. */
+export const DEFAULT_REMOTE_DRAFT: PolicyRemoteDraft = { enabled: false, url: '', intervalMinutes: 60 };
+export const DEFAULT_PACKS_DRAFT: PolicyPacksDraft = { sources: [], removeUnlisted: false, refreshMinutes: 360 };
+export const DEFAULT_LOCK_DRAFT: PolicyLockDraft = { enabled: false, digits: 6, period: 30, selfHeal: true, immutable: true, refuseManualStop: true, denyEscapes: true };
 
 function valueAt(settings: PolicyFile['settings'], path: string): PolicyValue | undefined {
   let node: unknown = settings;
@@ -201,6 +234,25 @@ export function policyDraftFrom(policy: PolicyFile): PolicyDraft {
       extraDenySockets: [...(policy.guard?.extraDenySockets ?? [])],
       allowBinaries: [...(policy.guard?.allowBinaries ?? [])],
     },
+    remote: {
+      enabled: policy.remote !== undefined && policy.remote.enabled !== false,
+      url: policy.remote?.url ?? '',
+      intervalMinutes: policy.remote?.intervalMinutes ?? DEFAULT_REMOTE_DRAFT.intervalMinutes,
+    },
+    packs: {
+      sources: (policy.packs?.sources ?? []).map((s) => ({ ...s })),
+      removeUnlisted: policy.packs?.removeUnlisted === true,
+      refreshMinutes: policy.packs?.refreshMinutes ?? DEFAULT_PACKS_DRAFT.refreshMinutes,
+    },
+    lock: {
+      enabled: policy.lock !== undefined,
+      digits: policy.lock?.digits ?? DEFAULT_LOCK_DRAFT.digits,
+      period: policy.lock?.period ?? DEFAULT_LOCK_DRAFT.period,
+      selfHeal: policy.lock?.selfHeal !== false,
+      immutable: policy.lock?.immutable !== false,
+      refuseManualStop: policy.lock?.refuseManualStop !== false,
+      denyEscapes: policy.lock?.denyEscapes !== false,
+    },
   };
 }
 
@@ -239,7 +291,57 @@ export function policyDraftToFile(draft: PolicyDraft): PolicyFile {
   else if (draft.guard.shell.length > 1) guard.shell = [...draft.guard.shell];
   if (draft.guard.loginHelpers.length > 0) guard.loginHelpers = [...draft.guard.loginHelpers];
   out.guard = guard;
+
+  // `remote` is written only when it is switched on and has an address: a block without one would
+  // be refused, and an absent block is exactly "this machine keeps its own policy".
+  if (draft.remote.enabled && draft.remote.url.trim().length > 0) {
+    out.remote = { url: draft.remote.url.trim(), intervalMinutes: draft.remote.intervalMinutes };
+  }
+  if (draft.packs.sources.length > 0 || draft.packs.removeUnlisted) {
+    out.packs = {
+      sources: draft.packs.sources.map((s) => ({
+        id: s.id.trim(),
+        url: s.url.trim(),
+        ...(s.signature ? { signature: s.signature.trim() } : {}),
+        ...(s.sha256 ? { sha256: s.sha256.trim().toLowerCase() } : {}),
+        ...(s.version ? { version: s.version.trim() } : {}),
+      })),
+      removeUnlisted: draft.packs.removeUnlisted,
+      refreshMinutes: draft.packs.refreshMinutes,
+    };
+  }
+  if (draft.lock.enabled) {
+    out.lock = {
+      digits: draft.lock.digits,
+      period: draft.lock.period,
+      selfHeal: draft.lock.selfHeal,
+      immutable: draft.lock.immutable,
+      refuseManualStop: draft.lock.refuseManualStop,
+      denyEscapes: draft.lock.denyEscapes,
+    };
+  }
   return out;
+}
+
+/** Why a URL is not one a policy may point the app at (mirrors `parsePolicyUrl` in the main process). */
+export function policyUrlProblem(url: string): string | null {
+  const value = url.trim();
+  if (value.length === 0) return 'The address is empty.';
+  if (value.length > 2048) return 'The address is longer than 2048 characters.';
+  if (/[\s"\\]/.test(value)) return 'An address may not contain spaces, quotes or backslashes.';
+  if (/^https:\/\/./i.test(value)) return null;
+  if (/^http:\/\/(127\.0\.0\.1|localhost|\[::1\])([:/]|$)/i.test(value)) return null;
+  return 'The address must be https:// (plain http is only allowed on 127.0.0.1).';
+}
+
+/** Why an entry is not a pack the daemon would accept. */
+export function packSourceProblem(source: PackSource): string | null {
+  if (!/^[a-z0-9._-]{1,64}$/.test(source.id.trim())) return `"${source.id}" is not a pack id (lower-case letters, digits, -, . and _).`;
+  const url = policyUrlProblem(source.url);
+  if (url) return `${source.id}: ${url}`;
+  if (source.sha256 && !/^[0-9a-f]{64}$/i.test(source.sha256.trim())) return `${source.id}: the checksum must be 64 hex characters.`;
+  if (source.signature && !/^[A-Za-z0-9+/_-]{86,88}={0,2}$/.test(source.signature.trim())) return `${source.id}: the signature must be a base64 Ed25519 signature.`;
+  return null;
 }
 
 /**
@@ -302,6 +404,22 @@ export function policyDraftProblems(draft: PolicyDraft): string[] {
       if (problem) problems.push(`${what}: ${problem} (${path})`);
     }
   }
+  if (draft.remote.enabled) {
+    const problem = policyUrlProblem(draft.remote.url);
+    if (problem) problems.push(`Remote configuration: ${problem}`);
+    if (draft.remote.intervalMinutes < 5 || draft.remote.intervalMinutes > 1440) problems.push('The remote check interval must be between 5 minutes and 24 hours.');
+  }
+  const seen = new Set<string>();
+  for (const source of draft.packs.sources) {
+    const problem = packSourceProblem(source);
+    if (problem) problems.push(`Packs: ${problem}`);
+    const id = source.id.trim();
+    if (seen.has(id)) problems.push(`Packs: "${id}" is listed twice.`);
+    seen.add(id);
+  }
+  if (draft.packs.refreshMinutes < 5 || draft.packs.refreshMinutes > 1440) problems.push('The pack refresh interval must be between 5 minutes and 24 hours.');
+  if (draft.lock.enabled && (draft.lock.digits < 6 || draft.lock.digits > 8)) problems.push('A code is 6, 7 or 8 digits.');
+  if (draft.lock.enabled && (draft.lock.period < 15 || draft.lock.period > 300)) problems.push('A code lasts between 15 and 300 seconds.');
   return problems;
 }
 
@@ -328,6 +446,15 @@ export function policyRefusals(message: string): string[] {
   return [message];
 }
 
+/** The host of a URL for a summary line; the URL itself when it does not parse (the form says so separately). */
+function hostOf(url: string): string {
+  try {
+    return new URL(url.trim()).host;
+  } catch {
+    return url.trim();
+  }
+}
+
 /** One phrase per thing the policy pins or takes away, for the form's footer. `strict` marks the restrictive ones. */
 export function policyEffects(draft: PolicyDraft): Array<{ text: string; strict: boolean }> {
   const out: Array<{ text: string; strict: boolean }> = [];
@@ -342,5 +469,8 @@ export function policyEffects(draft: PolicyDraft): Array<{ text: string; strict:
   else if (!draft.dev.devTools) out.push({ text: 'DevTools off', strict: true });
   if (!draft.inputLock.enabled) out.push({ text: 'input locking refused', strict: true });
   if (draft.guard.mode !== 'off') out.push({ text: `session guard: ${draft.guard.mode}`, strict: draft.guard.mode === 'enforce' });
+  if (draft.remote.enabled && draft.remote.url.trim()) out.push({ text: `policy fetched from ${hostOf(draft.remote.url)} every ${draft.remote.intervalMinutes} min`, strict: true });
+  if (draft.packs.sources.length > 0) out.push({ text: `${draft.packs.sources.length} pack${draft.packs.sources.length === 1 ? '' : 's'} installed by policy${draft.packs.removeUnlisted ? ', others removed' : ''}`, strict: draft.packs.removeUnlisted });
+  if (draft.lock.enabled) out.push({ text: 'locked behind a code once sealed', strict: true });
   return out;
 }

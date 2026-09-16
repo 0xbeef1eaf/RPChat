@@ -235,6 +235,27 @@ itself may; attempts reach characters as the `guard-attempt` event, and `enforce
 The app shows the daemon and policy state under **Settings → System**,
 where you can also create the policy once without a root password (afterwards only
 root can change it).
+
+A policy can be **locked** instead of being written once, in one of two ways. With a **code**, the
+daemon pins the policy to a TOTP secret it shows you exactly once, and replacing or removing it
+needs the code your authenticator app is showing — `sudo` is not enough. With a **signed policy
+chain**, the machine holds no secret at all: it pins an Ed25519 public key and the hash of the last
+version it applied, and the only thing that can change anything is a new version signed by that
+key, committing to the one before it. Letting a machine go is also a signed version, so even
+release is an act the key authorises.
+
+Either way the effective policy is published into a read-only filesystem the daemon mounts itself,
+an edited policy file is put back within seconds and reported, spare copies of the lock are kept,
+the files are immutable, the service refuses a manual stop, and — with the session guard enforcing
+— `run0`, `systemd-run`, `machinectl`, `pkexec` and `chattr` are taken away from the managed
+sessions, so there is no unconfined shell to undo it from. What it still cannot do is listed in
+the app rather than glossed over.
+
+A machine follows a chain by being given a **Remote Link**: one base64 blob carrying the address,
+the key and the mode. The same policy **pins the packs** the machine gets, each one signed rather
+than merely checksummed, installed without anybody choosing a file, with everything else optionally
+removed. The app is both ends of this: Settings → System publishes a chain, signs each version and
+hands out the link, and `scripts/rp-policy-chain.mjs` does the same from a terminal.
 See [docs/system-integration.md](docs/system-integration.md).
 
 The same installer writes the browser extension policy for **Settings → Browser**

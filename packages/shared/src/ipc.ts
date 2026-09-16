@@ -9,7 +9,7 @@ import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, SaveScriptInput, ScriptKind, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
-import type { AppRestrictions, GuardAttemptRecord, ManagedSettingsPaths, SystemIntegrationStatus } from './system.js';
+import type { AppRestrictions, ChainAuthorStatus, ChainLink, GuardAttemptRecord, ManagedSettingsPaths, PolicyChain, PolicyFile, RemoteLink, SealMode, SystemIntegrationStatus } from './system.js';
 import type { BrowserBlock, BrowserBridgeStatus } from './browser.js';
 import type { UpdateStatus } from './updates.js';
 import type { SandboxRunRequest, SandboxRunResult } from './sandbox.js';
@@ -246,6 +246,55 @@ export interface IpcApi {
      * the mapped daemon error (`EXISTS` when a policy already exists). Resolves with the new status.
      */
     createPolicy(text: string): Promise<SystemIntegrationStatus>;
+    /**
+     * Seal this machine: pin `text` (or the policy already on disk) to a fresh TOTP secret, so
+     * changing or removing the policy needs a code from an authenticator app. The secret, its
+     * `otpauth://` enrolment URI and the remote-configuration signing key are in the answer and
+     * **nowhere else** — show them once and never ask for them again.
+     */
+    sealPolicy(text?: string): Promise<{ secret: string; otpauth: string; status: SystemIntegrationStatus }>;
+    /**
+     * Paste a **Remote Link**: point this machine at a policy chain and seal it in the mode the
+     * blob names. On an unlinked machine no code is needed; on one already linked with a code it
+     * needs the current one; on one held by a chain it is refused — only a signed link moves that.
+     * `secret`/`otpauth` come back only when the blob asked for `totp` and this sealed the machine.
+     */
+    setRemoteLink(blob: string, code?: string): Promise<{ mode: SealMode; url: string; secret?: string; otpauth?: string; status: SystemIntegrationStatus }>;
+    /**
+     * Replace a sealed policy. `code` is the current code from the enrolled app; a missing, wrong,
+     * replayed or locked-out code throws `PERMISSION_DENIED` with `details.daemonCode: 'CODE'`.
+     */
+    replacePolicy(text: string, code: string): Promise<SystemIntegrationStatus>;
+    /** Remove the seal with a code; `removePolicy` deletes the policy file with it. */
+    unsealPolicy(code: string, removePolicy?: boolean): Promise<SystemIntegrationStatus>;
+    /** Fetch the policy chain now instead of waiting for the interval. */
+    remoteRefresh(): Promise<SystemIntegrationStatus>;
+    /**
+     * The authoring side (`chain-author.ts`): the administrator's own signing key and the chain
+     * they are building. Nothing here touches this machine's policy — it produces the Remote Link
+     * and the signed versions that other machines follow.
+     */
+    authorStatus(): Promise<ChainAuthorStatus>;
+    /** Generate a signing key. `replace: true` overwrites one, orphaning machines on that chain. */
+    authorCreateKey(replace?: boolean): Promise<ChainAuthorStatus>;
+    /** Take over an existing Ed25519 private key (PKCS#8 PEM). */
+    authorImportKey(pem: string): Promise<ChainAuthorStatus>;
+    /** The private key as PEM, to back up. Only on explicit request. */
+    authorExportKey(): Promise<string>;
+    /** Forget the key and the chain in this app. */
+    authorForget(): Promise<ChainAuthorStatus>;
+    /** Where the chain is published, what to call the key, and which mode the Remote Link sets. */
+    authorConfigure(settings: { url?: string; keyId?: string; intervalMinutes?: number; managedBy?: string; mode?: SealMode }): Promise<ChainAuthorStatus>;
+    /** The base64 Remote Link blob to hand out, self-signed with the chain key. */
+    authorRemoteLink(): Promise<{ blob: string; link: RemoteLink }>;
+    /** Add a version: a link carrying `policy`, or one that rotates the key or unseals. */
+    authorAppendLink(input: { policy?: PolicyFile; unseal?: boolean; rotateTo?: string }): Promise<{ status: ChainAuthorStatus; link: ChainLink }>;
+    /** Remove the last link — an undo for a version signed by mistake and not yet published. */
+    authorDropLastLink(): Promise<ChainAuthorStatus>;
+    /** The chain file as it would be published. */
+    authorChain(): Promise<PolicyChain>;
+    /** Sign a pack the administrator is publishing, so pinned machines will install it. */
+    authorSignPack(input: { id: string; version?: string; sha256: string }): Promise<string>;
     /** Pretty JSON of a policy seeded from the current settings, to start editing from. */
     policyTemplate(): Promise<string>;
     /** Session guard: have the daemon (re)generate and load the profiles from the policy now. Resolves with the new status. */

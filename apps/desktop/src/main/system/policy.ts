@@ -3,10 +3,12 @@
  * is pure; `PolicyWatcher` re-reads the file whenever its mtime changes.
  */
 import * as fs from 'node:fs/promises';
-import type { AppPolicy, AppRestrictions, AppSettings, GuardPolicy, ManagedSettingsPaths, PolicyFile } from '@rp/shared';
-import { APP_ALLOW_KEYS, APP_REQUIRE_KEYS, DEFAULT_APP_RESTRICTIONS, GUARD_COMPOSITOR_IPC, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RpError } from '@rp/shared';
+import type { AppPolicy, AppRestrictions, AppSettings, GuardPolicy, ManagedSettingsPaths, PackSource, PacksPolicy, PolicyFile, PolicyLock, RemotePolicy } from '@rp/shared';
+import { APP_ALLOW_KEYS, APP_REQUIRE_KEYS, DEFAULT_APP_RESTRICTIONS, GUARD_COMPOSITOR_IPC, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RUNTIME_POLICY_FILE, RpError, SEAL_MARKER_PATH } from '@rp/shared';
 import type { GuardShell } from '@rp/shared';
 import { activeRestrictions } from './restrictions.js';
+import type { SealCache } from './seal-cache.js';
+import { policyHash } from './seal-cache.js';
 
 const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTimersPerSession', 'minRepeatIntervalMs', 'minDelayMs'] as const;
 const MEMORY_KEYS = ['enabled', 'consolidateEveryTurns', 'maxEntriesPerCharacter', 'promptBudgetTokens'] as const;
@@ -184,6 +186,18 @@ export function parsePolicy(json: unknown): PolicyFile {
       out.dev = devBlock;
     }
   }
+  if (raw.remote !== undefined) {
+    const remote = parseRemote(raw.remote, problems);
+    if (remote) out.remote = remote;
+  }
+  if (raw.packs !== undefined) {
+    const packs = parsePacks(raw.packs, problems);
+    if (packs) out.packs = packs;
+  }
+  if (raw.lock !== undefined) {
+    const lock = parseLock(raw.lock, problems);
+    if (lock) out.lock = lock;
+  }
   if (raw.guard !== undefined) {
     const guard = parseGuard(raw.guard, problems);
     if (guard) out.guard = guard;
@@ -191,6 +205,142 @@ export function parsePolicy(json: unknown): PolicyFile {
     if (guard && guard.mode !== undefined && guard.mode !== 'off' && !listed) problems.push('guard.mode needs app.users: the guard confines the listed users\' sessions');
   }
   if (problems.length > 0) throw new RpError('INVALID_ARGUMENT', `Invalid policy file:\n${problems.join('\n')}`, { problems });
+  return out;
+}
+
+/**
+ * A URL a policy may point the app at: `https://` anywhere, or `http://` on the loopback, which is
+ * how an on-box management agent and the tests serve one. Mirrors `validate_url` in the daemon's
+ * `remote.rs` — both sides must agree or a policy the app accepts would be refused on write.
+ */
+export function parsePolicyUrl(value: unknown, what: string, problems: string[]): string | undefined {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) {
+    problems.push(`${what} must be a URL`);
+    return undefined;
+  }
+  if (/[\s"\\]/.test(value) || /[\u0000-\u001f]/.test(value)) {
+    problems.push(`${what} must not contain spaces, quotes or control characters`);
+    return undefined;
+  }
+  if (/^https:\/\/./i.test(value)) return value;
+  const loopback = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])([:/]|$)/i.test(value);
+  if (loopback) return value;
+  problems.push(`${what} must be an https:// URL (plain http is only allowed on 127.0.0.1)`);
+  return undefined;
+}
+
+/** The `remote` block, mirroring `validate_remote` in the daemon. */
+export function parseRemote(raw: unknown, problems: string[]): RemotePolicy | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    problems.push('remote must be an object');
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  const url = parsePolicyUrl(r.url, 'remote.url', problems);
+  if (url === undefined) return undefined;
+  const out: RemotePolicy = { url };
+  if (r.enabled !== undefined) {
+    if (typeof r.enabled === 'boolean') out.enabled = r.enabled;
+    else problems.push('remote.enabled must be a boolean');
+  }
+  if (r.intervalMinutes !== undefined) {
+    if (isNumber(r.intervalMinutes) && r.intervalMinutes >= 5 && r.intervalMinutes <= 1440) out.intervalMinutes = Math.round(r.intervalMinutes);
+    else problems.push('remote.intervalMinutes must be a number between 5 and 1440');
+  }
+  return out;
+}
+
+/** The `packs` block, mirroring `validate_packs` in the daemon. */
+export function parsePacks(raw: unknown, problems: string[]): PacksPolicy | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    problems.push('packs must be an object');
+    return undefined;
+  }
+  const p = raw as Record<string, unknown>;
+  const out: PacksPolicy = {};
+  if (p.sources !== undefined) {
+    if (!Array.isArray(p.sources) || p.sources.length > 64) {
+      problems.push('packs.sources must be an array of at most 64 entries');
+    } else {
+      const sources: PackSource[] = [];
+      const seen = new Set<string>();
+      for (const entry of p.sources) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+          problems.push('packs.sources entries must be objects');
+          continue;
+        }
+        const e = entry as Record<string, unknown>;
+        const id = typeof e.id === 'string' ? e.id : '';
+        if (!/^[a-z0-9._-]{1,64}$/.test(id)) {
+          problems.push(`packs.sources[].id must be a pack id (lower-case letters, digits, -, . and _); got ${JSON.stringify(e.id)}`);
+          continue;
+        }
+        if (seen.has(id)) {
+          problems.push(`packs.sources lists "${id}" twice`);
+          continue;
+        }
+        seen.add(id);
+        const url = parsePolicyUrl(e.url, `packs.sources[${id}].url`, problems);
+        if (url === undefined) continue;
+        const source: PackSource = { id, url };
+        if (e.sha256 !== undefined) {
+          if (typeof e.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(e.sha256)) source.sha256 = e.sha256.toLowerCase();
+          else problems.push(`packs.sources[${id}].sha256 must be 64 hex characters`);
+        }
+        if (e.signature !== undefined) {
+          // 64 raw bytes of Ed25519, base64: 88 characters with the padding.
+          if (typeof e.signature === 'string' && /^[A-Za-z0-9+/_-]{86,88}={0,2}$/.test(e.signature)) source.signature = e.signature;
+          else problems.push(`packs.sources[${id}].signature must be a base64 Ed25519 signature`);
+        }
+        if (e.version !== undefined) {
+          if (typeof e.version === 'string' && e.version.length > 0 && e.version.length <= 64) source.version = e.version;
+          else problems.push(`packs.sources[${id}].version must be 1..64 characters`);
+        }
+        sources.push(source);
+      }
+      out.sources = sources;
+    }
+  }
+  if (p.removeUnlisted !== undefined) {
+    if (typeof p.removeUnlisted === 'boolean') out.removeUnlisted = p.removeUnlisted;
+    else problems.push('packs.removeUnlisted must be a boolean');
+  }
+  if (p.refreshMinutes !== undefined) {
+    if (isNumber(p.refreshMinutes) && p.refreshMinutes >= 5 && p.refreshMinutes <= 1440) out.refreshMinutes = Math.round(p.refreshMinutes);
+    else problems.push('packs.refreshMinutes must be a number between 5 and 1440');
+  }
+  return out;
+}
+
+/** The `lock` block, mirroring `validate_lock` in the daemon. The secret never appears here. */
+export function parseLock(raw: unknown, problems: string[]): PolicyLock | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    problems.push('lock must be an object');
+    return undefined;
+  }
+  const l = raw as Record<string, unknown>;
+  const out: PolicyLock = {};
+  if (l.algorithm !== undefined) {
+    if (l.algorithm === 'SHA1' || l.algorithm === 'SHA256' || l.algorithm === 'SHA512') out.algorithm = l.algorithm;
+    else problems.push('lock.algorithm must be SHA1, SHA256 or SHA512');
+  }
+  if (l.digits !== undefined) {
+    if (isNumber(l.digits) && l.digits >= 6 && l.digits <= 8) out.digits = Math.round(l.digits);
+    else problems.push('lock.digits must be 6, 7 or 8');
+  }
+  if (l.period !== undefined) {
+    if (isNumber(l.period) && l.period >= 15 && l.period <= 300) out.period = Math.round(l.period);
+    else problems.push('lock.period must be between 15 and 300 seconds');
+  }
+  if (l.window !== undefined) {
+    if (isNumber(l.window) && l.window >= 0 && l.window <= 10) out.window = Math.round(l.window);
+    else problems.push('lock.window must be between 0 and 10');
+  }
+  for (const k of ['selfHeal', 'immutable', 'refuseManualStop', 'denyEscapes'] as const) {
+    if (l[k] === undefined) continue;
+    if (typeof l[k] === 'boolean') out[k] = l[k] as boolean;
+    else problems.push(`lock.${k} must be a boolean`);
+  }
   return out;
 }
 
@@ -351,6 +501,18 @@ export function stripManagedPatch(patch: Partial<AppSettings>, managed: ManagedS
   return out as Partial<AppSettings>;
 }
 
+/** Where the policy the app is enforcing came from. */
+export type PolicySource =
+  /** `/run/rp-code/policy/policy.json`: the daemon's own filesystem, republished on every tick. */
+  | 'runtime'
+  /** `/etc/rp-code/policy.json`. */
+  | 'file'
+  /** `/etc/rp-code/policy.sealed`: the seal's world-readable copy, when the policy file is gone. */
+  | 'seal'
+  /** The app's own memory of a sealed policy, because nothing on the machine had one. */
+  | 'cache'
+  | 'none';
+
 export interface PolicyState {
   present: boolean;
   path: string;
@@ -361,26 +523,137 @@ export interface PolicyState {
   /** `appRestrictions(policy)`: what the app refuses on the IPC boundary; permissive defaults without a file. */
   restrictions: AppRestrictions;
   managedBy?: string;
+  /** Which of the four places this came from. */
+  source: PolicySource;
+  /** SHA-256 of the policy, as the daemon and the seal compute it. */
+  policyHash?: string;
+  /** The machine is sealed as far as the app can tell (a marker, or its own memory of one). */
+  sealed: boolean;
+  /** The policy came from the app's own cache: nothing on the machine had one. */
+  fromCache: boolean;
   error?: string;
 }
 
-/** Read and validate the policy file once. Missing file → `policy: null`, no error. */
-export async function loadPolicy(path: string = POLICY_FILE_PATH): Promise<PolicyState> {
-  let text: string;
+/** The places `loadPolicy` looks, in order. Overridable so the tests need no root-owned paths. */
+export interface PolicySources {
+  /** `/etc/rp-code/policy.json`. */
+  file?: string;
+  /** `/run/rp-code/policy/policy.json`, the daemon's runtime filesystem. */
+  runtime?: string;
+  /** `/etc/rp-code/policy.sealed`, the seal's world-readable copy. */
+  marker?: string;
+  /** The app's own memory of a sealed policy (`seal-cache.ts`). */
+  cache?: SealCache;
+}
+
+function emptyState(path: string, extra: Partial<PolicyState> = {}): PolicyState {
+  return {
+    present: false,
+    path,
+    policy: null,
+    managed: [],
+    app: appPolicy(null),
+    restrictions: appRestrictions(null),
+    source: 'none',
+    sealed: false,
+    fromCache: false,
+    ...extra,
+  };
+}
+
+function stateFrom(policy: PolicyFile, path: string, source: PolicySource, sealed: boolean): PolicyState {
+  const state: PolicyState = {
+    present: true,
+    path,
+    policy,
+    managed: managedPaths(policy),
+    app: appPolicy(policy),
+    restrictions: appRestrictions(policy),
+    source,
+    policyHash: policyHash(policy),
+    sealed,
+    fromCache: source === 'cache',
+  };
+  if (policy.managedBy) state.managedBy = policy.managedBy;
+  return state;
+}
+
+async function readJson(path: string): Promise<{ value: unknown } | { missing: true } | { error: string }> {
   try {
-    text = await fs.readFile(path, 'utf8');
+    return { value: JSON.parse(await fs.readFile(path, 'utf8')) as unknown };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { present: false, path, policy: null, managed: [], app: appPolicy(null), restrictions: appRestrictions(null) };
-    return { present: true, path, policy: null, managed: [], app: appPolicy(null), restrictions: appRestrictions(null), error: `cannot read ${path}: ${(err as Error).message}` };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { missing: true };
+    return { error: `cannot read ${path}: ${(err as Error).message}` };
   }
-  try {
-    const policy = parsePolicy(JSON.parse(text));
-    const state: PolicyState = { present: true, path, policy, managed: managedPaths(policy), app: appPolicy(policy), restrictions: appRestrictions(policy) };
-    if (policy.managedBy) state.managedBy = policy.managedBy;
-    return state;
-  } catch (err) {
-    return { present: true, path, policy: null, managed: [], app: appPolicy(null), restrictions: appRestrictions(null), error: (err as Error).message };
+}
+
+/**
+ * Read and validate the policy the app is to enforce.
+ *
+ * The order matters and is the whole point of the runtime filesystem (docs/spec/system.md
+ * "Sealing the policy"):
+ *
+ * 1. **The daemon's runtime filesystem.** On a sealed machine this is the only copy that counts —
+ *    the daemon publishes it from the seal and republishes it whenever it drifts, so an edit to
+ *    the file on disk changes nothing here.
+ * 2. **The policy file**, exactly as before, for the machines that have no daemon or no seal.
+ * 3. **The seal's world-readable marker**, when the policy file has been removed but the seal has
+ *    not: the machine is still managed, and the sealed policy says how.
+ * 4. **The app's own cache**, when none of the above is there but the app has seen a seal before.
+ *    A wiped `/etc/rp-code` is treated as tampering, not as freedom.
+ *
+ * Missing everywhere → `policy: null`, no error, which is the unmanaged machine most people have.
+ */
+export async function loadPolicy(path: string = POLICY_FILE_PATH, sources: PolicySources = {}): Promise<PolicyState> {
+  const runtimePath = sources.runtime ?? RUNTIME_POLICY_FILE;
+  const markerPath = sources.marker ?? SEAL_MARKER_PATH;
+
+  const runtime = await readJson(runtimePath);
+  if ('value' in runtime) {
+    try {
+      const policy = parsePolicy(runtime.value);
+      const marker = await readJson(markerPath);
+      return stateFrom(policy, runtimePath, 'runtime', 'value' in marker);
+    } catch (err) {
+      // A runtime copy that does not parse is the daemon's problem, not a reason to fall back to
+      // a file the daemon may be refusing to honour: report it and keep looking.
+      return emptyState(runtimePath, { present: true, error: `${runtimePath}: ${(err as Error).message}` });
+    }
   }
+
+  const file = await readJson(path);
+  if ('error' in file) return emptyState(path, { present: true, error: file.error });
+  if ('value' in file) {
+    try {
+      const policy = parsePolicy(file.value);
+      const marker = await readJson(markerPath);
+      return stateFrom(policy, path, 'file', 'value' in marker);
+    } catch (err) {
+      return emptyState(path, { present: true, error: (err as Error).message });
+    }
+  }
+
+  // The policy file is gone. The seal's marker still says what this machine enforces.
+  const marker = await readJson(markerPath);
+  if ('value' in marker) {
+    const sealed = marker.value as { policy?: unknown };
+    try {
+      const policy = parsePolicy(sealed.policy);
+      return stateFrom(policy, markerPath, 'seal', true);
+    } catch (err) {
+      return emptyState(markerPath, { present: true, sealed: true, error: `${markerPath}: ${(err as Error).message}` });
+    }
+  }
+
+  const cached = await sources.cache?.read();
+  if (cached) {
+    try {
+      return stateFrom(parsePolicy(cached.policy), sources.cache!.path, 'cache', true);
+    } catch (err) {
+      return emptyState(path, { sealed: true, error: `the cached sealed policy is invalid: ${(err as Error).message}` });
+    }
+  }
+  return emptyState(path);
 }
 
 /** Caches the parsed policy and re-reads it when the file's mtime (or existence) changes. */
@@ -388,11 +661,20 @@ export class PolicyWatcher {
   private state: PolicyState | undefined;
   private stamp: string | undefined;
   private inflight: Promise<PolicyState> | undefined;
+  private readonly sources: PolicySources;
 
   constructor(
     readonly path: string = POLICY_FILE_PATH,
     private readonly logger?: Pick<Console, 'info' | 'warn'>,
-  ) {}
+    sources: PolicySources = {},
+  ) {
+    this.sources = sources;
+  }
+
+  /** Every file `current()` may read, in the order `loadPolicy` tries them. */
+  private watchedPaths(): string[] {
+    return [this.sources.runtime ?? RUNTIME_POLICY_FILE, this.path, this.sources.marker ?? SEAL_MARKER_PATH];
+  }
 
   /** Drop the cache so the next `current()` re-reads the file whatever its mtime (e.g. right after creating it). */
   invalidate(): void {
@@ -401,22 +683,31 @@ export class PolicyWatcher {
   }
 
   async current(): Promise<PolicyState> {
-    let stamp: string;
-    try {
-      const st = await fs.stat(this.path);
-      stamp = `${st.mtimeMs}:${st.size}`;
-    } catch {
-      stamp = 'missing';
-    }
+    // The stamp covers every source: the runtime copy changes without the file changing, and a
+    // removed file is itself a change worth re-reading for.
+    const stamps = await Promise.all(
+      this.watchedPaths().map(async (p) => {
+        try {
+          const st = await fs.stat(p);
+          return `${st.mtimeMs}:${st.size}`;
+        } catch {
+          return 'missing';
+        }
+      }),
+    );
+    const stamp = stamps.join('|');
     if (this.state && stamp === this.stamp) return this.state;
     if (this.inflight) return this.inflight;
-    this.inflight = loadPolicy(this.path)
+    this.inflight = loadPolicy(this.path, this.sources)
       .then((state) => {
         const changed = this.stamp !== undefined && this.stamp !== stamp;
         this.state = state;
         this.stamp = stamp;
         if (state.error) this.logger?.warn?.(`[policy] ${state.error}`);
-        else if (state.present) {
+        else if (state.present && state.source !== 'file') {
+          const from = state.source === 'runtime' ? `the daemon's runtime filesystem (${state.path})` : state.source === 'seal' ? `the policy seal (${state.path})` : `the app's cached copy of the sealed policy (${state.path})`;
+          this.logger?.info?.(`[policy] ${changed ? 'reloaded' : 'loaded'} from ${from}: ${state.managed.length} managed setting(s)${state.managedBy ? ` (managed by ${state.managedBy})` : ''}`);
+        } else if (state.present) {
           const restricted = activeRestrictions(state.restrictions);
           this.logger?.info?.(`[policy] ${changed ? 'reloaded' : 'loaded'} ${this.path}: ${state.managed.length} managed setting(s)${state.app.allowQuit ? '' : `, quitting disabled for ${state.app.users.length > 0 ? state.app.users.join(', ') : 'nobody (app.users is empty)'}`}${restricted.length > 0 ? `, restrictions: ${restricted.join(', ')}` : ''}${state.managedBy ? ` (managed by ${state.managedBy})` : ''}`);
         }

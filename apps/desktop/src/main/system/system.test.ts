@@ -696,7 +696,7 @@ describe('SystemIntegration.createPolicy', () => {
     await expect(integration.createPolicy(JSON.stringify({ version: 1, settings: { theme: 'dark' } }))).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', message: /settings.theme/, details: { daemonCode: 'INVALID' } });
     expect(fs.existsSync(policyPath)).toBe(false);
 
-    const text = integration.policyTemplate({ ...base, maxInputLockMs: 15_000 }).replace('"managedBy": ""', '"managedBy": "alice"');
+    const text = (await integration.policyTemplate({ ...base, maxInputLockMs: 15_000 })).replace('"managedBy": ""', '"managedBy": "alice"');
     const after = await integration.createPolicy(text);
     expect(daemon.seen.filter((r) => r.op === 'set-policy')).toHaveLength(2);
     expect(after.policy).toMatchObject({ present: true, canCreate: false, path: policyPath, managedBy: 'alice' });

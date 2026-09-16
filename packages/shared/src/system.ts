@@ -64,6 +64,22 @@ export interface PolicyFile {
    * cannot be read through a file the locked user chose.
    */
   dev?: DevPolicy;
+  /**
+   * Remote configuration: where this machine's policy is fetched from. A policy that names a
+   * `remote.url` is refreshed from it on the interval; the daemon verifies what comes back before
+   * it replaces anything. The key that signs the chain is pinned by the Remote Link, never named
+   * here: a policy must not be able to name the key that authorises it.
+   */
+  remote?: RemotePolicy;
+  /** The packs this machine is meant to have, and where to download them. */
+  packs?: PacksPolicy;
+  /**
+   * The TOTP lock. Once the machine is **sealed** the policy is no longer write-once-then-root's:
+   * changing or removing it needs a code from the enrolled authenticator app, and the daemon puts
+   * back anything that is edited behind its back. This block holds the knobs only — the secret is
+   * in the root-only seal beside the policy file.
+   */
+  lock?: PolicyLock;
 }
 
 /** `PolicyFile.dev`: whether the app honours its development switches at all. */
@@ -198,9 +214,14 @@ export interface GuardAttemptRecord extends GuardAttempt {
 }
 
 /** A pushed daemon line (`{ ev: … }`), received on a connection that sent `subscribe`. */
-export type DaemonEvent = { ev: 'guard-attempt'; at: string } & GuardAttempt;
+export type DaemonEvent =
+  | ({ ev: 'guard-attempt'; at: string } & GuardAttempt)
+  /** A sealed file was changed behind the daemon's back, and what it did about it. */
+  | ({ ev: 'policy-tamper'; at: string } & TamperRecord)
+  /** The effective policy changed (a code-authorised write, a remote configuration, or a restore from the seal). */
+  | { ev: 'policy-changed'; at: string; source: string; policyHash: string };
 export type DaemonEventName = DaemonEvent['ev'];
-export const DAEMON_EVENT_NAMES: readonly DaemonEventName[] = ['guard-attempt'];
+export const DAEMON_EVENT_NAMES: readonly DaemonEventName[] = ['guard-attempt', 'policy-tamper', 'policy-changed'];
 
 /**
  * The app-enforced restrictions of the `app` block (docs/spec/system.md "Restrictions"). Unlike
@@ -373,8 +394,22 @@ export interface SystemIntegrationStatus {
      * policy edited since says nothing about the app that is running.
      */
     dev: DevRules;
+    /**
+     * The TOTP lock. `sealed` means the policy can only be changed with a code; `canCreate` is
+     * false while it is, because creating one is not how a sealed policy is replaced.
+     */
+    seal: SealInfo;
+    /** The daemon-owned filesystem the effective policy is published into; absent without one. */
+    runtime?: RuntimeInfo;
+    /**
+     * The app is enforcing a sealed policy it cached itself, because the machine's policy file
+     * and the daemon are both gone. Wiping `/etc/rp-code` does not leave the app unmanaged.
+     */
+    fromCache?: boolean;
     error?: string;
   };
+  /** Remote configuration: what the daemon knows, plus the app's own fetch and pack state. */
+  remote?: { daemon: RemoteInfo; app: RemoteConfigStatus };
   /** udev rule and group membership as detected (Linux). */
   udev: { rulePresent: boolean; inGroup: boolean; groupName: string };
   autostart: { enabled: boolean; method: 'xdg' | 'systemd-user' | 'none'; path?: string };
@@ -399,8 +434,36 @@ export type DaemonRequest =
   | { op: 'key'; combo: string }
   | { op: 'click'; x: number; y: number; button?: 'left' | 'right' | 'middle' }
   | { op: 'move'; x: number; y: number }
-  /** Create the policy file once (write-once): `EXISTS` when one is already there, `INVALID` when the object fails validation. */
-  | { op: 'set-policy'; policy: PolicyFile }
+  /**
+   * Create the policy file (write-once while unsealed: `EXISTS` when one is already there,
+   * `INVALID` when the object fails validation). On a sealed machine `code` — the current code
+   * from the enrolled authenticator app — replaces the policy instead and re-pins the seal;
+   * without it, or with a wrong one, the answer is `CODE`.
+   */
+  | { op: 'set-policy'; policy: PolicyFile; code?: string }
+  /**
+   * Seal this machine: generate a TOTP secret, pin `policy` (or the policy already on disk) to it
+   * and publish it into the runtime filesystem. The secret and the remote-configuration key come
+   * back in the answer and are never readable again.
+   */
+  | { op: 'seal-policy'; policy?: PolicyFile; totp?: TotpConfig }
+  /** Remove the seal with a valid code; `removePolicy` takes the policy file with it. */
+  | { op: 'unseal-policy'; code: string; removePolicy?: boolean }
+  /** The seal, the runtime filesystem and the remote-configuration state, without secrets. */
+  | { op: 'seal-status' }
+  /**
+   * Apply a policy chain the app fetched. `document` is the response body verbatim — the
+   * signatures cover exactly those bytes, so it must not be reformatted.
+   */
+  | { op: 'remote-apply'; document: string }
+  /**
+   * Paste a **Remote Link**. On an unlinked machine this is what seals it, in the mode the blob
+   * names. On a machine already linked in `totp` mode it needs the current `code`; on one in
+   * `chain` mode it is refused — only a signed link can move that machine's trust root.
+   */
+  | { op: 'set-remote-link'; blob: string; code?: string }
+  /** Whether a downloaded pack may be installed: the app hashes the bytes, the daemon decides. */
+  | { op: 'verify-pack'; id: string; sha256: string }
   /**
    * Keepalive registration on a long-lived connection: how to relaunch this app in the user's
    * session (`exec` absolute, `args` ≤ 32, `env` from `KEEPALIVE_ENV_KEYS` only, values ≤ 4 KiB).
@@ -431,12 +494,20 @@ export type DaemonResponse =
   | { ok: true; op: 'policy'; policy: PolicyFile | null; path: string }
   | { ok: true; op: 'lock'; until: string; durationMs: number; devices: LockDevices }
   | { ok: true; op: 'unlock' | 'type' | 'key' | 'click' | 'move' | 'register' | 'unregister' }
-  | { ok: true; op: 'set-policy'; path: string }
+  | { ok: true; op: 'set-policy'; path: string; replaced: boolean }
+  /** `secret`, `otpauth` and `remoteKey` are shown once and stored nowhere the app can read. */
+  | { ok: true; op: 'seal-policy'; path: string; secret: string; otpauth: string; seal: SealInfo; runtime: RuntimeInfo }
+  | { ok: true; op: 'unseal-policy'; path: string; removed: boolean }
+  | { ok: true; op: 'seal-status'; seal: SealInfo; runtime: RuntimeInfo; remote: RemoteInfo }
+  | { ok: true; op: 'remote-apply'; changed: boolean; applied: number; seq: number; unsealed: boolean; policyHash: string; runtime: RuntimeInfo; remote: RemoteInfo }
+  /** `secret`/`otpauth` are present only when the blob asked for `totp` and this link sealed it. */
+  | { ok: true; op: 'set-remote-link'; mode: SealMode; url: string; secret?: string; otpauth?: string; seal: SealInfo; runtime: RuntimeInfo; remote: RemoteInfo }
+  | { ok: true; op: 'verify-pack'; signed: boolean }
   /** `restartDaemon`: the daemon updated itself and restarts right after answering (wait for it before relaunching). */
   | { ok: true; op: 'apply-update'; version: string; restartDaemon: boolean }
   | { ok: true; op: 'guard-apply' | 'guard-status'; guard: GuardInfo }
   | { ok: true; op: 'subscribe'; events: DaemonEventName[] }
-  | { ok: false; error: string; code: 'REFUSED' | 'POLICY' | 'NO_DEVICES' | 'BUSY' | 'INVALID' | 'INTERNAL' | 'EXISTS' };
+  | { ok: false; error: string; code: 'REFUSED' | 'POLICY' | 'NO_DEVICES' | 'BUSY' | 'INVALID' | 'INTERNAL' | 'EXISTS' | 'CODE' };
 
 export const DAEMON_SOCKET_PATH = '/run/rp-code/daemon.sock';
 /**
@@ -475,3 +546,300 @@ export const KEEPALIVE_ENV_VALUE_MAX = 4096;
 export const KEEPALIVE_ARGS_MAX = 32;
 export const POLICY_FILE_PATH = '/etc/rp-code/policy.json';
 export const SYSTEM_GROUP = 'rp-code';
+
+// ---------------------------------------------------------------------------
+// Remote configuration, remote packs and the TOTP-locked (sealed) policy
+// ---------------------------------------------------------------------------
+
+/**
+ * `PolicyFile.remote`: where this machine's policy comes from. The app fetches `url` on the
+ * interval and hands the bytes to the daemon, which decides whether to believe them
+ * (`native/rp-coded/src/remote.rs`) — so a patched app cannot loosen a sealed machine, and the
+ * daemon needs no TLS stack of its own.
+ */
+export interface RemotePolicy {
+  /** `https://` anywhere, or `http://` on the loopback (an on-box management agent, the tests). */
+  url: string;
+  /** `false` stops the fetching without forgetting the address. Default true. */
+  enabled?: boolean;
+  /** How often to fetch, 5..1440. Default 60. */
+  intervalMinutes?: number;
+}
+
+/** One pack a policy pins: where to download it and what it must turn out to be. */
+export interface PackSource {
+  /** The pack id the download must contain — checked after unpacking. */
+  id: string;
+  url: string;
+  /**
+   * The administrator's Ed25519 signature over this pack, base64. It covers the id, the version
+   * and the SHA-256 of the file together (`rp-code-pack/v1\n<id>\n<version>\n<sha256>`), so a
+   * signed pack cannot be re-labelled as a different one. **Required on a machine with a Remote
+   * Link**: there, the policy itself arrived over the network, so a checksum in it proves only
+   * that the policy and the pack agree — not that either came from the administrator.
+   */
+  signature?: string;
+  /** SHA-256 of the `.rppack`, lower-case hex. The only check available without a pinned key. */
+  sha256?: string;
+  /** The version to install; when absent, whatever the download contains. */
+  version?: string;
+}
+
+/**
+ * How a sealed machine may be changed. The two are mutually exclusive: a machine with both would
+ * be only as strong as the weaker one.
+ *
+ * - `totp` — a person types the code from the enrolled authenticator app and the policy becomes
+ *   editable here. For a machine you will stand in front of.
+ * - `chain` — no code exists. The machine pins a public key and the hash of the last policy link
+ *   it applied; only a signed link continuing that chain can change anything, and letting the
+ *   machine go is itself a link. For a fleet.
+ */
+export type SealMode = 'totp' | 'chain';
+export const SEAL_MODES: readonly SealMode[] = ['totp', 'chain'];
+
+/**
+ * A **Remote Link**: the base64 blob an administrator hands out. Pasting one into Settings →
+ * System points the machine at a policy chain, pins the key that signs it, and seals the machine
+ * in the mode the blob names. It is self-signed by the key it carries, so a blob mangled or
+ * swapped on the way is refused rather than trusted for having arrived in the right box.
+ */
+export interface RemoteLink {
+  version: 1;
+  /** Where the chain is published. */
+  url: string;
+  /** The Ed25519 public key, base64, that every link must be signed with. */
+  key: string;
+  keyId?: string;
+  intervalMinutes?: number;
+  /** Free text shown in Settings → System, so a person can see whose link they pasted. */
+  managedBy?: string;
+  /** Which way in the machine gets. Default `chain`. */
+  mode?: SealMode;
+  signature: { alg: 'ed25519'; value: string; keyId?: string };
+}
+
+/** One link of a policy chain: a policy, hash-linked to the one before it and signed. */
+export interface ChainLink {
+  /** Position in the chain, one more than the link before it. */
+  seq: number;
+  /** SHA-256 of the previous link's canonical bytes; empty for the genesis. */
+  prev: string;
+  issuedAt?: string;
+  /** The policy this link puts in force. Absent keeps the one before it. */
+  policy?: PolicyFile;
+  /** Rotation: from the next link on, signatures are checked against this key. */
+  nextKey?: string;
+  /** `true` releases the machine — the seal is lifted and local changes are possible again. */
+  unseal?: boolean;
+  signature: { alg: 'ed25519'; value: string; keyId?: string };
+}
+
+/** A published chain: what a machine fetches from `remote.url`. */
+export interface PolicyChain {
+  version: 1;
+  links: ChainLink[];
+}
+
+/**
+ * `PolicyFile.packs`: the packs this machine is meant to have. The app installs them without the
+ * user choosing a file, and keeps them installed.
+ */
+export interface PacksPolicy {
+  sources?: PackSource[];
+  /** Uninstall every pack that is not listed. Default false. */
+  removeUnlisted?: boolean;
+  /** How often to re-check the sources, 5..1440. Default 360. */
+  refreshMinutes?: number;
+}
+
+/** TOTP parameters an authenticator app is enrolled with. */
+export interface TotpConfig {
+  algorithm: 'SHA1' | 'SHA256' | 'SHA512';
+  digits: number;
+  /** Seconds per code. */
+  period: number;
+  /** Steps of clock drift accepted on each side. */
+  window: number;
+}
+
+/**
+ * `PolicyFile.lock`: how hard the policy holds once the machine is **sealed**. The TOTP secret is
+ * never here — this file is world-readable; it lives in the root-only seal
+ * (`/etc/rp-code/policy.seal`) the daemon writes when it seals the machine.
+ *
+ * A policy that carries a `lock` block also tells the session guard to take `/etc/rp-code` and the
+ * profile-escaping binaries away from the guarded sessions; sealing adds an empty one when the
+ * policy has none, so what is in force is always readable in the file.
+ */
+export interface PolicyLock {
+  algorithm?: TotpConfig['algorithm'];
+  digits?: number;
+  period?: number;
+  window?: number;
+  /** Rewrite the policy file from the seal when it is edited or deleted. Default true. */
+  selfHeal?: boolean;
+  /** Set the immutable attribute on the policy, the seal and its mirrors. Default true. */
+  immutable?: boolean;
+  /** Write the `RefuseManualStop=yes` drop-in for `rp-coded.service`. Default true. */
+  refuseManualStop?: boolean;
+  /** Deny guarded sessions `run0`, `systemd-run`, `machinectl`, `pkexec`, `chattr`, `apparmor_parser`. Default true. */
+  denyEscapes?: boolean;
+}
+
+/** One noticed change to a sealed file, and what the daemon did about it. */
+export interface TamperRecord {
+  at: string;
+  /** `policy-edited`, `policy-removed` or `seal-removed`. */
+  kind: string;
+  path: string;
+  /** Whether the daemon put it back. */
+  healed: boolean;
+}
+
+/** `seal-status.seal`: what the seal is, never what it knows. */
+export interface SealInfo {
+  sealed: boolean;
+  /** Which way in this machine has. */
+  mode: SealMode;
+  sealedAt?: string;
+  managedBy?: string;
+  /** SHA-256 of the sealed policy. */
+  policyHash?: string;
+  /** The TOTP parameters — absent in `chain` mode, where there is no code at all. */
+  totp?: TotpConfig;
+  /** Consecutive wrong codes, and when the lockout they armed ends. */
+  failures: number;
+  lockedUntil?: string;
+  /** Every place a copy of the seal is kept. */
+  paths: string[];
+  /** The protections actually in place right now, not what the policy asked for. */
+  immutable: boolean;
+  selfHeal: boolean;
+  denyEscapes: boolean;
+  refuseManualStop: boolean;
+  tampers: TamperRecord[];
+  /** What this seal cannot protect against, one sentence each. */
+  residual: string[];
+}
+
+/** What applies before the daemon has answered, and on a machine that has no seal. */
+export const DEFAULT_SEAL_INFO: SealInfo = {
+  sealed: false,
+  mode: 'totp',
+  failures: 0,
+  paths: [],
+  immutable: false,
+  selfHeal: false,
+  denyEscapes: false,
+  refuseManualStop: false,
+  tampers: [],
+  residual: [],
+};
+
+/** `seal-status.runtime`: the daemon-owned filesystem the effective policy is published into. */
+export interface RuntimeInfo {
+  dir: string;
+  /** A tmpfs of the daemon's own is mounted there. */
+  mounted: boolean;
+  /** That mount is currently read-only. */
+  readOnly: boolean;
+  present: boolean;
+  policyHash?: string;
+  publishedAt?: string;
+  /** Why the protection is not complete (empty when it is). */
+  degraded: string[];
+}
+
+/** `seal-status.remote`: the policy chain this machine follows and how far along it is. */
+export interface RemoteInfo {
+  /** This machine has a Remote Link, so it has somewhere to fetch from and a key to check it. */
+  configured: boolean;
+  url?: string;
+  enabled: boolean;
+  intervalMinutes: number;
+  /** The pinned public key (base64) and the name the administrator gave it. */
+  key?: string;
+  keyId?: string;
+  /** Where the machine is on its chain: the last link's `seq` and hash. */
+  seq: number;
+  head?: string;
+  /** When the Remote Link was pasted. */
+  linkedAt?: string;
+  /** Keys this chain has rotated through, oldest first. */
+  rotations: string[];
+  lastAppliedAt?: string;
+  lastError?: string;
+  /** The packs the policy pins, for the app to install. */
+  packs: PackSource[];
+  removeUnlisted: boolean;
+  packRefreshMinutes: number;
+}
+
+/** What the app reports about its own half of remote configuration: the fetch and the packs. */
+export interface RemoteConfigStatus {
+  /** The policy names a source and it is switched on. */
+  active: boolean;
+  url?: string;
+  intervalMinutes: number;
+  /** When the app last fetched, whatever came of it. */
+  lastCheckedAt?: string;
+  /** When a document was last accepted by the daemon. */
+  lastAppliedAt?: string;
+  /** The last fetch or apply failure, cleared by a success. */
+  lastError?: string;
+  /** Where the machine is on its chain. */
+  seq: number;
+  /** One line per pinned pack. */
+  packs: RemotePackStatus[];
+  /** A fetch or a pack download is running right now. */
+  busy: boolean;
+}
+
+/** How one pinned pack stands on this machine. */
+export interface RemotePackStatus {
+  id: string;
+  url: string;
+  /** The version the policy asks for, when it names one. */
+  wanted?: string;
+  /** The version installed right now. */
+  installed?: string;
+  state: 'installed' | 'pending' | 'downloading' | 'failed' | 'removed';
+  error?: string;
+  updatedAt?: string;
+}
+
+/**
+ * The authoring side: the administrator's own signing key and the chain they are building
+ * (`apps/desktop/src/main/system/chain-author.ts`). Nothing here describes *this* machine's
+ * policy — it is the tooling for the machines that follow the chain.
+ */
+export interface ChainAuthorStatus {
+  /** A signing key exists in this app's data. */
+  hasKey: boolean;
+  /** The public key, base64 — safe to show, and what a Remote Link carries. */
+  publicKey?: string;
+  keyId?: string;
+  /** Whether the key is protected by the OS keyring rather than file permissions alone. */
+  keyring: boolean;
+  /** The chain being built: how many links and where it ends. */
+  links: number;
+  seq: number;
+  head?: string;
+  url?: string;
+  mode: SealMode;
+  managedBy?: string;
+  /** Where the key and the chain live, so an administrator can back them up. */
+  dir: string;
+}
+
+/** The runtime policy filesystem (`native/rp-coded/src/runtime.rs`). */
+export const RUNTIME_POLICY_DIR = '/run/rp-code/policy';
+export const RUNTIME_POLICY_FILE = `${RUNTIME_POLICY_DIR}/policy.json`;
+export const RUNTIME_POLICY_STATE_FILE = `${RUNTIME_POLICY_DIR}/state.json`;
+/**
+ * The world-readable half of the seal. It carries the sealed policy and its hash but no secret,
+ * so the app can tell a managed machine from an unmanaged one — and can keep enforcing the policy
+ * — without being able to change anything.
+ */
+export const SEAL_MARKER_PATH = '/etc/rp-code/policy.sealed';

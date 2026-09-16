@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use crate::guard::{GuardAttempt, GuardInfo};
 use crate::policy::PolicyFile;
+use crate::runtime::RuntimeInfo;
+use crate::seal::{SealMode, TamperRecord};
+use crate::totp::TotpConfig;
 
 /// Protocol version this daemon speaks (`hello.version` it accepts and `protocol` it reports).
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -21,6 +24,8 @@ pub const TEXT_MAX_CHARS: usize = 2000;
 pub const COMBO_MAX_CHARS: usize = 64;
 /// Longest `reason` kept for a lock; longer reasons are truncated.
 pub const REASON_MAX_CHARS: usize = 200;
+/// Longest TOTP code accepted (digits plus the spaces people paste).
+pub const CODE_MAX_CHARS: usize = 32;
 
 // ---------------------------------------------------------------------------
 // Requests (app → daemon)
@@ -100,11 +105,63 @@ pub enum Request {
         x: f64,
         y: f64,
     },
-    /// Create the policy file once (write-once; `EXISTS` when one is already there). The
-    /// object is validated exactly like the file would be.
+    /// Create the policy file (write-once while the machine is unsealed: `EXISTS` when one is
+    /// already there). On a sealed machine a `code` from the enrolled authenticator replaces the
+    /// policy instead, and the seal is re-pinned to what was written. The object is validated
+    /// exactly like the file would be.
     #[serde(rename = "set-policy")]
     SetPolicy {
         policy: serde_json::Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+    },
+    /// Seal this machine: generate a TOTP secret, pin `policy` (or the policy already on disk)
+    /// to it and publish it into the runtime filesystem. The secret comes back exactly once.
+    #[serde(rename = "seal-policy")]
+    SealPolicy {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        policy: Option<serde_json::Value>,
+        /// TOTP parameters to enrol with; the defaults (SHA1, 6 digits, 30 s) suit every app.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        totp: Option<TotpConfig>,
+    },
+    /// Remove the seal after a valid `code`. With `removePolicy` the policy file goes too, so
+    /// the machine comes back unmanaged.
+    #[serde(rename = "unseal-policy")]
+    UnsealPolicy {
+        code: String,
+        #[serde(
+            default,
+            rename = "removePolicy",
+            skip_serializing_if = "Option::is_none"
+        )]
+        remove_policy: Option<bool>,
+    },
+    /// The seal, the runtime filesystem and the remote-configuration state, without secrets.
+    #[serde(rename = "seal-status")]
+    SealStatus,
+    /// Apply a policy chain the app fetched (`chain.rs` decides whether to believe it).
+    /// `document` is the response body verbatim — the signatures cover those bytes.
+    #[serde(rename = "remote-apply")]
+    RemoteApply {
+        document: String,
+    },
+    /// Paste a **Remote Link**: the base64 blob that points this machine at a policy chain and
+    /// pins the key signing it. On an unlinked machine this is what seals it, in whichever mode
+    /// the blob names. On a machine already linked in `totp` mode it needs a `code`; on one in
+    /// `chain` mode it is refused outright — only a signed link can move that machine.
+    #[serde(rename = "set-remote-link")]
+    SetRemoteLink {
+        blob: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+    },
+    /// Whether a downloaded pack may be installed: the app hashes the bytes, the daemon checks
+    /// the hash and the administrator's signature against the key it pins.
+    #[serde(rename = "verify-pack")]
+    VerifyPack {
+        id: String,
+        sha256: String,
     },
     /// Keepalive registration: how to relaunch the app in the requester's session when this
     /// connection drops without `unregister` while the policy says `app.allowQuit: false`.
@@ -153,6 +210,12 @@ impl Request {
             Request::Click { .. } => "click",
             Request::Move { .. } => "move",
             Request::SetPolicy { .. } => "set-policy",
+            Request::SealPolicy { .. } => "seal-policy",
+            Request::UnsealPolicy { .. } => "unseal-policy",
+            Request::SealStatus => "seal-status",
+            Request::RemoteApply { .. } => "remote-apply",
+            Request::SetRemoteLink { .. } => "set-remote-link",
+            Request::VerifyPack { .. } => "verify-pack",
             Request::Register { .. } => "register",
             Request::Unregister => "unregister",
             Request::ApplyUpdate { .. } => "apply-update",
@@ -197,10 +260,12 @@ pub enum ErrorCode {
     Internal,
     /// `set-policy` while a policy file already exists (only root can change it).
     Exists,
+    /// A TOTP code was needed and was missing, wrong, replayed or locked out.
+    Code,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 7] = [
+    pub const ALL: [ErrorCode; 8] = [
         ErrorCode::Refused,
         ErrorCode::Policy,
         ErrorCode::NoDevices,
@@ -208,6 +273,7 @@ impl ErrorCode {
         ErrorCode::Invalid,
         ErrorCode::Internal,
         ErrorCode::Exists,
+        ErrorCode::Code,
     ];
 }
 
@@ -255,6 +321,82 @@ pub struct InstallInfo {
     pub daemon_version: String,
 }
 
+/// `seal-status.seal` (`SealInfo` in `@rp/shared`): what the seal is, never what it knows.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SealInfo {
+    pub sealed: bool,
+    /// Which way in this machine has: a code (`totp`) or a signed chain (`chain`).
+    #[serde(default)]
+    pub mode: SealMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_by: Option<String>,
+    /// SHA-256 of the sealed policy: the app compares it with what it was given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_hash: Option<String>,
+    /// The TOTP parameters — absent in `chain` mode, where there is no code at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totp: Option<TotpConfig>,
+    /// Consecutive wrong codes, and when the lockout they armed ends.
+    pub failures: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked_until: Option<String>,
+    /// Every place a copy of the seal is kept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+    /// The protections that are actually in place right now, not what the policy asked for.
+    pub immutable: bool,
+    pub self_heal: bool,
+    pub deny_escapes: bool,
+    pub refuse_manual_stop: bool,
+    /// Noticed changes to the sealed files, newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tampers: Vec<TamperRecord>,
+    /// What this seal cannot protect against, one sentence each.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub residual: Vec<String>,
+}
+
+/// `seal-status.remote` (`RemoteInfo` in `@rp/shared`): where the policy comes from and how the
+/// last fetch went. The daemon never fetches anything itself; the app reports back through
+/// `remote-apply`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteInfo {
+    /// This machine has a Remote Link, so it has somewhere to fetch from and a key to check it.
+    pub configured: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    pub enabled: bool,
+    pub interval_minutes: u64,
+    /// The pinned public key (base64) and the name the administrator gave it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
+    /// Where the machine is on its chain: the last link's `seq` and hash.
+    pub seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    /// When the Remote Link was pasted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_at: Option<String>,
+    /// Keys this chain has rotated through, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rotations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_applied_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// The packs the policy pins, for the app to install.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packs: Vec<crate::remote::PackSource>,
+    pub remove_unlisted: bool,
+    pub pack_refresh_minutes: u64,
+}
+
 /// Payload of a successful response; the `op` tag names the request it answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
@@ -290,10 +432,68 @@ pub enum Ok {
     Key,
     Click,
     Move,
-    /// The policy file that was just created.
+    /// The policy file that was just created or replaced.
     #[serde(rename = "set-policy")]
     SetPolicy {
         path: String,
+        /// Whether an existing policy was replaced (a sealed machine) rather than created.
+        replaced: bool,
+    },
+    /// The machine is now sealed in code mode. `secret` and `otpauth` are the only time either
+    /// is shown. Linking a machine to a policy chain is `set-remote-link`, not this.
+    #[serde(rename = "seal-policy")]
+    SealPolicy {
+        path: String,
+        secret: String,
+        otpauth: String,
+        seal: SealInfo,
+        runtime: RuntimeInfo,
+    },
+    #[serde(rename = "unseal-policy")]
+    UnsealPolicy {
+        path: String,
+        /// Whether the policy file was removed as well.
+        removed: bool,
+    },
+    #[serde(rename = "seal-status")]
+    SealStatus {
+        seal: SealInfo,
+        runtime: RuntimeInfo,
+        remote: RemoteInfo,
+    },
+    #[serde(rename = "remote-apply")]
+    RemoteApply {
+        /// Whether the chain moved (a re-fetch of the same file does not).
+        changed: bool,
+        /// How many links were verified in this walk.
+        applied: u32,
+        seq: u64,
+        /// The last link asked for the seal to be lifted, and it was.
+        unsealed: bool,
+        #[serde(rename = "policyHash")]
+        policy_hash: String,
+        runtime: RuntimeInfo,
+        remote: RemoteInfo,
+    },
+    /// The machine is now linked. `secret`/`otpauth` are present only when the blob asked for
+    /// `totp` mode and this was the link that sealed it — the one time either is readable.
+    #[serde(rename = "set-remote-link")]
+    SetRemoteLink {
+        mode: SealMode,
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        otpauth: Option<String>,
+        seal: SealInfo,
+        runtime: RuntimeInfo,
+        remote: RemoteInfo,
+    },
+    #[serde(rename = "verify-pack")]
+    VerifyPack {
+        /// Whether the administrator's key vouched for this pack (false on a machine with no key,
+        /// where only the checksum was available).
+        signed: bool,
     },
     Register,
     Unregister,
@@ -320,7 +520,7 @@ pub enum Ok {
 }
 
 /// Names of the events a connection may subscribe to.
-pub const EVENT_NAMES: [&str; 1] = ["guard-attempt"];
+pub const EVENT_NAMES: [&str; 3] = ["guard-attempt", "policy-tamper", "policy-changed"];
 
 /// A server-pushed line (`DaemonEvent` in `@rp/shared`): `{ "ev": "guard-attempt", "at", … }`.
 /// Distinguished from responses by the `ev` key; the app dispatches it to listeners instead of
@@ -333,12 +533,29 @@ pub enum Event {
         #[serde(flatten)]
         attempt: GuardAttempt,
     },
+    /// A sealed file was changed behind the daemon's back, and what it did about it.
+    PolicyTamper {
+        at: String,
+        #[serde(flatten)]
+        tamper: TamperRecord,
+    },
+    /// The effective policy changed (a code-authorised write, a remote configuration, or a
+    /// restore from the seal). The app re-reads the runtime policy when it sees this.
+    PolicyChanged {
+        at: String,
+        /// `local`, `remote` or `seal`.
+        source: String,
+        #[serde(rename = "policyHash")]
+        policy_hash: String,
+    },
 }
 
 impl Event {
     pub fn name(&self) -> &'static str {
         match self {
             Event::GuardAttempt { .. } => "guard-attempt",
+            Event::PolicyTamper { .. } => "policy-tamper",
+            Event::PolicyChanged { .. } => "policy-changed",
         }
     }
 
@@ -592,7 +809,15 @@ mod tests {
         assert_eq!(
             round_trip_request(json!({"op":"set-policy","policy":{"version":1,"managedBy":"me"}})),
             Request::SetPolicy {
-                policy: json!({"version":1,"managedBy":"me"})
+                policy: json!({"version":1,"managedBy":"me"}),
+                code: None,
+            }
+        );
+        assert_eq!(
+            round_trip_request(json!({"op":"set-policy","policy":{"version":1},"code":"123456"})),
+            Request::SetPolicy {
+                policy: json!({"version":1}),
+                code: Some("123456".into()),
             }
         );
         assert!(
@@ -919,8 +1144,9 @@ mod tests {
         round_trip_response(
             &Response::ok(Ok::SetPolicy {
                 path: "/etc/rp-code/policy.json".into(),
+                replaced: false,
             }),
-            json!({"ok":true,"op":"set-policy","path":"/etc/rp-code/policy.json"}),
+            json!({"ok":true,"op":"set-policy","path":"/etc/rp-code/policy.json","replaced":false}),
         );
     }
 
@@ -934,6 +1160,7 @@ mod tests {
             "INVALID",
             "INTERNAL",
             "EXISTS",
+            "CODE",
         ];
         assert_eq!(names.len(), ErrorCode::ALL.len());
         for (code, name) in ErrorCode::ALL.iter().zip(names) {
