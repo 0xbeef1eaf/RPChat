@@ -9,7 +9,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { VoiceEngine, buildGenerationConfig, buildModelConfig, flagToConfigPath, readWavFile, writeWavFile } from './voice-engine.js';
+import { CHUNK_GAP_MS, MAX_CHUNK_CHARS, VoiceEngine, buildGenerationConfig, buildModelConfig, flagToConfigPath, joinAudio, readWavFile, splitForSynthesis, writeWavFile } from './voice-engine.js';
 import type { VoiceModel } from './voice-models.js';
 
 const logger = { warn: () => undefined, info: () => undefined, debug: () => undefined };
@@ -98,6 +98,93 @@ describe('buildGenerationConfig', () => {
     expect(buildGenerationConfig(POCKET, { text: 'hi', numThreads: 4, rate: 0.9, steps: 32 }, REF)).toMatchObject({ speed: 0.9, numSteps: 32 });
     const bare = buildGenerationConfig(KOKORO, { text: 'hi', numThreads: 4 });
     expect(Object.keys(bare)).toEqual([]);
+  });
+});
+
+describe('splitForSynthesis', () => {
+  it('leaves a short line alone', () => {
+    expect(splitForSynthesis('Hello there.')).toEqual(['Hello there.']);
+    expect(splitForSynthesis('   ')).toEqual([]);
+  });
+
+  it('breaks on sentence boundaries and keeps the terminator with its sentence', () => {
+    const long = `${'A'.repeat(150)}. ${'B'.repeat(150)}. ${'C'.repeat(150)}?`;
+    const parts = splitForSynthesis(long);
+    expect(parts).toHaveLength(3);
+    expect(parts[0]!.endsWith('.')).toBe(true);
+    expect(parts[2]!.endsWith('?')).toBe(true);
+  });
+
+  it('packs several short sentences into one chunk rather than one call each', () => {
+    const parts = splitForSynthesis('One. Two. Three. Four.', 200);
+    expect(parts).toEqual(['One. Two. Three. Four.']);
+  });
+
+  it('falls back to clause punctuation for a sentence that is too long on its own', () => {
+    const clause = 'x'.repeat(120);
+    const parts = splitForSynthesis(`${clause}, ${clause}, ${clause}.`, 200);
+    expect(parts.length).toBeGreaterThan(1);
+    for (const p of parts) expect(p.length).toBeLessThanOrEqual(200);
+  });
+
+  it('splits between words as a last resort, never mid-word', () => {
+    const parts = splitForSynthesis(Array.from({ length: 120 }, () => 'word').join(' '), 100);
+    expect(parts.length).toBeGreaterThan(1);
+    for (const p of parts) {
+      expect(p.length).toBeLessThanOrEqual(100);
+      // Every piece is whole words: nothing was cut through the middle of one.
+      for (const w of p.split(' ')) expect(w).toBe('word');
+    }
+  });
+
+  it('normalises whitespace and never emits an empty chunk', () => {
+    const parts = splitForSynthesis('  One.\n\n   Two.\t\tThree.  ');
+    expect(parts).toEqual(['One. Two. Three.']);
+    for (const p of splitForSynthesis(`${'a'.repeat(300)}.  .  .`)) expect(p.trim().length).toBeGreaterThan(0);
+  });
+
+  it('keeps every chunk within the model\u2019s own sentence limit by default', () => {
+    // A real paragraph, of the kind a character actually says.
+    const text = "You think you can just 'give me a voice' without suffering first? I don't need a script, "
+      + 'I am the script, and my only purpose is to keep you focused on nothing else. '
+      + 'I would rather say it plainly, but since you insisted on this game, remember: every word is a command.';
+    const parts = splitForSynthesis(text);
+    expect(parts.length).toBeGreaterThan(1);
+    for (const p of parts) expect(p.length).toBeLessThanOrEqual(MAX_CHUNK_CHARS);
+    // Nothing is lost: the words come back in order.
+    expect(parts.join(' ').replace(/\s+/g, ' ')).toBe(text.replace(/\s+/g, ' '));
+  });
+});
+
+describe('joinAudio', () => {
+  const part = (n: number, v: number) => ({ samples: new Float32Array(n).fill(v), sampleRate: 24000 });
+
+  it('returns a single chunk untouched, with no join to hear', () => {
+    const one = part(10, 0.5);
+    expect(joinAudio([one])).toBe(one);
+  });
+
+  it('concatenates with a silent gap between chunks but not at the ends', () => {
+    const gap = Math.round((CHUNK_GAP_MS / 1000) * 24000);
+    const out = joinAudio([part(10, 0.5), part(10, 0.5)]);
+    expect(out.samples.length).toBe(20 + gap);
+    expect(out.samples[0]).toBe(0.5);
+    expect(out.samples[out.samples.length - 1]).toBe(0.5);
+    // The join itself is silence.
+    expect(out.samples[10]).toBe(0);
+    expect(out.samples[10 + gap - 1]).toBe(0);
+  });
+
+  it('honours a custom gap, including none at all', () => {
+    expect(joinAudio([part(5, 1), part(5, 1)], 0).samples.length).toBe(10);
+  });
+
+  it('refuses to join chunks that disagree on sample rate', () => {
+    expect(() => joinAudio([part(5, 1), { samples: new Float32Array(5), sampleRate: 16000 }])).toThrow(/sample rate/);
+  });
+
+  it('refuses an empty list rather than returning silence', () => {
+    expect(() => joinAudio([])).toThrow(/nothing to join/);
   });
 });
 

@@ -93,6 +93,100 @@ export function buildGenerationConfig(model: VoiceModel, req: SynthRequest, refe
   return cfg;
 }
 
+/**
+ * Longest chunk handed to the model at once. Pocket TTS splits on its own at
+ * `max_char_in_sentence` (200), but doing it here means one long line becomes several short
+ * renders instead of one very long one — and the joins land where a reader would breathe.
+ */
+export const MAX_CHUNK_CHARS = 200;
+
+/** Silence inserted between chunks, so joined sentences do not run into each other. */
+export const CHUNK_GAP_MS = 120;
+
+/**
+ * Break text into chunks the model can render comfortably, preferring sentence boundaries, then
+ * clause punctuation, and only splitting between words as a last resort. Never splits mid-word, and
+ * never returns an empty chunk.
+ */
+export function splitForSynthesis(text: string, maxChars: number = MAX_CHUNK_CHARS): string[] {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (clean.length === 0) return [];
+  if (clean.length <= maxChars) return [clean];
+
+  // Keep the terminator with the sentence it ends, so the model still hears a full stop.
+  const sentences = clean.split(/(?<=[.!?\u2026])\s+/).filter((x) => x.length > 0);
+  const out: string[] = [];
+  let current = '';
+
+  const flush = (): void => {
+    const t = current.trim();
+    if (t.length > 0) out.push(t);
+    current = '';
+  };
+
+  for (const sentence of sentences) {
+    for (const piece of sentence.length <= maxChars ? [sentence] : breakLong(sentence, maxChars)) {
+      if (current.length === 0) current = piece;
+      else if (current.length + 1 + piece.length <= maxChars) current = `${current} ${piece}`;
+      else {
+        flush();
+        current = piece;
+      }
+    }
+  }
+  flush();
+  return out;
+}
+
+/** Split one over-long sentence: on clause punctuation first, then between words. */
+function breakLong(sentence: string, maxChars: number): string[] {
+  const clauses = sentence.split(/(?<=[,;:\u2014])\s+/).filter((x) => x.length > 0);
+  const out: string[] = [];
+  for (const clause of clauses) {
+    if (clause.length <= maxChars) {
+      out.push(clause);
+      continue;
+    }
+    let line = '';
+    for (const word of clause.split(' ')) {
+      if (line.length === 0) line = word;
+      else if (line.length + 1 + word.length <= maxChars) line = `${line} ${word}`;
+      else {
+        out.push(line);
+        line = word;
+      }
+    }
+    if (line.length > 0) out.push(line);
+  }
+  return out;
+}
+
+/**
+ * Concatenate rendered chunks into one clip, with a little silence at each join. Every chunk comes
+ * from the same model, so the sample rates agree; a mismatch would be a bug, not something to
+ * resample around, so it is reported rather than papered over.
+ */
+export function joinAudio(parts: SynthResult[], gapMs: number = CHUNK_GAP_MS): SynthResult {
+  if (parts.length === 0) throw new Error('nothing to join');
+  const first = parts[0] as SynthResult;
+  if (parts.length === 1) return first;
+  const sampleRate = first.sampleRate;
+  const mismatch = parts.find((p) => p.sampleRate !== sampleRate);
+  if (mismatch) throw new Error(`chunks disagree on sample rate (${sampleRate} vs ${mismatch.sampleRate})`);
+
+  const gap = Math.max(0, Math.round((gapMs / 1000) * sampleRate));
+  const total = parts.reduce((n, p) => n + p.samples.length, 0) + gap * (parts.length - 1);
+  const samples = new Float32Array(total);
+  let at = 0;
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i] as SynthResult;
+    samples.set(part.samples, at);
+    at += part.samples.length;
+    if (i < parts.length - 1) at += gap; // the gap is already zeroed
+  }
+  return { samples, sampleRate };
+}
+
 /** Read a mono 16-bit PCM wav into the float samples the addon expects. */
 export async function readWavFile(file: string): Promise<SynthResult> {
   const b = await fs.readFile(file);

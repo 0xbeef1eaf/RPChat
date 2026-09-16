@@ -24,8 +24,8 @@ import { commandFailed, isConfigured, notConfigured, spawnCapture } from '../com
 import type { CommandResult } from '../commands.js';
 import type { OverlayWindowLike } from '../display/backend.js';
 import type { VoiceModel } from './voice-models.js';
-import type { VoiceEngine } from './voice-engine.js';
-import { writeWavFile } from './voice-engine.js';
+import type { SynthResult, VoiceEngine } from './voice-engine.js';
+import { joinAudio, splitForSynthesis, writeWavFile } from './voice-engine.js';
 import {
   SAMPLE_DIRNAME,
   SHERPA_TTS_BINARY,
@@ -225,20 +225,34 @@ export class VoiceHandler implements CapabilityHandler {
     const engine = this.deps.engine;
     if (engine?.available()) {
       const started = Date.now();
-      const audio = await engine.synthesize(voice.model, {
-        text,
-        numThreads: voice.numThreads,
-        ...(rate ?? voice.rate ? { rate: rate ?? voice.rate } : {}),
-        ...(voice.speaker !== undefined ? { speaker: voice.speaker } : {}),
-        ...(voice.steps !== undefined ? { steps: voice.steps } : {}),
-        ...(voice.seed !== undefined ? { seed: voice.seed } : {}),
-        ...(voice.temperature !== undefined ? { temperature: voice.temperature } : {}),
-        ...(voice.reference ? { reference: voice.reference } : {}),
-        ...(voice.referenceText ? { referenceText: voice.referenceText } : {}),
-      });
-      if (abort.signal.aborted) return;
+      // One long line is rendered as several short ones and joined. A whole paragraph in a single
+      // call is minutes of audio from one request, and the joins land where a reader would breathe.
+      const chunks = splitForSynthesis(text);
+      const parts: SynthResult[] = [];
+      for (const [index, chunk] of chunks.entries()) {
+        // A locked voice must stay reproducible, so per-chunk seeds are derived from the base
+        // rather than drawn fresh — but they differ, or every sentence would share one contour.
+        const seed = voice.seed !== undefined && voice.seed >= 0 ? voice.seed + index : undefined;
+        parts.push(
+          await engine.synthesize(voice.model, {
+            text: chunk,
+            numThreads: voice.numThreads,
+            ...(rate ?? voice.rate ? { rate: rate ?? voice.rate } : {}),
+            ...(voice.speaker !== undefined ? { speaker: voice.speaker } : {}),
+            ...(voice.steps !== undefined ? { steps: voice.steps } : {}),
+            ...(seed !== undefined ? { seed } : {}),
+            ...(voice.temperature !== undefined ? { temperature: voice.temperature } : {}),
+            ...(voice.reference ? { reference: voice.reference } : {}),
+            ...(voice.referenceText ? { referenceText: voice.referenceText } : {}),
+          }),
+        );
+        if (abort.signal.aborted) return;
+      }
+      const audio = joinAudio(parts);
       await writeWavFile(file, audio);
-      this.deps.logger.debug?.(`[voice] ${voice.model.name} synthesised ${text.length} chars in ${Date.now() - started} ms (in process)`);
+      this.deps.logger.debug?.(
+        `[voice] ${voice.model.name} synthesised ${text.length} chars as ${chunks.length} chunk(s) in ${Date.now() - started} ms (in process)`,
+      );
       await this.play(file, wait, abort);
       return;
     }
