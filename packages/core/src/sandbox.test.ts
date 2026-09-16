@@ -32,7 +32,7 @@ describe('SandboxService', () => {
     const request = t.runner.requests.find((r) => r.context.trigger.kind === 'sandbox')!;
     expect(request.context).toMatchObject({ packId: LUNA_ID, characterId: 'luna', sessionId: out.sessionId, trigger: { kind: 'sandbox', runId: 'run-1' } });
     expect(request.surface.modules.map((m) => m.id)).toEqual(expect.arrayContaining(['chat', 'pack', 'media', 'ui']));
-    expect(request.prelude).toContain('const lib = Object.freeze(');
+    expect(request.prelude).toContain('const lib = __rp_lib(');
     const messages = await t.engine.sessions.messages(out.sessionId);
     expect(messages.at(-1)).toMatchObject({ role: 'assistant', content: 'from the sandbox' });
 

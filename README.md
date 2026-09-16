@@ -48,8 +48,8 @@ Characters, their behaviours and their media are distributed as shareable
   with a self-written prompt, and keep a session moving without you typing,
   within rate limits you control.
 - **A function library of their own**: a character can save reusable functions with
-  `sdk.lib.define` and call them as `lib.<name>(...)` from any later action, timer
-  or event handler. Each function is a file in the pack
+  `lib.register` and call them as `lib.<name>(...)` from any later action, timer
+  or event handler (`sdk.lib` is that same object, so `sdk.lib.<name>(...)` works too). Each function is a file in the pack
   (`characters/<id>/lib/<name>.ts`), so pack authors can ship functions, the
   character's own definitions persist with the installed pack, and the library
   is listed in its prompt. A pack author can keep a function to themselves with a

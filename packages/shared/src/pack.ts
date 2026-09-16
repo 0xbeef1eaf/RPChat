@@ -192,7 +192,7 @@ export interface LoadedCharacter {
   /** Hook → script source text. */
   behaviourSources: Partial<Record<BehaviourHook, string>>;
   /**
-   * The character's function library (`sdk.lib`), read from `characters/<id>/lib/<name>.ts`:
+   * The character's function library (the `lib` global), read from `characters/<id>/lib/<name>.ts`:
    * name → entry, sorted by name. Files the loader had to skip are reported as warnings.
    */
   library: Record<string, CharacterLibraryEntry>;
@@ -201,7 +201,7 @@ export interface LoadedCharacter {
 }
 
 /**
- * One `sdk.lib` function as shipped in (or saved into) the pack. The file is
+ * One `lib` function as shipped in (or saved into) the pack. The file is
  * `characters/<id>/lib/<name>.ts`: an optional first-line `// <description>`
  * comment followed by exactly one function expression.
  */
@@ -216,7 +216,7 @@ export interface CharacterLibraryEntry {
   bytes: number;
   /** Path relative to the pack root, e.g. `characters/luna/lib/cheer.ts`. */
   file: string;
-  /** ISO-8601 modification time of the file (what `sdk.lib.list()` reports as `updatedAt`). */
+  /** ISO-8601 modification time of the file (what `lib.register` reports as `updatedAt`). */
   updatedAt: string;
 }
 

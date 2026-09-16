@@ -317,12 +317,15 @@ describe('QuickJsRunner', () => {
   });
 
   describe('prelude (the character\'s function library)', () => {
-    const prelude = ['const lib = Object.freeze({', '  "double": (async (n: number) => n * 2),', '});'].join('\n');
+    const prelude = ['const lib = __rp_lib({', '  "double": (async (n: number) => n * 2),', '});'].join('\n');
+    /** The surface with the library module on it, so `lib` carries its two methods. */
+    const libSurface: SdkSurface = { modules: [...surface.modules, { id: 'lib', methods: ['register', 'unregister'] }] };
 
     it('defines lib in front of the user code, inside the same async wrapper', async () => {
-      const result = await runner.run(req('const four = await lib.double(2);\nreturn { four, keys: Object.keys(lib) };', { prelude }));
+      const result = await runner.run(req('const four = await lib.double(2);\nreturn { four, keys: Object.keys(lib), source: String(lib.double) };', { prelude }));
       expect(result.error).toBeUndefined();
-      expect(result.returnValue).toEqual({ four: 4, keys: ['double'] });
+      // the source is right there in the isolate, which is what replaces the old sdk.lib.source()
+      expect(result.returnValue).toEqual({ four: 4, keys: ['double'], source: 'async (n) => n * 2' });
     });
 
     it('keeps an internal function out of the lib the action sees, while its siblings still call it', async () => {
@@ -330,18 +333,54 @@ describe('QuickJsRunner', () => {
       // every function, the outer one only the functions the character may call itself.
       const split = [
         'const lib = (() => {',
-        '  const lib = Object.freeze({',
+        '  const lib = __rp_lib({',
         '    "pick": ((n: number) => n + 1),',
         '    "double": (async (n: number) => lib.pick(n) * 2),',
         '  });',
-        '  return Object.freeze({',
+        '  return __rp_lib({',
         '    "double": lib["double"],',
         '  });',
         '})();',
       ].join('\n');
-      const result = await runner.run(req('return { six: await lib.double(2), keys: Object.keys(lib), pick: typeof lib.pick };', { prelude: split }));
+      const result = await runner.run(req('return { six: await lib.double(2), keys: Object.keys(lib), pick: typeof lib.pick, sdkPick: typeof sdk.lib.pick };', { prelude: split, surface: libSurface }));
       expect(result.error).toBeUndefined();
-      expect(result.returnValue).toEqual({ six: 6, keys: ['double'], pick: 'undefined' });
+      // the outer object is built last, so sdk.lib is the one the action sees — the helper is out of reach either way
+      expect(result.returnValue).toEqual({ six: 6, keys: ['double', 'register', 'unregister'], pick: 'undefined', sdkPick: 'undefined' });
+    });
+
+    it('makes sdk.lib the very lib object, with the module\'s register and unregister on it', async () => {
+      const invoker = makeInvoker();
+      const result = await runner.run(
+        req(
+          `const four = await sdk.lib.double(2);
+           await sdk.lib.register("triple", (n: number) => n * 3);
+           await lib.unregister("double");
+           return { same: sdk.lib === lib, four, keys: Object.keys(lib), frozen: Object.isFrozen(lib) };`,
+          { prelude, surface: libSurface, invoker },
+        ),
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.returnValue).toEqual({ same: true, four: 4, keys: ['double', 'register', 'unregister'], frozen: true });
+      // only the two methods cross to the host; the saved function ran inside the isolate
+      expect(invoker.calls.map((c) => `${c.module}.${c.method}`)).toEqual(['lib.register', 'lib.unregister']);
+      expect(invoker.calls[0]!.args[0]).toBe('triple');
+      expect(invoker.calls[0]!.args[1]).toMatch(/^return await \(.*n \* 3.*\)\(input\);$/);
+      expect(invoker.calls[1]!.args).toEqual(['double']);
+    });
+
+    it('still defines lib when the library module is not on the surface, without its methods', async () => {
+      const result = await runner.run(req('return { four: await sdk.lib.double(2), keys: Object.keys(lib), register: typeof lib.register };', { prelude }));
+      expect(result.error).toBeUndefined();
+      expect(result.returnValue).toEqual({ four: 4, keys: ['double'], register: 'undefined' });
+    });
+
+    it('gives sdk.lib the library methods even without a prelude', async () => {
+      const invoker = makeInvoker();
+      const code = ['await sdk.lib.register("triple", "(n) => n * 3");', 'return Object.keys(sdk.lib);'].join('\n');
+      const result = await runner.run(req(code, { surface: libSurface, invoker }));
+      expect(result.error).toBeUndefined();
+      expect(result.returnValue).toEqual(['register', 'unregister']);
+      expect(invoker.calls.map((c) => `${c.module}.${c.method}`)).toEqual(['lib.register']);
     });
 
     it('still reports the user\'s own line numbers after a three-line prelude', async () => {
@@ -356,7 +395,7 @@ describe('QuickJsRunner', () => {
     });
 
     it('names the library function when the failure is inside it, and keeps the frame in the user\'s code', async () => {
-      const broken = ['const lib = Object.freeze({', '  "boom": (async (x: any) => {', '    return x.missing.deep;', '  }),', '});'].join('\n');
+      const broken = ['const lib = __rp_lib({', '  "boom": (async (x: any) => {', '    return x.missing.deep;', '  }),', '});'].join('\n');
       const result = await runner.run(req('const a = 1;\nreturn await lib.boom(a);', { prelude: broken }));
       expect(result.ok).toBe(false);
       expect(result.error?.code).toBe('SANDBOX_RUNTIME');
@@ -370,7 +409,7 @@ describe('QuickJsRunner', () => {
     });
 
     it('reports a syntax error in the prelude as a library problem, not as a line of the action', async () => {
-      const result = await runner.run(req('return 1;', { prelude: 'const lib = Object.freeze({\n  "bad": (async ( => 1),\n});' }));
+      const result = await runner.run(req('return 1;', { prelude: 'const lib = __rp_lib({\n  "bad": (async ( => 1),\n});' }));
       expect(result.ok).toBe(false);
       expect(result.error?.code).toBe('SANDBOX_COMPILE');
       expect(result.error?.message).toMatch(/function library/);

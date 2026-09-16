@@ -67,7 +67,7 @@ describe('generateSdkTypings', () => {
     expect(out).toContain('/** The SDK available to character code as the global `sdk`. */\ndeclare const sdk: Sdk;\ninterface Sdk {');
     expect(out).toContain('  /** Show images and play video/audio from the pack in an overlay window on the user\'s screen. (permission: pack) */\n  media: MediaApi;');
     expect(out).toContain('declare const console: {');
-    expect(out).toContain('declare const lib: { [name: string]: (...args: any[]) => any };');
+    expect(out).toContain('declare const lib: LibApi;');
     for (const spec of registry.list()) {
       expect(out).toContain(`// ---- module: ${spec.id} v${spec.version} ----\n${spec.typings.trim()}`);
     }
@@ -76,6 +76,16 @@ describe('generateSdkTypings', () => {
     expect(banners.every((i) => i > out.indexOf('interface Sdk {'))).toBe(true);
     expect([...banners].sort((a, b) => a - b)).toEqual(banners);
     expect(out).not.toMatch(/^\s*(import|export)\b/m);
+  });
+
+  it('types the lib global as the lib module\'s api, and falls back when that module is not selected', () => {
+    // `sdk.lib` is the `lib` object itself, so both are `LibApi`; without the module there is no LibApi.
+    const withLib = generateSdkTypings(registry, { modules: ['lib'] });
+    expect(withLib).toContain('  lib: LibApi;');
+    expect(withLib).toContain('declare const lib: LibApi;');
+    const withoutLib = generateSdkTypings(registry, { modules: ['chat'] });
+    expect(withoutLib).toContain('declare const lib: { [name: string]: (...args: any[]) => any };');
+    expect(withoutLib).not.toContain('LibApi');
   });
 
   it('compiles with zero diagnostics against lib.es2022', () => {

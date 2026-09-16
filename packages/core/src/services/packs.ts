@@ -148,7 +148,7 @@ export class PackService {
   }
 
   /**
-   * Older versions kept `sdk.lib` functions in the character state under
+   * Older versions kept `lib` functions in the character state under
    * `lib.functions`; they now live in the pack as `characters/<id>/lib/<name>.ts`.
    * Write every stored function to a file (a name that already has a file is
    * left alone: the file wins), drop the state key, and rescan.

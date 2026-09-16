@@ -66,6 +66,7 @@ export {
 
 export {
   LIB_RESERVED_NAMES,
+  LIB_STATIC_NAMES,
   formatLibraryFile,
   functionSourceProblem,
   libraryFilePath,

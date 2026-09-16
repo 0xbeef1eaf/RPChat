@@ -1,9 +1,9 @@
 /**
- * The character's function library on disk (`sdk.lib`): one file per function,
- * `characters/<id>/lib/<name>.ts`, holding an optional first-line `// <description>`
- * comment followed by exactly one function expression, verbatim as
- * `sdk.lib.define` received it. Pack authors ship functions here; what a
- * character defines itself is written here too (docs/spec/pack.md "Function library").
+ * The character's function library on disk (the `lib` global, `sdk.lib`): one file
+ * per function, `characters/<id>/lib/<name>.ts`, holding an optional first-line
+ * `// <description>` comment followed by exactly one function expression, verbatim
+ * as `lib.register` received it. Pack authors ship functions here; what a character
+ * registers itself is written here too (docs/spec/pack.md "Function library").
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -34,12 +34,20 @@ export const LIB_RESERVED_NAMES: ReadonlySet<string> = new Set([
   'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'arguments', 'eval', '__proto__',
 ]);
 
+/**
+ * Members of the `lib` object itself (`lib.register(...)` / `lib.unregister(...)`,
+ * added by the sandbox bootstrap): a saved function cannot take one of those names,
+ * or it would be unreachable behind the method.
+ */
+export const LIB_STATIC_NAMES: ReadonlySet<string> = new Set(['register', 'unregister']);
+
 /** Why `name` cannot name a library function, or undefined when it can. */
 export function libraryNameProblem(name: unknown): string | undefined {
   if (typeof name !== 'string' || name.length === 0) return 'name must be a non-empty string';
   if (name.length > LIB_NAME_MAX_CHARS) return `name must be at most ${LIB_NAME_MAX_CHARS} characters`;
   if (!LIB_NAME_PATTERN.test(name)) return 'name must be a JavaScript identifier (letters, digits, _ and $, not starting with a digit)';
   if (LIB_RESERVED_NAMES.has(name)) return `"${name}" is a reserved word and cannot be a function name`;
+  if (LIB_STATIC_NAMES.has(name)) return `"${name}" is a method of the library itself (lib.${name}); choose another name`;
   return undefined;
 }
 
@@ -49,7 +57,7 @@ const HANDLER_WRAPPER_RE = /^return await \(([\s\S]*)\)\(input\);$/;
 const FUNCTION_EXPRESSION_RE = /^\(?\s*(async\s+)?(function\b|\([\s\S]*?\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/;
 
 /**
- * The function expression behind what `sdk.lib.define` received: a function
+ * The function expression behind what `lib.register` received: a function
  * argument arrives as the action body that calls it (see the sandbox
  * bootstrap); a string is taken as the expression itself.
  */
@@ -190,7 +198,7 @@ export interface CharacterLibraryScan {
 export interface ReadLibraryOptions {
   /**
    * The previous scan of the same folder. A file whose source text is unchanged is taken
-   * from it without re-parsing, which keeps a rescan after every `sdk.lib.define` cheap.
+   * from it without re-parsing, which keeps a rescan after every `lib.register` cheap.
    */
   previous?: Record<string, CharacterLibraryEntry>;
 }

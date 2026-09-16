@@ -8,14 +8,21 @@
  *   returning the JSON text of a `CapabilityResult`;
  * - `log(level, message) => void`: host function capturing log output.
  *
- * It installs the frozen globals `sdk` and `console`. Nothing else leaks into
- * the isolate: `hostCall` and `log` are captured by closures only, so user code
- * can only reach the host through the methods listed in the surface.
+ * It installs the frozen globals `sdk` and `console`, plus `__rp_lib`. Nothing
+ * else leaks into the isolate: `hostCall` and `log` are captured by closures
+ * only, so user code can only reach the host through the methods listed in the
+ * surface.
  *
  * `console.*` is synchronous and captured locally; it never crosses to the
  * host as a call.
  * Dotted method names (`session.get`) are exposed one level deep
  * (`sdk.state.session.get`).
+ *
+ * The `lib` module is not a namespace of its own: `__rp_lib(functions)` builds
+ * the character's function library — the `lib` the prelude defines — out of the
+ * saved functions plus the module's `register` / `unregister`, and `sdk.lib`
+ * reads back whatever it last built. `sdk.lib.cheer()` is therefore the same
+ * call as `lib.cheer()`, which is what characters kept writing anyway.
  */
 export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log) {
   'use strict';
@@ -81,6 +88,7 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
   }
 
   var sdk = {};
+  var libStatics = null;
   for (var m = 0; m < surface.modules.length; m++) {
     var mod = surface.modules[m];
     var target = {};
@@ -101,8 +109,40 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
     for (var k = 0; k < keys.length; k++) {
       if (typeof target[keys[k]] === 'object') Object.freeze(target[keys[k]]);
     }
-    sdk[mod.id] = Object.freeze(target);
+    if (mod.id === 'lib') libStatics = target; // the library's own methods; sdk.lib is the lib object (below)
+    else sdk[mod.id] = Object.freeze(target);
   }
+
+  /**
+   * The character's function library. The prelude the host prepends to the code
+   * calls __rp_lib once with the saved functions ("const lib = __rp_lib({...});");
+   * a library with internal helpers calls it again with the subset the character
+   * may see, and that outer object — the one the code runs against — is the one
+   * sdk.lib ends up with. A later call from the character's own code can only
+   * hand back functions it already holds, so nothing hidden can be reached
+   * through it.
+   */
+  var libValue = buildLib({});
+
+  function buildLib(functions) {
+    var lib = {};
+    var names = Object.keys(functions);
+    for (var i = 0; i < names.length; i++) lib[names[i]] = functions[names[i]];
+    if (libStatics !== null) {
+      // Not overridable by a saved function: register and unregister are reserved names.
+      lib.register = libStatics.register;
+      lib.unregister = libStatics.unregister;
+    }
+    return Object.freeze(lib);
+  }
+
+  Object.defineProperty(sdk, 'lib', {
+    get: function () {
+      return libValue;
+    },
+    enumerable: true,
+    configurable: false,
+  });
   Object.freeze(sdk);
 
   var console = Object.freeze({
@@ -114,6 +154,15 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
     trace: logger('debug'),
   });
 
+  Object.defineProperty(globalThis, '__rp_lib', {
+    value: function (functions) {
+      libValue = buildLib(functions === null || typeof functions !== 'object' ? {} : functions);
+      return libValue;
+    },
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  });
   Object.defineProperty(globalThis, 'sdk', { value: sdk, writable: false, configurable: false, enumerable: false });
   Object.defineProperty(globalThis, 'console', { value: console, writable: false, configurable: false, enumerable: false });
 })`;

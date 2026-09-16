@@ -1,9 +1,9 @@
 /**
- * A character's own function library (`sdk.lib`): reusable functions the
- * character defines once and calls as `lib.<name>(...)` from any later action,
+ * A character's own function library (the `lib` global, which `sdk.lib` is too):
+ * reusable functions the character registers once and calls as `lib.<name>(...)` from any later action,
  * timer handler or event handler. Each function is a file in the pack,
  * `characters/<id>/lib/<name>.ts`, so pack authors can ship functions and what a
- * character defines itself survives sessions and app restarts (docs/spec/pack.md
+ * character registers itself survives sessions and app restarts (docs/spec/pack.md
  * "Function library", docs/spec/core.md "LibraryService").
  */
 
@@ -25,18 +25,18 @@ export interface LibFunction {
   description?: string;
   /**
    * An author's helper (`// @internal` first line): other library functions and the pack's
-   * behaviour hooks can call it, the character cannot. It is left out of `<library>`, of
-   * `sdk.lib.list()` and of `sdk.lib.source()`, and out of the `lib` object the model's own
-   * action code sees.
+   * behaviour hooks can call it, the character cannot. It is left out of `<library>` and out
+   * of the `lib` object the model's own action code sees; `lib.register` only replaces one
+   * when the call asks for `internal` too.
    */
   internal?: boolean;
   /** UTF-8 size of `source`. */
   bytes: number;
-  /** ISO-8601 time of the last define (the file's modification time). */
+  /** ISO-8601 time of the last register (the file's modification time). */
   updatedAt: string;
 }
 
-/** What `sdk.lib.define/list` return: a `LibFunction` without its source. */
+/** What `lib.register` returns: a `LibFunction` without its source. */
 export type LibFunctionInfo = Omit<LibFunction, 'source'>;
 
 /** Name rules for library functions: a JavaScript identifier, at most this long. */

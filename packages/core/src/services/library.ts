@@ -11,8 +11,13 @@ export { functionSourceProblem, unwrapFunctionSource } from '@rp/pack';
  * `<state>` block until it has run).
  */
 export const LIB_STATE_KEY = 'lib.functions';
-/** The prelude of a character without any library function. */
-export const EMPTY_PRELUDE = 'const lib = Object.freeze({});';
+/**
+ * The prelude of a character without any library function. `__rp_lib` is the
+ * sandbox bootstrap's library factory: it adds `register` / `unregister` and
+ * makes what it returns the value of `sdk.lib`, so an empty library still has
+ * its two methods.
+ */
+export const EMPTY_PRELUDE = 'const lib = __rp_lib({});';
 
 /** The character a library belongs to. */
 export interface LibraryTarget {
@@ -62,29 +67,32 @@ export function functionParams(source: string): string {
 }
 
 /**
- * Turn stored functions into the `const lib = Object.freeze({...});` prelude the sandbox
- * prepends to every run.
+ * Turn stored functions into the `const lib = __rp_lib({...});` prelude the sandbox
+ * prepends to every run. `__rp_lib` (sandbox bootstrap) adds the library's own
+ * `register` / `unregister` to the object and makes it the value of `sdk.lib`, so
+ * `sdk.lib.<name>(...)` reaches the same function as `lib.<name>(...)`.
  *
  * With an internal function in the library the prelude gets two scopes: an inner `lib`
  * holding every function, and the outer `lib` the running code sees, which carries only the
  * functions that are not internal. Inside the IIFE the inner binding shadows the outer one,
  * so a function body calling `lib.<helper>(...)` reaches the full object while `lib.<helper>`
- * is `undefined` in the code the character writes. `internals: true` skips the split and
- * exposes everything — the pack's own behaviour hooks run that way.
+ * is `undefined` in the code the character writes — and because the outer object is built
+ * last, it is the one `sdk.lib` reads back. `internals: true` skips the split and exposes
+ * everything — the pack's own behaviour hooks run that way.
  */
 export function buildPrelude(functions: LibFunction[], opts: { internals?: boolean } = {}): string {
   if (functions.length === 0) return EMPTY_PRELUDE;
   const entries = (indent: string) => functions.map((f) => `${indent}${JSON.stringify(f.name)}: (${f.source}),`).join('\n');
   if (opts.internals === true || !functions.some((f) => f.internal === true)) {
-    return `const lib = Object.freeze({\n${entries('  ')}\n});`;
+    return `const lib = __rp_lib({\n${entries('  ')}\n});`;
   }
   const exposed = functions.filter((f) => f.internal !== true).map((f) => `    ${JSON.stringify(f.name)}: lib[${JSON.stringify(f.name)}],`);
   return [
     'const lib = (() => {',
-    '  const lib = Object.freeze({',
+    '  const lib = __rp_lib({',
     entries('    '),
     '  });',
-    `  return Object.freeze({${exposed.length > 0 ? `\n${exposed.join('\n')}\n  ` : ''}});`,
+    `  return __rp_lib({${exposed.length > 0 ? `\n${exposed.join('\n')}\n  ` : ''}});`,
     '})();',
   ].join('\n');
 }
@@ -92,6 +100,7 @@ export function buildPrelude(functions: LibFunction[], opts: { internals?: boole
 function info(f: LibFunction): LibFunctionInfo {
   const out: LibFunctionInfo = { name: f.name, bytes: f.bytes, updatedAt: f.updatedAt };
   if (f.description !== undefined) out.description = f.description;
+  if (f.internal === true) out.internal = true;
   return out;
 }
 
@@ -104,12 +113,12 @@ export function toLibFunction(name: string, entry: CharacterLibraryEntry): LibFu
 }
 
 /**
- * A character's own function library (`sdk.lib`): functions it defines once and
- * calls as `lib.<name>(...)` in every later action, timer handler and event
- * handler. Each function is a file in the installed pack,
- * `characters/<id>/lib/<name>.ts`, read by the pack loader; `define` and
- * `remove` write and delete those files and rescan the library, so what a
- * character defines lands next to what the author shipped and survives
+ * A character's own function library (`lib`, which is also `sdk.lib`): functions
+ * it registers once and calls as `lib.<name>(...)` in every later action, timer
+ * handler and event handler. Each function is a file in the installed pack,
+ * `characters/<id>/lib/<name>.ts`, read by the pack loader; `register` and
+ * `unregister` write and delete those files and rescan the library, so what a
+ * character registers lands next to what the author shipped and survives
  * sessions and restarts (until the pack folder is replaced by a reinstall).
  * The prelude that defines `lib` is cached per character and rebuilt after
  * every write.
@@ -119,7 +128,14 @@ export class LibraryService {
 
   constructor(private readonly packs: LibraryPacks) {}
 
-  async define(target: LibraryTarget, name: string, fn: string, opts: { description?: string } = {}): Promise<LibFunctionInfo> {
+  /**
+   * Save (or replace) `name`. `opts.internal` writes an `// @internal` helper: hidden from the
+   * prompt and from the `lib` the character's own action code sees, callable from its other
+   * library functions. An existing internal function (the pack author's plumbing, or one the
+   * character wrote that way) is only replaced when the call says `internal: true` too, so a
+   * name the character cannot see cannot be taken by accident.
+   */
+  async register(target: LibraryTarget, name: string, fn: string, opts: { description?: string; internal?: boolean } = {}): Promise<LibFunctionInfo> {
     const nameProblem = libraryNameProblem(name);
     if (nameProblem !== undefined) throw new RpError('INVALID_ARGUMENT', nameProblem, { name });
     if (typeof fn !== 'string') throw new RpError('INVALID_ARGUMENT', 'fn must be a function (or a string holding a function expression)');
@@ -130,12 +146,16 @@ export class LibraryService {
     if (opts.description !== undefined && opts.description !== null && typeof opts.description !== 'string') {
       throw new RpError('INVALID_ARGUMENT', 'opts.description must be a string');
     }
+    if (opts.internal !== undefined && opts.internal !== null && typeof opts.internal !== 'boolean') {
+      throw new RpError('INVALID_ARGUMENT', 'opts.internal must be a boolean');
+    }
     const description = typeof opts.description === 'string' ? opts.description.trim().slice(0, 200) : '';
+    const internal = opts.internal === true;
 
     const { pack, character } = this.resolve(target);
     const functions = character.library;
-    if (functions[name]?.internal === true) {
-      // An author's helper: the character cannot see it, so it must not be able to replace it either.
+    if (functions[name]?.internal === true && !internal) {
+      // A helper the character does not see: it must not lose it to a name it picked blind.
       throw new RpError('INVALID_ARGUMENT', `lib.${name} is reserved by this pack (an internal helper); choose another name`, { name });
     }
     if (!(name in functions) && Object.keys(functions).length >= LIB_MAX_FUNCTIONS) {
@@ -145,7 +165,7 @@ export class LibraryService {
     if (total > LIB_MAX_TOTAL_BYTES) {
       throw new RpError('INVALID_ARGUMENT', `the library would be ${total} bytes; the limit is ${LIB_MAX_TOTAL_BYTES} bytes in total`, { bytes: total, limit: LIB_MAX_TOTAL_BYTES });
     }
-    await writeLibraryFunction(pack.root, character.dir, name, source, description.length > 0 ? description : undefined);
+    await writeLibraryFunction(pack.root, character.dir, name, source, description.length > 0 ? description : undefined, internal);
     const library = await this.reload(target);
     const entry = library[name];
     if (!entry) {
@@ -155,32 +175,19 @@ export class LibraryService {
     return info(toLibFunction(name, entry));
   }
 
-  async remove(target: LibraryTarget, name: string): Promise<boolean> {
+  /** Delete `name`, internal helpers included: a character that can register one can take it back. */
+  async unregister(target: LibraryTarget, name: string): Promise<boolean> {
     if (typeof name !== 'string' || name.length === 0) throw new RpError('INVALID_ARGUMENT', 'name must be a non-empty string');
     if (libraryNameProblem(name) !== undefined) return false;
     const { pack, character } = this.resolve(target);
-    if (character.library[name]?.internal === true) return false; // not part of the character's own library
     const existed = await removeLibraryFunction(pack.root, character.dir, name);
     if (existed || name in character.library) await this.reload(target);
     return existed;
   }
 
-  /** The functions the character itself may use, without their sources, by name (internal helpers left out). */
-  async list(target: LibraryTarget): Promise<LibFunctionInfo[]> {
-    return (await this.functions(target)).filter((f) => f.internal !== true).map(info);
-  }
-
   /** Every function with its source, internal helpers included (the prelude's input; the prompt lists the rest). */
   async functions(target: LibraryTarget): Promise<LibFunction[]> {
     return Object.entries(this.read(target)).map(([name, entry]) => toLibFunction(name, entry));
-  }
-
-  /** The source of one function; an internal helper is `NOT_FOUND` like a name that does not exist. */
-  async source(target: LibraryTarget, name: string): Promise<string> {
-    if (typeof name !== 'string' || name.length === 0) throw new RpError('INVALID_ARGUMENT', 'name must be a non-empty string');
-    const f = this.read(target)[name];
-    if (!f || f.internal === true) throw new RpError('NOT_FOUND', `lib.${name} is not defined`, { name });
-    return f.source;
   }
 
   /**

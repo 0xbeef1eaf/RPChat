@@ -166,10 +166,11 @@ export function libraryReadme(name: string): string {
   const n = name.trim() || 'the character';
   return `# Function library
 
-Every \`<name>.ts\` file in this folder is one function of ${n}'s \`sdk.lib\`
+Every \`<name>.ts\` file in this folder is one function of ${n}'s \`lib\`
 library, available in every action, timer handler and event handler as
-\`lib.<name>(...)\`. The app writes files here too when the character calls
-\`sdk.lib.define\`, so ship the functions you want it to start with.
+\`lib.<name>(...)\` (and as \`sdk.lib.<name>(...)\`, the same object). The app
+writes files here too when the character calls \`lib.register\`, so ship the
+functions you want it to start with.
 
 Format: an optional first line \`// <description>\` (shown in the prompt), then
 exactly one function expression (an arrow function or \`async function\`), for
@@ -187,8 +188,9 @@ async (mood: string) => {
 Only that first line is the description; any further comments above the
 function stay part of it. The function is an expression, so it ends without
 a \`;\`. The file name is the function name: a JavaScript identifier of at most 64
-characters. A function may use \`sdk\` and its sibling \`lib\` functions but
-closes over nothing else. Limits: 50 files, 128 KiB in total (no per-file cap).
+characters, and not \`register\` or \`unregister\` (the library's own methods).
+A function may use \`sdk\` and its sibling \`lib\` functions but closes over
+nothing else. Limits: 50 files, 128 KiB in total (no per-file cap).
 This README and anything that is not a \`.ts\` file are ignored.
 
 Start the first line with \`// @internal\` (optionally followed by a
@@ -201,9 +203,9 @@ async (mood: string) => (await sdk.pack.findAssets({ anyTags: [mood], kind: "ima
 
 Your other library functions and the character's behaviour hooks call it as
 \`lib.<name>(...)\` as usual; the character itself never sees it — it is left
-out of the prompt, out of \`sdk.lib.list()\`/\`source()\`, and out of the
-\`lib\` object the code it writes runs against, and \`sdk.lib.define\` cannot
-take the name.
+out of the prompt and out of the \`lib\` object the code it writes runs
+against, and \`lib.register\` refuses the name unless the call passes
+\`{ internal: true }\` itself.
 `;
 }
 

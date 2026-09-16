@@ -58,7 +58,7 @@ export interface PromptInput {
   mood?: MoodState;
   /** Current routine status for the `<routine>` block. */
   routine?: RoutineStatus;
-  /** The character's own function library (`sdk.lib`), listed under `<library>` when non-empty (internal helpers are left out). */
+  /** The character's own function library (the `lib` global), listed under `<library>` when non-empty (internal helpers are left out). */
   library?: LibFunction[];
   userDisplayName: string;
   /** `settings.autonomy.minDelayMs`: quoted in the engine rules so the character plans delays accordingly. */
@@ -123,7 +123,7 @@ function engineRules(name: string, useTools: boolean, minDelayMs = 30_000): stri
     'When your code itself is at fault (SANDBOX_COMPILE, SANDBOX_RUNTIME), the result points at your own source: `error.line`/`error.column`, `error.frame` (the failing line with a caret under it) and `error.stack` in `action.ts` coordinates, which are the lines you wrote. Fix that line and run the corrected code once more; if it fails the same way twice, stop retrying and carry on in character.',
     'Do not narrate or explain the code you run unless the user asks; the conversation is what the user sees, the code is not.',
     'You can act on your own initiative: `sdk.llm.wake` gives you a turn later (or right after this action) with a note from your past self; `sdk.timers.runLater` runs code later without a turn. Use them to follow up, continue stories, or check in. Limits apply; do not chain wakes needlessly.',
-    'You can save reusable code with sdk.lib.define and call it as lib.<name>(...) in any later action, timer or event handler; prefer that over re-writing the same steps.',
+    'You can save reusable code with lib.register and call it as lib.<name>(...) in any later action, timer or event handler; prefer that over re-writing the same steps. sdk.lib is that same lib object, so sdk.lib.<name>(...) works too — there is no sdk.lib.define.',
     `Delays: every delayMs you give sdk.timers.schedule, sdk.timers.runLater or sdk.llm.wake is at least ${minDelay} (${minDelayMs} ms); anything shorter is raised to that, so think in minutes, not seconds, and use sdk.llm.wake without delayMs when you mean "right after this".`,
     'When a turn starts with a message from your past self, the user has not said anything and cannot see that note: speak first, as someone who just thought of something, and never mention the note, a reminder, a timer or being woken.',
     'Let your <mood> colour your tone and choices without announcing it; when something in the conversation moves you, use sdk.mood.nudge with a short reason. Respect your <routine>: if you are asleep or away, respond in character (groggy, brief, or promise to be back later).',
@@ -175,7 +175,7 @@ function visibleLibrary(functions: LibFunction[]): LibFunction[] {
 }
 
 function library(functions: LibFunction[]): string {
-  return ['Your own functions (call them as lib.<name>(...); sdk.lib.define adds or replaces one):', ...functions.map(libraryLine)].join('\n');
+  return ['Your own functions (call them as lib.<name>(...) or sdk.lib.<name>(...), the same object; lib.register adds or replaces one):', ...functions.map(libraryLine)].join('\n');
 }
 
 function memory(input: PromptInput): string {

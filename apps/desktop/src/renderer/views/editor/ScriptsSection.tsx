@@ -6,7 +6,7 @@ import { reportError, toast } from '../../store/actions';
 import { useDraft, useEditor } from './context';
 import { SaveBar } from './SaveBar';
 
-/** The function name rules of `sdk.lib` (a JavaScript identifier, at most 64 characters). */
+/** The function name rules of the `lib` library (a JavaScript identifier, at most 64 characters). */
 const NAME_RE = /^[a-zA-Z_$][\w$]*$/;
 const NAME_MAX = 64;
 /** How long the author has to stop typing before the function is checked again. */
@@ -33,7 +33,7 @@ function fresh(template: string): ScriptDraft {
 /**
  * The character's function library: one `lib/<name>.ts` per function (docs/spec/pack.md
  * "Function library"). What the author ships here is what the character starts with; the
- * app writes the character's own `sdk.lib.define` calls into the same folder of the installed copy.
+ * app writes the character's own `lib.register` calls into the same folder of the installed copy.
  */
 export function ScriptsSection() {
   const { project, setProject } = useEditor();
@@ -172,9 +172,9 @@ export function ScriptsSection() {
         </button>
       </div>
       <p className="muted small" style={{ marginBottom: 14 }}>
-        Each file is one function of {character.definition.name || character.definition.id}'s <code>sdk.lib</code> library, callable as <code>lib.&lt;name&gt;(...)</code> in every
+        Each file is one function of {character.definition.name || character.definition.id}'s <code>lib</code> library, callable as <code>lib.&lt;name&gt;(...)</code> in every
         action, timer handler and event handler. The first line <code>// …</code> is its description in the prompt; the rest is exactly one function expression.
-        The character's own <code>sdk.lib.define</code> calls are saved into the same folder of the installed pack. Mark a function <em>internal</em> to keep it as
+        The character's own <code>lib.register</code> calls are saved into the same folder of the installed pack. Mark a function <em>internal</em> to keep it as
         plumbing for your other functions and hooks, out of sight of the character.
       </p>
       <div className="scripts-layout">
@@ -219,7 +219,7 @@ export function ScriptsSection() {
             </label>
             <span className="field-hint">
               Your other functions and the character's behaviour hooks can call <code>lib.{name || 'name'}(...)</code>; the character cannot. It is left out of{' '}
-              <code>&lt;library&gt;</code>, of <code>sdk.lib.list()</code> and of the <code>lib</code> object the character's own code sees.
+              <code>&lt;library&gt;</code> and of the <code>lib</code> object the character's own code sees.
             </span>
           </div>
           <div className="field" style={{ marginTop: 12 }}>

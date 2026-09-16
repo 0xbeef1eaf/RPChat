@@ -90,7 +90,7 @@ export class Engine {
   readonly memories: MemoryService;
   /** Background summarisation of the older messages of a session. */
   readonly history: HistoryService;
-  /** Per-character function libraries (`sdk.lib`): the `lib` prelude of every run. */
+  /** Per-character function libraries: the `lib` prelude of every run (and, through it, `sdk.lib`). */
   readonly library: LibraryService;
   /** Event subscriptions + host-event routing (`hostEvents`/`subscriptions` are the host-facing views). */
   readonly eventService: EventService;

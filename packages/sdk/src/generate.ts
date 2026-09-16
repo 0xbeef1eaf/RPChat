@@ -30,12 +30,21 @@ declare const console: {
 };`;
 
 /**
- * Typings for the `lib` local the host defines in front of character code
- * (`CodeRunRequest.prelude`): the character's own function library (`sdk.lib`).
- * The members are only known at run time, so it is typed as an open record.
+ * Typings for the `lib` global the host defines in front of character code
+ * (`CodeRunRequest.prelude`): the character's own function library. Its members
+ * are only known at run time, so the type is an open record; `sdk.lib` is the
+ * same object (the `lib` module's `LibApi`, emitted with the module).
  */
 export const LIB_TYPINGS = `/**
- * Your own function library: everything you saved with sdk.lib.define(), callable as lib.<name>(...).
+ * Your own function library: everything you saved with lib.register(), callable as lib.<name>(...).
+ * Available in every action, timer handler and event handler; see <library> in your prompt for the names.
+ * \`sdk.lib\` is this very object, so \`sdk.lib.<name>(...)\` does the same as \`lib.<name>(...)\`.
+ */
+declare const lib: LibApi;`;
+
+/** {@link LIB_TYPINGS} for a surface without the `lib` module, where `LibApi` is not emitted. */
+export const LIB_TYPINGS_WITHOUT_MODULE = `/**
+ * Your own function library: the functions saved under characters/<id>/lib/, callable as lib.<name>(...).
  * Available in every action, timer handler and event handler; see <library> in your prompt for the names.
  */
 declare const lib: { [name: string]: (...args: any[]) => any };`;
@@ -64,7 +73,8 @@ export function generateSdkTypings(registry: CapabilityRegistry, options: Genera
     out.push(`  /** ${spec.summary.trim()} (permission: ${spec.permission}) */`);
     out.push(`  ${spec.id}: ${spec.apiTypeName};`);
   }
-  out.push('}', '', CONSOLE_TYPINGS, '', LIB_TYPINGS);
+  const hasLib = specs.some((spec) => spec.id === 'lib');
+  out.push('}', '', CONSOLE_TYPINGS, '', hasLib ? LIB_TYPINGS : LIB_TYPINGS_WITHOUT_MODULE);
 
   for (const spec of specs) {
     out.push('', `// ---- module: ${spec.id} v${spec.version} ----`, spec.typings.trim());

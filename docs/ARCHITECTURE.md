@@ -123,8 +123,8 @@ process. The renderer is a thin UI over the typed `IpcApi` in
 ### 4.1 What character code looks like
 
 The LLM writes the **body of an async function**. A global `sdk` object is in
-scope, plus `console` and `lib` (the character's own function library, see
-`sdk.lib`). `return` sends a JSON value back to the model.
+scope, plus `console` and `lib` (the character's own function library, which is
+also `sdk.lib`). `return` sends a JSON value back to the model.
 
 ```ts
 // Luna decides to show a picture and set a reminder
@@ -177,7 +177,7 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `state`  | trusted    | `get/set/delete/keys` (character-scoped, persistent), `session.get/set/delete/keys` |
 | `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `readText(path)`, `info()`                    |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `runLater(delayMs, code, opts?)` (setTimeout-style stored code, optionally repeating), `cancel(id)`, `list()` |
-| `lib`    | trusted    | `define(name, fn, opts?)`, `remove(name)`, `list()`, `source(name)` — the character's own function library, one file per function in the pack (`characters/<id>/lib/<name>.ts`; authors can ship them), available as `lib.<name>(...)` in every run (`CodeRunRequest.prelude`) |
+| `lib`    | trusted    | not a namespace of its own: `sdk.lib` **is** the `lib` global (the character's own function library, one file per function in the pack — `characters/<id>/lib/<name>.ts`; authors can ship them), so `sdk.lib.<name>(...)` and `lib.<name>(...)` are the same call. Only `register(name, fn, opts?)` and `unregister(name)` cross to the host; the rest is the prelude (`CodeRunRequest.prelude`) |
 | `llm`    | trusted    | `ask(prompt, opts?)` (private side completion), `wake(prompt, { delayMs? })` (self-triggered turn now or later; rate-limited by autonomy settings) |
 | `memory` | trusted    | `remember(text, opts?)`, `recall(query, limit?)`, `recent(limit?)`, `update(id, patch)`, `forget(id)` — long-term memory, also consolidated automatically (see `docs/spec/memory.md`) |
 | `display`| trusted    | `monitors()`, `backend()` — read-only screen/backend info for placement decisions   |
@@ -328,7 +328,7 @@ my-pack/
 │       ├── character.json
 │       ├── persona.md
 │       ├── avatar.png
-│       ├── lib/                  (optional) the character's sdk.lib functions, one per file
+│       ├── lib/                  (optional) the character's `lib` functions, one per file
 │       │   └── cheer.ts          `// <description>` + one function expression
 │       └── scripts/
 │           ├── on-session-start.ts
@@ -377,10 +377,10 @@ packs is ignored with the warning `pack.json: "capabilities" is ignored;
 permissions are set in the app under Settings → Permissions`.
 
 Installed packs live in `<userData>/packs/<packId>/<version>/`. The pack store
-(`InstalledPackRecord`) keeps id, version, root path and install time. The app owns that folder: `sdk.lib.define` writes the character's own
-functions into `characters/<id>/lib/` of the installed copy (and `remove`
+(`InstalledPackRecord`) keeps id, version, root path and install time. The app owns that folder: `lib.register` writes the character's own
+functions into `characters/<id>/lib/` of the installed copy (and `unregister`
 deletes them), so they persist across sessions and restarts; reinstalling or
-upgrading the pack replaces the folder and therefore those definitions, unless
+upgrading the pack replaces the folder and therefore those functions, unless
 the author shipped them. `@rp/pack` exposes `loadPack(dir)`, `validatePack`, `packDirectory(dir)
 → .rppack`, `extractPack(file, destDir)`, and `indexAssets(pack)` (kind by
 extension: image/video/audio/text/other).

@@ -224,14 +224,15 @@ are no imports. The same is true of the code the model writes.
 
 ## 8. Function library (`lib/`)
 
-A character can save functions with `sdk.lib.define` and call them as
-`lib.<name>(...)` in every later action, timer handler and event handler. Those
+A character can save functions with `lib.register` and call them as
+`lib.<name>(...)` in every later action, timer handler and event handler
+(`sdk.lib` is that same object, so `sdk.lib.<name>(...)` works too). Those
 functions are files in the pack, `characters/<id>/lib/<name>.ts`, so you can
 ship the ones you want the character to start with — and what the character
-defines itself is written to the same folder of the installed copy (a reinstall
+registers itself is written to the same folder of the installed copy (a reinstall
 replaces the folder, so ship what must survive). Format: an optional first line
 `// <description>` (shown in the character's prompt), then exactly one function
-expression, as `sdk.lib.define` would receive it:
+expression, as `lib.register` would receive it:
 
 ```ts
 // characters/makima/lib/glance.ts
@@ -246,7 +247,8 @@ async () => {
 ```
 
 The file name is the function name (a JavaScript identifier, at most 64
-characters, no reserved words). A function may use `sdk` and its sibling `lib`
+characters, no reserved words, and not `register` or `unregister` — the
+library's own methods). A function may use `sdk` and its sibling `lib`
 functions but closes over nothing else.
 
 Library functions are the right place for anything that outlives one action:
