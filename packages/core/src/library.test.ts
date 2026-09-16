@@ -57,6 +57,10 @@ describe('LibraryService helpers', () => {
     expect(functionParams('async x => x')).toBe('x');
     expect(functionParams('() => 1')).toBe('');
     expect(functionParams('(s = ")") => s')).toBe('s = ")"');
+    // a comment above the function is skipped, even one holding a `(` or a `=>`
+    expect(functionParams('// counts (up) to => 1\nasync (mood: string) => 1')).toBe('mood: string');
+    expect(functionParams('/* helper (old) */\n// keep\nx => x')).toBe('x');
+    expect(functionParams('// nothing but a comment')).toBe('');
   });
 
   it('accepts function expressions and rejects everything else, with the parser message', () => {
@@ -65,6 +69,13 @@ describe('LibraryService helpers', () => {
     expect(functionSourceProblem('function (a, b) { return a + b; }')).toBeUndefined();
     expect(functionSourceProblem('async function named() {}')).toBeUndefined();
     expect(functionSourceProblem('x => x')).toBeUndefined();
+    // comments in front of the function, and inside it, do not hide it
+    expect(functionSourceProblem(`// cheer the mood up\n/* uses the pack's pictures */\n${CHEER}`)).toBeUndefined();
+    expect(functionSourceProblem('// a note\nfunction (a, b) { return a + b; }')).toBeUndefined();
+    expect(functionSourceProblem('async /* here */ (mood: string) => true')).toBeUndefined();
+    expect(functionSourceProblem('// looks like a function: async (x) => 1')).toMatch(/does not parse/);
+    expect(functionSourceProblem('// a note\n1 + 2')).toMatch(/function expression/);
+    expect(functionSourceProblem('// a note\nx => 1); sdk.chat.emote("hi"); (y => 2')).toMatch(/single function expression/);
     expect(functionSourceProblem('')).toMatch(/function/);
     expect(functionSourceProblem('1 + 2')).toMatch(/function expression/);
     expect(functionSourceProblem('sdk.chat.emote("hi")')).toMatch(/function expression/);
@@ -81,6 +92,10 @@ describe('LibraryService helpers', () => {
     ]);
     expect(prelude.startsWith('const lib = Object.freeze({\n  "double": ((n: number) => n * 2),\n  "cheer": (async (mood) => {')).toBe(true);
     expect(prelude.endsWith('}),\n});')).toBe(true);
+    // a function that opens with a comment still parses inside the parentheses the prelude puts round it
+    const commented = buildPrelude([{ name: 'cheer', source: '// says hi\nasync (mood) => mood', bytes: 1, updatedAt: 't' }]);
+    expect(commented).toBe('const lib = Object.freeze({\n  "cheer": (// says hi\nasync (mood) => mood),\n});');
+    expect(() => new Function(`${commented}\nreturn lib;`)).not.toThrow();
   });
 
   it('splits the prelude in two scopes when a function is internal, and keeps one scope for the pack\'s own hooks', () => {

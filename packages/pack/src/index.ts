@@ -73,6 +73,7 @@ export {
   parseLibraryFile,
   readCharacterLibrary,
   removeLibraryFunction,
+  stripLeadingComments,
   unwrapFunctionSource,
   writeLibraryFunction,
 } from './library.js';

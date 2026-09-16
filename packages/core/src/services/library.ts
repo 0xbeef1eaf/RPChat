@@ -1,4 +1,4 @@
-import { functionSourceProblem, libraryNameProblem, removeLibraryFunction, unwrapFunctionSource, writeLibraryFunction } from '@rp/pack';
+import { functionSourceProblem, libraryNameProblem, removeLibraryFunction, stripLeadingComments, unwrapFunctionSource, writeLibraryFunction } from '@rp/pack';
 import type { CharacterLibraryEntry, LibFunction, LibFunctionInfo, LoadedCharacter, LoadedPack } from '@rp/shared';
 import { LIB_MAX_FUNCTIONS, LIB_MAX_TOTAL_BYTES, RpError } from '@rp/shared';
 
@@ -30,9 +30,11 @@ export interface LibraryPacks {
  * Parameters of a stored function as text: what lies between the first `(` and
  * its matching `)`, whitespace collapsed (`async (mood: string) => …` gives
  * `mood: string`); a parenthesis-free arrow (`x => …`) gives its one parameter.
+ * Comments in front of the function are skipped, so one holding a `(` or a `=>`
+ * cannot pass itself off as the parameter list.
  */
 export function functionParams(source: string): string {
-  const text = source.trim();
+  const text = stripLeadingComments(source).trim();
   const open = text.indexOf('(');
   const arrow = text.indexOf('=>');
   if (open < 0 || (arrow >= 0 && arrow < open)) {

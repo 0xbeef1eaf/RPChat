@@ -281,6 +281,21 @@ describe('validatePack / loadPack problems', () => {
     expect(lib['wave']!.internal).toBeUndefined();
   });
 
+  it('reads a library file whose function is preceded by comment lines, keeping them in the source', async () => {
+    const commented = '// only reaches for the mood tag\n/* the pack ships the pictures */\nasync (mood: string) => (await sdk.pack.findAssets({ anyTags: [mood] }))[0]';
+    const dir = await packWith({
+      ...minimalPackFiles(),
+      'characters/a/lib/cheer.ts': `// show a picture for a mood\n${commented}\n`,
+      'characters/a/lib/tick.ts': '// counts (up) to => 1\n() => 1\n',
+    });
+    expect(await validatePack(dir)).toEqual({ ok: true, problems: [], warnings: [] });
+    const lib = (await loadPack(dir)).character.library;
+    expect(Object.keys(lib)).toEqual(['cheer', 'tick']);
+    // the first line is the description; the comments below it stay part of the function, verbatim
+    expect(lib['cheer']).toMatchObject({ description: 'show a picture for a mood', source: commented });
+    expect(lib['tick']).toMatchObject({ description: 'counts (up) to => 1', source: '() => 1' });
+  });
+
   it('skips a library file that is not one function expression or not a valid name, with a warning, and still loads', async () => {
     const dir = await packWith({
       ...minimalPackFiles(),
@@ -288,6 +303,7 @@ describe('validatePack / loadPack problems', () => {
       'characters/a/lib/broken.ts': '// half\nasync ( => 1',
       'characters/a/lib/call.ts': 'sdk.chat.emote("hi")',
       'characters/a/lib/two.ts': 'x => 1); (y => 2',
+      'characters/a/lib/sneaky.ts': '// a description\n// and a comment the function hides behind\nx => 1); sdk.chat.emote("hi"); (y => 2',
       'characters/a/lib/1bad.ts': '() => 1',
       'characters/a/lib/class.ts': '() => 1',
     });
@@ -298,6 +314,8 @@ describe('validatePack / loadPack problems', () => {
       expect.stringMatching(/^warning: characters\/a\/lib\/broken\.ts: not a single function expression: fn does not parse: /),
       expect.stringMatching(/^warning: characters\/a\/lib\/call\.ts: not a single function expression: fn must be a function expression/),
       'warning: characters/a/lib/class.ts: file name is not a valid function name: "class" is a reserved word and cannot be a function name',
+      // a comment above the function does not make the statements it smuggles in look like one expression
+      'warning: characters/a/lib/sneaky.ts: not a single function expression: fn must be a single function expression (arrow function or `async function`)',
       'warning: characters/a/lib/two.ts: not a single function expression: fn must be a single function expression (arrow function or `async function`)',
     ]);
     const pack = await loadPack(dir);

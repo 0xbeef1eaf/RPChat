@@ -45,7 +45,7 @@ export function libraryNameProblem(name: unknown): string | undefined {
 
 /** `return await (<fn>)(input);` — how the sandbox serialises a function argument (docs/spec/sandbox.md §4). */
 const HANDLER_WRAPPER_RE = /^return await \(([\s\S]*)\)\(input\);$/;
-/** What a function expression looks like once esbuild has normalised it (a `function` expression keeps its outer parentheses). */
+/** What a function expression looks like once esbuild has normalised it: comments gone, whitespace minimal, outer parentheses kept. */
 const FUNCTION_EXPRESSION_RE = /^\(?\s*(async\s+)?(function\b|\([\s\S]*?\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/;
 
 /**
@@ -60,6 +60,31 @@ export function unwrapFunctionSource(raw: string): string {
 }
 
 /**
+ * `source` with the comments in front of the function removed, so a `// note`
+ * line above it does not stand in for the `async` behind it. Only the head is
+ * scanned, where `//` and `/*` can only open a comment; comments further in
+ * (inside the parameter list, in the body) are left alone. A source that is
+ * nothing but comments gives an empty string.
+ */
+export function stripLeadingComments(source: string): string {
+  let i = 0;
+  for (;;) {
+    while (i < source.length && /\s/.test(source[i]!)) i += 1;
+    if (source.startsWith('//', i)) {
+      const end = source.indexOf('\n', i + 2);
+      if (end < 0) return '';
+      i = end + 1;
+    } else if (source.startsWith('/*', i)) {
+      const end = source.indexOf('*/', i + 2);
+      if (end < 0) return '';
+      i = end + 2;
+    } else {
+      return source.slice(i);
+    }
+  }
+}
+
+/**
  * Check that `source` is exactly one function expression, using esbuild as the
  * parser (character code is never evaluated on the host). Returns the problem,
  * or undefined when the source is fine.
@@ -68,7 +93,9 @@ export function functionSourceProblem(source: string): string | undefined {
   if (source.length === 0) return 'fn must be a function';
   let normalised: string;
   try {
-    normalised = transformSync(`(${source})`, { loader: 'ts', target: 'es2020', logLevel: 'silent', legalComments: 'none' }).code.trim();
+    // `minifyWhitespace` drops every comment: esbuild otherwise hoists the ones in front of the
+    // function to the top of its output, where they would hide the function from the shape check below.
+    normalised = transformSync(`(${source})`, { loader: 'ts', target: 'es2020', logLevel: 'silent', legalComments: 'none', minifyWhitespace: true }).code.trim();
   } catch (err) {
     return `fn does not parse: ${esbuildMessage(err)}`;
   }
