@@ -22,6 +22,24 @@ updates:
       # Lift this together with the move to Vite 8.
       - dependency-name: '@vitejs/plugin-react'
         update-types: [version-update:semver-major]
+      # playwright-core is pinned exactly (no caret) because it chooses the browser the smoke
+      # drives, and the browser is half of what that smoke tests. From 1.63 it downloads Chrome
+      # for Testing rather than a Chromium build, and Chrome for Testing reads managed policy
+      # from /etc/opt/chrome_for_testing/policies — not the /etc/chromium, /etc/opt/chrome and
+      # /etc/opt/edge directories the installer writes. The unpacked phase of browser-smoke.sh
+      # still passes on it; the policy phase never sees the extension (#2). Lift this once the
+      # smoke has an answer for that — a real Chromium via RP_CHROMIUM_BIN, or a policy path it
+      # knows about — and bump it on purpose, not inside a group.
+      - dependency-name: playwright-core
+      # TypeScript majors are a compiler swap, not a dependency bump. 7 typechecks this repo
+      # clean and its `tsc -p` emits byte-identical JavaScript for every package — but it is the
+      # native compiler, and packages/sdk/src/generate.test.ts drives the old JS compiler API
+      # (`ts.createCompilerHost`, `ts.ScriptTarget`, a virtual-file host) to prove the generated
+      # SDK typings compile. That API is not there on 7: `ts.ScriptTarget` is undefined and all
+      # six of those tests throw (#4). Moving means giving that test another way to run — a
+      # compiler of its own, or the compiler out of process — so it happens on purpose.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
   - package-ecosystem: cargo
     directory: /native/overlay-wlr
     schedule:
