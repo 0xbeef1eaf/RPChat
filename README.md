@@ -5,8 +5,9 @@ code**. Each character is driven by an LLM that, besides talking, may write
 short TypeScript snippets against a documented SDK. The app runs those snippets
 in a WebAssembly sandbox and executes the requested actions on the host:
 show a picture, play a video or sound, remember something, set a reminder,
-notify you, and touch the system, all within the functions you leave switched on
-under Settings → Permissions (one switch per SDK function, for every character).
+notify you, lock a file away, and touch the system, all within the functions you
+leave switched on under Settings → Permissions (one switch per SDK function, for
+every character).
 
 Characters, their behaviours and their media are distributed as shareable
 **packs** (`.rppack` files or plain directories).
@@ -42,6 +43,10 @@ Characters, their behaviours and their media are distributed as shareable
   on the layer you choose (`background`, `bottom`, `top`, `overlay`), on the
   monitor you choose, with opacity and click-through. Other desktops use the
   generic Electron backend; more backends plug into the same interface.
+- **Washes over the whole screen**: besides a picture in a window somewhere,
+  `sdk.media.overlay` covers every monitor (or one) with a click-through image or
+  video on the overlay layer — faint by default, tiled rather than stretched when
+  the shape does not match, one handle closing it everywhere at once.
 - **Long-term memory**: characters remember facts about you across sessions,
   consolidated automatically and editable in the app.
 - **Initiative**: characters can schedule code to run later, wake themselves
@@ -103,6 +108,12 @@ Characters, their behaviours and their media are distributed as shareable
 - **Desktop control**: launch apps, move and focus windows, switch workspaces,
   volume, brightness, do-not-disturb, theme; a per-character home folder; typed
   input and clicks unless you switch them off; outbound messages via webhooks.
+- **Locking a file away**: `sdk.crypto` encrypts or decrypts one of your own
+  files in place (AES-256-GCM) when you ask a character to. It reaches your home
+  directory only and refuses anything that looks like a system or session file;
+  the key is managed for you (**Settings → System → Encryption**, rotation keeps
+  the old keys so old files still open), every encryption is logged, and
+  `rpchat-decrypt-all` brings everything back from a terminal.
 - **Inner life**: a mood model that decays and reacts, a daily routine with
   wake-ups on transitions, and long-term memory.
 - **Permissions are yours alone, one SDK function at a time**: Settings →
@@ -128,6 +139,7 @@ Characters, their behaviours and their media are distributed as shareable
 | path                 | package        | role                                             |
 |----------------------|----------------|--------------------------------------------------|
 | `apps/desktop`       | `@rp/desktop`  | Electron app: main, preload, renderer, media window |
+| `apps/browser-extension` | `@rp/browser-extension` | Manifest V3 extension: the browser bridge `sdk.browser` drives |
 | `packages/shared`    | `@rp/shared`   | Cross-package contracts                          |
 | `packages/sdk`       | `@rp/sdk`      | Capability registry, standard modules, d.ts/docs generator |
 | `packages/pack`      | `@rp/pack`     | Pack format: schema, loader, validator, `.rppack` zip |
@@ -135,7 +147,7 @@ Characters, their behaviours and their media are distributed as shareable
 | `packages/sandbox`   | `@rp/sandbox`  | QuickJS runner and host bridge                   |
 | `packages/core`      | `@rp/core`     | Chat engine, action loop, permissions, storage   |
 | `native/overlay-wlr` | `rp-overlay-wlr` | Rust wlr-layer-shell overlay helper (Hyprland, Sway, river, KDE Wayland) |
-| `native/rpchatd`    | `rpchatd`     | Rust root daemon: input locking, injection, locked policy; installer and udev/systemd files |
+| `native/rpchatd`     | `rpchatd`      | Rust root daemon: input locking, injection, locked policy, `sdk.crypto` keys; installer and udev/systemd files |
 | `examples/packs`     |                | Sample packs and the pack-author guide           |
 | `docs`               |                | Architecture and per-package specs               |
 
@@ -204,7 +216,7 @@ commands.
 
 ### Tray icon
 
-rpchat keeps a tray icon on every launch; closing the window hides it there (Settings →
+RPChat keeps a tray icon on every launch; closing the window hides it there (Settings →
 General → *Closing the window keeps rpchat running in the tray*) so timers, self-wakes and the
 browser bridge keep working, and **Quit** lives in the tray menu. On Linux the tray is a
 StatusNotifier item: install `libayatana-appindicator3-1` (Debian/Ubuntu; the `.deb` depends on
@@ -234,7 +246,7 @@ tray, and the daemon relaunches the app in their session if it is killed or cras
 (`native/rpchatd/dist/POLICY.md`). A `"guard": { "mode": "audit" }` block turns on the
 *session guard*: AppArmor profiles generated by the daemon that confine those users' login
 sessions so their own terminals, keybind scripts and pickers cannot reach the compositor/shell
-IPC (`hyprctl`, `noctalia msg`), edit the wallpaper config or kill rpchat — while rpchat
+IPC (`hyprctl`, `noctalia msg`), edit the wallpaper config or kill RPChat — while RPChat
 itself may; attempts reach characters as the `guard-attempt` event, and `enforce` blocks them.
 The app shows the daemon and policy state under **Settings → System**,
 where you can also create the policy once without a root password (afterwards only
@@ -266,6 +278,15 @@ The same installer writes the browser extension policy for **Settings → Browse
 root-owned file per user
 (`install.sh --browser-only --browser-extension <id> --browser-update-url <url> --user <name> [--browser-policy-dir <dir>]…`); see
 [docs/browser-extension.md](docs/browser-extension.md).
+
+The daemon also keeps the keys `sdk.crypto` encrypts with: one root-owned `0600` file per uid
+(`/etc/rpchat/crypto-keys/<uid>.json`), handed out over the socket to that uid only, so a
+character's encryption survives the app's own config being wiped and no user can read another's
+keys. Without the daemon the app falls back to a `0600` file in its own config directory. Rotating
+the key (**Settings → System → Encryption**) appends a new one and keeps the history forever, so
+files encrypted under an old key still open. Every encryption is written to a log, and
+`rpchat-decrypt-all` (shipped by `@rp/core`; `--dry-run` to look first) walks that log as your own
+user and decrypts whatever is still encrypted — there is no button for that, on purpose.
 
 To chat for real, open **Settings → Providers**, add a provider (Anthropic,
 or an OpenAI-compatible base URL such as `http://localhost:11434/v1` for
