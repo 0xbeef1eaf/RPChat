@@ -34,7 +34,7 @@ export * as modules from './modules/index.js';   // chatModule, logModule, state
 
 `options.modules` / `options.methods` filter to what is available — every SDK function the user has not switched off under Settings → Permissions, narrowed for the prompt by the character's `promptFunctions` (core builds both from `PermissionService`; see docs/spec/core.md). `generateSdkIndex` simply leaves a filtered-out function out of the index. The typings and the docs are one authored block per module and cannot drop a single method from their text, so they add a `Not available: <module>.<name>` line naming it instead — as does `sdk.help.module(id)`, in its `unavailable` field.
 
-Permission levels (`CapabilityModuleSpec.permission`, per-method override in `methods[name].permission`): `trusted` — always available, cannot be switched off; `pack` — on for every character unless the user switches the module off under Settings → Permissions (app-wide; packs neither request nor are granted it); `prompt` — as `pack`, plus a confirmation dialog on every call (remembered per session on `allow-session`; a handler may `preauthorize`). No built-in module uses `prompt`.
+Permission levels (`CapabilityModuleSpec.permission`, per-method override in `methods[name].permission`) say how much ceremony a call needs, not whether it is allowed — that is the user's per-function policy (docs/spec/core.md), which every module but `lib` answers to. `trusted` — effects stay inside the app's own data, never confirmed; `pack` — reaches outside the app, used without asking; `prompt` — as `pack`, plus a confirmation dialog on every call (remembered per session on `allow-session`; a handler may `preauthorize`). No built-in module uses `prompt`.
 
 ## Generated typings format
 

@@ -5,8 +5,9 @@ folder containing `plugin.json` and an entry JavaScript module. The manifest dec
 (typings, docs, permission, methods) exactly like the built-in `CapabilityModuleSpec`s; the entry
 module implements them on the host. Once loaded, plugin modules are indistinguishable from
 built-ins: they appear in the generated `sdk.d.ts` and prompt docs, every character may use them
-unless the user switches them off under Settings → Permissions (the app-wide policy is the only
-permission control), every call is audited.
+unless the user switches the module — or one function of it — off under Settings → Permissions
+(the app-wide per-function policy is the only permission control), every call is audited. A plugin's
+declared level decides whether a call is confirmed, never whether it is allowed.
 
 Trust model: plugins are ordinary Node code running in the app's main process, with the same
 power as the app. The UI says so on install. Contracts: `@rp/shared/plugin.ts`, `IpcApi.plugins`.
@@ -43,7 +44,12 @@ my-plugin/
   unregister, call fails with CAPABILITY_UNKNOWN.
 - Packs do not declare capabilities (a legacy `capabilities` key is ignored with a warning), so
   there is nothing to validate against the registry at install; a plugin module is simply on for
-  every character once registered, unless switched off under Settings → Permissions.
+  every character once registered, function by function, unless switched off under Settings →
+  Permissions — including functions a later version of the plugin adds, since an unmentioned key
+  in `functionAllow` is allowed.
+- A pack's `character.json` `promptFunctions` can name a plugin module or one of its functions.
+  Unknown names are not an error: a pack written against a plugin this machine does not have
+  simply selects nothing for it.
 
 ## Desktop main — `PluginService` (`src/main/plugins/`)
 

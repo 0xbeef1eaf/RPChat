@@ -183,21 +183,35 @@ as their default in Settings.
 ## 6. Capabilities and permissions
 
 The SDK is made of modules, each with a permission level. Permissions are
-**app-wide**: the user switches modules on or off once, for every character,
-under Settings → Permissions. Packs neither request nor are granted anything —
-there is nothing to declare in `pack.json` or `character.json`. (A
+**app-wide and per function**: the user switches any SDK function — or a whole
+module at once — on or off under Settings → Permissions, for every character.
+Everything is on until they say otherwise. Packs neither request nor are granted
+anything: there is nothing to declare in `pack.json` or `character.json`. (A
 `capabilities` key from older packs is accepted, ignored and reported as a
-loader warning.)
+loader warning.) `sdk.lib` is the one module outside all of this — it is the
+character's own saved functions, so it is always available.
+
+The level says how much ceremony a call needs, not whether it is allowed:
 
 | level     | meaning                                                                                  |
 |-----------|------------------------------------------------------------------------------------------|
-| `trusted` | always available (`chat`, `state`, `pack`, `timers`, …); no effects outside the app; cannot be switched off |
-| `pack`    | on for every character unless the user switches the module off under Settings → Permissions (`media`, `ui`, `system`, …) |
+| `trusted` | effects stay inside the app's own data (`chat`, `state`, `pack`, `timers`, …); never confirmed |
+| `pack`    | reaches outside the app (`media`, `ui`, `crypto`, `system`, …); used without asking       |
 | `prompt`  | as `pack`, plus a confirmation dialog on every call (no built-in module uses it)          |
 
-Write the character so it copes with a module being off: the call fails with
-`PERMISSION_DENIED` naming Settings → Permissions, and the module is absent
-from the SDK reference the model sees.
+Write the character so it copes with a function being off — a user may well keep
+`crypto.decrypt` and drop `crypto.encrypt`. The call fails with
+`PERMISSION_DENIED` naming Settings → Permissions, and the function is absent
+from the SDK reference the model sees, so a character that reads its own
+reference will not reach for it in the first place.
+
+You can also choose what that reference **describes**: `promptFunctions` in
+`character.json` (Pack editor → Character → "SDK in the prompt") lists the
+modules and `module.function` names your character's prompt should carry. It
+trims the prompt, not the pack — your behaviour scripts and `lib` functions
+still call everything the user allows, so you can keep `sdk.wallpaper` out of
+the character's reference and still set the wallpaper from a `lib` function. It
+cannot widen anything: the user's permissions always have the last word.
 
 ## 7. Behaviour hooks
 
@@ -299,11 +313,12 @@ Standard modules (v1):
 | `state`  | trusted    | `get/set/delete/keys` (per character, persistent), `session.get/set/delete/keys`                 |
 | `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `tags()`, `readText(path)`, `info()`                       |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `cancel(id)`, `list()`                                      |
-| `lib`    | trusted    | `define(name, fn, opts?)`, `remove(name)`, `list()`, `source(name)` — the function library, files under `lib/` (§8) |
+| `lib`    | trusted    | `register(name, fn, opts?)`, `unregister(name)` — `sdk.lib` **is** the `lib` global, so every other member is one of your saved functions; files under `lib/` (§8). The one module the permission policy never touches |
 | `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `overlay(asset, opts?)` (whole-screen, click-through), `close(id)`, `closeAll()`, `list()` |
 | `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`                       |
 | `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — saved under `webcam/` in the character home, returned as a `source: 'home'` AssetRef |
-| `system` | prompt     | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)` |
+| `crypto` | pack       | `encrypt(path)`, `decrypt(path)` — one of the user's own files, in place, under a key the app manages |
+| `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)` |
 
 Every run is limited (wall-clock timeout, CPU budget, memory, number of host
 calls, log and result size), so keep scripts short and never loop forever.

@@ -30,6 +30,7 @@ const PROBE_CALL: Record<string, { method: string; args: Json[] }> = {
   ui: { method: 'notify', args: ['hi'] },
   web: { method: 'fetch', args: ['https://example.com'] },
   files: { method: 'list', args: ['.'] },
+  crypto: { method: 'decrypt', args: ['~/note.txt'] },
 };
 
 function nonTrustedModules(): string[] {

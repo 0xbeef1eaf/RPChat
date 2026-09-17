@@ -294,7 +294,7 @@ requests go to the most recently connected extension.
 
 ## What a character can and cannot do
 
-Can (unless you switched `browser` off under Settings → Permissions, and only while the extension is connected):
+Can (unless you switched `browser`, or the single function named, off under Settings → Permissions, and only while the extension is connected):
 
 - see every open tab's URL and title (`tabs()`), open new tabs or windows, switch between
   tabs, close tabs, navigate, go back/forward, reload;
@@ -323,15 +323,16 @@ Cannot:
 - reach the extension at all when it is not connected, or from another machine (the bridge
   and the update URL are bound to `127.0.0.1`);
 - act once you switched it off: `browser` is a pack-level capability (on for every character
-  unless switched off under Settings → Permissions) and `openTab`, `navigate`, `close`,
-  `click`, `type` and `screenshot` are marked *dangerous* in the SDK, so they are shown as such
-  in the permissions UI and the audit log records every call.
+  unless switched off under Settings → Permissions, whole or one function at a time) and
+  `openTab`, `navigate`, `close`, `click`, `type` and `screenshot` are marked *dangerous* in the
+  SDK, so they are shown as such in the permissions UI and the audit log records every call.
 
 Things worth knowing: clicks and typing land in your real session (logged-in accounts,
 forms). The SDK docs tell the model not to submit, buy, post or send anything the user did
 not ask for in the conversation, and to say what it opened — but the switch is the control;
 it applies to every installed character, so switch `browser` off under Settings → Permissions
-unless you trust the packs you run, and keep the web allowlist tight when in doubt.
+unless you trust the packs you run — or keep the reading functions and switch off just `click`,
+`type` and `openTab` — and keep the web allowlist tight when in doubt.
 
 ## Security model
 
