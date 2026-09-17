@@ -101,30 +101,21 @@ describe('LibraryService helpers', () => {
     expect(() => new Function('__rp_lib', `${commented}\nreturn lib;`)).not.toThrow();
   });
 
-  it('splits the prelude in two scopes when a function is internal, and keeps one scope for the pack\'s own hooks', () => {
+  it('names the internal functions in the prelude instead of hiding them in a second scope', () => {
     const functions = [
       { name: 'pick', source: '(n: number) => n + 1', bytes: 1, updatedAt: 't', internal: true },
       { name: 'double', source: 'async (n: number) => lib.pick(n) * 2', bytes: 1, updatedAt: 't' },
     ];
-    // the inner `lib` shadows the outer one, so `double` reaches `pick` and the action code does not
+    // One `lib` holding everything: a nested one would be renamed by the transpiler (lib -> lib2) and
+    // that rename would travel into any handler a library function hands to sdk.events.on. The second
+    // argument is what the sandbox refuses to the action body of an LLM run.
     expect(buildPrelude(functions)).toBe(
-      [
-        'const lib = (() => {',
-        '  const lib = __rp_lib({',
-        '    "pick": ((n: number) => n + 1),',
-        '    "double": (async (n: number) => lib.pick(n) * 2),',
-        '  });',
-        '  return __rp_lib({',
-        '    "double": lib["double"],',
-        '  });',
-        '})();',
-      ].join('\n'),
+      ['const lib = __rp_lib({', '  "pick": ((n: number) => n + 1),', '  "double": (async (n: number) => lib.pick(n) * 2),', '}, ["pick"]);'].join('\n'),
     );
-    expect(buildPrelude(functions, { internals: true })).toBe('const lib = __rp_lib({\n  "pick": ((n: number) => n + 1),\n  "double": (async (n: number) => lib.pick(n) * 2),\n});');
-    expect(buildPrelude([functions[0]!])).toContain('  return __rp_lib({});');
-    // without an internal function nothing changes
+    expect(buildPrelude([functions[0]!])).toBe('const lib = __rp_lib({\n  "pick": ((n: number) => n + 1),\n}, ["pick"]);');
+    // without an internal function there is no second argument at all
     expect(buildPrelude([functions[1]!])).toBe('const lib = __rp_lib({\n  "double": (async (n: number) => lib.pick(n) * 2),\n});');
-    expect(buildPrelude([], { internals: true })).toBe(EMPTY_PRELUDE);
+    expect(buildPrelude([])).toBe(EMPTY_PRELUDE);
   });
 
   it('renders one prompt line per function', () => {
@@ -336,25 +327,21 @@ describe('the lib module through the engine', () => {
     expect(await exists(libFile(LUNA_ID, 'luna', 'pick'))).toBe(true);
     expect(await fs.readFile(libFile(LUNA_ID, 'luna', 'pick'), 'utf8')).toBe('// @internal pick a picture for a mood\n(mood: string) => mood\n');
 
-    // the prelude of the character's own runs carries it in the inner scope only
-    const split = await t.engine.library.preludeFor(LUNA_ID, 'luna');
-    expect(split).toContain('const lib = (() => {');
-    expect(split).toContain('"pick": ((mood: string) => mood),');
-    expect(split.slice(split.indexOf('return __rp_lib('))).toBe('return __rp_lib({\n    "cheer": lib["cheer"],\n  });\n})();');
-    // a script the pack ships runs against the flat prelude, so the author's hooks can use their own helper
-    expect(await t.engine.library.preludeFor(LUNA_ID, 'luna', { internals: true })).toMatch(/^const lib = __rp_lib\(\{\n  "cheer"/);
+    // every run gets the same prelude: one `lib` with both functions on it, `pick` named as internal
+    const prelude = await t.engine.library.preludeFor(LUNA_ID, 'luna');
+    expect(prelude).toBe('const lib = __rp_lib({\n  "cheer": (async (mood: string) => lib.pick(mood)),\n  "pick": ((mood: string) => mood),\n}, ["pick"]);');
 
     const pack = t.engine.packs.getLoaded(LUNA_ID);
     pack.characters[0]!.behaviourSources.onUserMessage = 'await lib.pick("happy");\nreturn { skipLlm: true };';
     await t.engine.chat.send(session.id, 'hi');
     const hookRun = t.runner.requests.find((r) => r.context.trigger.kind === 'behaviour');
-    expect(hookRun?.prelude).toBe(await t.engine.library.preludeFor(LUNA_ID, 'luna', { internals: true }));
-    // code the character wrote itself (a `code` timer) gets the split prelude, like an action
+    expect(hookRun?.prelude).toBe(prelude);
+    // code the character wrote itself (a `code` timer) gets that same prelude
     const timerCall = { callId: 'timers.runLater', module: 'timers', method: 'runLater', args: [5000, asHandlerArg('async () => 1'), {}] as Json[], context: ctx };
     expect((await t.engine.dispatcher.invoke(timerCall)).ok).toBe(true);
     t.clock.advance(5000);
     expect(await t.engine.timers.fireDue()).toBe(1);
-    expect(t.runner.requests.find((r) => r.context.trigger.kind === 'timer')?.prelude).toBe(split);
+    expect(t.runner.requests.find((r) => r.context.trigger.kind === 'timer')?.prelude).toBe(prelude);
 
     // and the prompt lists only what the character may call
     const system = t.provider.requests.at(-1)?.system ?? '';
@@ -367,6 +354,31 @@ describe('the lib module through the engine', () => {
     expect((await visible(LUNA_ID, 'luna')).map((f) => f.name)).toEqual(['cheer']);
     expect(await invoke(ctx, 'unregister', 'pick')).toEqual({ ok: true, value: true });
     expect(await exists(libFile(LUNA_ID, 'luna', 'pick'))).toBe(false);
+  });
+
+  it('lets an event handler a library function installed reach the library\'s internal helpers', async () => {
+    // The shape a game in a pack has: a public starter subscribes, and the handler it hands to
+    // sdk.events.on calls the author's internal helper when the widget reports a move.
+    t = await createTestEngine({ runnerHandler: async () => null });
+    await installLunaWith(t.engine, t.packsDir, { extraFiles: {
+      'characters/luna/lib/gameLost.ts': '// @internal (games) the loss path\nasync (d: any) => d\n',
+      'characters/luna/lib/startGame.ts': '// (game) start a round\nasync () => "started"\n',
+    } });
+    const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
+    const ctx = ctxOf(LUNA_ID, 'luna', session.id);
+
+    const on = { callId: 'events.on', module: 'events', method: 'on', context: ctx,
+      args: ['widget-message', 'return await lib.gameLost({ over: true });', { label: 'game:test' }] as Json[] };
+    expect((await t.engine.dispatcher.invoke(on)).ok).toBe(true);
+    t.engine.hostEvents.emit({ name: 'widget-message', data: { widgetId: 'g' }, at: t.clock.now().toISOString() });
+    await t.engine.eventService.idle();
+
+    // the handler ran, against the one prelude that carries the helper — no second scope to fall out of
+    const eventRun = t.runner.requests.find((r) => r.context.trigger.kind === 'event');
+    expect(eventRun?.prelude).toBe(await t.engine.library.preludeFor(LUNA_ID, 'luna'));
+    expect(eventRun?.prelude).toContain('"gameLost"');
+    // and the prompt still leaves it out
+    expect((await visible(LUNA_ID, 'luna')).map((f) => f.name)).toEqual(['startGame']);
   });
 
   it('migrates functions still stored in character state into files on start and on install', async () => {

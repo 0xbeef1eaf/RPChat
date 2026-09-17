@@ -328,24 +328,54 @@ describe('QuickJsRunner', () => {
       expect(result.returnValue).toEqual({ four: 4, keys: ['double'], source: 'async (n) => n * 2' });
     });
 
-    it('keeps an internal function out of the lib the action sees, while its siblings still call it', async () => {
-      // What LibraryService emits for a library with an internal helper: the inner `lib` holds
-      // every function, the outer one only the functions the character may call itself.
-      const split = [
-        'const lib = (() => {',
-        '  const lib = __rp_lib({',
-        '    "pick": ((n: number) => n + 1),',
-        '    "double": (async (n: number) => lib.pick(n) * 2),',
-        '  });',
-        '  return __rp_lib({',
-        '    "double": lib["double"],',
-        '  });',
-        '})();',
-      ].join('\n');
-      const result = await runner.run(req('return { six: await lib.double(2), keys: Object.keys(lib), pick: typeof lib.pick, sdkPick: typeof sdk.lib.pick };', { prelude: split, surface: libSurface }));
+    // What LibraryService.buildPrelude emits for a library with an @internal helper: one flat
+    // object holding everything, plus the names the action body may not call.
+    const withInternal = [
+      'const lib = __rp_lib({',
+      '  "pick": ((n: number) => n + 1),',
+      '  "double": (async (n: number) => lib.pick(n) * 2),',
+      '  "watch": (async () => { await sdk.events.on("widget-message", async () => { return await lib.pick(1); }); }),',
+      '}, ["pick"]);',
+    ].join('\n');
+
+    it('refuses an internal function to the action body of an LLM run, while its siblings still call it', async () => {
+      const result = await runner.run(
+        req('return { six: await lib.double(2), keys: Object.keys(lib), source: String(lib.pick) };', { prelude: withInternal, surface: libSurface }),
+      );
       expect(result.error).toBeUndefined();
-      // the outer object is built last, so sdk.lib is the one the action sees — the helper is out of reach either way
-      expect(result.returnValue).toEqual({ six: 6, keys: ['double', 'register', 'unregister'], pick: 'undefined', sdkPick: 'undefined' });
+      // it is on the object (one lib, no second scope) and its source still reads back...
+      expect(result.returnValue).toEqual({ six: 6, keys: ['pick', 'double', 'watch', 'register', 'unregister'], source: '(n) => n + 1' });
+
+      // ...but the action body itself cannot call it, through `lib` or through `sdk.lib`
+      for (const code of ['return await lib.pick(1);', 'return await sdk.lib.pick(1);']) {
+        const denied = await runner.run(req(code, { prelude: withInternal, surface: libSurface }));
+        expect(denied.error?.message).toContain('lib.pick is an internal helper');
+      }
+    });
+
+    it('lets every other trigger call an internal function directly', async () => {
+      for (const trigger of [
+        { kind: 'event', subscriptionId: 's1', event: 'widget-message' },
+        { kind: 'behaviour', hook: 'onSessionStart' },
+        { kind: 'timer', timerId: 't1' },
+        { kind: 'sandbox', runId: 'r1' },
+      ] as const) {
+        const result = await runner.run(
+          req('return await lib.pick(1);', { prelude: withInternal, surface: libSurface, context: { ...context, trigger } }),
+        );
+        expect(result.error, `trigger ${trigger.kind}`).toBeUndefined();
+        expect(result.returnValue).toBe(2);
+      }
+    });
+
+    it('stores a handler a library function installs without a renamed binding', async () => {
+      const invoker = makeInvoker();
+      const result = await runner.run(req('return await lib.watch();', { prelude: withInternal, surface: libSurface, invoker }));
+      expect(result.error).toBeUndefined();
+      // The prelude declares one `lib`, so nothing is renamed to `lib2` on the way into the stored code.
+      const stored = String(invoker.calls.find((c) => c.module === 'events' && c.method === 'on')!.args[1]);
+      expect(stored).toContain('lib.pick(1)');
+      expect(stored).not.toMatch(/\blib\d+\b/);
     });
 
     it('makes sdk.lib the very lib object, with the module\'s register and unregister on it', async () => {

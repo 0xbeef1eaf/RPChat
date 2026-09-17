@@ -405,7 +405,11 @@ class RunSession implements TerminationState {
     const hostCallFn = scope.manage(context.newFunction('__rp_host_call', (mod, method, argsJson) => this.onHostCall(mod, method, argsJson)));
     const logFn = scope.manage(context.newFunction('__rp_log', (level, message) => this.onLog(level, message)));
 
-    const callResult = this.enter(() => context.callFunction(bootFn, context.undefined, surfaceJson, hostCallFn, logFn));
+    // Only code the model wrote is kept out of the library's @internal helpers; the pack's own
+    // behaviour hooks, its event handlers and timers, and the Sandbox tab all reach them.
+    const restrictInternals = this.request.context.trigger.kind === 'llm' ? context.true : context.false;
+
+    const callResult = this.enter(() => context.callFunction(bootFn, context.undefined, surfaceJson, hostCallFn, logFn, restrictInternals));
     if (callResult.error) {
       throw new RpError('INTERNAL', 'sandbox bootstrap failed', this.dumpAndDispose(callResult.error));
     }

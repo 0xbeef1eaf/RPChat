@@ -53,8 +53,9 @@ Characters, their behaviours and their media are distributed as shareable
   (`characters/<id>/lib/<name>.ts`), so pack authors can ship functions, the
   character's own definitions persist with the installed pack, and the library
   is listed in its prompt. A pack author can keep a function to themselves with a
-  `// @internal` first line: the character's other functions and its behaviour
-  hooks call it, the character never sees it.
+  `// @internal` first line: it stays out of the prompt and the model's own code
+  cannot call it, while the character's other functions, its behaviour hooks, its
+  event handlers and its timers all use it normally.
 - **External commands**: wallpaper, browser, desktop and voice actions run through
   command templates you edit in Settings. Input locking and injection are
   daemon-only (see *System integration* below).
