@@ -275,3 +275,52 @@ describe('helpers', () => {
     expect(effectiveVolume(0.4)).toBe(0.4);
   });
 });
+
+describe('full-screen overlay page', () => {
+  const show = (id: string, options: Record<string, unknown> = {}) =>
+    ({ type: 'show-fullscreen', id, url: 'rp-asset://com.example.pack/media/images/rain.png', options: { media: 'image', opacity: 0.25, ...options } }) as const;
+
+  it('adds the surface, replaces it when shown again and refuses a non-asset url', () => {
+    let s: MediaState = applyMediaCommand(INITIAL_MEDIA_STATE, show('f')).state;
+    expect(s.fullscreens).toEqual([{ id: 'f', url: 'rp-asset://com.example.pack/media/images/rain.png', options: { media: 'image', opacity: 0.25 } }]);
+    s = applyMediaCommand(s, show('f', { opacity: 0.5 })).state;
+    expect(s.fullscreens).toHaveLength(1);
+    expect(s.fullscreens[0]?.options.opacity).toBe(0.5);
+    const bad = applyMediaCommand(s, { ...show('g'), url: 'https://example.com/x.png' });
+    expect(bad.state.fullscreens).toHaveLength(1);
+    expect(bad.reports).toEqual([{ type: 'error', id: 'g', message: 'Refused non-asset URL: https://example.com/x.png' }]);
+  });
+
+  it('takes only opacity from an update: it covers its screen, click-through, at that size', () => {
+    const s = applyMediaCommand(INITIAL_MEDIA_STATE, show('f')).state;
+    const faded = applyMediaCommand(s, { type: 'update', id: 'f', options: { opacity: 2, width: 100, clickThrough: false } }).state;
+    expect(faded.fullscreens[0]?.options).toEqual({ media: 'image', opacity: 1 });
+    // Nothing to fade: the same state comes back.
+    expect(applyMediaCommand(s, { type: 'update', id: 'f', options: { width: 100 } }).state).toBe(s);
+  });
+
+  it('closes on the end of a video, stays for a looping one, and goes away on an error', () => {
+    const video = (options: Record<string, unknown>) => applyMediaCommand(INITIAL_MEDIA_STATE, show('f', { media: 'video', ...options })).state;
+    const ended = applyMediaLocalEvent(video({ loop: false }), { type: 'ended', id: 'f' });
+    expect(ended.state.fullscreens).toEqual([]);
+    expect(ended.reports).toEqual([
+      { type: 'ended', id: 'f' },
+      { type: 'closed', id: 'f', reason: 'ended' },
+    ]);
+    const looping = applyMediaLocalEvent(video({ loop: true }), { type: 'ended', id: 'f' });
+    expect(looping.state.fullscreens).toHaveLength(1);
+    expect(looping.reports).toEqual([{ type: 'ended', id: 'f' }]);
+    const failed = applyMediaLocalEvent(video({}), { type: 'error', id: 'f', message: 'boom' });
+    expect(failed.state.fullscreens).toEqual([]);
+    expect(failed.reports).toEqual([
+      { type: 'error', id: 'f', message: 'boom' },
+      { type: 'closed', id: 'f', reason: 'error' },
+    ]);
+  });
+
+  it('is closed by close / close-all like every other page', () => {
+    const s = applyMediaCommand(INITIAL_MEDIA_STATE, show('f')).state;
+    expect(applyMediaCommand(s, { type: 'close', id: 'f' })).toEqual({ state: INITIAL_MEDIA_STATE, reports: [{ type: 'closed', id: 'f', reason: 'api' }] });
+    expect(applyMediaCommand(s, { type: 'close-all' })).toEqual({ state: INITIAL_MEDIA_STATE, reports: [{ type: 'closed', id: 'f', reason: 'api' }] });
+  });
+});

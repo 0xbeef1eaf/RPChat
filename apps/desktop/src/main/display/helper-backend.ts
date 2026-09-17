@@ -56,6 +56,7 @@ export function pageCommand(command: MediaCommand, rewrite: (url: string) => str
     case 'show-image':
     case 'play-video':
     case 'play-audio':
+    case 'show-fullscreen':
       return { ...command, url: rewrite(command.url) };
     case 'avatar-show':
       return { ...command, state: { ...command.state, imageUrl: rewrite(command.state.imageUrl) } };

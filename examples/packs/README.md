@@ -300,7 +300,7 @@ Standard modules (v1):
 | `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `tags()`, `readText(path)`, `info()`                       |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `cancel(id)`, `list()`                                      |
 | `lib`    | trusted    | `define(name, fn, opts?)`, `remove(name)`, `list()`, `source(name)` — the function library, files under `lib/` (§8) |
-| `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `close(id)`, `closeAll()`, `list()` |
+| `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `overlay(asset, opts?)` (whole-screen, click-through), `close(id)`, `closeAll()`, `list()` |
 | `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`                       |
 | `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — saved under `webcam/` in the character home, returned as a `source: 'home'` AssetRef |
 | `system` | prompt     | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)` |

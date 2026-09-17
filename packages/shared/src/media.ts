@@ -56,6 +56,42 @@ export interface ShowImageOptions extends OverlayOptions {
   closeOnClick?: boolean;
 }
 
+/**
+ * Options for `sdk.media.overlay`: one image or video washed over whole screens. Placement, size,
+ * layer and click-through are not negotiable — the overlay covers each screen it is given, sits on
+ * the `overlay` layer and always lets clicks through.
+ */
+export interface MediaOverlayOptions {
+  /** Which screen to cover: `all` (the default) for every connected monitor, or one `MonitorSelector`. */
+  monitor?: MonitorSelector | 'all';
+  /** 0..1, default 0.25. Over 0.5 the screen is mostly the overlay: keep it low unless the user asked for more. */
+  opacity?: number;
+  /** Auto-close after this many ms. Omit to keep it up until `close()`. */
+  durationMs?: number;
+  /** Video volume 0..1, default 0.5. With several screens covered only one of them plays sound. */
+  volume?: number;
+  /** Restart the video when it ends. Default: true with `durationMs`, false without. */
+  loop?: boolean;
+  /** Start the video muted. Default false. */
+  muted?: boolean;
+}
+
+/**
+ * What the media page needs to paint one full-screen overlay. The picture is fitted into the screen
+ * keeping its aspect ratio and copies repeat outwards from that centred one, so a shape that does
+ * not match the screen tiles instead of stretching.
+ */
+export interface FullscreenOverlayOptions {
+  /** Whether `url` is an image or a video. */
+  media: 'image' | 'video';
+  /** 0..1 CSS opacity of the whole surface. */
+  opacity: number;
+  /** Video volume 0..1; the copies on the other screens get 0 so one soundtrack plays. */
+  volume?: number;
+  loop?: boolean;
+  muted?: boolean;
+}
+
 export interface PlayVideoOptions extends OverlayOptions {
   /** 0..1, default 1. */
   volume?: number;
@@ -115,8 +151,8 @@ export interface PlayAudioOptions {
 
 export type MediaKind = 'image' | 'video' | 'audio';
 
-/** Everything the display backend can put on screen. `image`/`video` come from `sdk.media`. */
-export type OverlayKind = 'image' | 'video' | 'avatar' | 'widget' | 'draw';
+/** Everything the display backend can put on screen. `image`/`video`/`fullscreen` come from `sdk.media`. */
+export type OverlayKind = 'image' | 'video' | 'fullscreen' | 'avatar' | 'widget' | 'draw';
 
 export type AvatarAnimation = 'bounce' | 'shake' | 'nod' | 'wave' | 'pulse' | 'spin' | 'fade-in' | 'fade-out';
 
@@ -176,6 +212,8 @@ export type MediaCommand =
   | { type: 'show-image'; id: MediaItemId; url: string; options: ShowImageOptions }
   | { type: 'play-video'; id: MediaItemId; url: string; options: PlayVideoOptions }
   | { type: 'play-audio'; id: MediaItemId; url: string; options: PlayAudioOptions }
+  /** One screen-filling, click-through image/video surface (`sdk.media.overlay`). */
+  | { type: 'show-fullscreen'; id: MediaItemId; url: string; options: FullscreenOverlayOptions }
   | { type: 'update'; id: MediaItemId; options: OverlayUpdate }
   | { type: 'close'; id: MediaItemId }
   | { type: 'close-all' }

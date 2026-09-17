@@ -98,6 +98,24 @@ describe('CapabilityDispatcher', () => {
     expect(audit[0]!.args).toEqual(['media/images/luna-wave.png', { monitor: 'primary' }]);
   });
 
+  it('lets media.overlay take an image or a video, but not audio', async () => {
+    const luna = await loadPack(LUNA_DIR);
+    const packs = { tryGetLoaded: (id: string) => (id === LUNA_ID ? luna : undefined) };
+    const calls: Json[][] = [];
+    const { dispatcher } = setup('allow', { moduleId: 'media', invoke: async (_m, args) => { calls.push(args); return null; } }, packs);
+    const ctx = { ...context, packId: LUNA_ID, packRoot: luna.root };
+
+    expect(await dispatcher.invoke({ callId: '1', module: 'media', method: 'overlay', args: ['images/luna-wave.png', { opacity: 0.2 }], context: ctx })).toMatchObject({ ok: true });
+    expect(await dispatcher.invoke({ callId: '2', module: 'media', method: 'overlay', args: ['video/testcard.webm'], context: ctx })).toMatchObject({ ok: true });
+    expect(calls).toEqual([['media/images/luna-wave.png', { opacity: 0.2 }], ['media/video/testcard.webm']]);
+    const audio = await dispatcher.invoke({ callId: '3', module: 'media', method: 'overlay', args: ['audio/chime.wav'], context: ctx });
+    expect(audio).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining('needs an image or video asset') } });
+    // The single-kind methods still name the one kind they take.
+    const wrong = await dispatcher.invoke({ callId: '4', module: 'media', method: 'playVideo', args: ['images/luna-wave.png'], context: ctx });
+    expect(wrong).toMatchObject({ ok: false, error: { message: expect.stringContaining('needs a video asset') } });
+    expect(calls).toHaveLength(2);
+  });
+
   it('refuses a character-home ref (an sdk.webcam capture) where a pack asset is expected', async () => {
     const luna = await loadPack(LUNA_DIR);
     const packs = { tryGetLoaded: (id: string) => (id === LUNA_ID ? luna : undefined) };
