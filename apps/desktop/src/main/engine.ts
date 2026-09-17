@@ -100,8 +100,6 @@ export interface AppServices {
   extension: ExtensionService;
   /** Save `settings.browser.bridgePort` and rebind the loopback server. */
   setBridgePort(port: number): Promise<void>;
-  /** Save `settings.browser.homePage` ('' clears it) and push it to the connected extension. */
-  setHomePage(url: string): Promise<void>;
   /** Absolute path of the bundled sample image (copied out of the asar when needed). */
   sampleImage(): Promise<string>;
   /** Root directory served for a pack id by rp-asset:// (installed packs + app-generated roots). */
@@ -276,6 +274,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       void pushHomePage();
     } else if (!key) lastPushedTo = undefined;
   });
+  // Only a character sets the home page (`sdk.browser.setHomePage`); the setting is where it is kept.
   const setHomePage = async (url: string): Promise<void> => {
     if (url !== '' && !/^https?:\/\//i.test(url)) throw new RpError('INVALID_ARGUMENT', 'The home page must be an http(s) URL (or empty to clear it)');
     const current = (await settingsOf()).browser;
@@ -663,7 +662,6 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     loopback,
     browser,
     extension,
-    setHomePage,
     async setBridgePort(port) {
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new RpError('INVALID_ARGUMENT', 'port must be 1..65535');
       const current = (await settingsOf()).browser;

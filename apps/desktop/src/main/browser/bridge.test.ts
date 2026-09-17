@@ -3,7 +3,7 @@ import { RpError } from '@rp/shared';
 import type { BrowserBridgeEvent, BrowserBridgeStatus } from '@rp/shared';
 import { BrowserBridge, CLOSE_CODES, NOT_CONNECTED_MESSAGE, extensionIdFromOrigin, rpChatFor } from './bridge.js';
 import type { BridgeSocket, BrowserBridgeDeps } from './bridge.js';
-import { BROWSER_POLICY_DIRS, browserPolicy, browserPolicyText, updateXml } from './policy.js';
+import { BROWSER_POLICY_DIRS, LEGACY_BROWSER_POLICY_FILENAME, browserPolicy, browserPolicyFilename, browserPolicyText, updateXml } from './policy.js';
 
 const ID_A = 'abcdefghijklmnopabcdefghijklmnop';
 const ID_B = 'ppppppppppppppppaaaaaaaaaaaaaaaa';
@@ -226,9 +226,9 @@ describe('policy', () => {
       '3rdparty': { extensions: { [ID_A]: { policy: { port: 47821 } } } },
     });
     expect(JSON.parse(browserPolicyText(ID_A, 5000, 'http://127.0.0.1:5000/extension/update.xml'))).toEqual(browserPolicy(ID_A, 5000));
+    // The home page is a character's to set (sdk.browser.setHomePage), so the policy never carries one.
     expect(browserPolicy(ID_A, 5000)).not.toHaveProperty('HomepageLocation');
-    expect(browserPolicy(ID_A, 5000, undefined, 'https://home.test/')).toMatchObject({ HomepageLocation: 'https://home.test/', HomepageIsNewTabPage: false });
-    expect(browserPolicy(ID_A, 5000, undefined, 'chrome://newtab')).not.toHaveProperty('HomepageLocation');
+    expect(browserPolicy(ID_A, 5000)).not.toHaveProperty('HomepageIsNewTabPage');
     const xml = updateXml(ID_A, '0.1.0', 'http://127.0.0.1:47821/extension/rpchat.crx');
     expect(xml).toContain(`<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>`);
     expect(xml).toContain(`<app appid='${ID_A}'>`);
@@ -242,5 +242,16 @@ describe('policy', () => {
       '/etc/vivaldi/policies/managed',
       '/etc/opera/policies/managed',
     ]);
+  });
+
+  it('names the policy file after the user it is for, and falls back to the uid', () => {
+    expect(browserPolicyFilename('alice', 1000)).toBe('rpchat-alice.json');
+    expect(browserPolicyFilename('rpchat.test-user_1', 1000)).toBe('rpchat-rpchat.test-user_1.json');
+    // Names a policy directory should not carry (winbind/sssd, spaces, path separators) use the uid.
+    expect(browserPolicyFilename('CORP\\alice', 1000)).toBe('rpchat-uid-1000.json');
+    expect(browserPolicyFilename('a/b', 1001)).toBe('rpchat-uid-1001.json');
+    expect(browserPolicyFilename('', 1002)).toBe('rpchat-uid-1002.json');
+    // The machine-wide file older versions wrote; the installer deletes it wherever it finds one.
+    expect(LEGACY_BROWSER_POLICY_FILENAME).toBe('rpchat.json');
   });
 });

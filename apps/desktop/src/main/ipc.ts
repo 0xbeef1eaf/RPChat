@@ -326,7 +326,6 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
           extensionId: id,
           updateUrl: status.updateUrl,
           port: status.requestedPort,
-          ...(status.homePage ? { homePage: status.homePage } : {}),
           extraPolicyDirs: settings.browser.extraPolicyDirs,
         });
       },
@@ -334,11 +333,6 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       extensionDir: async () => services.extension.dir() ?? null,
       blocks: async () => (services.browser.connected ? ((await services.browser.request('rules.list')) as unknown as BrowserBlock[]) : []),
       clearBlocks: async () => (services.browser.connected ? ((await services.browser.request('rules.clear')) as unknown as { removed: number }) : { removed: 0 }),
-      setHomePage: async (_e, url) => {
-        if (typeof url !== 'string') throw new RpError('INVALID_ARGUMENT', 'url must be a string');
-        await services.setHomePage(url.trim());
-        return services.browser.status();
-      },
     },
     updates: {
       status: () => services.updates.status(),

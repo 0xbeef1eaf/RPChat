@@ -583,7 +583,7 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
 | `senses` | `senses.includeInPrompt`, `senses.watchDirs`, `senses.calendarSources` | |
 | `displayBackend` | `displayBackend` | `auto` \| `electron` \| `hyprland` |
 | `updates` | `updates.automatic`, `updates.enabled` (`allowDowngrade` accepted, never managed) | booleans. `enabled: false` switches update checks off entirely (`UpdateStatus.state === 'disabled'`, token field hidden, `automatic` forced off); `automatic` pins the background-check toggle; `allowDowngrade: true` lets the daemon's `apply-update` install an older version (daemon-enforced, default false). |
-| `browser` | `browser.allowBlocking`, `browser.allowEval`, `browser.allowHistory`, `browser.homePage` | booleans, a non-negative number (ms; the cap on `sdk.browser.block` durations), an http(s) URL or `""`. What characters may do through the browser extension (docs/browser-extension.md). |
+| `browser` | `browser.allowBlocking`, `browser.allowEval`, `browser.allowHistory` | booleans. What characters may do through the browser extension (docs/browser-extension.md). The home page is not managed: only a character sets it, with `sdk.browser.setHomePage`. |
 
 ## Renderer
 

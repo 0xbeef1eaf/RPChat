@@ -41,7 +41,7 @@ export interface BrowserBridgeStatus {
   extensionDir?: string;
   /** Extension ids that asked to connect and were refused this run (until trusted in Settings). */
   denied: string[];
-  /** `settings.browser.homePage` (mirrored to the extension and the policy). */
+  /** `settings.browser.homePage`: what a character last set, mirrored to the extension. Read-only for the user. */
   homePage: string;
 }
 
@@ -64,12 +64,13 @@ export interface BrowserBridgeEvent {
   data: { tabId: number; windowId?: number; url?: string; title?: string; status?: string };
 }
 
-/** Chromium policy JSON the installer writes to every managed-policy directory (`policy.ts`). */
+/**
+ * Chromium policy JSON the installer writes into every managed-policy directory (`policy.ts`), as
+ * one file per user. It force-installs the extension and pins the port, and nothing else: the home
+ * page is a character's to set (`sdk.browser.setHomePage`), not the policy's.
+ */
 export interface BrowserPolicyJson {
   ExtensionInstallForcelist: string[];
   ExtensionInstallSources: string[];
   '3rdparty': { extensions: Record<string, { policy: { port: number } }> };
-  /** `settings.browser.homePage` when set (the new-tab override covers new tabs regardless). */
-  HomepageLocation?: string;
-  HomepageIsNewTabPage?: boolean;
 }

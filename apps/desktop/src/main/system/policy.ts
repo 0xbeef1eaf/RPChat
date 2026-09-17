@@ -16,7 +16,7 @@ const SENSES_KEYS = ['includeInPrompt', 'watchDirs', 'calendarSources'] as const
 const UPDATES_KEYS = ['automatic', 'enabled', 'allowDowngrade'] as const;
 /** `updates.enabled` and `updates.allowDowngrade` are updater/daemon rules, not settings the UI pins. */
 const UPDATES_MANAGED_KEYS = ['automatic', 'enabled'] as const;
-const BROWSER_KEYS = ['allowBlocking', 'allowEval', 'allowHistory', 'homePage'] as const;
+const BROWSER_KEYS = ['allowBlocking', 'allowEval', 'allowHistory'] as const;
 const BACKENDS = new Set(['auto', 'electron', 'hyprland']);
 
 function isNumber(v: unknown): v is number {
@@ -127,10 +127,7 @@ export function parsePolicy(json: unknown): PolicyFile {
       for (const k of BROWSER_KEYS) {
         const v = raw3[k];
         if (v === undefined) continue;
-        if (k === 'homePage') {
-          if (typeof v === 'string' && (v === '' || /^https?:\/\//i.test(v))) b.homePage = v;
-          else problems.push('settings.browser.homePage must be an http(s) URL or ""');
-        } else if (typeof v === 'boolean') b[k] = v;
+        if (typeof v === 'boolean') b[k] = v;
         else problems.push(`settings.browser.${k} must be a boolean`);
       }
       settings.browser = b;

@@ -153,7 +153,7 @@ export function policyTemplate(settings: AppSettings, userName?: string): string
       senses: { includeInPrompt: settings.senses.includeInPrompt, watchDirs: [...settings.senses.watchDirs], calendarSources: [...settings.senses.calendarSources] },
       displayBackend: settings.displayBackend,
       updates: { enabled: true, automatic: settings.updates.automatic },
-      browser: { allowBlocking: settings.browser.allowBlocking, allowEval: settings.browser.allowEval, allowHistory: settings.browser.allowHistory, homePage: settings.browser.homePage },
+      browser: { allowBlocking: settings.browser.allowBlocking, allowEval: settings.browser.allowEval, allowHistory: settings.browser.allowHistory },
     },
     inputLock: { enabled: true, maxDurationMs: settings.maxInputLockMs, emergencyKey: 'esc', emergencyHoldMs: 5000 },
     // Off by default so a freshly created policy changes nothing; every key is present to edit.
@@ -556,17 +556,15 @@ export class SystemIntegration {
    * Write the Chromium managed policy that force-installs the bundled extension from the app's
    * loopback update URL (`install.sh --browser-only --browser-extension … --browser-update-url …
    * --browser-port …`, through pkexec; Linux only). The id is per user, so this never runs from
-   * the package's post-install.
+   * the package's post-install, and the installer writes one file for `--user` alone.
    */
-  async installBrowserPolicy(input: { extensionId: string; updateUrl: string; port: number; homePage?: string; extraPolicyDirs?: string[] }, onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
+  async installBrowserPolicy(input: { extensionId: string; updateUrl: string; port: number; extraPolicyDirs?: string[] }, onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
     if (!/^[a-p]{32}$/.test(input.extensionId)) throw new RpError('INVALID_ARGUMENT', 'extensionId must be 32 letters a–p');
     if (!/^http:\/\/127\.0\.0\.1:\d{1,5}\/extension\/update\.xml$/.test(input.updateUrl)) throw new RpError('INVALID_ARGUMENT', 'updateUrl must be the app\'s loopback update URL');
     if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new RpError('INVALID_ARGUMENT', 'port must be 1..65535');
-    if (input.homePage !== undefined && !/^https?:\/\/[^\s"\\]+$/i.test(input.homePage)) throw new RpError('INVALID_ARGUMENT', 'homePage must be an http(s) URL');
     return this.runInstaller(
       [
         '--browser-only', '--browser-extension', input.extensionId, '--browser-update-url', input.updateUrl, '--browser-port', String(input.port),
-        ...(input.homePage ? ['--browser-home', input.homePage] : []),
         ...extraPolicyDirArgs(input.extraPolicyDirs),
       ],
       'browser policy',
@@ -574,7 +572,7 @@ export class SystemIntegration {
     );
   }
 
-  /** Remove the policy files `installBrowserPolicy` wrote (pkexec; Linux only), including those in `extraPolicyDirs`. */
+  /** Remove this user's policy files (pkexec; Linux only), including those in `extraPolicyDirs`. Other users' are left alone. */
   async removeBrowserPolicy(extraPolicyDirs?: string[], onOutput?: (chunk: string) => void): Promise<{ ok: boolean; output: string }> {
     return this.runInstaller(['--remove-browser-policy', ...extraPolicyDirArgs(extraPolicyDirs)], 'browser policy removal', onOutput);
   }
