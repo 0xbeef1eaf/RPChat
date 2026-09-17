@@ -49,7 +49,7 @@ cleanup() {
   [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null
   [ -n "$CHROME_PID" ] && kill "$CHROME_PID" 2>/dev/null
   kill "$XVFB_PID" 2>/dev/null
-  if $RUN_POLICY; then $SUDO "$INSTALLER" --remove-browser-policy >/dev/null 2>&1 || true; fi
+  if $RUN_POLICY; then $SUDO "$INSTALLER" --remove-browser-policy --user "$(id -un)" >/dev/null 2>&1 || true; fi
   rm -rf "${TMPDIRS[@]}"
 }
 trap cleanup EXIT
@@ -79,7 +79,9 @@ run_phase() {
   if [ "$MODE" = policy ]; then
     ID="$(curl -s "http://127.0.0.1:$PORT/extension/id")"
     echo "--- installer ($MODE): extension $ID"
-    $SUDO "$INSTALLER" --browser-only --browser-extension "$ID" --browser-update-url "http://127.0.0.1:$PORT/extension/update.xml" | grep -E "^\[(ok|fail|warn)\]" | cut -c1-160
+    # --user: the policy is written for this user alone (root-owned, readable only by them), which
+    # is exactly the browser that is about to start.
+    $SUDO "$INSTALLER" --browser-only --browser-extension "$ID" --browser-update-url "http://127.0.0.1:$PORT/extension/update.xml" --user "$(id -un)" | grep -E "^\[(ok|fail|warn)\]" | cut -c1-160
     LAUNCH+=(--mode policy --expect-id "$ID")
   fi
   (cd "$ROOT/apps/desktop" && DISPLAY="$DISPLAY_NUM" exec timeout "${RP_SMOKE_SECONDS:-150}" "${LAUNCH[@]}") >"$CLOG" 2>&1 &

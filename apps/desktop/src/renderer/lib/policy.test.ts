@@ -20,7 +20,7 @@ const POLICY_TEMPLATE: PolicyFile = {
     senses: { includeInPrompt: true, watchDirs: [], calendarSources: [] },
     displayBackend: 'auto',
     updates: { enabled: true, automatic: true },
-    browser: { allowBlocking: true, allowEval: true, allowHistory: true, homePage: '' },
+    browser: { allowBlocking: true, allowEval: true, allowHistory: true },
   },
   inputLock: { enabled: true, maxDurationMs: 300_000, emergencyKey: 'esc', emergencyHoldMs: 5000 },
   app: { allowQuit: true, users: ['alice'] },
@@ -164,19 +164,15 @@ describe('policyDraftProblems', () => {
     expect(policyDraftProblems(draft)).toEqual([expect.stringContaining('Longest input lock'), expect.stringContaining('input-lock limit'), expect.stringContaining('emergency-unlock hold')]);
   });
 
-  it('catches a home page that is not an http(s) address, but allows an empty one', () => {
+  it('ignores a bad value on a key that is switched off', () => {
     const draft = policyDraftFrom(POLICY_TEMPLATE);
-    draft.values['browser.homePage'] = 'example.com';
-    expect(policyDraftProblems(draft)).toEqual([expect.stringContaining('Home page')]);
-    draft.values['browser.homePage'] = '';
+    draft.values['autonomy.maxSelfWakesPerHour'] = 'often';
+    draft.forced['autonomy.maxSelfWakesPerHour'] = false;
     expect(policyDraftProblems(draft)).toEqual([]);
   });
 
-  it('ignores a bad value on a key that is switched off', () => {
-    const draft = policyDraftFrom(POLICY_TEMPLATE);
-    draft.values['browser.homePage'] = 'not a url';
-    draft.forced['browser.homePage'] = false;
-    expect(policyDraftProblems(draft)).toEqual([]);
+  it('has no home page to force: only a character sets one (sdk.browser.setHomePage)', () => {
+    expect(POLICY_SETTINGS.map((s) => s.path)).not.toContain('browser.homePage');
   });
 
   it('catches guard paths the daemon would refuse to turn into rules', () => {

@@ -18,7 +18,6 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
   const [error, setError] = useState<string | null>(null);
   const [portText, setPortText] = useState<string | null>(null);
   const [trustText, setTrustText] = useState('');
-  const [homeText, setHomeText] = useState<string | null>(null);
   const [extraDirsText, setExtraDirsText] = useState<string | null>(null);
   const [blocks, setBlocks] = useState<BrowserBlock[]>([]);
   const [busy, setBusy] = useState(false);
@@ -30,7 +29,6 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
   const blockingManaged = useManaged('browser.allowBlocking');
   const evalManaged = useManaged('browser.allowEval');
   const historyManaged = useManaged('browser.allowHistory');
-  const homeManaged = useManaged('browser.homePage');
 
   const loadBlocks = useCallback(async () => {
     try {
@@ -66,26 +64,6 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
   }, [status?.connected, loadBlocks]);
 
   const patchBrowser = (patch: Partial<AppSettings['browser']>) => onPatch({ browser: { ...browser, ...patch } });
-
-  const saveHomePage = async () => {
-    if (homeText === null) return;
-    const url = homeText.trim();
-    setHomeText(null);
-    if (url === browser.homePage) return;
-    if (url !== '' && !/^https?:\/\//i.test(url)) {
-      toast('error', 'The home page must start with http:// or https://');
-      return;
-    }
-    setBusy(true);
-    try {
-      setStatus(await api().browser.setHomePage(url));
-      toast('success', url ? `Home page set to ${url}${status?.connected ? '' : ' (sent to the extension when it connects)'}` : 'Home page cleared');
-    } catch (err) {
-      reportError('Could not set the home page', err);
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const saveExtraDirs = async () => {
     if (extraDirsText === null) return;
@@ -341,27 +319,14 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
               Read the browser history (<code>sdk.browser.history</code>)
               <ManagedBadge show={historyManaged} />
             </label>
-            <div className="field" style={{ marginTop: 4 }}>
-              <label htmlFor="browser-home">
-                Home page
-                <ManagedBadge show={homeManaged} />
-              </label>
-              <input
-                id="browser-home"
-                type="url"
-                placeholder="https://… (empty: the plain new-tab page)"
-                value={homeText ?? browser.homePage}
-                disabled={homeManaged || busy}
-                spellCheck={false}
-                onChange={(e) => setHomeText(e.target.value)}
-                onBlur={saveHomePage}
-                onKeyDown={(e) => e.key === 'Enter' && saveHomePage()}
-              />
-              <span className="field-hint">
-                What new tabs open (the extension overrides the new-tab page) and, once the policy is re-installed, the browser&apos;s Home button
-                (<code>HomepageLocation</code>). Characters can change it with <code>sdk.browser.setHomePage</code>.
-              </span>
-            </div>
+            <dl className="kv small" style={{ marginTop: 4 }}>
+              <dt>Home page</dt>
+              <dd>{browser.homePage ? <code style={{ overflowWrap: 'anywhere' }}>{browser.homePage}</code> : <span className="muted">not set — new tabs show the plain page</span>}</dd>
+            </dl>
+            <span className="field-hint">
+              What new tabs open (the extension overrides the new-tab page). Only a character sets it, with <code>sdk.browser.setHomePage</code>; ask
+              yours to change or clear it.
+            </span>
           </div>
         </div>
 
@@ -401,7 +366,8 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
             <h3 style={{ margin: 0 }}>Install browser policy</h3>
             <p className="muted small" style={{ margin: '4px 0 0' }}>
               Writes a managed policy for Chromium, Chrome and every other Chromium-based browser found on this machine that force-installs the bundled
-              extension from this app and pins the port; asks for your password (pkexec).
+              extension from this app and pins the port; asks for your password (pkexec). The file is for your user account alone — owned by root, so
+              nothing here can be edited without a password, and readable only by you, so other users of this computer keep their own.
             </p>
           </div>
           <button
@@ -462,7 +428,7 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
           />
           <span className="field-hint">
             One per line (or comma separated): managed-policy directories of Chromium forks the installer does not know (Helium, ungoogled-chromium
-            derivatives…). They get the same <code>rpchat.json</code>, and <em>Remove policy</em> cleans them too. Find a browser&apos;s directory
+            derivatives…). They get the same file, and <em>Remove policy</em> cleans them too. Find a browser&apos;s directory
             with <code>chrome://policy</code> or <code>strace -f -e trace=openat &lt;browser&gt; 2&gt;&amp;1 | grep policies/managed</code>.
           </span>
         </div>
@@ -511,8 +477,8 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
           <p>The installer runs with administrator rights and writes one policy file per browser:</p>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             <li>
-              <code>rpchat.json</code> in <code>/etc/chromium/policies/managed</code> and <code>/etc/opt/chrome/policies/managed</code>, plus the same for
-              Brave, Edge, Vivaldi and Opera when they are installed
+              <code>rpchat-&lt;your user name&gt;.json</code> in <code>/etc/chromium/policies/managed</code> and{' '}
+              <code>/etc/opt/chrome/policies/managed</code>, plus the same for Brave, Edge, Vivaldi and Opera when they are installed
               {browser.extraPolicyDirs.length > 0 ? (
                 <>
                   , and in {browser.extraPolicyDirs.map((d) => <code key={d}>{d}</code>).reduce<React.ReactNode[]>((acc, el, i) => (i === 0 ? [el] : [...acc, ', ', el]), [])}
@@ -522,11 +488,10 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
             <li>
               it force-installs extension <code>{status.installedExtensionId}</code> from <code>{status.updateUrl}</code> (this app, on this computer only)
               and tells it to use port {status.requestedPort}
-              {browser.homePage ? (
-                <>
-                  , and sets <code>{browser.homePage}</code> as the browser&apos;s home page
-                </>
-              ) : null}
+            </li>
+            <li>
+              the file stays owned by root and only your account may read it, so no character and no program of yours can change the policy, and another
+              user&apos;s browser ignores it
             </li>
           </ul>
           <p className="muted small">
@@ -547,8 +512,8 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
       {removeDialog ? (
         <Modal title="Remove the browser policy?" onClose={() => setRemoveDialog(false)}>
           <p>
-            Deletes every <code>rpchat.json</code> policy file the installer wrote (administrator rights, pkexec). Browsers uninstall the
-            force-installed extension on their next policy refresh.
+            Deletes the policy files the installer wrote for your user account (administrator rights, pkexec); other users&apos; are left alone.
+            Browsers uninstall the force-installed extension on their next policy refresh.
           </p>
           <div className="form-actions">
             <button type="button" className="btn" onClick={() => setRemoveDialog(false)}>

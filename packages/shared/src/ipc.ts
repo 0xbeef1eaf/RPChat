@@ -321,8 +321,6 @@ export interface IpcApi {
     blocks(): Promise<BrowserBlock[]>;
     /** Remove every page block. */
     clearBlocks(): Promise<{ removed: number }>;
-    /** Save `settings.browser.homePage` (http(s) or empty) and push it to the extension; resolves with the new status. */
-    setHomePage(url: string): Promise<BrowserBridgeStatus>;
     onStatus(listener: (status: BrowserBridgeStatus) => void): Unsubscribe;
   };
   /** In-place app updates from the private GitHub releases (see `UpdateStatus`). */
