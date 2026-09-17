@@ -181,6 +181,17 @@ const modelHintsSchema = z.object({
   model: z.string().min(1).optional(),
 });
 
+/**
+ * One entry of `character.json`'s `promptFunctions`: a module id (`avatar`) or one function of it
+ * (`avatar.show`). Unknown names are not an error — a pack may name a function of a plugin module
+ * that is not installed here, and the selection is intersected with what exists anyway.
+ */
+export const PROMPT_FUNCTION_PATTERN = /^[a-z][a-zA-Z0-9]*(\.[A-Za-z_$][\w$]*)*$/;
+
+const promptFunctionsSchema = z
+  .array(z.string().regex(PROMPT_FUNCTION_PATTERN, 'promptFunctions entries are "module" or "module.function"'))
+  .check(uniqueCheck('promptFunctions entry'));
+
 const characterDefinitionObject = z.object({
   id: z.string().regex(CHARACTER_ID_PATTERN, 'character id must match /^[a-z0-9][a-z0-9-_]*$/'),
   name: z.string().min(1),
@@ -191,6 +202,7 @@ const characterDefinitionObject = z.object({
   exampleDialogue: z.array(exampleDialogueTurnSchema).optional(),
   behaviours: z.partialRecord(z.enum(BEHAVIOUR_HOOKS), behaviourPathSchema).optional(),
   avatarSet: avatarSetSchema.optional(),
+  promptFunctions: promptFunctionsSchema.optional(),
   mood: moodSchema.optional(),
   voice: voiceSchema.optional(),
   [IGNORED_CAPABILITIES_KEY]: ignoredCapabilitiesSchema,

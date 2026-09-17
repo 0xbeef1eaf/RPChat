@@ -941,7 +941,7 @@ mod tests {
             "settings": {
                 "autonomy": {"maxSelfWakesPerHour": 5},
                 "maxInputLockMs": 60000,
-                "permissions": {"moduleAllow": {"input": false}},
+                "permissions": {"functionAllow": {"input": false, "media.playVideo": false}},
                 "web": {"allowlist": ["example.com"]},
                 "desktop": {"launchAllowlist": []},
                 "memory": {},

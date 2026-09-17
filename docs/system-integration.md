@@ -230,17 +230,21 @@ changes; no restart needed. Full reference with every field and defaults:
 {
   "version": 1,
   "managedBy": "shared family PC",
-  "settings": { "maxInputLockMs": 60000, "permissions": { "moduleAllow": { "desktop": false } } },
+  "settings": { "maxInputLockMs": 60000, "permissions": { "functionAllow": { "desktop": false, "web.fetch": false } } },
   "inputLock": { "enabled": true, "maxDurationMs": 60000, "emergencyKey": "esc", "emergencyHoldMs": 5000 }
 }
 ```
 
 Points worth knowing:
 
-- `settings.permissions.moduleAllow` is the app-wide permission policy (Settings → Permissions is
-  the only permission control; packs neither request nor are granted modules). A module the
-  policy file sets to `false` is off for every character and its toggle is shown as managed and
-  locked in the app; modules the file does not mention stay under the user's control.
+- `settings.permissions.functionAllow` is the app-wide permission policy (Settings → Permissions is
+  the only permission control; packs neither request nor are granted anything). Its keys are a
+  module id (`desktop`, the whole module) or one function of it (`web.fetch`), and a function key
+  wins over its module's. A key the policy file sets to `false` is off for every character and its
+  toggle is shown as managed and locked in the app — pinning a module locks its functions with it;
+  keys the file does not mention stay under the user's control. `sdk.lib`, the character's own
+  saved functions, is not subject to the policy. `moduleAllow` is the name this map had while
+  permissions were per module; policy files that still use it keep working unchanged.
 - `inputLock.enabled: false` refuses every lock request; injection is unaffected.
 - A broken policy file (invalid JSON, unknown keys) makes the daemon refuse locks until it is
   fixed — it fails closed rather than falling back to defaults. `journalctl -u rpchatd` names
@@ -376,8 +380,9 @@ fill in), in five tabs:
   the value beside it. A key switched **off is left out of the file entirely**, which is what
   leaves it to each user; switched on it is pinned for everyone and shown to them as *managed by
   policy*. *Force all* / *Force none* set them in one go, and the tab shows how many are on.
-  `permissions.moduleAllow` is a three-way per module — *user's choice*, *allow*, *deny* — since
-  a module left out of the map keeps the user's setting.
+  `permissions.functionAllow` is a three-way per module — *user's choice*, *allow*, *deny* — since
+  a key left out of the map keeps the user's setting; each module expands to the same three-way
+  per function, for pinning one call rather than a whole module.
 - **Remote & packs** — the address the policy is fetched from (`remote`) and the packs this
   machine is meant to have (`packs`), each with an optional checksum and version.
 - **Session guard** — `guard.mode`, the protection switches, `compositorIpc`, the shell picker

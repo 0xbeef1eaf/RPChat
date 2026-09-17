@@ -220,13 +220,17 @@ export interface AppSettings {
     channels: MessagingChannel[];
   };
   /**
-   * Global permission policy. A pack's effective capabilities are the intersection of what its
-   * manifest requests, what this policy allows, and the per-pack toggle. Modules missing from
-   * `moduleAllow` count as allowed (so newly added modules are on by default); `trusted` modules
-   * are never listed here.
+   * Global permission policy: which SDK functions every installed character may call. Keys are a
+   * module id (`avatar`) or one function of it (`avatar.show`); a function entry wins over its
+   * module's, and anything the map does not mention is allowed, so functions added by a later
+   * version or by a plugin arrive switched on. The `lib` module is never listed — `sdk.lib` is the
+   * character's own function library and is always available. See `./permissions.ts`.
+   *
+   * A settings patch replaces this map instead of merging into it, so switching a function back on
+   * can take its key out again; send the whole map.
    */
   permissions: {
-    moduleAllow: Record<string, boolean>;
+    functionAllow: Record<string, boolean>;
   };
   /** In-place application updates (docs: README "Updating"). */
   updates: {
@@ -299,7 +303,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   desktop: { launchAllowlist: [] },
   browser: { bridgePort: 47821, trustedExtensionIds: [], allowBlocking: true, allowEval: true, allowHistory: true, homePage: '', extraPolicyDirs: [] },
   messaging: { channels: [] },
-  permissions: { moduleAllow: {} },
+  permissions: { functionAllow: {} },
   maxInputLockMs: 5 * 60_000,
   wallpaperRestoreFile: '',
   memory: DEFAULT_MEMORY_SETTINGS,

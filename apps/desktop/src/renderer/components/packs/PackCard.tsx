@@ -72,7 +72,8 @@ export function PackCard({ pack, onUninstall }: PackCardProps) {
         <section>
           <h3 style={{ marginBottom: 8 }}>Permissions</h3>
           <p className="field-hint pack-permissions-note">
-            Permissions apply to every character and are set under Settings → Permissions.
+            Permissions apply to every character and are set under Settings → Permissions, one SDK function at a time. A pack may
+            describe fewer functions in its character's prompt; it can never reach past what you allow.
           </p>
           <button type="button" className="btn btn-sm" onClick={() => openSettings('permissions')}>
             Open Settings → Permissions

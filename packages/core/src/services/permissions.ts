@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { CapabilityRegistry } from '@rp/sdk';
 import type { ActionContext, AppSettings, PermissionDecision, PermissionLevel, PermissionRequest } from '@rp/shared';
+import { functionAllowed, functionKey, isAlwaysAvailableModule, selectionCovers } from '@rp/shared';
 import type { EngineEmitter, Logger } from '../types.js';
 
 export type PermissionPrompter = (request: PermissionRequest) => Promise<PermissionDecision>;
 
 export type PermissionVerdict = 'allow' | 'deny' | 'prompt';
 
-/** Why a non-trusted module is unavailable: only ever the app-wide policy. */
+/** Why a function is unavailable: only ever the app-wide policy. */
 export type DenialReason = 'policy';
 
 export const DENIAL_TEXT: Record<DenialReason, string> = {
@@ -19,25 +20,57 @@ export const DENIAL_HINT: Record<DenialReason, string> = {
   policy: 'switched off by the user under Settings → Permissions (applies to every character)',
 };
 
+/** One module and the functions of it that are available, in registry order. */
+export interface AllowedModule {
+  id: string;
+  methods: string[];
+}
+
+/** What the app-wide policy leaves of the SDK, function by function. */
 export interface EffectiveCapabilities {
-  /** Every registered non-trusted module the app-wide policy allows, in registry order. */
-  effective: string[];
-  /** Every registered non-trusted module the policy switches off, with the (only) reason. */
+  /** Every module with at least one allowed function, each with its allowed method names. */
+  effective: AllowedModule[];
+  /** Every switched-off function as `module.method`, with the (only) reason. */
   denied: Record<string, DenialReason>;
 }
 
-/** `true` unless the app-wide policy explicitly turns the module off. */
-export function policyAllows(settings: Pick<AppSettings, 'permissions'>, module: string): boolean {
-  return settings.permissions?.moduleAllow?.[module] !== false;
+/** `true` unless the app-wide policy explicitly turns this function (or its whole module) off. */
+export function policyAllows(settings: Pick<AppSettings, 'permissions'>, module: string, method: string): boolean {
+  return functionAllowed(settings.permissions?.functionAllow, module, method);
+}
+
+/** The `modules`/`methods` pair the `@rp/sdk` generators take, from a list of allowed modules. */
+export function selectionOptions(allowed: readonly AllowedModule[]): { modules: string[]; methods: Record<string, string[]> } {
+  const methods: Record<string, string[]> = {};
+  for (const m of allowed) methods[m.id] = m.methods;
+  return { modules: allowed.map((m) => m.id), methods };
 }
 
 /**
- * Per-call permission logic. Permissions are app-wide: the only control is the user's policy
- * under Settings → Permissions (`settings.permissions.moduleAllow`), which applies to every
- * installed character alike. Packs neither request nor are granted anything.
+ * What the character's prompt describes: the functions it may call, narrowed to the pack author's
+ * `promptFunctions` selection when the character has one. The narrowing is the author's editorial
+ * choice about the prompt and never widens anything — a function the user switched off stays out,
+ * and one left out of the prompt is still there for the pack's own `lib` code to call.
+ */
+export function promptSelection(allowed: readonly AllowedModule[], promptFunctions?: readonly string[]): AllowedModule[] {
+  // No list at all means "everything allowed"; an empty one is a deliberate "nothing but `lib`".
+  if (!promptFunctions) return allowed.map((m) => ({ ...m }));
+  const out: AllowedModule[] = [];
+  for (const m of allowed) {
+    const methods = m.methods.filter((method) => selectionCovers(promptFunctions, m.id, method));
+    if (methods.length > 0) out.push({ id: m.id, methods });
+  }
+  return out;
+}
+
+/**
+ * Per-call permission logic. Permissions are app-wide and per function: the only control is the
+ * user's policy under Settings → Permissions (`settings.permissions.functionAllow`), which applies
+ * to every installed character alike. Packs neither request nor are granted anything.
  *
- * - `trusted` methods are always allowed.
- * - `pack` methods are allowed unless the policy switches the module off.
+ * - `sdk.lib` is the character's own function library and is always available.
+ * - a switched-off function is denied, whatever its level.
+ * - `trusted` and `pack` methods the policy allows are called without asking.
  * - `prompt` methods additionally need a user confirmation on every call, unless an
  *   `allow-session` decision was remembered for this session+module+method (or the handler
  *   pre-authorises the call).
@@ -52,47 +85,59 @@ export class PermissionService {
     private readonly prompter: PermissionPrompter,
     private readonly emitter: EngineEmitter,
     private readonly logger: Logger,
-    private readonly settings: () => Promise<Pick<AppSettings, 'permissions'>> = async () => ({ permissions: { moduleAllow: {} } }),
+    private readonly settings: () => Promise<Pick<AppSettings, 'permissions'>> = async () => ({ permissions: { functionAllow: {} } }),
   ) {}
 
-  /** Every non-trusted module the policy allows and, per switched-off module, the reason. */
+  /** Every function the policy allows, grouped by module, and the switched-off ones with the reason. */
   async effective(_packId?: string): Promise<EffectiveCapabilities> {
     const settings = await this.settings();
-    const effective: string[] = [];
+    const effective: AllowedModule[] = [];
     const denied: Record<string, DenialReason> = {};
     for (const spec of this.registry.list()) {
-      if (spec.permission === 'trusted') continue;
-      if (policyAllows(settings, spec.id)) effective.push(spec.id);
-      else denied[spec.id] = 'policy';
+      const methods: string[] = [];
+      for (const method of Object.keys(spec.methods)) {
+        if (policyAllows(settings, spec.id, method)) methods.push(method);
+        else denied[functionKey(spec.id, method)] = 'policy';
+      }
+      if (methods.length > 0) effective.push({ id: spec.id, methods });
     }
     return { effective, denied };
   }
 
-  /** Module ids usable right now: every `trusted` module plus the effective set, in registry order. */
-  async allowedModules(packId?: string): Promise<string[]> {
-    const { effective } = await this.effective(packId);
-    const ok = new Set(effective);
-    return this.registry
-      .list()
-      .filter((spec) => spec.permission === 'trusted' || ok.has(spec.id))
-      .map((spec) => spec.id);
+  /** Every module with at least one allowed function, each with its allowed methods, in registry order. */
+  async allowedFunctions(packId?: string): Promise<AllowedModule[]> {
+    return (await this.effective(packId)).effective;
   }
 
-  /** Module ids registered but switched off (for error messages and the help module). */
-  async deniedModules(packId?: string): Promise<string[]> {
+  /** Module ids with at least one function left. */
+  async allowedModules(packId?: string): Promise<string[]> {
+    return (await this.allowedFunctions(packId)).map((m) => m.id);
+  }
+
+  /** `module.method` keys switched off (for error messages and the help module). */
+  async deniedFunctions(packId?: string): Promise<string[]> {
     return Object.keys((await this.effective(packId)).denied);
   }
 
+  /** Module ids registered but switched off entirely (no function of them is left). */
+  async deniedModules(packId?: string): Promise<string[]> {
+    const left = new Set(await this.allowedModules(packId));
+    return this.registry
+      .list()
+      .map((spec) => spec.id)
+      .filter((id) => !left.has(id));
+  }
+
   async isAllowed(context: ActionContext, module: string, method: string): Promise<PermissionVerdict> {
+    if (isAlwaysAvailableModule(module)) return 'allow';
     const level: PermissionLevel = this.registry.permissionFor(module, method);
-    if (level === 'trusted') return 'allow';
-    if (!policyAllows(await this.settings(), module)) return 'deny';
-    if (level === 'pack') return 'allow';
+    if (!policyAllows(await this.settings(), module, method)) return 'deny';
+    if (level !== 'prompt') return 'allow';
     return this.sessionAllows.has(this.sessionKey(context.sessionId, module, method)) ? 'allow' : 'prompt';
   }
 
-  /** Human-readable reason a module is unavailable (for error messages and the prompt). */
-  async denialReason(_packId: string, _module: string): Promise<string> {
+  /** Human-readable reason a function is unavailable (for error messages and the prompt). */
+  async denialReason(_packId: string, _module: string, _method?: string): Promise<string> {
     return DENIAL_TEXT.policy;
   }
 

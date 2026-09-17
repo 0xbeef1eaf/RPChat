@@ -2,11 +2,12 @@ import type { CallId, CharacterId, Json, PackId, SessionId } from './ids.js';
 import type { SerializedError } from './errors.js';
 
 /**
- * Permission level of a capability module (or of a single method override).
+ * How much ceremony a capability method needs. It says nothing about *whether* the user allows
+ * it: every function of every module (bar `lib`, see `./permissions.ts`) is on unless the user
+ * switches it off under Settings → Permissions, one function at a time.
  *
- * - `trusted`: always available; effects stay inside the app's own data.
- * - `pack`: on for every installed character unless the user switches the module off
- *   under Settings → Permissions (app-wide; packs neither request nor are granted it).
+ * - `trusted`: effects stay inside the app's own data; on by default and never confirmed.
+ * - `pack`: reaches outside the app; on by default, used without asking.
  * - `prompt`: as `pack`, and every call additionally needs a user confirmation
  *   (which may be remembered for the session).
  */

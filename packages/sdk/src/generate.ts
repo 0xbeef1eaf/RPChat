@@ -5,6 +5,12 @@ import type { CapabilityRegistry } from './registry.js';
 export interface GenerateTypingsOptions {
   /** Only include these modules (the available ones). Omit for all registered modules. Unknown ids are ignored. */
   modules?: string[];
+  /**
+   * Per module id, the only method names to include — permissions are per function, so a module
+   * is usually here with a subset of its own. A module absent from the map keeps all of its
+   * methods; one mapped to an empty list is left out entirely.
+   */
+  methods?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface GenerateDocsOptions extends GenerateTypingsOptions {
@@ -49,11 +55,24 @@ export const LIB_TYPINGS_WITHOUT_MODULE = `/**
  */
 declare const lib: { [name: string]: (...args: any[]) => any };`;
 
-function selectModules(registry: CapabilityRegistry, modules?: string[]): CapabilityModuleSpec[] {
-  const all = registry.list();
-  if (!modules) return all;
-  const allowed = new Set(modules);
-  return all.filter((m) => allowed.has(m.id));
+/** The method names of `spec` the selection keeps, in spec order. */
+function selectMethods(spec: CapabilityModuleSpec, options: GenerateTypingsOptions): string[] {
+  const names = Object.keys(spec.methods);
+  const only = options.methods?.[spec.id];
+  if (!only) return names;
+  const keep = new Set(only);
+  return names.filter((name) => keep.has(name));
+}
+
+/** The methods of `spec` the selection leaves out (switched off by the user), in spec order. */
+function hiddenMethods(spec: CapabilityModuleSpec, options: GenerateTypingsOptions): string[] {
+  const kept = new Set(selectMethods(spec, options));
+  return Object.keys(spec.methods).filter((name) => !kept.has(name));
+}
+
+function selectModules(registry: CapabilityRegistry, options: GenerateTypingsOptions): CapabilityModuleSpec[] {
+  const allowed = options.modules ? new Set(options.modules) : undefined;
+  return registry.list().filter((m) => (!allowed || allowed.has(m.id)) && selectMethods(m, options).length > 0);
 }
 
 /**
@@ -63,7 +82,7 @@ function selectModules(registry: CapabilityRegistry, modules?: string[]): Capabi
  * self-contained, import-free declaration file that compiles against `lib.es2022`.
  */
 export function generateSdkTypings(registry: CapabilityRegistry, options: GenerateTypingsOptions = {}): string {
-  const specs = selectModules(registry, options.modules);
+  const specs = selectModules(registry, options);
   const out: string[] = [TYPINGS_HEADER, SDK_PREAMBLE_TYPINGS.trimEnd(), ''];
 
   out.push('/** The SDK available to character code as the global `sdk`. */');
@@ -77,7 +96,12 @@ export function generateSdkTypings(registry: CapabilityRegistry, options: Genera
   out.push('}', '', CONSOLE_TYPINGS, '', hasLib ? LIB_TYPINGS : LIB_TYPINGS_WITHOUT_MODULE);
 
   for (const spec of specs) {
-    out.push('', `// ---- module: ${spec.id} v${spec.version} ----`, spec.typings.trim());
+    out.push('', `// ---- module: ${spec.id} v${spec.version} ----`);
+    // A module's typings are one authored block, so a switched-off method cannot be cut out of
+    // them; naming it keeps the declaration honest about what calling it would do.
+    const hidden = hiddenMethods(spec, options);
+    if (hidden.length > 0) out.push(`// Not available: ${hidden.map((n) => `${spec.id}.${n}`).join(', ')} — calling one throws PERMISSION_DENIED.`);
+    out.push(spec.typings.trim());
   }
   out.push('');
   return out.join('\n');
@@ -102,7 +126,7 @@ You act by running TypeScript through the \`run_action\` tool (or, if tools are 
  * permission, then the list of denied (unavailable) modules.
  */
 export function generateSdkDocs(registry: CapabilityRegistry, options: GenerateDocsOptions = {}): string {
-  const specs = selectModules(registry, options.modules);
+  const specs = selectModules(registry, options);
   const sections: string[] = [GENERAL_DOCS];
 
   for (const spec of specs) {
@@ -125,6 +149,10 @@ export function generateSdkDocs(registry: CapabilityRegistry, options: GenerateD
       if (dangerous.length > 0) {
         lines.push('', `Methods with effects outside the app (use with care): ${dangerous.join(', ')}.`);
       }
+    }
+    const hidden = hiddenMethods(spec, options);
+    if (hidden.length > 0) {
+      lines.push('', `Switched off by the user and **not available**: ${hidden.map((n) => `\`${spec.id}.${n}\``).join(', ')}. Calling one throws \`PERMISSION_DENIED\`.`);
     }
     lines.push('', spec.docs.trim());
     sections.push(lines.join('\n'));
@@ -151,9 +179,9 @@ export function generateSdkDocs(registry: CapabilityRegistry, options: GenerateD
  */
 export function describeSurface(registry: CapabilityRegistry, options: DescribeSurfaceOptions = {}): SdkSurface {
   return {
-    modules: selectModules(registry, options.modules).map((spec) => ({
+    modules: selectModules(registry, options).map((spec) => ({
       id: spec.id,
-      methods: Object.keys(spec.methods),
+      methods: selectMethods(spec, options),
     })),
   };
 }

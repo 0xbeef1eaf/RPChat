@@ -16,18 +16,23 @@ export class CapabilityRegistry {
 }
 export function createStandardRegistry(): CapabilityRegistry;          // all v1 modules registered
 export function validateModuleSpec(spec: CapabilityModuleSpec): string[]; // list of problems, [] = valid
-export function generateSdkTypings(registry, options?: { modules?: string[] }): string;
-export function generateSdkDocs(registry, options?: { modules?: string[]; deniedModules?: string[] }): string;
+// `methods` narrows a module to the given function names — permissions are per function, so this is
+// how a switched-off call stops existing. Absent from the map = all of the module's methods; `[]` = the
+// module is left out entirely.
+type Selection = { modules?: string[]; methods?: Readonly<Record<string, readonly string[]>> };
+export function generateSdkTypings(registry, options?: Selection): string;
+export function generateSdkDocs(registry, options?: Selection & { deniedModules?: string[] }): string;
 // Prompt reference generated from the type definitions: rules, then per module one entry per method —
 // `- name(sig): ret — TSDoc summary`, every `@param`, `@returns`, the first `@example` — helper types on one
-// line, one module example; shared preamble types only when referenced; unavailable modules are not mentioned.
-export function generateSdkIndex(registry, options?: { modules?: string[]; deniedModules?: string[]; helperTypes?: boolean }): string;
-export function describeSurface(registry, options?: { modules?: string[] }): SdkSurface;
+// line, one module example; shared preamble types only when referenced; unavailable modules and functions
+// are not mentioned.
+export function generateSdkIndex(registry, options?: Selection & { helperTypes?: boolean }): string;
+export function describeSurface(registry, options?: Selection): SdkSurface;
 export const SDK_PREAMBLE_TYPINGS: string;  // shared helper types (AssetRef, MediaHandle, ...)
 export * as modules from './modules/index.js';   // chatModule, logModule, stateModule, packModule, timersModule, mediaModule, uiModule, systemModule
 ```
 
-`options.modules` filters to the available modules — trusted plus every module the user has not switched off under Settings → Permissions (used by core when building prompts and sandbox surface).
+`options.modules` / `options.methods` filter to what is available — every SDK function the user has not switched off under Settings → Permissions, narrowed for the prompt by the character's `promptFunctions` (core builds both from `PermissionService`; see docs/spec/core.md). `generateSdkIndex` simply leaves a filtered-out function out of the index. The typings and the docs are one authored block per module and cannot drop a single method from their text, so they add a `Not available: <module>.<name>` line naming it instead — as does `sdk.help.module(id)`, in its `unavailable` field.
 
 Permission levels (`CapabilityModuleSpec.permission`, per-method override in `methods[name].permission`): `trusted` — always available, cannot be switched off; `pack` — on for every character unless the user switches the module off under Settings → Permissions (app-wide; packs neither request nor are granted it); `prompt` — as `pack`, plus a confirmation dialog on every call (remembered per session on `allow-session`; a handler may `preauthorize`). No built-in module uses `prompt`.
 

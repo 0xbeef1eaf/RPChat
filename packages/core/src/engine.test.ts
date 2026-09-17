@@ -60,11 +60,13 @@ describe('PackService', () => {
   it('re-installing the same pack replaces it and keeps the app-wide policy untouched', async () => {
     t = await createTestEngine();
     await t.engine.packs.install(LUNA_DIR);
-    await t.engine.settings.update({ permissions: { moduleAllow: { ui: false } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { ui: false } } });
     await t.engine.packs.install(LUNA_DIR);
     expect(await t.engine.packs.list()).toHaveLength(1);
-    expect((await t.engine.settings.get()).permissions.moduleAllow).toEqual({ ui: false });
-    expect((await t.engine.permissions.effective(LUNA_ID)).denied).toEqual({ ui: 'policy' });
+    expect((await t.engine.settings.get()).permissions.functionAllow).toEqual({ ui: false });
+    // A module-level entry denies each of the module's functions in turn.
+    expect(Object.keys((await t.engine.permissions.effective(LUNA_ID)).denied)).toEqual(expect.arrayContaining(['ui.notify', 'ui.ask']));
+    expect(Object.keys((await t.engine.permissions.effective(LUNA_ID)).denied).every((k) => k.startsWith('ui.'))).toBe(true);
   });
 
   it('installs packs whose legacy "capabilities" key names modules this app does not know (the key is ignored)', async () => {
@@ -174,7 +176,7 @@ describe('ChatService turns', () => {
       },
     });
     await t.engine.packs.install(MINIMAL_DIR);
-    await t.engine.settings.update({ permissions: { moduleAllow: { media: false } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { media: false } } });
     await t.storage.state.set(`char:${ECHO_REF}`, 'mood', 'happy');
     const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
     t.events.length = 0;
@@ -365,7 +367,7 @@ describe('permissions', () => {
     const media = new RecordingHandler('media', (method) => ({ id: 'm1', kind: 'image', asset: method }));
     t = await createTestEngine({ hostHandlers: [media] });
     await t.engine.packs.install(LUNA_DIR);
-    await t.engine.settings.update({ permissions: { moduleAllow: { media: false } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { media: false } } });
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const context = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: t.engine.packs.getLoaded(LUNA_ID).root, trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
 
@@ -373,7 +375,7 @@ describe('permissions', () => {
     expect(denied).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED', details: { reason: 'switched off under Settings → Permissions' } } });
     expect(media.calls).toHaveLength(0);
 
-    await t.engine.settings.update({ permissions: { moduleAllow: { media: true } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { media: true } } });
     const allowed = await t.engine.dispatcher.invoke({ callId: 'c2', module: 'media', method: 'showImage', args: ['images/luna-smile.png', { durationMs: 5 }], context });
     expect(allowed).toMatchObject({ ok: true, value: { id: 'm1' } });
     expect(media.calls).toHaveLength(1);
@@ -412,7 +414,7 @@ describe('permissions', () => {
     const decisions: Array<'allow-once' | 'allow-session' | 'deny'> = ['deny', 'allow-session'];
     t = await createTestEngine({ hostHandlers: [system], registry: createTestRegistryWithProbe(), prompter: async () => decisions.shift() ?? 'deny' });
     await installLunaWith(t.engine, t.packsDir);
-    await t.engine.settings.update({ permissions: { moduleAllow: { probe: false } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { probe: false } } });
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const context = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: '/x', trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
     const call = (n: number) => t!.engine.dispatcher.invoke({ callId: `s${n}`, module: 'probe', method: 'ping', args: ['https://example.com'], context });
@@ -421,7 +423,7 @@ describe('permissions', () => {
     expect(await call(1)).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
     expect(t.prompts).toHaveLength(0);
 
-    await t.engine.settings.update({ permissions: { moduleAllow: { probe: true } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { probe: true } } });
     const emitted: unknown[] = [];
     t.engine.events.on('permission-request', (r) => emitted.push(r));
 
@@ -443,7 +445,7 @@ describe('permissions', () => {
 
     // The SDK surface handed to the runner includes prompt-level modules that are switched on.
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).toContain('probe');
-    await t.engine.settings.update({ permissions: { moduleAllow: { probe: true, media: false } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { probe: true, media: false } } });
     expect((await t.engine.behaviours.surfaceFor(LUNA_ID)).modules.map((m) => m.id)).not.toContain('media');
   });
 
@@ -452,9 +454,9 @@ describe('permissions', () => {
     const handlers = [rec('display'), rec('wallpaper'), rec('browser'), rec('input')];
     t = await createTestEngine({ hostHandlers: handlers, prompter: async () => 'allow-once' });
     await installLunaWith(t.engine, t.packsDir);
-    // `settings.update` merges `moduleAllow`, so every module of interest is set explicitly each time.
+    // `settings.update` replaces `functionAllow`, so every module of interest is set explicitly each time.
     const off = (modules: string[]) =>
-      t!.engine.settings.update({ permissions: { moduleAllow: Object.fromEntries(['wallpaper', 'browser', 'input'].map((m) => [m, !modules.includes(m)])) } });
+      t!.engine.settings.update({ permissions: { functionAllow: Object.fromEntries(['wallpaper', 'browser', 'input'].map((m) => [m, !modules.includes(m)])) } });
     await off(['wallpaper', 'browser', 'input']);
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const luna = t.engine.packs.getLoaded(LUNA_ID);
@@ -502,11 +504,11 @@ describe('permissions', () => {
     await fs.writeFile(path.join(charDir, 'character.json'), JSON.stringify(def));
 
     // a switched-off module does not hold the hook back: permissions are app-wide, nothing is pending
-    await t.engine.settings.update({ permissions: { moduleAllow: { ui: false } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { ui: false } } });
     await t.engine.packs.install(src);
     expect(installs).toEqual(['onInstall']);
     // policy changes never re-run it
-    await t.engine.settings.update({ permissions: { moduleAllow: { ui: true } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { ui: true } } });
     await new Promise((r) => setTimeout(r, 0));
     expect(installs).toEqual(['onInstall']);
     // re-installing runs it again (it is a fresh install of that version)

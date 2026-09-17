@@ -5,6 +5,7 @@ import { Markdown } from '../../components/common/Markdown';
 import { isValidCharacterId, wordCount } from '../../lib/editor';
 import { reportError, toast } from '../../store/actions';
 import { useDraft, useEditor } from './context';
+import { PromptSdkSection } from './PromptSdkSection';
 import { SaveBar } from './SaveBar';
 import { VoicePicker } from './VoicePicker';
 
@@ -382,6 +383,8 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
           ) : null}
         </div>
       </div>
+
+      <PromptSdkSection value={def.promptFunctions} onChange={(promptFunctions) => setDef({ promptFunctions })} />
 
       <div className="field" style={{ marginTop: 16 }}>
         <span className="field-label">Mood baselines</span>

@@ -107,7 +107,7 @@ describe('prompt rendering with tags', () => {
       pack,
       character: luna.characters[0]!,
       registry: createStandardRegistry(),
-      allowedModules: ['chat', 'pack'],
+      sdkSelection: { modules: ['chat', 'pack'] },
       session: { id: 's', characterRef: LUNA_REF, title: 'T', createdAt: 't', updatedAt: 't', messageCount: 0 },
       transcript: [],
       state: {},

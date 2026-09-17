@@ -47,7 +47,7 @@ describe('engine.capabilities.register / unregister', () => {
     expect(t.engine.capabilities.typings()).toContain('interface ClockApi');
 
     // now the module is on for every installed character (app-wide policy default) and visible everywhere
-    expect((await t.engine.permissions.effective(LUNA_ID)).effective).toContain('clock');
+    expect((await t.engine.permissions.effective(LUNA_ID)).effective).toContainEqual({ id: 'clock', methods: ['now'] });
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     const context: ActionContext = { packId: LUNA_ID, characterId: 'luna', sessionId: session.id, packRoot: t.engine.packs.getLoaded(LUNA_ID).root, trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } };
     const call = (n: string, args: Json[] = []) => t!.engine.dispatcher.invoke({ callId: n, module: 'clock', method: 'now', args, context });
@@ -64,9 +64,9 @@ describe('engine.capabilities.register / unregister', () => {
     expect(system).toMatch(/Available modules: .*\bsdk\.clock\b/);
 
     // switched off under Settings → Permissions → denied like any pack-level module
-    await t.engine.settings.update({ permissions: { moduleAllow: { clock: false } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { clock: false } } });
     expect(await call('c2')).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
-    await t.engine.settings.update({ permissions: { moduleAllow: { clock: true } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { clock: true } } });
 
     // unregister: handler disposed, calls fail CAPABILITY_UNKNOWN, prompt and list no longer mention it
     expect(await t.engine.capabilities.unregister('clock')).toBe(true);

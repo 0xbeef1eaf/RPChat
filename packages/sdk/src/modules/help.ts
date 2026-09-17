@@ -17,14 +17,16 @@ interface HelpApi {
   /**
    * Complete TypeScript typings and the usage guide of one available module.
    * @param id Module id as it appears on sdk, e.g. "media".
+   * @returns The module's reference. \`unavailable\`, when present, names the functions of it you
+   *   may not call even though the typings still describe them.
    * @example const ref = await sdk.help.module("media"); console.info(ref.typings);
    */
-  module(id: string): Promise<{ id: string; title: string; typings: string; docs: string }>;
+  module(id: string): Promise<{ id: string; title: string; typings: string; docs: string; unavailable?: string[] }>;
 }`,
   docs: `Fetch the full reference of a module when the index in your prompt is not enough. The result comes back as the action result; read it, then act in your next action.
 
 - Costs one action round; do it only when you are unsure about a signature or option.
-- Only available modules can be looked up; others fail with \`NOT_FOUND\`.
+- Only available modules can be looked up; others fail with \`NOT_FOUND\`. A module may be available with some of its functions switched off: those are listed in \`unavailable\` even though the typings still declare them.
 
 \`\`\`ts
 const ref = await sdk.help.module("avatar");

@@ -146,7 +146,7 @@ export function policyTemplate(settings: AppSettings, userName?: string): string
     settings: {
       maxInputLockMs: settings.maxInputLockMs,
       autonomy: { ...settings.autonomy },
-      permissions: { moduleAllow: { ...settings.permissions.moduleAllow } },
+      permissions: { functionAllow: { ...settings.permissions.functionAllow } },
       web: { allowlist: [...settings.web.allowlist] },
       desktop: { launchAllowlist: [...settings.desktop.launchAllowlist] },
       memory: { ...settings.memory },

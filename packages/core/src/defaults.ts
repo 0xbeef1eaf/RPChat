@@ -1,4 +1,4 @@
-import { DEFAULT_RUN_LIMITS, DEFAULT_SETTINGS, clampChatZoom } from '@rp/shared';
+import { DEFAULT_RUN_LIMITS, DEFAULT_SETTINGS, clampChatZoom, mergeLegacyModuleAllow } from '@rp/shared';
 import type { AppSettings, CommandTemplates, RunLimits } from '@rp/shared';
 
 /** A fresh, fully populated `AppSettings` (deep copies of the defaults). */
@@ -53,7 +53,14 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   if (stored.updates && typeof stored.updates === 'object') merged.updates = { ...base.updates, ...stored.updates };
   if (stored.debug && typeof stored.debug === 'object') merged.debug = { ...base.debug, ...stored.debug };
   if (stored.permissions && typeof stored.permissions === 'object') {
-    merged.permissions = { ...base.permissions, ...stored.permissions, moduleAllow: { ...base.permissions.moduleAllow, ...(stored.permissions.moduleAllow ?? {}) } };
+    // `functionAllow` is replaced, not merged: the map only holds decisions that differ from "on",
+    // so switching a function back on has to be able to take its key out again.
+    // Permissions were per module before they were per function, under `moduleAllow`; its keys are
+    // exactly what a module-level entry is now, so an older settings file keeps its decisions.
+    const legacy = (stored.permissions as { moduleAllow?: Record<string, boolean> }).moduleAllow;
+    const functionAllow = stored.permissions.functionAllow ?? base.permissions.functionAllow;
+    merged.permissions = { ...base.permissions, ...stored.permissions, functionAllow: mergeLegacyModuleAllow(functionAllow, legacy) };
+    delete (merged.permissions as { moduleAllow?: unknown }).moduleAllow;
   }
   return merged;
 }

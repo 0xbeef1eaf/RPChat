@@ -75,13 +75,15 @@ engine.permissions.effective(packId?): { effective: string[]; denied: Record<str
 
 ### 3.2 Permission policy (app-wide)
 
-`PermissionService.isAllowed`: for non-trusted modules the only requirement is
-`settings.permissions.moduleAllow[module] !== false` (Settings → Permissions). The policy applies to
-every installed character alike; packs neither request nor are granted modules, and there is no
-per-pack state. It is applied at check time, so a change takes effect on the next call. The prompt's
-SDK reference and the sandbox surface are filtered to the effective set; a switched-off module is
-absent from both and a call to it fails with PERMISSION_DENIED, reason "switched off under
-Settings → Permissions". `prompt`-level methods: if the handler's `preauthorize(method, args, ctx)`
+`PermissionService.isAllowed`: the only requirement is that the function is not switched off —
+`functionAllowed(settings.permissions.functionAllow, module, method)` (Settings → Permissions),
+i.e. the `module.method` entry if there is one, else the `module` entry, else allowed. `sdk.lib` is
+exempt and always allowed. The policy applies to every installed character alike; packs neither
+request nor are granted anything, and there is no per-pack state. It is applied at check time, so a
+change takes effect on the next call. The prompt's SDK reference and the sandbox surface are
+filtered to the effective set; a switched-off function is absent from both and a call to it fails
+with PERMISSION_DENIED, reason "switched off under Settings → Permissions". A pack's
+`character.json` `promptFunctions` narrows the prompt further and the surface not at all. `prompt`-level methods: if the handler's `preauthorize(method, args, ctx)`
 resolves true, skip the dialog (still audited `allowed`); otherwise the existing per-call prompt with
 allow-session memory.
 

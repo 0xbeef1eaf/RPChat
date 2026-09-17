@@ -42,7 +42,7 @@ async function input(transcript: ChatMessage[], overrides: Partial<PromptInput> 
     pack,
     character: pack.characters[0]!,
     registry: createStandardRegistry(),
-    allowedModules: ['chat', 'state', 'pack', 'timers', 'media'],
+    sdkSelection: { modules: ['chat', 'state', 'pack', 'timers', 'media'] },
     session,
     transcript,
     state: { userName: 'Sam' },
@@ -84,7 +84,7 @@ describe('PromptBuilder', () => {
   });
 
   it('includes the new modules when available and says nothing at all about the rest', async () => {
-    const denied = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'state', 'pack', 'timers', 'display'] })).system;
+    const denied = new PromptBuilder().build(await input([], { sdkSelection: { modules: ['chat', 'state', 'pack', 'timers', 'display'] } })).system;
     expect(denied).toContain('## sdk.display');
     for (const id of ['wallpaper', 'browser', 'input', 'media']) {
       expect(denied).not.toContain(`## sdk.${id} —`);
@@ -93,7 +93,7 @@ describe('PromptBuilder', () => {
     expect(denied).not.toContain('Not available'); // no list of what the character cannot do
     expect(denied).not.toContain('are not available in this session');
 
-    const available = new PromptBuilder().build(await input([], { allowedModules: ['chat', 'state', 'pack', 'timers', 'display', 'wallpaper', 'browser', 'input'] })).system;
+    const available = new PromptBuilder().build(await input([], { sdkSelection: { modules: ['chat', 'state', 'pack', 'timers', 'display', 'wallpaper', 'browser', 'input'] } })).system;
     for (const id of ['display', 'wallpaper', 'browser', 'input']) expect(available).toContain(`## sdk.${id}`);
     expect(available).toContain('Available modules: sdk.chat, sdk.state, sdk.pack, sdk.timers, sdk.display, sdk.wallpaper, sdk.browser, sdk.input.');
     expect(available).not.toContain('Not available');
@@ -167,7 +167,7 @@ describe('PromptBuilder', () => {
       { id: 'm1', characterRef: session.characterRef, text: 'Their cat is Miso.', tags: ['pets', 'cat'], importance: 4, source: 'character' as const, createdAt: '2026-02-01T10:00:00.000Z', updatedAt: '2026-02-01T10:00:00.000Z', recallCount: 0 },
       { id: 'm2', characterRef: session.characterRef, text: 'They work nights.', tags: [], importance: 3, source: 'consolidation' as const, createdAt: '2026-02-02T10:00:00.000Z', updatedAt: '2026-02-02T10:00:00.000Z', recallCount: 0 },
     ];
-    const withMemories = new PromptBuilder().build(await input([], { memories, allowedModules: ['chat', 'state', 'pack', 'timers', 'memory'] })).system;
+    const withMemories = new PromptBuilder().build(await input([], { memories, sdkSelection: { modules: ['chat', 'state', 'pack', 'timers', 'memory'] } })).system;
     expect(withMemories).toContain('<memories>\nThings you remember (most important first):\n- (4/5, 2026-02-01) Their cat is Miso. [pets, cat]\n- (3/5, 2026-02-02) They work nights.\n</memories>');
     expect(withMemories).toContain('## sdk.memory —');
   });

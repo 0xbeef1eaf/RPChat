@@ -111,6 +111,17 @@ export interface CharacterDefinition {
     /** Rendered width in CSS px. Default 240. */
     size?: number;
   };
+  /**
+   * Which SDK functions the character's prompt describes. Entries are a module id (`avatar`, the
+   * whole module) or one function (`avatar.show`); omit the key for "everything the user allows".
+   *
+   * This trims the prompt, not the permissions: code still reaches every function the user allows,
+   * so a pack may keep `wallpaper` out of the character's reference while a `lib` function of its
+   * own calls `sdk.wallpaper.set`. The prompt lists this selection intersected with the user's
+   * permissions — showing the character a function it would be denied helps nobody. `lib` is
+   * always in the prompt.
+   */
+  promptFunctions?: string[];
   /** Baselines for the mood model (`sdk.mood`). */
   mood?: { baseline?: number; energyBaseline?: number };
   /** How the character sounds in `sdk.voice.speak()`. Paths are relative to the character directory. */

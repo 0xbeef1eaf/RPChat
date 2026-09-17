@@ -13,7 +13,7 @@ const POLICY_TEMPLATE: PolicyFile = {
   settings: {
     maxInputLockMs: 300_000,
     autonomy: { maxSelfWakesPerHour: 30, maxConsecutiveSelfWakes: 10, maxTimersPerSession: 20, minRepeatIntervalMs: 60_000, minDelayMs: 30_000 },
-    permissions: { moduleAllow: { web: true, desktop: false } },
+    permissions: { functionAllow: { 'web.fetch': true, desktop: false } },
     web: { allowlist: ['example.com'] },
     desktop: { launchAllowlist: [] },
     memory: { enabled: true, consolidateEveryTurns: 8, maxEntriesPerCharacter: 300, promptBudgetTokens: 600 },
@@ -35,7 +35,7 @@ describe('policyDraftFrom', () => {
     expect(draft.values['updates.allowDowngrade']).toBe(false);
     expect(POLICY_SETTINGS.filter((s) => !draft.forced[s.path]).map((s) => s.path)).toEqual(['updates.allowDowngrade']);
     expect(draft.values['web.allowlist']).toEqual(['example.com']);
-    expect(draft.values['permissions.moduleAllow']).toEqual({ web: true, desktop: false });
+    expect(draft.values['permissions.functionAllow']).toEqual({ 'web.fetch': true, desktop: false });
   });
 
   it('leaves every key off for a bare policy but keeps the blocks at their documented defaults', () => {
