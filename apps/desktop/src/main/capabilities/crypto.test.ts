@@ -81,14 +81,14 @@ describe('CryptoService', () => {
     expect(await fs.readFile(file, 'utf8')).toBe('x');
   });
 
-  it('decryptAll delegates to the manager', async () => {
+  it('counts pending decrypts without decrypting them (bulk decryption is the CLI\'s job)', async () => {
     const manager = setup();
     const service = new CryptoService(manager, 'daemon');
     const file = path.join(home, 'a.txt');
     await fs.writeFile(file, 'x');
     await manager.encrypt(file);
-    const outcomes = await service.decryptAll();
-    expect(outcomes).toEqual([{ path: file, ok: true }]);
-    expect(await fs.readFile(file, 'utf8')).toBe('x');
+    expect((await service.status()).pendingDecrypts).toBe(1);
+    // Still encrypted: nothing the renderer can reach decrypts in bulk.
+    expect(await fs.readFile(file, 'utf8')).not.toBe('x');
   });
 });

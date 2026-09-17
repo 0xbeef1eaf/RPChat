@@ -13,10 +13,3 @@ export interface CryptoStatus {
   /** Encrypted files the log has not seen a matching `decrypt` for yet. */
   pendingDecrypts: number;
 }
-
-/** One file `decryptAll` looked at. */
-export interface CryptoDecryptOutcome {
-  path: string;
-  ok: boolean;
-  reason?: string;
-}

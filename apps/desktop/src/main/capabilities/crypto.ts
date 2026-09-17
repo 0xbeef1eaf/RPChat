@@ -6,7 +6,7 @@
  * return the SDK typings promise (the checksums and key id are already in the log — nobody
  * scripting a character has a use for them, see `modules/crypto.ts`).
  */
-import type { ActionContext, CapabilityHandler, CryptoDecryptOutcome, CryptoStatus, Json } from '@rp/shared';
+import type { ActionContext, CapabilityHandler, CryptoStatus, Json } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import type { CryptoManager } from '@rp/core';
 
@@ -30,10 +30,11 @@ export class CryptoHandler implements CapabilityHandler {
 }
 
 /**
- * Settings → System → Encryption: the "user process to rotate the key" and the in-app twin of
- * `rpchat-decrypt-all`, both over the same `CryptoManager` the SDK calls go through (so a
- * rotation here is exactly what a later `sdk.crypto.encrypt` picks up, and "decrypt everything"
- * here is the same walk the standalone script does).
+ * Settings → System → Encryption: the "user process to rotate the key", over the same
+ * `CryptoManager` the SDK calls go through, so a rotation here is exactly what a later
+ * `sdk.crypto.encrypt` picks up. Bulk decryption is deliberately not reachable from the
+ * renderer: `rpchat-decrypt-all` (`@rp/core`) is the one way to run it, as the user, from a
+ * terminal — `status().pendingDecrypts` is all this side reports about it.
  */
 export class CryptoService {
   constructor(
@@ -55,12 +56,8 @@ export class CryptoService {
     return this.status();
   }
 
-  async decryptAll(): Promise<CryptoDecryptOutcome[]> {
-    return this.manager.decryptAll();
-  }
-
   private async pendingCount(): Promise<number> {
-    // decryptAll() would also decrypt; a status check only counts, via the same log decryptAll reads.
+    // Read-only: the same log `rpchat-decrypt-all` walks, counted rather than acted on.
     return (await this.manager.listPendingPaths()).length;
   }
 }

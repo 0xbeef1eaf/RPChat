@@ -81,7 +81,7 @@ export interface AppServices {
   editor: EditorService;
   plugins: PluginService;
   system: SystemIntegration;
-  /** Settings → System → Encryption: `sdk.crypto`'s key history, rotation and "decrypt everything". */
+  /** Settings → System → Encryption: `sdk.crypto`'s key history and its rotation. */
   crypto: CryptoService;
   updates: UpdateService;
   policy: PolicyWatcher;

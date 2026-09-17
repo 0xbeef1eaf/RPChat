@@ -12,7 +12,7 @@ export const cryptoModule: CapabilityModuleSpec = {
  * System → Encryption). Paths are absolute (or ~) under the user's home directory only; anything
  * outside it, or that looks like a system/session file (.service, .desktop, .conf, ...), is
  * rejected before it is touched. Every encryption is logged (path, before/after checksum, which
- * key) so the user can run "decrypt everything" later even if they lose track of what you locked.
+ * key) so the user can decrypt everything later even if they lose track of what you locked.
  */
 interface CryptoApi {
   /**
@@ -37,8 +37,9 @@ interface CryptoApi {
   system or session file (\`.service\`, \`.desktop\`, \`.conf\`, and the like) even inside it.
 - \`encrypt\` replaces the file's content with ciphertext at the same path; there is no separate
   "encrypted copy" left behind, and no file extension changes, so tell the user what you did.
-- The user can rotate the key or run "decrypt everything" from Settings → System → Encryption
-  without your help; you never need to ask them for a key or a password.
+- Key handling is the user's business, not yours: they rotate the key in Settings → System →
+  Encryption and bring everything back with the \`rpchat-decrypt-all\` script. You never need to
+  ask them for a key or a password.
 
 \`\`\`ts
 await sdk.crypto.encrypt("~/Documents/plans.txt");

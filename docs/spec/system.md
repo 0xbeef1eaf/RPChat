@@ -7,7 +7,7 @@ and enforces a root-owned **policy file**; the app talks to it over a unix socke
 script sets everything up (group, udev rule, daemon service, policy template, autostart).
 Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `SystemIntegrationStatus`,
 `DAEMON_SOCKET_PATH`, `POLICY_FILE_PATH`, `SYSTEM_GROUP`, `CryptoKeyRecord`), `@rp/shared/crypto.ts`
-(`CryptoStatus`, `CryptoDecryptOutcome`), `IpcApi.system`, `IpcApi.crypto`, `IpcApi.settings.managed`.
+(`CryptoStatus`), `IpcApi.system`, `IpcApi.crypto`, `IpcApi.settings.managed`.
 
 ## `native/rpchatd` (Rust, Linux only)
 

@@ -306,7 +306,6 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
     crypto: {
       status: () => services.crypto.status(),
       rotateKey: () => services.crypto.rotateKey(),
-      decryptAll: () => services.crypto.decryptAll(),
     },
     browser: {
       status: () => services.browser.status(),

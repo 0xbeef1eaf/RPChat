@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { CryptoDecryptOutcome, CryptoStatus } from '@rp/shared';
+import type { CryptoStatus } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { formatDateTime } from '../../lib/format';
 import { reportError } from '../../store/actions';
@@ -12,7 +12,6 @@ export function EncryptionSection() {
   const [status, setStatus] = useState<CryptoStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [decryptResult, setDecryptResult] = useState<CryptoDecryptOutcome[] | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -38,20 +37,6 @@ export function EncryptionSection() {
     }
   };
 
-  const decryptAll = async () => {
-    setBusy(true);
-    setDecryptResult(null);
-    try {
-      const outcomes = await api().crypto.decryptAll();
-      setDecryptResult(outcomes);
-      setStatus(await api().crypto.status());
-    } catch (err) {
-      reportError('Decrypt everything failed', err);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (error) {
     return (
       <div className="stack">
@@ -71,9 +56,6 @@ export function EncryptionSection() {
       </div>
     );
   }
-
-  const failed = decryptResult?.filter((o) => !o.ok) ?? [];
-  const succeeded = decryptResult?.filter((o) => o.ok) ?? [];
 
   return (
     <div className="stack" style={{ gap: 14 }}>
@@ -109,29 +91,10 @@ export function EncryptionSection() {
           <button type="button" className="btn btn-sm" onClick={() => void rotate()} disabled={busy}>
             Rotate key
           </button>
-          <button type="button" className="btn btn-sm" onClick={() => void decryptAll()} disabled={busy || status.pendingDecrypts === 0}>
-            Decrypt everything
-          </button>
         </div>
-        {decryptResult ? (
-          <div className="stack small" style={{ marginTop: 10 }}>
-            <span>
-              {succeeded.length}/{decryptResult.length} decrypted{failed.length > 0 ? `, ${failed.length} failed` : ''}.
-            </span>
-            {failed.length > 0 ? (
-              <ul className="small">
-                {failed.map((o) => (
-                  <li key={o.path} className="mono">
-                    {o.path}: {o.reason ?? 'unknown error'}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        ) : null}
         <p className="field-hint" style={{ marginTop: 8 }}>
-          The same walk runs from a terminal (no app needed) as <code>rpchat-decrypt-all</code>, for when a file needs decrypting and the app is not around to
-          ask.
+          To bring everything back at once, run <code>rpchat-decrypt-all</code> from a terminal: it walks the same log this page counts and decrypts whatever is
+          still encrypted, as you, with or without the app running.
         </p>
       </div>
     </div>
