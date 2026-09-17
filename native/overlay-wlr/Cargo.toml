@@ -15,7 +15,7 @@ path = "src/main.rs"
 # GTK3 stack (system: gtk+-3.0 >= 3.24)
 gtk = "0.18"
 gdk = "0.18"
-glib = "0.18"
+glib = "0.20"
 cairo-rs = "0.18"
 # wlr-layer-shell integration (system: gtk-layer-shell-0 >= 0.6)
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
