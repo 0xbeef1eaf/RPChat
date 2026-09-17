@@ -1255,10 +1255,7 @@ pub mod tests {
         // Same version, different build: refresh. This is the case that was being missed.
         assert_eq!(run("rpchatd 0.2.0 (protocol 1)"), (Ok(true), 1));
         // Same version, same build: nothing to do, and no pointless restart.
-        assert_eq!(
-            run("rpchatd 0.2.0 (protocol 1) same-build"),
-            (Ok(false), 0)
-        );
+        assert_eq!(run("rpchatd 0.2.0 (protocol 1) same-build"), (Ok(false), 0));
         // Older: never downgrade the daemon behind the user's back.
         assert_eq!(run("rpchatd 0.1.0 (protocol 1)"), (Ok(false), 0));
     }

@@ -5009,13 +5009,7 @@ mod tests {
             .files
             .lock()
             .unwrap()
-            .get(
-                &server
-                    .daemon
-                    .guard_paths
-                    .profile_dir
-                    .join("rpchat-session"),
-            )
+            .get(&server.daemon.guard_paths.profile_dir.join("rpchat-session"))
             .cloned()
             .unwrap();
         assert!(session.contains("audit deny"));
