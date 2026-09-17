@@ -47,7 +47,13 @@ POLICY_DST="$POLICY_DIR/policy.json"
 STATE_DIR=/var/lib/rpchat
 RUN_DIR=/run/rpchat
 MENU_DST=/usr/local/share/applications/rpchat.desktop
-ICON_DST=/usr/local/share/icons/hicolor/512x512/apps/rpchat.png
+ICON_THEME_DIR=/usr/local/share/icons/hicolor
+# Sizes to install, largest first. One size is not enough: /usr/local/share/icons/hicolor carries no
+# index.theme (the hicolor package owns the one under /usr/share), so a launcher that cannot read the
+# Directories list there falls back to probing a hard-coded set of size directories, and several stop
+# at 256x256 — a lone 512x512 icon is then invisible even though the .desktop file is found. Every
+# size is a downscale of apps/desktop/build/icon-source.png, so each one carries real detail.
+ICON_SIZES="512 128 64 48 32"
 # System install: the unpacked app (docs/system-integration.md "System install").
 INSTALL_ROOT=/opt/rpchat
 BIN_LINK=/usr/local/bin/rpchat
@@ -151,7 +157,7 @@ if [ -n "$PREFIX" ]; then
   UDEV_DST="$PREFIX$UDEV_DST"; MODULES_DST="$PREFIX$MODULES_DST"; POLICY_DIR="$PREFIX$POLICY_DIR"
   POLICY_DST="$POLICY_DIR/policy.json"; STATE_DIR="$PREFIX$STATE_DIR"
   RUN_DIR="$PREFIX$RUN_DIR"; MENU_DST="$PREFIX$MENU_DST"
-  ICON_DST="$PREFIX$ICON_DST"; INSTALL_ROOT="$PREFIX$INSTALL_ROOT"; BIN_LINK="$PREFIX$BIN_LINK"
+  ICON_THEME_DIR="$PREFIX$ICON_THEME_DIR"; INSTALL_ROOT="$PREFIX$INSTALL_ROOT"; BIN_LINK="$PREFIX$BIN_LINK"
   PAM_FILES="$PREFIX/etc/pam.d/system-login $PREFIX/etc/pam.d/common-session"
   # The browser policy directories too: a test run must not write to (or delete from) the real /etc.
   BROWSER_POLICY_DIRS="$(printf '%s\n' "$BROWSER_POLICY_DIRS" | awk -v p="$PREFIX" -F'|' 'NF { print p $1 "|" p $2 "|" $3 }')"
@@ -267,10 +273,39 @@ fi
 APP_EXEC="${APP_BIN:-rpchat}"
 # With a system install every launcher points at the stable root-owned copy, never at the AppImage.
 if [ "$SYSTEM_INSTALL" = yes ]; then APP_EXEC="$INSTALL_ROOT/current/rpchat"; fi
-ICON_SRC=""
-for c in "$SCRIPT_DIR/rpchat.png" "$SCRIPT_DIR/../../apps/desktop/build/icon.png"; do
-  if [ -f "$c" ]; then ICON_SRC="$c"; break; fi
-done
+# icon_src <size>: the artwork to install for one size, from the payload next to the installer first
+# and the checked-out repo second, or empty when neither ships it. 512 keeps the historical names so
+# an older payload still installs its one icon.
+icon_src() {
+  local size="$1" c
+  if [ "$size" = 512 ]; then
+    for c in "$SCRIPT_DIR/rpchat.png" "$SCRIPT_DIR/../../apps/desktop/build/icon.png"; do
+      if [ -f "$c" ]; then printf '%s\n' "$c"; return 0; fi
+    done
+  else
+    for c in "$SCRIPT_DIR/rpchat-$size.png" "$SCRIPT_DIR/../../apps/desktop/build/icon-$size.png"; do
+      if [ -f "$c" ]; then printf '%s\n' "$c"; return 0; fi
+    done
+  fi
+  return 0
+}
+
+# icon_dst <size>: where that size belongs in the hicolor theme.
+icon_dst() { printf '%s/%sx%s/apps/rpchat.png\n' "$ICON_THEME_DIR" "$1" "$1"; }
+
+# install_icons: every size the payload ships. Succeeds when at least one landed or was already
+# current, so a partial payload still gets the menu entry an icon.
+install_icons() {
+  local size src found=false
+  for size in $ICON_SIZES; do
+    src="$(icon_src "$size")"
+    [ -n "$src" ] || continue
+    found=true
+    if install_file "$src" "$(icon_dst "$size")" 0644; then icons_changed=true; fi
+  done
+  $found || return 1
+  return 0
+}
 
 # install <src> <dst> <mode>: copy only when content differs; prints ok/skip. The copy lands
 # next to the destination first and is renamed over it, so a running binary (the daemon
@@ -292,7 +327,7 @@ install_file() {
 refresh_menus() {
   $SYSTEM_CMDS || return 0
   if have update-desktop-database; then run update-desktop-database "$(dirname "$MENU_DST")" 2>/dev/null || true; fi
-  if have gtk-update-icon-cache; then run gtk-update-icon-cache -q -t /usr/local/share/icons/hicolor 2>/dev/null || true; fi
+  if have gtk-update-icon-cache; then run gtk-update-icon-cache -q -t "$ICON_THEME_DIR" 2>/dev/null || true; fi
 }
 
 # Run systemctl --user as the target user when a session bus exists; prints otherwise.
@@ -747,7 +782,8 @@ if $REFRESH_DAEMON; then
       if $DRY_RUN; then note "+ write $MENU_DST"; else printf '%s\n' "$content" > "$MENU_DST.new" && chmod 0644 "$MENU_DST.new" && mv -f "$MENU_DST.new" "$MENU_DST"; fi
       ok "wrote $MENU_DST"
     fi
-    [ -n "$ICON_SRC" ] && install_file "$ICON_SRC" "$ICON_DST" 0644 || true
+    icons_changed=false
+    install_icons || true
     refresh_menus
   fi
   if $SYSTEM_CMDS && have systemctl && [ -d /run/systemd/system ]; then run systemctl daemon-reload; fi
@@ -776,7 +812,9 @@ if $UNINSTALL; then
   if $SYSTEM_CMDS && have udevadm; then run udevadm control --reload || true; fi
   if [ -d "$LIBEXEC" ]; then run rm -rf "$LIBEXEC"; ok "removed $LIBEXEC"; else skip "$LIBEXEC absent"; fi
   remove_system_install
-  for f in "$MENU_DST" "$ICON_DST"; do
+  icon_files=""
+  for size in $ICON_SIZES; do icon_files="$icon_files $(icon_dst "$size")"; done
+  for f in "$MENU_DST" $icon_files; do
     if [ -e "$f" ]; then run rm -f "$f"; ok "removed $f"; else skip "$f absent"; fi
   done
   refresh_menus
@@ -925,8 +963,9 @@ if [ "$MENU_ENTRY" = yes ]; then
     ok "wrote $MENU_DST"
     changed=true
   fi
-  if [ -n "$ICON_SRC" ]; then
-    if install_file "$ICON_SRC" "$ICON_DST" 0644; then changed=true; fi
+  icons_changed=false
+  if install_icons; then
+    if $icons_changed; then changed=true; fi
   else
     warn "app icon not found next to the installer; the menu entry will show a generic icon"
   fi
