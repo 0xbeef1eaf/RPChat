@@ -46,7 +46,7 @@ describe('buildApi', () => {
     }
     expect(invokeChannels()).toContain('display:monitors');
     expect(invokeChannels()).toContain('memories:consolidate');
-    expect(invokeChannels()).toContain('updates:setToken');
+    expect(invokeChannels()).toContain('updates:install');
     expect(invokeChannels()).toContain('system:createPolicy');
     expect(invokeChannels()).toContain('prompts:pending');
     expect(invokeChannels()).toContain('system:policyTemplate');

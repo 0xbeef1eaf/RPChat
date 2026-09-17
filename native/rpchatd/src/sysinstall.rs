@@ -1,7 +1,7 @@
-//! System install (`/opt/rp-code`): the unpacked app under `current/`, the previous version
+//! System install (`/opt/rpchat`): the unpacked app under `current/`, the previous version
 //! under `previous/` for rollback, `versions.json` describing both, and the `apply-update`
 //! request that swaps a verified AppImage in — extracted as the *requesting user*, never as
-//! root — followed by the daemon's own update when the new bundle ships a newer `rp-coded`.
+//! root — followed by the daemon's own update when the new bundle ships a newer `rpchatd`.
 //!
 //! Everything that touches the OS in a way tests cannot (dropping privileges, running the
 //! AppImage, running `install.sh`) goes through [`ApplyHooks`]; the rest is plain file system
@@ -20,14 +20,14 @@ use sha2::{Digest, Sha512};
 
 use crate::protocol::{DaemonError, ErrorCode, InstallInfo};
 
-/// Default install root (`--install-root`, env `RP_CODED_INSTALL_ROOT`).
-pub const DEFAULT_INSTALL_ROOT: &str = "/opt/rp-code";
+/// Default install root (`--install-root`, env `RPCHATD_INSTALL_ROOT`).
+pub const DEFAULT_INSTALL_ROOT: &str = "/opt/rpchat";
 /// Largest AppImage `apply-update` accepts (1 GiB).
 pub const MAX_UPDATE_BYTES: u64 = 1 << 30;
 /// Files a valid unpacked app tree must contain (relative to the tree).
-pub const REQUIRED_FILES: [&str; 3] = ["rp-code", "libffmpeg.so", "resources/app.asar"];
+pub const REQUIRED_FILES: [&str; 3] = ["rpchat", "libffmpeg.so", "resources/app.asar"];
 /// Where the bundle ships the daemon and the installer (relative to the tree).
-pub const BUNDLED_DAEMON: &str = "resources/bin/rp-coded";
+pub const BUNDLED_DAEMON: &str = "resources/bin/rpchatd";
 pub const BUNDLED_INSTALLER: &str = "resources/system/install.sh";
 /// Name of the AppImage copy inside the staging directory.
 const STAGED_APPIMAGE: &str = "update.AppImage";
@@ -104,7 +104,7 @@ impl VersionsFile {
 pub fn install_info(root: &Path, daemon_version: &str) -> InstallInfo {
     let versions = VersionsFile::load(root).ok().flatten();
     let current_dir = root.join("current");
-    let system_install = current_dir.join("rp-code").is_file() && versions.is_some();
+    let system_install = current_dir.join("rpchat").is_file() && versions.is_some();
     InstallInfo {
         system_install,
         current: versions
@@ -114,7 +114,7 @@ pub fn install_info(root: &Path, daemon_version: &str) -> InstallInfo {
         previous: versions
             .as_ref()
             .and_then(|v| v.previous.as_ref())
-            .filter(|_| root.join("previous").join("rp-code").is_file())
+            .filter(|_| root.join("previous").join("rpchat").is_file())
             .map(|e| e.version.clone()),
         daemon_version: daemon_version.to_string(),
     }
@@ -206,7 +206,7 @@ pub fn is_downgrade(requested: &Semver, installed: Option<&str>) -> bool {
     }
 }
 
-/// `rp-coded --version` prints `rp-coded 0.1.0 (protocol 1)`; extract the version.
+/// `rpchatd --version` prints `rpchatd 0.1.0 (protocol 1)`; extract the version.
 pub fn parse_version_output(out: &str) -> Option<Semver> {
     let word = out.split_whitespace().nth(1)?;
     Semver::parse(word)
@@ -289,7 +289,7 @@ pub fn check_tree(dir: &Path) -> Result<TreeReport, String> {
         let p = dir.join(rel);
         match fs::symlink_metadata(&p) {
             Ok(m) if m.is_file() => {}
-            _ => return Err(format!("not an rp-code app tree: {rel} is missing")),
+            _ => return Err(format!("not an rpchat app tree: {rel} is missing")),
         }
     }
     let mut report = TreeReport::default();
@@ -455,7 +455,7 @@ pub fn swap_in(root: &Path, new_tree: &Path) -> io::Result<()> {
 pub fn rollback(root: &Path) -> Result<VersionsFile, String> {
     let current = root.join("current");
     let previous = root.join("previous");
-    if !previous.join("rp-code").is_file() {
+    if !previous.join("rpchat").is_file() {
         return Err("no previous version to roll back to".into());
     }
     let tmp = root.join(".rollback");
@@ -550,9 +550,9 @@ pub fn apply_update(
                 root.display()
             ))
         })?;
-    if !root.join("current").join("rp-code").is_file() {
+    if !root.join("current").join("rpchat").is_file() {
         return Err(refused(format!(
-            "{}/current is not an rp-code install",
+            "{}/current is not an rpchat install",
             root.display()
         )));
     }
@@ -744,7 +744,7 @@ fn self_update(root: &Path, running: &str, hooks: &ApplyHooks) -> Result<bool, S
     // guarded user has to be given sudo, and sudo is exactly what undoes the guard.
     if new < cur {
         log_info!(
-            "apply-update: bundled rp-coded {}.{}.{} is older than the running {running}; no self-update",
+            "apply-update: bundled rpchatd {}.{}.{} is older than the running {running}; no self-update",
             new.major,
             new.minor,
             new.patch
@@ -754,17 +754,17 @@ fn self_update(root: &Path, running: &str, hooks: &ApplyHooks) -> Result<bool, S
     if new == cur {
         match (hooks.differs_from_running)(&bundled) {
             Some(true) => log_info!(
-                "apply-update: bundled rp-coded is {running} like the running one but a different build; refreshing"
+                "apply-update: bundled rpchatd is {running} like the running one but a different build; refreshing"
             ),
             Some(false) => {
                 log_info!(
-                    "apply-update: bundled rp-coded {running} is the build already running; no self-update"
+                    "apply-update: bundled rpchatd {running} is the build already running; no self-update"
                 );
                 return Ok(false);
             }
             None => {
                 log_info!(
-                    "apply-update: bundled rp-coded is {running} and it cannot be compared with the running build; no self-update"
+                    "apply-update: bundled rpchatd is {running} and it cannot be compared with the running build; no self-update"
                 );
                 return Ok(false);
             }
@@ -777,7 +777,7 @@ fn self_update(root: &Path, running: &str, hooks: &ApplyHooks) -> Result<bool, S
         ));
     }
     log_info!(
-        "apply-update: bundled rp-coded {}.{}.{} is newer than {running}; refreshing the daemon files ({} --refresh-daemon-files)",
+        "apply-update: bundled rpchatd {}.{}.{} is newer than {running}; refreshing the daemon files ({} --refresh-daemon-files)",
         new.major,
         new.minor,
         new.patch,
@@ -814,17 +814,17 @@ pub mod tests {
             let p = src.join(rel);
             fs::create_dir_all(p.parent().unwrap()).unwrap();
             fs::write(&p, content).unwrap();
-            if *rel == "rp-code" || rel.ends_with(".sh") || rel.ends_with("rp-coded") {
+            if *rel == "rpchat" || rel.ends_with(".sh") || rel.ends_with("rpchatd") {
                 fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
             }
         }
-        symlink("rp-code", src.join("AppRun")).unwrap();
+        symlink("rpchat", src.join("AppRun")).unwrap();
         let tar = std::process::Command::new("tar")
             .args(["-C", dir.path().to_str().unwrap(), "-cf", "-", EXTRACT_DIR])
             .output()
             .unwrap();
         assert!(tar.status.success());
-        let script = b"#!/bin/sh\n# fake AppImage for tests\nif [ \"$1\" = --appimage-extract ]; then\n  sed -e '1,/^__TAR__$/d' \"$0\" | tar -xf -\n  exit $?\nfi\necho \"fake rp-code $*\"\nexit 0\n__TAR__\n";
+        let script = b"#!/bin/sh\n# fake AppImage for tests\nif [ \"$1\" = --appimage-extract ]; then\n  sed -e '1,/^__TAR__$/d' \"$0\" | tar -xf -\n  exit $?\nfi\necho \"fake rpchat $*\"\nexit 0\n__TAR__\n";
         let mut body = script.to_vec();
         body.extend_from_slice(&tar.stdout);
         fs::write(path, &body).unwrap();
@@ -853,13 +853,13 @@ pub mod tests {
     pub fn app_tree(version: &str) -> Vec<(&'static str, Vec<u8>)> {
         vec![
             (
-                "rp-code",
-                format!("#!/bin/sh\necho rp-code {version}\n").into_bytes(),
+                "rpchat",
+                format!("#!/bin/sh\necho rpchat {version}\n").into_bytes(),
             ),
             ("libffmpeg.so", b"ffmpeg".to_vec()),
             ("resources/app.asar", format!("asar {version}").into_bytes()),
             (
-                "rp-code.desktop",
+                "rpchat.desktop",
                 format!("[Desktop Entry]\nX-AppImage-Version={version}\n").into_bytes(),
             ),
         ]
@@ -956,7 +956,7 @@ pub mod tests {
         );
         assert!(!is_downgrade(&v("0.0.1"), None));
         assert_eq!(
-            parse_version_output("rp-coded 0.2.0 (protocol 1)\n"),
+            parse_version_output("rpchatd 0.2.0 (protocol 1)\n"),
             Some(v("0.2.0"))
         );
         assert_eq!(parse_version_output("nope"), None);
@@ -984,7 +984,7 @@ pub mod tests {
         );
         let home = Path::new("/home/alice");
         assert!(is_plain_path_under(
-            Path::new("/home/alice/.cache/rp-code-updater/pending/x.AppImage"),
+            Path::new("/home/alice/.cache/rpchat-updater/pending/x.AppImage"),
             home
         ));
         assert!(!is_plain_path_under(
@@ -1042,7 +1042,7 @@ pub mod tests {
         );
         seed_install(dir.path(), "0.1.9");
         fs::create_dir_all(dir.path().join("previous")).unwrap();
-        fs::write(dir.path().join("previous/rp-code"), "x").unwrap();
+        fs::write(dir.path().join("previous/rpchat"), "x").unwrap();
         v.write(dir.path()).unwrap();
         let info = install_info(dir.path(), "0.1.0");
         assert_eq!(
@@ -1072,9 +1072,9 @@ pub mod tests {
             fs::write(&p, content).unwrap();
         }
         fs::create_dir_all(tree.join("usr/share/icons")).unwrap();
-        fs::write(tree.join("usr/share/icons/rp-code.png"), "png").unwrap();
-        symlink("usr/share/icons/rp-code.png", tree.join(".DirIcon")).unwrap();
-        symlink("../icons/rp-code.png", tree.join("usr/share/link")).unwrap();
+        fs::write(tree.join("usr/share/icons/rpchat.png"), "png").unwrap();
+        symlink("usr/share/icons/rpchat.png", tree.join(".DirIcon")).unwrap();
+        symlink("../icons/rpchat.png", tree.join("usr/share/link")).unwrap();
         let report = check_tree(&tree).unwrap();
         assert_eq!((report.files, report.dirs, report.symlinks), (5, 4, 2));
         assert!(report.bytes > 0);
@@ -1094,9 +1094,9 @@ pub mod tests {
         assert!(check_tree(&tree).unwrap_err().contains("up points outside"));
         fs::remove_file(tree.join("usr/up")).unwrap();
 
-        fs::set_permissions(tree.join("rp-code"), fs::Permissions::from_mode(0o4755)).unwrap();
+        fs::set_permissions(tree.join("rpchat"), fs::Permissions::from_mode(0o4755)).unwrap();
         assert!(check_tree(&tree).unwrap_err().contains("setuid"));
-        fs::set_permissions(tree.join("rp-code"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(tree.join("rpchat"), fs::Permissions::from_mode(0o755)).unwrap();
 
         fs::hard_link(tree.join("libffmpeg.so"), tree.join("hard")).unwrap();
         assert!(check_tree(&tree).unwrap_err().contains("hard link"));
@@ -1116,7 +1116,7 @@ pub mod tests {
         // Normalisation: 0700 dirs (what --appimage-extract leaves) become 0755, x bits kept.
         fs::set_permissions(tree.join("resources"), fs::Permissions::from_mode(0o700)).unwrap();
         fs::set_permissions(
-            tree.join("rp-code.desktop"),
+            tree.join("rpchat.desktop"),
             fs::Permissions::from_mode(0o600),
         )
         .unwrap();
@@ -1131,7 +1131,7 @@ pub mod tests {
                 0o755
             );
             assert_eq!(
-                fs::metadata(tree.join("rp-code"))
+                fs::metadata(tree.join("rpchat"))
                     .unwrap()
                     .permissions()
                     .mode()
@@ -1139,7 +1139,7 @@ pub mod tests {
                 0o755
             );
             assert_eq!(
-                fs::metadata(tree.join("rp-code.desktop"))
+                fs::metadata(tree.join("rpchat.desktop"))
                     .unwrap()
                     .permissions()
                     .mode()
@@ -1167,31 +1167,31 @@ pub mod tests {
         seed_install(root, "0.1.0");
         let new = root.join(".new");
         fs::create_dir_all(new.join("resources")).unwrap();
-        fs::write(new.join("rp-code"), "new").unwrap();
+        fs::write(new.join("rpchat"), "new").unwrap();
         swap_in(root, &new).unwrap();
         assert_eq!(
-            fs::read_to_string(root.join("current/rp-code")).unwrap(),
+            fs::read_to_string(root.join("current/rpchat")).unwrap(),
             "new"
         );
-        assert!(root.join("previous/rp-code").is_file());
+        assert!(root.join("previous/rpchat").is_file());
         assert!(!new.exists());
         // A second swap replaces `previous`.
         fs::create_dir_all(&new).unwrap();
-        fs::write(new.join("rp-code"), "newer").unwrap();
+        fs::write(new.join("rpchat"), "newer").unwrap();
         swap_in(root, &new).unwrap();
         assert_eq!(
-            fs::read_to_string(root.join("previous/rp-code")).unwrap(),
+            fs::read_to_string(root.join("previous/rpchat")).unwrap(),
             "new"
         );
         assert_eq!(
-            fs::read_to_string(root.join("current/rp-code")).unwrap(),
+            fs::read_to_string(root.join("current/rpchat")).unwrap(),
             "newer"
         );
         // A failing final rename puts `current` back.
         let missing = root.join("does-not-exist");
         assert!(swap_in(root, &missing).is_err());
         assert_eq!(
-            fs::read_to_string(root.join("current/rp-code")).unwrap(),
+            fs::read_to_string(root.join("current/rpchat")).unwrap(),
             "newer"
         );
         assert!(
@@ -1200,7 +1200,7 @@ pub mod tests {
         );
         // Rollback swaps the trees and the versions.json entries.
         fs::create_dir_all(root.join("previous")).unwrap();
-        fs::write(root.join("previous/rp-code"), "old").unwrap();
+        fs::write(root.join("previous/rpchat"), "old").unwrap();
         VersionsFile {
             current: Some(VersionEntry {
                 version: "2".into(),
@@ -1219,11 +1219,11 @@ pub mod tests {
         assert_eq!(v.current.unwrap().version, "1");
         assert_eq!(v.previous.unwrap().version, "2");
         assert_eq!(
-            fs::read_to_string(root.join("current/rp-code")).unwrap(),
+            fs::read_to_string(root.join("current/rpchat")).unwrap(),
             "old"
         );
         assert_eq!(
-            fs::read_to_string(root.join("previous/rp-code")).unwrap(),
+            fs::read_to_string(root.join("previous/rpchat")).unwrap(),
             "newer"
         );
         fs::remove_dir_all(root.join("previous")).unwrap();
@@ -1251,16 +1251,16 @@ pub mod tests {
         };
 
         // Newer: refresh, as before.
-        assert_eq!(run("rp-coded 0.3.0 (protocol 1)"), (Ok(true), 1));
+        assert_eq!(run("rpchatd 0.3.0 (protocol 1)"), (Ok(true), 1));
         // Same version, different build: refresh. This is the case that was being missed.
-        assert_eq!(run("rp-coded 0.2.0 (protocol 1)"), (Ok(true), 1));
+        assert_eq!(run("rpchatd 0.2.0 (protocol 1)"), (Ok(true), 1));
         // Same version, same build: nothing to do, and no pointless restart.
         assert_eq!(
-            run("rp-coded 0.2.0 (protocol 1) same-build"),
+            run("rpchatd 0.2.0 (protocol 1) same-build"),
             (Ok(false), 0)
         );
         // Older: never downgrade the daemon behind the user's back.
-        assert_eq!(run("rp-coded 0.1.0 (protocol 1)"), (Ok(false), 0));
+        assert_eq!(run("rpchatd 0.1.0 (protocol 1)"), (Ok(false), 0));
     }
 
     #[test]
@@ -1291,12 +1291,12 @@ pub mod tests {
         let hooks = test_hooks(home.clone(), refreshed.clone());
         let mut tree = app_tree("0.2.0");
         tree.push((
-            "resources/bin/rp-coded",
-            b"rp-coded 0.9.0 (protocol 1)\n".to_vec(),
+            "resources/bin/rpchatd",
+            b"rpchatd 0.9.0 (protocol 1)\n".to_vec(),
         ));
         tree.push(("resources/system/install.sh", b"#!/bin/sh\n".to_vec()));
         let tree_refs: Vec<(&str, &[u8])> = tree.iter().map(|(p, c)| (*p, c.as_slice())).collect();
-        let appimage = home.join("rp-code-0.2.0.AppImage");
+        let appimage = home.join("rpchat-0.2.0.AppImage");
         fake_appimage(&appimage, &tree_refs);
         owned(&appimage);
         let sha = sha512_b64(&appimage);
@@ -1469,8 +1469,8 @@ pub mod tests {
         // Same version again is allowed (reinstall); an older daemon in the bundle → no restart.
         let mut tree2 = app_tree("0.2.0");
         tree2.push((
-            "resources/bin/rp-coded",
-            b"rp-coded 0.1.0 (protocol 1)\n".to_vec(),
+            "resources/bin/rpchatd",
+            b"rpchatd 0.1.0 (protocol 1)\n".to_vec(),
         ));
         let refs2: Vec<(&str, &[u8])> = tree2.iter().map(|(p, c)| (*p, c.as_slice())).collect();
         let again = home.join("again.AppImage");
@@ -1494,7 +1494,7 @@ pub mod tests {
         );
         // A tree that fails the sanity check is refused and the install untouched.
         let bad = home.join("bad.AppImage");
-        fake_appimage(&bad, &[("rp-code", b"x"), ("libffmpeg.so", b"y")]);
+        fake_appimage(&bad, &[("rpchat", b"x"), ("libffmpeg.so", b"y")]);
         owned(&bad);
         let sha_bad: &'static str = Box::leak(sha512_b64(&bad).into_boxed_str());
         let e = apply_update(&root, &req("0.3.0", sha_bad, bad, false), &hooks).unwrap_err();
@@ -1515,8 +1515,8 @@ pub mod tests {
         // A refresh failure keeps the app update and reports no restart.
         let mut tree3 = app_tree("0.4.0");
         tree3.push((
-            "resources/bin/rp-coded",
-            b"rp-coded 9.9.9 (protocol 1)\n".to_vec(),
+            "resources/bin/rpchatd",
+            b"rpchatd 9.9.9 (protocol 1)\n".to_vec(),
         ));
         tree3.push(("resources/system/install.sh", b"#!/bin/sh\n".to_vec()));
         let refs3: Vec<(&str, &[u8])> = tree3.iter().map(|(p, c)| (*p, c.as_slice())).collect();

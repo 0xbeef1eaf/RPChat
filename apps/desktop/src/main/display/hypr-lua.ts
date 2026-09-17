@@ -25,8 +25,8 @@ export const OVERLAY_NAMESPACE_MATCH = `^(${OVERLAY_NAMESPACE}.*)$`;
 
 /** Lua global holding our rule handles, so re-registering can disable the previous ones. */
 export const RULES_GLOBAL = '__rp_overlay_rules';
-export const WINDOW_RULE_NAME = 'rp-code-overlays';
-export const LAYER_RULE_NAME = 'rp-code-overlay-layers';
+export const WINDOW_RULE_NAME = 'rpchat-overlays';
+export const LAYER_RULE_NAME = 'rpchat-overlay-layers';
 
 /**
  * True when Hyprland rejected a request because the session runs a Lua config.

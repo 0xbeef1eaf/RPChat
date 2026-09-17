@@ -105,7 +105,7 @@ export class WebHandler implements CapabilityHandler {
     const settings = await this.deps.settings();
     const cap = Math.min(WEB_HARD_MAX_BYTES, settings.maxBytes > 0 ? settings.maxBytes : WEB_DEFAULT_MAX_BYTES);
     const maxBytes = typeof o.maxBytes === 'number' && o.maxBytes > 0 ? Math.min(cap, Math.round(o.maxBytes)) : cap;
-    const headers: Record<string, string> = { 'user-agent': this.deps.userAgent ?? 'rp-code/0.1 (+https://github.com/rp-code)' };
+    const headers: Record<string, string> = { 'user-agent': this.deps.userAgent ?? 'rpchat/0.1 (+https://github.com/rpchat)' };
     if (o.headers && typeof o.headers === 'object') {
       for (const [k, v] of Object.entries(o.headers as Record<string, unknown>)) {
         if (typeof v === 'string' && /^[a-z0-9-]+$/i.test(k) && !['host', 'cookie', 'authorization'].includes(k.toLowerCase())) headers[k] = v;

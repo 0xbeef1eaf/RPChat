@@ -4,7 +4,7 @@
  * in a managed install — `RP_MOCK_LLM` swaps the provider for a scripted one, `RP_SMOKE` drives
  * turns by itself, `RP_EXAMPLE_PLUGIN` installs a plugin from any directory, `RP_OVERLAY_HELPER`
  * executes any binary as the overlay helper, `RP_DAEMON_SOCKET` points the app at something
- * pretending to be rp-coded, `ELECTRON_RENDERER_URL` loads the UI itself from anywhere, and
+ * pretending to be rpchatd, `ELECTRON_RENDERER_URL` loads the UI itself from anywhere, and
  * `--inspect`/`--remote-debugging-port` hand out the main process and the renderer wholesale.
  *
  * Two decisions make this a lock rather than a suggestion:

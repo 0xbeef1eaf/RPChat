@@ -2,7 +2,7 @@
   "name": "@rp/desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "rp-code desktop app",
+  "description": "RPChat desktop app",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -50,8 +50,8 @@
     "vitest": "^4.1.11"
   },
   "build": {
-    "appId": "dev.rp-code.app",
-    "productName": "rp-code",
+    "appId": "dev.rpchat.app",
+    "productName": "RPChat",
     "directories": {
       "output": "release",
       "buildResources": "resources"
@@ -131,15 +131,14 @@
       ],
       "category": "Utility",
       "icon": "build/icon.png",
-      "executableName": "rp-code",
-      "maintainer": "rp-code contributors"
+      "executableName": "rpchat",
+      "maintainer": "RPChat contributors"
     },
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "publish": {
       "provider": "github",
       "owner": "0xbeef1eaf",
-      "repo": "llm-rp-code",
-      "private": true,
+      "repo": "RPChat",
       "releaseType": "release"
     },
     "deb": {
@@ -159,9 +158,9 @@
     }
   },
   "author": {
-    "name": "rp-code contributors"
+    "name": "RPChat contributors"
   },
-  "homepage": "https://github.com/0xbeef1eaf/llm-rp-code",
+  "homepage": "https://github.com/0xbeef1eaf/RPChat",
   "optionalDependencies": {
     "@esbuild/darwin-arm64": "0.28.2",
     "@esbuild/darwin-x64": "0.28.2",

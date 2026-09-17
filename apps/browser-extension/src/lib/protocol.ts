@@ -1,6 +1,6 @@
 /**
  * Pure protocol helpers shared by the service worker and its tests: the wire format between the
- * rp-code app and the extension, URL policy, reconnect backoff and text normalisation. Nothing in
+ * rpchat app and the extension, URL policy, reconnect backoff and text normalisation. Nothing in
  * here touches `chrome.*`, so it runs under plain vitest.
  */
 

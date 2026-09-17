@@ -1,5 +1,5 @@
 /**
- * The keepalive registration with `rp-coded` (docs/spec/system.md "Keepalive"): a dedicated
+ * The keepalive registration with `rpchatd` (docs/spec/system.md "Keepalive"): a dedicated
  * long-lived connection — `DaemonClient` connects on demand and the daemon only relaunches an
  * app whose *registered* connection dropped — that says `hello`, sends `register` with how to
  * start this app again, and then just stays open. Whenever it drops (daemon restart, socket
@@ -125,7 +125,7 @@ export class KeepaliveLink {
     if (this.registered) {
       try {
         await this.send({ op: 'unregister' });
-        this.logger?.info?.('[keepalive] unregistered from rp-coded');
+        this.logger?.info?.('[keepalive] unregistered from rpchatd');
       } catch (err) {
         this.logger?.warn?.(`[keepalive] unregister failed: ${(err as Error).message}`);
       }
@@ -157,7 +157,7 @@ export class KeepaliveLink {
       this.registrations += 1;
       this.attempt = 0;
       this.stateValue = 'registered';
-      this.logger?.info?.(`[keepalive] registered with rp-coded (${this.registration.exec}${this.registration.args.length > 0 ? ` ${this.registration.args.join(' ')}` : ''})`);
+      this.logger?.info?.(`[keepalive] registered with rpchatd (${this.registration.exec}${this.registration.args.length > 0 ? ` ${this.registration.args.join(' ')}` : ''})`);
       await this.subscribe();
     } catch (err) {
       if (this.stopped) return;
@@ -210,7 +210,7 @@ export class KeepaliveLink {
         if (settled) return;
         settled = true;
         socket.destroy();
-        reject(new Error(`rp-coded did not accept the connection within ${this.timeoutMs} ms`));
+        reject(new Error(`rpchatd did not accept the connection within ${this.timeoutMs} ms`));
       }, this.timeoutMs);
       socket.setEncoding('utf8');
       socket.once('connect', () => {
@@ -226,13 +226,13 @@ export class KeepaliveLink {
         if (!settled) {
           settled = true;
           clearTimeout(timer);
-          reject(new Error(`rp-coded is not reachable at ${this.socketPath}: ${err.message}`));
+          reject(new Error(`rpchatd is not reachable at ${this.socketPath}: ${err.message}`));
           return;
         }
         if (this.socket === socket) this.lost(err);
       });
       socket.on('close', () => {
-        if (this.socket === socket) this.lost(new Error('rp-coded closed the connection'));
+        if (this.socket === socket) this.lost(new Error('rpchatd closed the connection'));
       });
     });
   }
@@ -243,7 +243,7 @@ export class KeepaliveLink {
     this.dropSocket(err);
     if (this.stopped) return;
     if (wasRegistered) {
-      this.logger?.warn?.(`[keepalive] link to rp-coded lost (${err.message}); reconnecting`);
+      this.logger?.warn?.(`[keepalive] link to rpchatd lost (${err.message}); reconnecting`);
       this.attempt = 0;
       this.scheduleReconnect(reconnectDelay(1, this.backoff));
     }
@@ -253,13 +253,13 @@ export class KeepaliveLink {
     return new Promise((resolve, reject) => {
       const socket = this.socket;
       if (!socket || socket.destroyed) {
-        reject(new Error('rp-coded is not connected'));
+        reject(new Error('rpchatd is not connected'));
         return;
       }
       const timer = setTimeout(() => {
         const idx = this.pending.findIndex((p) => p.timer === timer);
         if (idx >= 0) this.pending.splice(idx, 1);
-        reject(new Error(`rp-coded did not answer "${req.op}" within ${this.timeoutMs} ms`));
+        reject(new Error(`rpchatd did not answer "${req.op}" within ${this.timeoutMs} ms`));
         this.dropSocket(new Error('timeout'));
       }, this.timeoutMs);
       this.pending.push({ resolve, reject, timer });
@@ -284,7 +284,7 @@ export class KeepaliveLink {
         const pending = this.pending.shift();
         if (pending) {
           clearTimeout(pending.timer);
-          pending.reject(new Error(`rp-coded sent invalid JSON: ${line.slice(0, 120)}`));
+          pending.reject(new Error(`rpchatd sent invalid JSON: ${line.slice(0, 120)}`));
         } else this.logger?.debug?.(`[keepalive] unparsable line: ${line.slice(0, 200)}`);
         continue;
       }

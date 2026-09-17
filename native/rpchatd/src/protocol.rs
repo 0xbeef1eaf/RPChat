@@ -1,4 +1,4 @@
-//! Wire types for the JSON-lines protocol between the desktop app and `rp-coded`.
+//! Wire types for the JSON-lines protocol between the desktop app and `rpchatd`.
 //!
 //! These mirror `DaemonRequest` / `DaemonResponse` in `packages/shared/src/system.ts`
 //! field for field; the tests below pin the exact JSON shapes. One request per line on
@@ -311,7 +311,7 @@ pub struct KeepaliveInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallInfo {
-    /// `<install-root>/current/rp-code` exists and `versions.json` describes it.
+    /// `<install-root>/current/rpchat` exists and `versions.json` describes it.
     pub system_install: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current: Option<String>,
@@ -829,12 +829,12 @@ mod tests {
             "the op is kebab-case on the wire"
         );
         let reg = round_trip_request(
-            json!({"op":"register","exec":"/usr/bin/rp-code","args":["--hidden"],"cwd":"/home/a","env":{"HOME":"/home/a","DISPLAY":":0"}}),
+            json!({"op":"register","exec":"/usr/bin/rpchat","args":["--hidden"],"cwd":"/home/a","env":{"HOME":"/home/a","DISPLAY":":0"}}),
         );
         assert_eq!(
             reg,
             Request::Register {
-                exec: "/usr/bin/rp-code".into(),
+                exec: "/usr/bin/rpchat".into(),
                 args: vec!["--hidden".into()],
                 cwd: "/home/a".into(),
                 env: [("DISPLAY", ":0"), ("HOME", "/home/a")]
@@ -860,10 +860,10 @@ mod tests {
         );
         assert_eq!(
             round_trip_request(
-                json!({"op":"apply-update","file":"/home/a/.cache/rp-code-updater/pending/x.AppImage","version":"0.1.9","sha512":"AAAA"})
+                json!({"op":"apply-update","file":"/home/a/.cache/rpchat-updater/pending/x.AppImage","version":"0.1.9","sha512":"AAAA"})
             ),
             Request::ApplyUpdate {
-                file: "/home/a/.cache/rp-code-updater/pending/x.AppImage".into(),
+                file: "/home/a/.cache/rpchat-updater/pending/x.AppImage".into(),
                 version: "0.1.9".into(),
                 sha512: "AAAA".into(),
             }
@@ -1010,7 +1010,7 @@ mod tests {
         let engaged = GuardInfo {
             available: true,
             mode: crate::policy::GuardMode::Audit,
-            loaded: vec!["rp-code-session".into()],
+            loaded: vec!["rpchat-session".into()],
             users: vec!["work".into()],
             residual: vec!["audit mode".into()],
             warnings: vec![],
@@ -1020,7 +1020,7 @@ mod tests {
             applied_at: Some("2026-09-14T12:00:00.000Z".into()),
             last_error: None,
         };
-        let engaged_json = json!({"available":true,"mode":"audit","loaded":["rp-code-session"],"users":["work"],"residual":["audit mode"],"pamConfigured":true,"shell":"noctalia","compositor":"hyprland","appliedAt":"2026-09-14T12:00:00.000Z"});
+        let engaged_json = json!({"available":true,"mode":"audit","loaded":["rpchat-session"],"users":["work"],"residual":["audit mode"],"pamConfigured":true,"shell":"noctalia","compositor":"hyprland","appliedAt":"2026-09-14T12:00:00.000Z"});
         round_trip_response(
             &Response::ok(Ok::GuardApply {
                 guard: engaged.clone(),
@@ -1046,7 +1046,7 @@ mod tests {
                 command: "hyprctl".into(),
                 pid: 42,
                 blocked: false,
-                profile: "rp-code-session".into(),
+                profile: "rpchat-session".into(),
                 operation: "connect".into(),
                 requested: Some("wr".into()),
             },
@@ -1054,7 +1054,7 @@ mod tests {
         let v: Value = serde_json::from_str(&ev.to_line()).unwrap();
         assert_eq!(
             v,
-            json!({"ev":"guard-attempt","at":"2026-09-14T12:00:00.000Z","kind":"ipc","target":"/run/user/1000/hypr/x/.socket.sock","command":"hyprctl","pid":42,"blocked":false,"profile":"rp-code-session","operation":"connect","requested":"wr"})
+            json!({"ev":"guard-attempt","at":"2026-09-14T12:00:00.000Z","kind":"ipc","target":"/run/user/1000/hypr/x/.socket.sock","command":"hyprctl","pid":42,"blocked":false,"profile":"rpchat-session","operation":"connect","requested":"wr"})
         );
         assert_eq!(serde_json::from_value::<Event>(v).unwrap(), ev);
         assert_eq!(ev.name(), "guard-attempt");
@@ -1110,9 +1110,9 @@ mod tests {
         round_trip_response(
             &Response::ok(Ok::Policy {
                 policy: None,
-                path: "/etc/rp-code/policy.json".into(),
+                path: "/etc/rpchat/policy.json".into(),
             }),
-            json!({"ok":true,"op":"policy","policy":null,"path":"/etc/rp-code/policy.json"}),
+            json!({"ok":true,"op":"policy","policy":null,"path":"/etc/rpchat/policy.json"}),
         );
         let policy: PolicyFile = serde_json::from_value(
             json!({"version":1,"managedBy":"IT","inputLock":{"enabled":true}}),
@@ -1143,10 +1143,10 @@ mod tests {
         round_trip_response(&Response::ok(Ok::Move), json!({"ok":true,"op":"move"}));
         round_trip_response(
             &Response::ok(Ok::SetPolicy {
-                path: "/etc/rp-code/policy.json".into(),
+                path: "/etc/rpchat/policy.json".into(),
                 replaced: false,
             }),
-            json!({"ok":true,"op":"set-policy","path":"/etc/rp-code/policy.json","replaced":false}),
+            json!({"ok":true,"op":"set-policy","path":"/etc/rpchat/policy.json","replaced":false}),
         );
     }
 

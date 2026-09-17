@@ -14,7 +14,7 @@ export interface GenerateDocsOptions extends GenerateTypingsOptions {
 
 export type DescribeSurfaceOptions = GenerateTypingsOptions;
 
-export const TYPINGS_HEADER = '// ---- rp-code character SDK (generated) ----';
+export const TYPINGS_HEADER = '// ---- rpchat character SDK (generated) ----';
 
 /** Typings for the `console` global inside the sandbox; the bootstrap captures its output. */
 export const CONSOLE_TYPINGS = `/**

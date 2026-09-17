@@ -1,7 +1,7 @@
-//! rp-coded — root daemon for the rp desktop app: input lock (EVIOCGRAB) and keystroke /
+//! rpchatd — root daemon for the rp desktop app: input lock (EVIOCGRAB) and keystroke /
 //! pointer injection (uinput) behind a root-owned policy file.
 //!
-//! Listens on a unix socket (`/run/rp-code/daemon.sock`, group `rp-code`), speaks JSON lines
+//! Listens on a unix socket (`/run/rpchat/daemon.sock`, group `rpchat`), speaks JSON lines
 //! (`packages/shared/src/system.ts` `DaemonRequest` / `DaemonResponse`), one response per
 //! request per connection. See `docs/spec/system.md` and the crate README.
 
@@ -51,7 +51,7 @@ mod logging {
 
     pub fn log(level: Level, message: String) {
         if enabled(level) {
-            eprintln!("rp-coded [{}] {}", level.as_str(), message);
+            eprintln!("rpchatd [{}] {}", level.as_str(), message);
         }
     }
 
@@ -107,46 +107,46 @@ use sysinstall::{ApplyHooks, ApplyRequest, DEFAULT_INSTALL_ROOT};
 use totp::TotpConfig;
 
 /// `DAEMON_SOCKET_PATH` in `@rp/shared`.
-pub const DEFAULT_SOCKET_PATH: &str = "/run/rp-code/daemon.sock";
+pub const DEFAULT_SOCKET_PATH: &str = "/run/rpchat/daemon.sock";
 /// `SYSTEM_GROUP` in `@rp/shared`: owner group of the socket directory and socket.
-pub const SYSTEM_GROUP: &str = "rp-code";
+pub const SYSTEM_GROUP: &str = "rpchat";
 /// Where the drop-in that refuses a manual stop is written while the policy is sealed.
-pub const DEFAULT_DROP_IN_DIR: &str = "/etc/systemd/system/rp-coded.service.d";
-/// The crate version; `RP_CODED_VERSION` at build time overrides it (test builds that must look
+pub const DEFAULT_DROP_IN_DIR: &str = "/etc/systemd/system/rpchatd.service.d";
+/// The crate version; `RPCHATD_VERSION` at build time overrides it (test builds that must look
 /// newer than the running daemon to exercise the self-update path).
-pub const VERSION: &str = match option_env!("RP_CODED_VERSION") {
+pub const VERSION: &str = match option_env!("RPCHATD_VERSION") {
     Some(v) => v,
     None => env!("CARGO_PKG_VERSION"),
 };
 
 const USAGE: &str = "\
-rp-coded — input lock / injection daemon for the rp desktop app
+rpchatd — input lock / injection daemon for the rp desktop app
 
 USAGE:
-    rp-coded [--socket <path>] [--policy <path>] [--log-level <error|warn|info|debug>]
-    rp-coded --check-devices
-    rp-coded --guard-apply | --guard-off [--policy <path>] [--profile-dir <p>] [--guard-state <p>]
-    rp-coded --seal-status | --unseal <code> [--policy <path>]
-    rp-coded --help | --version
+    rpchatd [--socket <path>] [--policy <path>] [--log-level <error|warn|info|debug>]
+    rpchatd --check-devices
+    rpchatd --guard-apply | --guard-off [--policy <path>] [--profile-dir <p>] [--guard-state <p>]
+    rpchatd --seal-status | --unseal <code> [--policy <path>]
+    rpchatd --help | --version
 
 OPTIONS:
-    --socket <path>     Unix socket to listen on (default /run/rp-code/daemon.sock,
-                        env RP_CODED_SOCKET)
-    --policy <path>     Policy file (default /etc/rp-code/policy.json, env RP_CODED_POLICY)
+    --socket <path>     Unix socket to listen on (default /run/rpchat/daemon.sock,
+                        env RPCHATD_SOCKET)
+    --policy <path>     Policy file (default /etc/rpchat/policy.json, env RPCHATD_POLICY)
     --sessions-dir <p>  logind session state files used to find the active graphical user
                         for app relaunches (default /run/systemd/sessions, env
-                        RP_CODED_SESSIONS_DIR; `loginctl` is the fallback)
+                        RPCHATD_SESSIONS_DIR; `loginctl` is the fallback)
     --install-root <p>  System install root holding current/, previous/ and versions.json
-                        (default /opt/rp-code, env RP_CODED_INSTALL_ROOT)
+                        (default /opt/rpchat, env RPCHATD_INSTALL_ROOT)
     --system-prefix <p> Prefix passed to `install.sh --prefix` when the daemon refreshes its
-                        own files after an update (tests; env RP_CODED_SYSTEM_PREFIX)
+                        own files after an update (tests; env RPCHATD_SYSTEM_PREFIX)
     --no-restart        After a self-update only log that a restart is due instead of
-                        restarting (tests; env RP_CODED_NO_RESTART=1)
+                        restarting (tests; env RPCHATD_NO_RESTART=1)
     --no-uinput         Do not create the uinput virtual device (injection reports NO_DEVICES)
     --profile-dir <p>   Where the session-guard AppArmor profiles are written (default
-                        /etc/apparmor.d, env RP_CODED_PROFILE_DIR)
-    --guard-state <p>   Session-guard state file (default /etc/rp-code/guard-state.json,
-                        env RP_CODED_GUARD_STATE)
+                        /etc/apparmor.d, env RPCHATD_PROFILE_DIR)
+    --guard-state <p>   Session-guard state file (default /etc/rpchat/guard-state.json,
+                        env RPCHATD_GUARD_STATE)
     --guard-apply       Engage the session guard from the policy now (what the daemon does at
                         start and on policy changes), print the status as JSON and exit
     --guard-off         Unload the session guard whatever the policy says, print the status, exit
@@ -157,7 +157,7 @@ OPTIONS:
     --check-devices     Print which input devices and /dev/uinput can be opened, then exit 0
     --log-level <lvl>   stderr verbosity (default info)
 
-Runs as root under rp-coded.service. Members of the `rp-code` group may connect.
+Runs as root under rpchatd.service. Members of the `rpchat` group may connect.
 ";
 
 struct Args {
@@ -182,28 +182,28 @@ struct Args {
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut args = Args {
-        socket: std::env::var_os("RP_CODED_SOCKET")
+        socket: std::env::var_os("RPCHATD_SOCKET")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_SOCKET_PATH)),
-        policy: std::env::var_os("RP_CODED_POLICY")
+        policy: std::env::var_os("RPCHATD_POLICY")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_POLICY_PATH)),
-        sessions_dir: std::env::var_os("RP_CODED_SESSIONS_DIR")
+        sessions_dir: std::env::var_os("RPCHATD_SESSIONS_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_SESSIONS_DIR)),
-        install_root: std::env::var_os("RP_CODED_INSTALL_ROOT")
+        install_root: std::env::var_os("RPCHATD_INSTALL_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_INSTALL_ROOT)),
-        system_prefix: std::env::var_os("RP_CODED_SYSTEM_PREFIX")
+        system_prefix: std::env::var_os("RPCHATD_SYSTEM_PREFIX")
             .filter(|p| !p.is_empty())
             .map(PathBuf::from),
-        no_restart: std::env::var_os("RP_CODED_NO_RESTART").is_some_and(|v| v == "1"),
+        no_restart: std::env::var_os("RPCHATD_NO_RESTART").is_some_and(|v| v == "1"),
         no_uinput: false,
         check_devices: false,
-        profile_dir: std::env::var_os("RP_CODED_PROFILE_DIR")
+        profile_dir: std::env::var_os("RPCHATD_PROFILE_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(guard::DEFAULT_PROFILE_DIR)),
-        guard_state: std::env::var_os("RP_CODED_GUARD_STATE")
+        guard_state: std::env::var_os("RPCHATD_GUARD_STATE")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(guard::DEFAULT_STATE_FILE)),
         guard_apply: false,
@@ -348,7 +348,7 @@ pub struct Daemon {
     keepalive: Mutex<Keepalive>,
     hooks: KeepaliveHooks,
     shutting_down: AtomicBool,
-    /// System install root (`/opt/rp-code`).
+    /// System install root (`/opt/rpchat`).
     install_root: PathBuf,
     apply_hooks: ApplyHooks,
     /// Serialises `apply-update` (one at a time) and marks a pending restart.
@@ -644,7 +644,7 @@ impl Daemon {
         });
     }
 
-    /// An audit record about an rp-code profile: rate-limited per target, logged, pushed.
+    /// An audit record about an rpchat profile: rate-limited per target, logged, pushed.
     pub fn report_attempt(&self, attempt: GuardAttempt, now: Instant, at: String) -> bool {
         let key = format!("{}:{}", attempt.kind.as_str(), attempt.target);
         if !self
@@ -1048,7 +1048,7 @@ impl Daemon {
     }
 
     /// Restart after a self-update once no input lock is active: under systemd through
-    /// `systemctl restart rp-coded` (the refreshed unit file applies), otherwise by re-exec'ing
+    /// `systemctl restart rpchatd` (the refreshed unit file applies), otherwise by re-exec'ing
     /// the (replaced) binary with the original arguments. Runs on its own thread, started once
     /// the reply to `apply-update` has been written, so that reply goes out first. `--no-restart`
     /// only logs. Only one restart thread is ever started.
@@ -1062,7 +1062,7 @@ impl Daemon {
         }
         let daemon = self.clone();
         thread::Builder::new()
-            .name("rp-coded-restart".into())
+            .name("rpchatd-restart".into())
             .spawn(move || {
                 thread::sleep(std::time::Duration::from_millis(500));
                 let mut waited = false;
@@ -1079,7 +1079,7 @@ impl Daemon {
                 let plan = daemon.restart.lock().unwrap_or_else(|e| e.into_inner());
                 if plan.suppressed {
                     log_warn!(
-                        "self-update installed; restart suppressed (--no-restart): run `systemctl restart rp-coded` or re-exec {} {}",
+                        "self-update installed; restart suppressed (--no-restart): run `systemctl restart rpchatd` or re-exec {} {}",
                         plan.exe.display(),
                         plan.argv.join(" ")
                     );
@@ -1298,7 +1298,7 @@ impl Daemon {
         ];
         if !guard_enforcing {
             residual.push(
-                "the session guard is not in enforce mode, so a terminal in a managed session can still reach /etc/rp-code and systemctl".into(),
+                "the session guard is not in enforce mode, so a terminal in a managed session can still reach /etc/rpchat and systemctl".into(),
             );
         }
         if !immutable {
@@ -1335,14 +1335,14 @@ impl Daemon {
 
     /// Where the `RefuseManualStop=yes` drop-in lives and whether it is there.
     fn drop_in_path(&self) -> PathBuf {
-        self.drop_in_dir.join("50-rp-code-sealed.conf")
+        self.drop_in_dir.join("50-rpchat-sealed.conf")
     }
 
     fn drop_in_present(&self) -> bool {
         self.drop_in_path().is_file()
     }
 
-    /// Write or remove the systemd drop-in that refuses `systemctl stop rp-coded`. It is not a
+    /// Write or remove the systemd drop-in that refuses `systemctl stop rpchatd`. It is not a
     /// wall — `systemctl kill` and a plain `kill` still work, and root can delete the file — but
     /// it takes away the one command an administrator reaches for first, and combined with the
     /// guard's exec denials there is no unconfined shell in the session to run the others from.
@@ -1353,7 +1353,7 @@ impl Daemon {
         }
         if wanted {
             let text =
-                "# Written by rp-coded while the policy is sealed; removed when it is unsealed.\n\
+                "# Written by rpchatd while the policy is sealed; removed when it is unsealed.\n\
                         [Unit]\n\
                         RefuseManualStop=yes\n\
                         \n\
@@ -2162,7 +2162,7 @@ fn test_scratch() -> PathBuf {
     // shared runtime directory would have them publishing over each other.
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let dir = std::env::temp_dir().join(format!(
-        "rp-coded-test-{}-{}",
+        "rpchatd-test-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
@@ -2194,7 +2194,7 @@ fn default_drop_in_dir(scratch: &Path) -> PathBuf {
     }
 }
 
-/// The gid of the `rp-code` group, so the runtime policy is readable by the app and nobody else.
+/// The gid of the `rpchat` group, so the runtime policy is readable by the app and nobody else.
 fn system_group_gid() -> Option<u32> {
     nix::unistd::Group::from_name(SYSTEM_GROUP)
         .ok()
@@ -2357,7 +2357,7 @@ mod os {
         match permitted {
             // CAP_SETUID is bit 7, CAP_SETGID bit 6.
             Some(p) if p & (1 << 7) == 0 || p & (1 << 6) == 0 => {
-                " (the daemon cannot change to that user: CAP_SETUID/CAP_SETGID are not in its permitted set. If rp-coded.service has no `AmbientCapabilities=CAP_SETUID CAP_SETGID`, it predates this daemon — systemd drops the capability when NoNewPrivileges= meets a seccomp option, whatever CapabilityBoundingSet= says. Run install.sh --refresh-daemon-files, then systemctl daemon-reload && systemctl restart rp-coded)"
+                " (the daemon cannot change to that user: CAP_SETUID/CAP_SETGID are not in its permitted set. If rpchatd.service has no `AmbientCapabilities=CAP_SETUID CAP_SETGID`, it predates this daemon — systemd drops the capability when NoNewPrivileges= meets a seccomp option, whatever CapabilityBoundingSet= says. Run install.sh --refresh-daemon-files, then systemctl daemon-reload && systemctl restart rpchatd)"
                     .to_string()
             }
             _ => String::new(),
@@ -2444,7 +2444,7 @@ mod os {
         }
     }
 
-    /// `<path> --version` → the version it prints (`rp-coded X.Y.Z (protocol N)`).
+    /// `<path> --version` → the version it prints (`rpchatd X.Y.Z (protocol N)`).
     pub fn daemon_version_of(path: &Path) -> Option<sysinstall::Semver> {
         let out = std::process::Command::new(path)
             .arg("--version")
@@ -2513,7 +2513,7 @@ mod os {
         }
     }
 
-    /// Restart the daemon: `systemctl restart rp-coded` when running as a systemd service
+    /// Restart the daemon: `systemctl restart rpchatd` when running as a systemd service
     /// (the unit stops us with SIGTERM, which releases the lock, and starts the new binary
     /// with the refreshed unit file), otherwise re-exec the binary in place. Only returns on
     /// failure (logged); the caller then keeps running the old version.
@@ -2521,9 +2521,9 @@ mod os {
         let under_systemd = std::env::var_os("INVOCATION_ID").is_some()
             && Path::new("/run/systemd/system").is_dir();
         if under_systemd {
-            log_info!("restarting through systemctl restart rp-coded (self-update)");
+            log_info!("restarting through systemctl restart rpchatd (self-update)");
             match std::process::Command::new("systemctl")
-                .args(["restart", "--no-block", "rp-coded"])
+                .args(["restart", "--no-block", "rpchatd"])
                 .env_clear()
                 .env("PATH", "/usr/bin:/bin")
                 .stdin(std::process::Stdio::null())
@@ -2533,7 +2533,7 @@ mod os {
             {
                 Ok(s) if s.success() => return,
                 Ok(s) => {
-                    log_error!("systemctl restart rp-coded exited with {s}; re-exec'ing instead")
+                    log_error!("systemctl restart rpchatd exited with {s}; re-exec'ing instead")
                 }
                 Err(e) => log_error!("cannot run systemctl ({e}); re-exec'ing instead"),
             }
@@ -2576,7 +2576,7 @@ mod os {
         let pid = child.id();
         let what = spec.program.clone();
         thread::Builder::new()
-            .name("rp-coded-reap".into())
+            .name("rpchatd-reap".into())
             .spawn(move || match child.wait() {
                 Ok(status) => log_info!("relaunched app pid {pid} ({what}) exited: {status}"),
                 Err(e) => log_warn!("waiting for relaunched app pid {pid} failed: {e}"),
@@ -2861,7 +2861,7 @@ mod os {
     }
 
     /// Start the audit tail once the guard is engaged (idempotent): `journalctl -f -o json`
-    /// over the kernel and audit transports, else `/dev/kmsg`. Records about `rp-code-*`
+    /// over the kernel and audit transports, else `/dev/kmsg`. Records about `rpchat-*`
     /// profiles become `guard-attempt` events for subscribed connections.
     pub fn start_audit_tailer_if_engaged(daemon: &Arc<Daemon>) {
         if !daemon.guard_engaged() || !daemon.claim_tailer() {
@@ -2869,7 +2869,7 @@ mod os {
         }
         let d = daemon.clone();
         thread::Builder::new()
-            .name("rp-coded-audit".into())
+            .name("rpchatd-audit".into())
             .spawn(move || audit_tail_loop(&d))
             .ok();
     }
@@ -3026,7 +3026,7 @@ fn accept_loop(listener: UnixListener, daemon: Arc<Daemon>) {
             Ok(stream) => {
                 let d = daemon.clone();
                 thread::Builder::new()
-                    .name("rp-coded-conn".into())
+                    .name("rpchatd-conn".into())
                     .spawn(move || {
                         if let Err(e) = serve_connection(stream, &d) {
                             log_debug!("connection ended: {e}");
@@ -3042,8 +3042,8 @@ fn accept_loop(listener: UnixListener, daemon: Arc<Daemon>) {
     }
 }
 
-/// Create the socket directory (0750 root:rp-code) and bind the socket (0660 root:rp-code).
-/// When the `rp-code` group does not exist the files stay root-owned and a warning is logged.
+/// Create the socket directory (0750 root:rpchat) and bind the socket (0660 root:rpchat).
+/// When the `rpchat` group does not exist the files stay root-owned and a warning is logged.
 fn bind_socket(path: &Path) -> io::Result<UnixListener> {
     let gid = nix::unistd::Group::from_name(SYSTEM_GROUP)
         .ok()
@@ -3089,7 +3089,7 @@ fn bind_socket(path: &Path) -> io::Result<UnixListener> {
 /// Start the ticker thread that drives lock timers / emergency detection / hot-plug.
 fn start_ticker(daemon: Arc<Daemon>) {
     thread::Builder::new()
-        .name("rp-coded-tick".into())
+        .name("rpchatd-tick".into())
         .spawn(move || {
             while !daemon.is_shutting_down() {
                 thread::sleep(TICK_INTERVAL);
@@ -3112,7 +3112,7 @@ fn install_signal_handler(daemon: Arc<Daemon>, socket: PathBuf) {
         return;
     }
     thread::Builder::new()
-        .name("rp-coded-signal".into())
+        .name("rpchatd-signal".into())
         .spawn(move || {
             let sig = set.wait().ok();
             log_info!("received {:?}; releasing lock and exiting", sig);
@@ -3130,7 +3130,7 @@ fn run(args: Args) -> ExitCode {
         Err(e) => format!("{e} — lock requests will be refused until it is fixed"),
     };
     log_info!(
-        "rp-coded {VERSION} starting; policy {}: {policy_note}",
+        "rpchatd {VERSION} starting; policy {}: {policy_note}",
         args.policy.display()
     );
     match PolicyStore::new(&args.policy).load() {
@@ -3241,7 +3241,7 @@ fn guard_paths(args: &Args) -> GuardPaths {
         state_file: args.guard_state.clone(),
         app_exec: args
             .install_root
-            .join("current/rp-code")
+            .join("current/rpchat")
             .to_string_lossy()
             .into_owned(),
         unit_dir: PathBuf::from(guard::DEFAULT_UNIT_DIR),
@@ -3260,7 +3260,7 @@ fn run_seal_cli(args: &Args) -> ExitCode {
     let seal = match store.load() {
         Ok(seal) => seal,
         Err(e) => {
-            eprintln!("rp-coded: {e}");
+            eprintln!("rpchatd: {e}");
             return ExitCode::from(1);
         }
     };
@@ -3294,7 +3294,7 @@ fn run_guard_cli(args: &Args, off: bool) -> ExitCode {
         match PolicyStore::new(&args.policy).load() {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("rp-coded: {e}");
+                eprintln!("rpchatd: {e}");
                 return ExitCode::from(1);
             }
         }
@@ -3316,7 +3316,7 @@ fn main() -> ExitCode {
     let args = match parse_args(&argv) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("rp-coded: {e}\n\n{USAGE}");
+            eprintln!("rpchatd: {e}\n\n{USAGE}");
             return ExitCode::from(64);
         }
     };
@@ -3325,7 +3325,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if args.version {
-        println!("rp-coded {VERSION} (protocol {PROTOCOL_VERSION})");
+        println!("rpchatd {VERSION} (protocol {PROTOCOL_VERSION})");
         return ExitCode::SUCCESS;
     }
     logging::set_level(args.log_level);
@@ -4269,7 +4269,7 @@ mod tests {
     #[test]
     fn set_policy_creates_the_parent_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let nested = dir.path().join("etc").join("rp-code").join("policy.json");
+        let nested = dir.path().join("etc").join("rpchat").join("policy.json");
         let daemon = Daemon::new(
             Box::new(fake_devices()),
             Box::new(FakeInjector::default()),
@@ -4483,7 +4483,7 @@ mod tests {
         // Validation errors and the root refusal come back as INVALID / REFUSED.
         let mut root = ConnCtx::test(0, 1);
         assert!(matches!(
-            daemon.handle(register_req("/usr/bin/rp-code"), &mut root),
+            daemon.handle(register_req("/usr/bin/rpchat"), &mut root),
             Response::Err(ref e) if e.code == ErrorCode::Refused
         ));
         let mut alice = ConnCtx::test(1000, 7);
@@ -4497,14 +4497,14 @@ mod tests {
         ));
         let mut nobody = ConnCtx::test(5555, 9);
         assert!(matches!(
-            daemon.handle(register_req("/usr/bin/rp-code"), &mut nobody),
+            daemon.handle(register_req("/usr/bin/rpchat"), &mut nobody),
             Response::Err(ref e) if e.code == ErrorCode::Invalid && e.error.contains("no user name")
         ));
         assert!(alice.registration.is_none());
 
         // Registered: status shows it, with allowQuit from the policy.
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice)
             .is_ok());
         let reg = alice
             .registration
@@ -4521,7 +4521,7 @@ mod tests {
         );
         // A second register on the same connection replaces the first.
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice)
             .is_ok());
 
         // The connection drops without unregister: relaunch scheduled 1.5 s later, then spawned
@@ -4535,7 +4535,7 @@ mod tests {
         let spawned = os.spawned();
         assert_eq!(spawned.len(), 1);
         let spec = &spawned[0];
-        assert_eq!(spec.program, "/usr/bin/rp-code");
+        assert_eq!(spec.program, "/usr/bin/rpchat");
         assert_eq!(spec.args, vec!["--hidden"]);
         assert_eq!(spec.cwd, "/home/alice");
         assert_eq!(
@@ -4554,7 +4554,7 @@ mod tests {
 
         // Unregister first: an intended exit, nothing scheduled.
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice)
             .is_ok());
         assert!(daemon.handle(Request::Unregister, &mut alice).is_ok());
         daemon.connection_lost(&mut alice, t0 + ms(2000));
@@ -4562,13 +4562,13 @@ mod tests {
 
         // The app comes back (new registration) before the delay is up: pending cancelled.
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice)
             .is_ok());
         daemon.connection_lost(&mut alice, t0 + ms(3000));
         assert!(daemon.keepalive().pending_for(1000).is_some());
         let mut alice2 = ConnCtx::test(1000, 8);
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice2)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice2)
             .is_ok());
         assert!(daemon.keepalive().pending_for(1000).is_none());
         daemon.keepalive_tick(t0 + ms(60_000));
@@ -4577,7 +4577,7 @@ mod tests {
 
         // Process still alive at fire time (the socket merely dropped): cancelled.
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice)
             .is_ok());
         daemon.connection_lost(&mut alice, t0 + ms(70_000));
         os.alive.store(true, Ordering::SeqCst);
@@ -4588,7 +4588,7 @@ mod tests {
 
         // The active graphical user changed (user switching) before the delay was up: cancelled.
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice)
             .is_ok());
         daemon.connection_lost(&mut alice, t0 + ms(200_000));
         *os.active.lock().unwrap() = vec![1001];
@@ -4597,7 +4597,7 @@ mod tests {
         // Nobody active at all (no logind): nothing scheduled either.
         *os.active.lock().unwrap() = vec![];
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice)
             .is_ok());
         daemon.connection_lost(&mut alice, t0 + ms(300_000));
         assert!(daemon.keepalive().pending_for(1000).is_none());
@@ -4606,14 +4606,14 @@ mod tests {
         // bob is not in app.users: registered fine, never relaunched.
         let mut bob = ConnCtx::test(1001, 11);
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut bob)
+            .handle(register_req("/usr/bin/rpchat"), &mut bob)
             .is_ok());
         daemon.connection_lost(&mut bob, t0 + ms(400_000));
         assert!(daemon.keepalive().pending_for(1001).is_none());
 
         // The policy flips to allowQuit while a relaunch is pending: cancelled at fire time.
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice)
             .is_ok());
         daemon.connection_lost(&mut alice, t0 + ms(500_000));
         fs::write(
@@ -4625,7 +4625,7 @@ mod tests {
         assert_eq!(os.spawned().len(), 1);
         // And with allowQuit true a drop schedules nothing at all.
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice)
             .is_ok());
         daemon.connection_lost(&mut alice, t0 + ms(520_000));
         assert!(daemon.keepalive().pending_for(1000).is_none());
@@ -4637,7 +4637,7 @@ mod tests {
         // allowQuit false without a users list: nothing is relaunched (warned once).
         fs::write(&policy_path, r#"{"version":1,"app":{"allowQuit":false}}"#).unwrap();
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice)
             .is_ok());
         daemon.connection_lost(&mut alice, t0 + ms(530_000));
         assert!(daemon.keepalive().pending_for(1000).is_none());
@@ -4667,7 +4667,7 @@ mod tests {
         // and after 10 relaunches inside 10 minutes the daemon gives up.
         for i in 1..=11 {
             assert!(daemon
-                .handle(register_req("/usr/bin/rp-code"), &mut alice)
+                .handle(register_req("/usr/bin/rpchat"), &mut alice)
                 .is_ok());
             daemon.connection_lost(&mut alice, now);
             let Some(p) = daemon.keepalive().pending_for(1000).cloned() else {
@@ -4689,7 +4689,7 @@ mod tests {
         now += std::time::Duration::from_secs(11 * 60);
         os.fail_spawn.store(true, Ordering::SeqCst);
         assert!(daemon
-            .handle(register_req("/usr/bin/rp-code"), &mut alice)
+            .handle(register_req("/usr/bin/rpchat"), &mut alice)
             .is_ok());
         daemon.connection_lost(&mut alice, now);
         let p = daemon
@@ -4737,7 +4737,7 @@ mod tests {
             _dir: dir,
         };
         let mut c = server.connect();
-        let res = c.send(json!({"op":"register","exec":"/usr/bin/rp-code","args":[],"cwd":"/","env":{"HOME":"/h"}}));
+        let res = c.send(json!({"op":"register","exec":"/usr/bin/rpchat","args":[],"cwd":"/","env":{"HOME":"/h"}}));
         if nix::unistd::getuid().is_root() {
             // The test process is root: SO_PEERCRED says uid 0, which may not register.
             assert_eq!(res["code"], "REFUSED");
@@ -4757,11 +4757,11 @@ mod tests {
             );
         }
         assert_eq!(
-            c.send(json!({"op":"register","exec":"rp-code","args":[],"cwd":"/","env":{}}))["ok"],
+            c.send(json!({"op":"register","exec":"rpchat","args":[],"cwd":"/","env":{}}))["ok"],
             false
         );
         assert_eq!(
-            c.send(json!({"op":"register","exec":"/usr/bin/rp-code","args":[],"cwd":"/","env":{"LD_PRELOAD":"x"}}))["ok"],
+            c.send(json!({"op":"register","exec":"/usr/bin/rpchat","args":[],"cwd":"/","env":{"LD_PRELOAD":"x"}}))["ok"],
             false
         );
         assert_eq!(
@@ -4816,12 +4816,12 @@ mod tests {
         );
         let mut tree = app_tree("0.5.0");
         tree.push((
-            "resources/bin/rp-coded",
-            b"rp-coded 99.0.0 (protocol 1)\n".to_vec(),
+            "resources/bin/rpchatd",
+            b"rpchatd 99.0.0 (protocol 1)\n".to_vec(),
         ));
         tree.push(("resources/system/install.sh", b"#!/bin/sh\n".to_vec()));
         let refs: Vec<(&str, &[u8])> = tree.iter().map(|(p, c)| (*p, c.as_slice())).collect();
-        let appimage = home.join("rp-code-0.5.0.AppImage");
+        let appimage = home.join("rpchat-0.5.0.AppImage");
         fake_appimage(&appimage, &refs);
         if root_run {
             std::os::unix::fs::chown(&appimage, Some(uid), Some(gid)).unwrap();
@@ -4936,7 +4936,7 @@ mod tests {
         );
         os.files.lock().unwrap().insert(
             PathBuf::from("/etc/pam.d/system-login"),
-            "session optional pam_apparmor.so order=user,group,default # rp-code session guard\n"
+            "session optional pam_apparmor.so order=user,group,default # rpchat session guard\n"
                 .into(),
         );
         let mut c = server.connect();
@@ -4964,11 +4964,11 @@ mod tests {
         assert_eq!(
             applied["guard"]["loaded"],
             json!([
-                "rp-code-session",
-                "rp-code-app",
-                "rp-code-shell",
-                "rp-code-compositor",
-                "rp-code-login"
+                "rpchat-session",
+                "rpchat-app",
+                "rpchat-shell",
+                "rpchat-compositor",
+                "rpchat-login"
             ])
         );
         assert_eq!(applied["guard"]["pamConfigured"], true);
@@ -5014,7 +5014,7 @@ mod tests {
                     .daemon
                     .guard_paths
                     .profile_dir
-                    .join("rp-code-session"),
+                    .join("rpchat-session"),
             )
             .cloned()
             .unwrap();
@@ -5058,7 +5058,7 @@ mod tests {
             command: "hyprctl".into(),
             pid: 7,
             blocked: false,
-            profile: "rp-code-session".into(),
+            profile: "rpchat-session".into(),
             operation: "connect".into(),
             requested: Some("wr".into()),
         };

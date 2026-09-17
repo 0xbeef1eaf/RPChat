@@ -16,7 +16,7 @@
 //! as a different one:
 //!
 //! ```text
-//! rp-code-pack/v1\n<id>\n<version or empty>\n<sha256 hex of the .rppack>
+//! rpchat-pack/v1\n<id>\n<version or empty>\n<sha256 hex of the .rppack>
 //! ```
 //!
 //! The app downloads and hashes; the daemon verifies. That keeps hundreds of megabytes off the
@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use crate::chain::{parse_key, verify_detached};
 
 /// Prefix of the string a pack signature covers.
-pub const PACK_SIGNING_PREFIX: &str = "rp-code-pack/v1";
+pub const PACK_SIGNING_PREFIX: &str = "rpchat-pack/v1";
 /// `remote.intervalMinutes` bounds and default.
 pub const MIN_INTERVAL_MINUTES: u64 = 5;
 pub const MAX_INTERVAL_MINUTES: u64 = 24 * 60;
@@ -422,11 +422,11 @@ mod tests {
     fn the_pack_message_binds_the_id_the_version_and_the_bytes() {
         assert_eq!(
             pack_message("luna", Some("1.2.0"), "AABB"),
-            "rp-code-pack/v1\nluna\n1.2.0\naabb"
+            "rpchat-pack/v1\nluna\n1.2.0\naabb"
         );
         assert_eq!(
             pack_message("luna", None, "aabb"),
-            "rp-code-pack/v1\nluna\n\naabb"
+            "rpchat-pack/v1\nluna\n\naabb"
         );
     }
 

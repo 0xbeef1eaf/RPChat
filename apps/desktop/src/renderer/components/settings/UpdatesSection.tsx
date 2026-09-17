@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AppSettings, UpdateStatus } from '@rp/shared';
-import { UPDATE_REPO, UPDATE_TOKEN_HELP_URL, releasePageUrl } from '@rp/shared';
+import { UPDATE_REPO, releasePageUrl } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { formatDateTime } from '../../lib/format';
-import { reportError, toast } from '../../store/actions';
+import { reportError } from '../../store/actions';
 import { Toggle } from '../common/Toggle';
 import { ManagedBadge, useManaged } from './Managed';
 
@@ -25,8 +25,6 @@ function stateLabel(s: UpdateStatus): { text: string; badge: string } {
       return { text: 'Not available in this build', badge: 'badge' };
     case 'disabled':
       return { text: 'Disabled by policy', badge: 'badge badge-warning' };
-    case 'no-token':
-      return { text: 'GitHub token needed', badge: 'badge badge-warning' };
     case 'idle':
       return { text: 'Not checked yet', badge: 'badge' };
     case 'checking':
@@ -52,8 +50,6 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [token, setToken] = useState('');
-  const [savingToken, setSavingToken] = useState(false);
   const automaticManaged = useManaged('updates.automatic');
 
   const load = useCallback(async () => {
@@ -82,33 +78,6 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
     }
   };
 
-  const saveToken = async () => {
-    const value = token.trim();
-    if (!value) return;
-    setSavingToken(true);
-    try {
-      setStatus(await api().updates.setToken(value));
-      setToken('');
-      toast('success', 'Token saved');
-    } catch (err) {
-      reportError('Could not save the token', err);
-    } finally {
-      setSavingToken(false);
-    }
-  };
-
-  const removeToken = async () => {
-    setSavingToken(true);
-    try {
-      setStatus(await api().updates.setToken(null));
-      toast('success', 'Token removed');
-    } catch (err) {
-      reportError('Could not remove the token', err);
-    } finally {
-      setSavingToken(false);
-    }
-  };
-
   if (error) {
     return (
       <div className="stack">
@@ -133,18 +102,17 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
   const disabledByPolicy = status.state === 'disabled';
   const unsupported = status.state === 'unsupported';
   const systemInstall = status.packaging === 'system';
-  const canCheck = !unsupported && !disabledByPolicy && status.tokenPresent && status.state !== 'checking' && status.state !== 'downloading' && status.state !== 'installing';
+  const canCheck = !unsupported && !disabledByPolicy && status.state !== 'checking' && status.state !== 'downloading' && status.state !== 'installing';
   const canDownload = status.state === 'available' && status.canInstallInPlace;
   const canInstall = status.state === 'ready' && (!systemInstall || status.canInstallInPlace);
   const releaseUrl = status.latestVersion ? releasePageUrl(status.latestVersion) : `https://github.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases`;
-  const showTokenField = !unsupported && !disabledByPolicy;
 
   return (
     <div className="stack" style={{ gap: 14 }}>
       <p className="muted small">
         The app updates itself from the releases of <code>{`${UPDATE_REPO.owner}/${UPDATE_REPO.repo}`}</code>.{' '}
         {systemInstall
-          ? 'Updates are applied by the system service (rp-coded): no password prompt, and the previous version is kept for rollback.'
+          ? 'Updates are applied by the system service (rpchatd): no password prompt, and the previous version is kept for rollback.'
           : 'The AppImage is replaced in place; package installs are notified only.'}
       </p>
 
@@ -194,12 +162,6 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
               <dd>{formatDateTime(status.checkedAt)}</dd>
             </>
           ) : null}
-          {status.tokenPresent ? (
-            <>
-              <dt>Token</dt>
-              <dd>token saved ({status.tokenStorage === 'keyring' ? 'keyring' : 'file'})</dd>
-            </>
-          ) : null}
         </dl>
         {status.state === 'downloading' ? (
           <progress value={status.progressPercent ?? 0} max={100} style={{ width: '100%', marginTop: 8 }} aria-label="Download progress" />
@@ -214,7 +176,7 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
             <span className="spinner" /> The system service is verifying and installing the update; the app restarts when it is done.
           </div>
         ) : null}
-        {status.reason && !unsupported && !disabledByPolicy && status.state !== 'no-token' ? <p className="field-hint">{status.reason}</p> : null}
+        {status.reason && !unsupported && !disabledByPolicy ? <p className="field-hint">{status.reason}</p> : null}
         {status.releaseNotes && (status.state === 'available' || status.state === 'downloading' || status.state === 'ready') ? (
           <details style={{ marginTop: 8 }}>
             <summary className="small">Release notes</summary>
@@ -253,48 +215,6 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
           </p>
         ) : null}
       </div>
-
-      {showTokenField ? (
-        <div className="card">
-          <h3 style={{ marginBottom: 6 }}>GitHub token</h3>
-          <p className="muted small" style={{ marginBottom: 8 }}>
-            Create a fine-grained personal access token at{' '}
-            <a href={UPDATE_TOKEN_HELP_URL} target="_blank" rel="noreferrer">
-              github.com/settings/personal-access-tokens
-            </a>{' '}
-            with read-only <em>Contents</em> access to <code>{`${UPDATE_REPO.owner}/${UPDATE_REPO.repo}`}</code>. It is stored in your system keyring.
-          </p>
-          <div className="row wrap">
-            <div className="field grow" style={{ minWidth: 240 }}>
-              <label htmlFor="update-token">{status.tokenPresent ? 'Replace token' : 'Token'}</label>
-              <input
-                id="update-token"
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="github_pat_…"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && void saveToken()}
-              />
-              {status.tokenPresent ? <span className="field-hint">token saved ({status.tokenStorage === 'keyring' ? 'keyring' : 'file'})</span> : null}
-            </div>
-            <button type="button" className="btn btn-primary btn-sm" onClick={saveToken} disabled={savingToken || token.trim().length === 0}>
-              Save token
-            </button>
-            {status.tokenPresent ? (
-              <button type="button" className="btn btn-sm btn-danger" onClick={removeToken} disabled={savingToken}>
-                Remove token
-              </button>
-            ) : null}
-          </div>
-          {status.tokenStorage === 'file' ? (
-            <div className="callout callout-warning small" style={{ marginTop: 8 }}>
-              No system keyring is available, so the token is kept in a file only you can read (<code>update-token.bin</code> in the app data folder).
-            </div>
-          ) : null}
-        </div>
-      ) : null}
 
       {!unsupported ? (
         <div className="card">

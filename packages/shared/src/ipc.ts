@@ -234,7 +234,7 @@ export interface IpcApi {
     /**
      * Runs the bundled installer with elevated privileges (pkexec). Resolves with the installer's
      * output. `systemInstall: false` passes `--no-system-install` (keep launching the AppImage
-     * instead of unpacking it to `/opt/rp-code`; only meaningful for an AppImage launch).
+     * instead of unpacking it to `/opt/rpchat`; only meaningful for an AppImage launch).
      */
     install(options?: { autostart?: boolean; systemInstall?: boolean }): Promise<{ ok: boolean; output: string }>;
     setAutostart(enabled: boolean): Promise<SystemIntegrationStatus>;
@@ -328,14 +328,12 @@ export interface IpcApi {
   /** In-place app updates from the private GitHub releases (see `UpdateStatus`). */
   updates: {
     status(): Promise<UpdateStatus>;
-    /** Manual check; allowed whenever a token exists and policy has not disabled updates. */
+    /** Manual check; allowed unless policy has disabled updates. */
     check(): Promise<UpdateStatus>;
     /** Start downloading the available update (AppImage in a writable location only). */
     download(): Promise<UpdateStatus>;
     /** Quit and relaunch into the downloaded update (system install: the daemon applies it first, then the app relaunches). */
     install(): Promise<void>;
-    /** Store (or with `null` remove) the per-user GitHub token used to read the private release feed. */
-    setToken(token: string | null): Promise<UpdateStatus>;
     onStatus(listener: (status: UpdateStatus) => void): Unsubscribe;
   };
   /** SDK plugins: folders under the app's plugins dir adding capability modules. */

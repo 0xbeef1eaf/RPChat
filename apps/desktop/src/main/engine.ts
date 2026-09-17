@@ -85,7 +85,7 @@ export interface AppServices {
   daemon: DaemonClient;
   /** `app.allowQuit` enforcement: tray/close/before-quit decisions and the signal handlers (quit-guard.ts). */
   quitGuard: QuitGuard;
-  /** The long-lived relaunch registration with rp-coded (unregistered before an authorised quit). */
+  /** The long-lived relaunch registration with rpchatd (unregistered before an authorised quit). */
   keepalive: KeepaliveLink;
   commands: CommandRunner;
   permissionPrompts: PendingPrompts<PermissionDecision>;
@@ -252,7 +252,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     },
     confirm: (id, browserName) => {
       const promptId = `browser-trust:${id}:${Date.now()}`;
-      const request: UiPromptRequest = { promptId, sessionId: '', characterName: 'rp-code', kind: 'confirm', question: `Browser extension ${id} (${browserName}) wants to connect to rp-code — Allow?` };
+      const request: UiPromptRequest = { promptId, sessionId: '', characterName: 'rpchat', kind: 'confirm', question: `Browser extension ${id} (${browserName}) wants to connect to rpchat — Allow?` };
       return uiPrompts.ask(promptId, () => windows.openPromptWindow({ kind: 'ui', prompt: request }) || windows.sendToMain(IPC_EVENT_CHANNELS.uiPrompt, request)).then((answer) => answer === true);
     },
     ports: () => ({ port: loopback.listeningPort, requested: loopback.requestedPort }),
@@ -284,7 +284,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   };
   // ---- system integration (Linux daemon + root-owned policy) --------------------
   const daemon = new DaemonClient({ ...(env.RP_DAEMON_SOCKET ? { socketPath: env.RP_DAEMON_SOCKET } : {}), logger });
-  // The app's memory of a sealed policy, so a wiped /etc/rp-code does not leave it unmanaged
+  // The app's memory of a sealed policy, so a wiped /etc/rpchat does not leave it unmanaged
   // (seal-cache.ts). The watcher reads it last, after the daemon's runtime filesystem, the policy
   // file and the seal's marker.
   const sealCache = SealCache.inUserData(opts.userData, logger);
@@ -471,7 +471,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     await rawUpdate(stripManagedPatch(patch ?? {}, state.managed));
     return engine.settings.get();
   };
-  // System install (docs/system-integration.md): the executable runs from /opt/rp-code/current
+  // System install (docs/system-integration.md): the executable runs from /opt/rpchat/current
   // (realpath, so a launch through the /usr/local/bin symlink counts) and the daemon applies updates.
   const execPathReal = ((): string => {
     try {
@@ -586,7 +586,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
         waitForDaemon: (timeoutMs) => daemon.waitForHello(timeoutMs),
         relaunch: () => {
           // Explicit execPath: the running binary's /proc/self/exe now points into previous/.
-          app.relaunch({ execPath: path.join(systemInstallDir, 'rp-code'), args: process.argv.slice(1) });
+          app.relaunch({ execPath: path.join(systemInstallDir, 'rpchat'), args: process.argv.slice(1) });
           app.quit();
         },
       }
@@ -598,10 +598,8 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     isPackaged: app.isPackaged,
     ...(env.APPIMAGE ? { appImagePath: env.APPIMAGE } : {}),
     execPath: execPathReal,
-    userDataDir: opts.userData,
     settings: { get: () => engine.settings.get() },
     policy,
-    safeStorage,
     logger,
     beforeRestart,
   });

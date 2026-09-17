@@ -1,4 +1,4 @@
-# Writing packs for rp-code
+# Writing packs for rpchat
 
 A **pack** is a directory (or an `.rppack` zip of that directory) that ships
 **exactly one character**, its media, optional pre-written behaviour scripts and
@@ -92,7 +92,7 @@ Rules enforced by `@rp/pack`:
 
 The persona is the heart of the character. It is placed in the system prompt
 right after the engine rules, so write it as instructions to the model: who the
-character is, how they talk, what they care about, and — because rp-code
+character is, how they talk, what they care about, and — because rpchat
 characters can *act* — when they should use their abilities and when they
 should just talk. `luna/characters/luna/persona.md` is a worked example.
 

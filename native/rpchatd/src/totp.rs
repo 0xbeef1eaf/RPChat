@@ -224,7 +224,7 @@ pub fn verify(
 pub fn otpauth_uri(issuer: &str, label: &str, secret: &[u8], cfg: TotpConfig) -> String {
     let cfg = cfg.sanitised();
     let issuer = if issuer.trim().is_empty() {
-        "rp-code"
+        "rpchat"
     } else {
         issuer.trim()
     };

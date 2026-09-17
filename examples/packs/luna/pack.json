@@ -4,7 +4,7 @@
   "name": "Luna",
   "version": "1.0.0",
   "description": "Luna, a warm companion character who shows pictures, plays a chime and schedules gentle reminders.",
-  "author": { "name": "rp-code examples", "url": "https://example.com/rp-code" },
+  "author": { "name": "rpchat examples", "url": "https://example.com/rpchat" },
   "license": "CC0-1.0",
   "tags": ["companion", "example"],
   "characters": ["characters/luna"],

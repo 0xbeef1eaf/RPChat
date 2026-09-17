@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=rp-code
+Name=RPChat
 Comment=Start the rp desktop app minimised to the tray
 # install.sh replaces the executable with the detected app path (--app-bin).
-Exec=rp-code --hidden
-Icon=rp-code
+Exec=rpchat --hidden
+Icon=rpchat
 Terminal=false
 Categories=Utility;
 X-GNOME-Autostart-enabled=true

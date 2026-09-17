@@ -3,8 +3,8 @@
  * Builds the native Linux pieces and copies them where electron-builder picks them up:
  *  - native/overlay-wlr → resources/bin/rp-overlay-wlr (wlr-layer-shell overlay helper; needs
  *    the GTK/WebKit development libraries),
- *  - native/rp-coded   → resources/bin/rp-coded (input lock / injection daemon; no system
- *    libraries) plus native/rp-coded/dist/* and install.sh → resources/system/.
+ *  - native/rpchatd   → resources/bin/rpchatd (input lock / injection daemon; no system
+ *    libraries) plus native/rpchatd/dist/* and install.sh → resources/system/.
  * Each part skips with a notice when its toolchain is missing (exit 1 only with
  * RP_REQUIRE_NATIVE=1).
  */
@@ -58,10 +58,10 @@ function buildOverlayHelper() {
 }
 
 function buildDaemon() {
-  const daemonDir = resolve(nativeDir, 'rp-coded');
+  const daemonDir = resolve(nativeDir, 'rpchatd');
   const manifest = resolve(daemonDir, 'Cargo.toml');
-  if (!existsSync(manifest)) return skip('rp-coded', `${manifest} not found`);
-  cargoBuild('rp-coded', manifest, resolve(appDir, 'resources/bin/rp-coded'));
+  if (!existsSync(manifest)) return skip('rpchatd', `${manifest} not found`);
+  cargoBuild('rpchatd', manifest, resolve(appDir, 'resources/bin/rpchatd'));
 
   // Installer and its support files, shipped flat under resources/system/.
   const systemDir = resolve(appDir, 'resources/system');
@@ -70,7 +70,7 @@ function buildDaemon() {
   const files = readdirSync(distDir).map((f) => join(distDir, f));
   files.push(resolve(daemonDir, 'install.sh'), resolve(daemonDir, 'README.md'));
   const icon = resolve(appDir, 'build/icon.png');
-  if (existsSync(icon)) copyFileSync(icon, join(systemDir, 'rp-code.png'));
+  if (existsSync(icon)) copyFileSync(icon, join(systemDir, 'rpchat.png'));
   for (const src of files) {
     const dst = join(systemDir, src.split('/').pop());
     copyFileSync(src, dst);
@@ -80,9 +80,9 @@ function buildDaemon() {
 }
 
 if (process.platform !== 'linux') {
-  skip('rp-overlay-wlr and rp-coded', `only built on Linux (this is ${process.platform})`);
+  skip('rp-overlay-wlr and rpchatd', `only built on Linux (this is ${process.platform})`);
 } else if (!has('cargo', ['--version'])) {
-  skip('rp-overlay-wlr and rp-coded', 'cargo is not on PATH (install Rust to build the native helpers)');
+  skip('rp-overlay-wlr and rpchatd', 'cargo is not on PATH (install Rust to build the native helpers)');
 } else {
   buildOverlayHelper();
   buildDaemon();

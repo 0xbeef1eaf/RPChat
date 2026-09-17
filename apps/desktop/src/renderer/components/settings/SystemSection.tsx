@@ -116,7 +116,7 @@ export function SystemSection() {
     <div className="stack" style={{ gap: 14 }}>
       <div className="row">
         <p className="muted small grow">
-          The optional system integration runs a small root daemon (<code>rp-coded</code>) that handles input locking and typing safely, plus a
+          The optional system integration runs a small root daemon (<code>rpchatd</code>) that handles input locking and typing safely, plus a
           root-owned policy file that can force settings on this machine. Input locking and injection (<code>sdk.input</code>) are only
           available through the daemon: until it is installed and connected, those calls fail.
         </p>
@@ -348,7 +348,7 @@ export function SystemSection() {
         <div className="card">
           <div className="row" style={{ marginBottom: 6 }}>
             <h3 className="grow">Start on login</h3>
-            <Toggle checked={autostart.enabled} disabled={busy || !linux} aria-label="Start rp-code on login" onChange={setAutostart} />
+            <Toggle checked={autostart.enabled} disabled={busy || !linux} aria-label="Start rpchat on login" onChange={setAutostart} />
           </div>
           <p className="muted small">
             {autostart.method === 'none' ? 'No autostart method available.' : `via ${autostart.method}`}
@@ -405,7 +405,7 @@ export function SystemSection() {
       {auditLog ? <GuardAuditDialog onClose={() => setAuditLog(false)} /> : null}
       {policyDialog ? (
         <CreatePolicyDialog
-          path={policy.path ?? '/etc/rp-code/policy.json'}
+          path={policy.path ?? '/etc/rpchat/policy.json'}
           sealed={policy.seal.sealed}
           onClose={() => setPolicyDialog(false)}
           onCreated={async (next) => {
@@ -426,10 +426,10 @@ export function SystemSection() {
             </li>
             <li>installs a udev rule granting that group access to input devices</li>
             <li>
-              installs and starts the <code>rp-coded</code> root daemon service (input lock, typing, emergency unlock key)
+              installs and starts the <code>rpchatd</code> root daemon service (input lock, typing, emergency unlock key)
             </li>
             <li>
-              creates <code>/etc/rp-code</code> for the policy file (nothing is written there; you can create the policy from this tab afterwards)
+              creates <code>/etc/rpchat</code> for the policy file (nothing is written there; you can create the policy from this tab afterwards)
             </li>
             <li>optionally registers the app to start on login</li>
             {appInstall.canSystemInstall ? (
@@ -441,7 +441,7 @@ export function SystemSection() {
           </ul>
           <label className="check">
             <input type="checkbox" checked={autostartWanted} onChange={(e) => setAutostartWanted(e.target.checked)} />
-            Also start rp-code on login
+            Also start rpchat on login
           </label>
           {appInstall.canSystemInstall ? (
             <label className="check">
@@ -513,7 +513,7 @@ function GuardAuditDialog({ onClose }: { onClose: () => void }) {
     <Modal title="Session guard: audit log" onClose={onClose} className="modal-wide">
       <p className="muted small">
         The last {rows?.length ?? 0} attempts the daemon reported since the app started (one per target every 10 s). In audit mode nothing is blocked; these are what
-        enforce mode would stop. The full log is in <code>journalctl -k</code> (<code>apparmor=</code> lines with <code>profile=&quot;rp-code-…&quot;</code>).
+        enforce mode would stop. The full log is in <code>journalctl -k</code> (<code>apparmor=</code> lines with <code>profile=&quot;rpchat-…&quot;</code>).
       </p>
       {error ? <div className="callout callout-danger small">{error}</div> : null}
       {rows === null ? (

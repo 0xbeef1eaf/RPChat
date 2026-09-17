@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RpError } from '@rp/shared';
 import type { BrowserBridgeEvent, BrowserBridgeStatus } from '@rp/shared';
-import { BrowserBridge, CLOSE_CODES, NOT_CONNECTED_MESSAGE, extensionIdFromOrigin, rpCodeFor } from './bridge.js';
+import { BrowserBridge, CLOSE_CODES, NOT_CONNECTED_MESSAGE, extensionIdFromOrigin, rpChatFor } from './bridge.js';
 import type { BridgeSocket, BrowserBridgeDeps } from './bridge.js';
 import { BROWSER_POLICY_DIRS, browserPolicy, browserPolicyText, updateXml } from './policy.js';
 
@@ -72,7 +72,7 @@ function setup(overrides: Partial<BrowserBridgeDeps> = {}) {
 
 const tick = (ms = 5): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-describe('extensionIdFromOrigin / rpCodeFor', () => {
+describe('extensionIdFromOrigin / rpChatFor', () => {
   it('accepts only chrome-extension origins with a valid id', () => {
     expect(extensionIdFromOrigin(`chrome-extension://${ID_A}`)).toBe(ID_A);
     expect(extensionIdFromOrigin(`chrome-extension://${ID_A}/`)).toBe(ID_A);
@@ -83,9 +83,9 @@ describe('extensionIdFromOrigin / rpCodeFor', () => {
     expect(extensionIdFromOrigin(`moz-extension://${ID_A}`)).toBeUndefined();
   });
   it('maps extension error codes', () => {
-    expect(rpCodeFor('NOT_FOUND')).toBe('NOT_FOUND');
-    expect(rpCodeFor('INVALID_URL')).toBe('INVALID_ARGUMENT');
-    expect(rpCodeFor('INJECT_FAILED')).toBe('CAPABILITY_FAILED');
+    expect(rpChatFor('NOT_FOUND')).toBe('NOT_FOUND');
+    expect(rpChatFor('INVALID_URL')).toBe('INVALID_ARGUMENT');
+    expect(rpChatFor('INJECT_FAILED')).toBe('CAPABILITY_FAILED');
   });
 });
 
@@ -229,10 +229,10 @@ describe('policy', () => {
     expect(browserPolicy(ID_A, 5000)).not.toHaveProperty('HomepageLocation');
     expect(browserPolicy(ID_A, 5000, undefined, 'https://home.test/')).toMatchObject({ HomepageLocation: 'https://home.test/', HomepageIsNewTabPage: false });
     expect(browserPolicy(ID_A, 5000, undefined, 'chrome://newtab')).not.toHaveProperty('HomepageLocation');
-    const xml = updateXml(ID_A, '0.1.0', 'http://127.0.0.1:47821/extension/rp-code.crx');
+    const xml = updateXml(ID_A, '0.1.0', 'http://127.0.0.1:47821/extension/rpchat.crx');
     expect(xml).toContain(`<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>`);
     expect(xml).toContain(`<app appid='${ID_A}'>`);
-    expect(xml).toContain(`<updatecheck codebase='http://127.0.0.1:47821/extension/rp-code.crx' version='0.1.0' />`);
+    expect(xml).toContain(`<updatecheck codebase='http://127.0.0.1:47821/extension/rpchat.crx' version='0.1.0' />`);
     expect(updateXml(ID_A, "1'<", 'http://x/a&b')).toContain(`version='1&apos;&lt;'`);
     expect(BROWSER_POLICY_DIRS.map((d) => d.dir)).toEqual([
       '/etc/chromium/policies/managed',

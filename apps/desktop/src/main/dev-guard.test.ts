@@ -108,19 +108,19 @@ describe('the switches themselves', () => {
   });
 
   it('refusedDevFlags catches the debugging flags with and without a value, and lets a real launch through', () => {
-    expect(refusedDevFlags(['/opt/rp-code/rp-code', '--hidden', '--no-sandbox', '--ozone-platform=wayland'])).toEqual([]);
-    expect(refusedDevFlags(['rp-code', '--inspect'])).toEqual(['--inspect']);
-    expect(refusedDevFlags(['rp-code', '--remote-debugging-port=9222', '--js-flags=--expose-gc'])).toEqual(['--remote-debugging-port=9222', '--js-flags=--expose-gc']);
+    expect(refusedDevFlags(['/opt/rpchat/rpchat', '--hidden', '--no-sandbox', '--ozone-platform=wayland'])).toEqual([]);
+    expect(refusedDevFlags(['rpchat', '--inspect'])).toEqual(['--inspect']);
+    expect(refusedDevFlags(['rpchat', '--remote-debugging-port=9222', '--js-flags=--expose-gc'])).toEqual(['--remote-debugging-port=9222', '--js-flags=--expose-gc']);
     // Not a flag, just a file that happens to be named like one.
-    expect(refusedDevFlags(['rp-code', 'inspect', '/tmp/--inspect'])).toEqual([]);
-    for (const flag of DEV_ARGV_FLAGS) expect(refusedDevFlags(['rp-code', flag])).toEqual([flag]);
+    expect(refusedDevFlags(['rpchat', 'inspect', '/tmp/--inspect'])).toEqual([]);
+    for (const flag of DEV_ARGV_FLAGS) expect(refusedDevFlags(['rpchat', flag])).toEqual([flag]);
   });
 });
 
 describe('applyDevGuard', () => {
   it('changes nothing while dev mode is allowed', () => {
     const env = devEnv();
-    const decision = applyDevGuard({ env, argv: ['rp-code', '--inspect'], path: POLICY_FILE_PATH, readFile: missing() });
+    const decision = applyDevGuard({ env, argv: ['rpchat', '--inspect'], path: POLICY_FILE_PATH, readFile: missing() });
     expect(decision).toEqual({ rules: DEFAULT_DEV_RULES, source: 'no-policy', refuse: false, refusedFlags: [], removedEnv: [] });
     expect(env).toEqual(devEnv());
   });
@@ -128,7 +128,7 @@ describe('applyDevGuard', () => {
   it('strips the switches out of the environment when the policy locks dev mode', () => {
     const env = devEnv();
     const text = JSON.stringify({ version: 1, dev: { allow: false } });
-    const decision = applyDevGuard({ env, argv: ['rp-code', '--hidden'], path: POLICY_FILE_PATH, readFile: fileAt(POLICY_FILE_PATH, text) });
+    const decision = applyDevGuard({ env, argv: ['rpchat', '--hidden'], path: POLICY_FILE_PATH, readFile: fileAt(POLICY_FILE_PATH, text) });
     expect(decision.rules).toEqual({ allow: false, devTools: false });
     expect(decision.refuse).toBe(false);
     expect(decision.removedEnv).toContain('RP_MOCK_LLM');
@@ -141,7 +141,7 @@ describe('applyDevGuard', () => {
     const env = { ...devEnv(), RP_POLICY_FILE: '/tmp/free.json' };
     const locked = JSON.stringify({ version: 1, dev: { allow: false } });
     // The reader answers for the canonical path only; the file the launch pointed at is never opened.
-    const decision = applyDevGuard({ env, argv: ['rp-code'], path: POLICY_FILE_PATH, readFile: fileAt(POLICY_FILE_PATH, locked) });
+    const decision = applyDevGuard({ env, argv: ['rpchat'], path: POLICY_FILE_PATH, readFile: fileAt(POLICY_FILE_PATH, locked) });
     expect(decision.rules.allow).toBe(false);
     expect(decision.removedEnv).toContain('RP_POLICY_FILE');
     expect(env.RP_POLICY_FILE).toBeUndefined();
@@ -149,7 +149,7 @@ describe('applyDevGuard', () => {
 
   it('refuses a locked launch that asks for a debugging channel, and names the flags', () => {
     const text = JSON.stringify({ version: 1, dev: { allow: false } });
-    const decision = applyDevGuard({ env: devEnv(), argv: ['rp-code', '--remote-debugging-port=9222'], path: POLICY_FILE_PATH, readFile: fileAt(POLICY_FILE_PATH, text) });
+    const decision = applyDevGuard({ env: devEnv(), argv: ['rpchat', '--remote-debugging-port=9222'], path: POLICY_FILE_PATH, readFile: fileAt(POLICY_FILE_PATH, text) });
     expect(decision.refuse).toBe(true);
     expect(decision.refusedFlags).toEqual(['--remote-debugging-port=9222']);
     expect(refusalMessage(decision.refusedFlags)).toContain('--remote-debugging-port=9222');
@@ -157,7 +157,7 @@ describe('applyDevGuard', () => {
 
   it('keeps DevTools when the policy asks for them on a locked machine', () => {
     const text = JSON.stringify({ version: 1, dev: { allow: false, devTools: true } });
-    const decision = applyDevGuard({ env: devEnv(), argv: ['rp-code'], path: POLICY_FILE_PATH, readFile: fileAt(POLICY_FILE_PATH, text) });
+    const decision = applyDevGuard({ env: devEnv(), argv: ['rpchat'], path: POLICY_FILE_PATH, readFile: fileAt(POLICY_FILE_PATH, text) });
     expect(decision.rules).toEqual({ allow: false, devTools: true });
     expect(decision.removedEnv.length).toBeGreaterThan(0);
   });
@@ -165,7 +165,7 @@ describe('applyDevGuard', () => {
   it('closes DevTools without touching the environment when only they are forbidden', () => {
     const env = devEnv();
     const text = JSON.stringify({ version: 1, dev: { devTools: false } });
-    const decision = applyDevGuard({ env, argv: ['rp-code', '--inspect'], path: POLICY_FILE_PATH, readFile: fileAt(POLICY_FILE_PATH, text) });
+    const decision = applyDevGuard({ env, argv: ['rpchat', '--inspect'], path: POLICY_FILE_PATH, readFile: fileAt(POLICY_FILE_PATH, text) });
     expect(decision.rules).toEqual({ allow: true, devTools: false });
     expect(decision.refuse).toBe(false);
     expect(env.RP_MOCK_LLM).toBe('1');
@@ -184,7 +184,7 @@ describe('reading a real policy file', () => {
     expect(readDevRules({ path: file })).toEqual({ rules: { allow: false, devTools: false }, source: 'policy' });
 
     const env = { RP_MOCK_LLM: '1', HOME: '/home/alice' };
-    expect(applyDevGuard({ env, argv: ['rp-code'], path: file }).removedEnv).toEqual(['RP_MOCK_LLM']);
+    expect(applyDevGuard({ env, argv: ['rpchat'], path: file }).removedEnv).toEqual(['RP_MOCK_LLM']);
     expect(env).toEqual({ HOME: '/home/alice' });
 
     fs.writeFileSync(file, 'not json at all');

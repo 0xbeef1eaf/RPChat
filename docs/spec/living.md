@@ -288,7 +288,7 @@ that voice bugs must be reproduced under Electron, because the addon behaves dif
   author can audition a seed before saving it. A preview always uses a real seed and reports it
   back, because an unseeded take cannot be recovered once it has played — that is what makes
   "pin this seed" possible, and it is the only way to give a character a consistent voice.
-  Previews are served over `rp-asset://` as `app.rp-code.voice-preview` and pruned to `MAX_PREVIEWS`.
+  Previews are served over `rp-asset://` as `app.rpchat.voice-preview` and pruned to `MAX_PREVIEWS`.
 
 ## 5. Renderer
 

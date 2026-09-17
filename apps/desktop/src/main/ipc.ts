@@ -88,7 +88,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
         const options: Electron.OpenDialogOptions =
           kind === 'directory'
             ? { title: 'Choose a pack directory', properties: ['openDirectory'] }
-            : { title: 'Choose a pack file', properties: ['openFile'], filters: [{ name: 'rp-code packs', extensions: ['rppack', 'zip'] }] };
+            : { title: 'Choose a pack file', properties: ['openFile'], filters: [{ name: 'rpchat packs', extensions: ['rppack', 'zip'] }] };
         const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
         void event;
         return result.canceled ? null : (result.filePaths[0] ?? null);
@@ -197,7 +197,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
           reason: 'test',
           devices: 'both',
           newWindow: '',
-          text: 'Hello from rp-code',
+          text: 'Hello from rpchat',
           level: '50',
           on: '0',
           onWord: 'false',
@@ -345,10 +345,6 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       check: () => services.updates.check(),
       download: () => services.updates.download(),
       install: () => services.updates.install(),
-      setToken: (_e, token) => {
-        if (token !== null && typeof token !== 'string') throw new RpError('INVALID_ARGUMENT', 'token must be a string or null');
-        return services.updates.setToken(token);
-      },
     },
     plugins: {
       pluginsDir: async () => services.plugins.pluginsDir,

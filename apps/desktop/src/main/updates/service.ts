@@ -1,19 +1,17 @@
 /**
- * In-place application updates from the private GitHub releases of this repository, driven by
- * `electron-updater` (docs: README "Updating"). Everything Electron-specific is injected
- * (`UpdaterLike`, `safeStorage`) so the state machine is unit-testable without Electron:
+ * In-place application updates from the public GitHub releases of this repository, driven by
+ * `electron-updater` (docs: README "Updating"). The updater is injected (`UpdaterLike`) so the
+ * state machine is unit-testable without Electron. The release feed is public: no credentials
+ * are stored or needed.
  *
- * - The per-user GitHub token lives in `<userData>/update-token.bin`, encrypted through the
- *   OS keyring (`safeStorage`) when available and otherwise as a 0600 plaintext file. It is
- *   never logged and never part of the settings JSON.
  * - AppImage in a writable location → download and swap in place; system install
- *   (`/opt/rp-code/current`, docs/system-integration.md) → download, then the `rp-coded` daemon
+ *   (`/opt/rpchat/current`, docs/system-integration.md) → download, then the `rpchatd` daemon
  *   verifies and swaps the tree in (`apply-update`) and the app relaunches; `.deb` and other
  *   layouts → check only, the UI links to the release page. Development runs never touch the
  *   updater.
  * - `settings.updates` (automatic checks, interval) and the policy file (`updates.enabled`,
  *   `updates.automatic`) decide whether background checks run; a manual check is always
- *   allowed when a token exists and policy has not disabled updates.
+ *   allowed unless policy has disabled updates.
  */
 import * as fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
@@ -22,18 +20,12 @@ import type { AppSettings, PolicyFile, UpdatePackaging, UpdateState, UpdateStatu
 import { RpError, UPDATE_REPO } from '@rp/shared';
 import type { Logger } from '@rp/core';
 
-export const TOKEN_FILENAME = 'update-token.bin';
-export const MAX_TOKEN_LENGTH = 400;
-export const TOKEN_REJECTED_MESSAGE = 'GitHub rejected the update token (expired or missing access to the repository)';
+export const FEED_FORBIDDEN_MESSAGE = 'GitHub refused the release feed (the repository is not public, or the request was rate-limited)';
 /** First check ~30 s after launch so startup stays snappy. */
 export const DEFAULT_INITIAL_DELAY_MS = 30_000;
-/** A saved token triggers a check shortly after, when automatic checks are on. */
-const AFTER_TOKEN_DELAY_MS = 2_000;
+/** A settings change re-evaluates the schedule shortly after. */
+const RESCHEDULE_DELAY_MS = 2_000;
 const MIN_INTERVAL_MS = 15 * 60_000;
-
-/** File header bytes: how the token that follows is stored. */
-const HEADER_KEYRING = 'RPTK1\n';
-const HEADER_PLAIN = 'RPTK0\n';
 
 export interface UpdateInfoLike {
   version: string;
@@ -77,7 +69,7 @@ export interface UpdaterLike {
   autoInstallOnAppQuit: boolean;
   allowPrerelease: boolean;
   logger: UpdaterLogger | null;
-  setFeedURL(options: { provider: 'github'; owner: string; repo: string; private: boolean; token: string; releaseType?: 'release' | 'prerelease' | 'draft' }): void;
+  setFeedURL(options: { provider: 'github'; owner: string; repo: string; releaseType?: 'release' | 'prerelease' | 'draft' }): void;
   checkForUpdates(): Promise<{ isUpdateAvailable: boolean; updateInfo: UpdateInfoLike } | null>;
   downloadUpdate(): Promise<string[]>;
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
@@ -86,12 +78,6 @@ export interface UpdaterLike {
   on(event: 'update-downloaded', listener: (info: UpdateDownloadedLike) => void): unknown;
   on(event: 'download-progress', listener: (progress: ProgressLike) => void): unknown;
   on(event: 'error', listener: (error: Error) => void): unknown;
-}
-
-export interface SafeStorageLike {
-  isEncryptionAvailable(): boolean;
-  encryptString(plainText: string): Buffer;
-  decryptString(encrypted: Buffer): string;
 }
 
 /** What a system install's daemon reports when asked whether it can apply updates. */
@@ -105,16 +91,16 @@ export interface SystemInstallAvailability {
 
 /**
  * The system install's side of updating (engine.ts wires it to the `DaemonClient` and Electron):
- * present only when the app runs from `/opt/rp-code/current`.
+ * present only when the app runs from `/opt/rpchat/current`.
  */
 export interface SystemInstallDeps {
-  /** The unpacked app directory (`/opt/rp-code/current`). */
+  /** The unpacked app directory (`/opt/rpchat/current`). */
   dir: string;
   available(): Promise<SystemInstallAvailability>;
   applyUpdate(input: DownloadedUpdate): Promise<{ version: string; restartDaemon: boolean }>;
   /** Wait for the daemon to answer `hello` again after it restarted itself; resolves with whether it did in time. */
   waitForDaemon(timeoutMs: number): Promise<boolean>;
-  /** `app.relaunch({ execPath: <dir>/rp-code })` + quit (through the authorised-quit path). */
+  /** `app.relaunch({ execPath: <dir>/rpchat })` + quit (through the authorised-quit path). */
   relaunch(): void;
 }
 
@@ -131,10 +117,8 @@ export interface UpdateServiceDeps {
   /** `process.env.APPIMAGE` when running as an AppImage. */
   appImagePath?: string;
   execPath: string;
-  userDataDir: string;
   settings: { get(): Promise<AppSettings> };
   policy: { current(): Promise<{ policy: PolicyFile | null }> };
-  safeStorage: SafeStorageLike;
   logger: Logger;
   now?: () => Date;
   /** Override for tests (root can write anywhere, so a real `fs.access` proves nothing there). */
@@ -150,11 +134,6 @@ export interface UpdateServiceDeps {
 
 type InternalState = Extract<UpdateState, 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'installing' | 'error'>;
 
-interface TokenRecord {
-  token: string;
-  storage: 'keyring' | 'file';
-}
-
 type Snapshot = Pick<UpdateStatus, 'latestVersion' | 'releaseNotes' | 'releaseDate' | 'progressPercent' | 'error' | 'checkedAt'> & { state: InternalState };
 
 async function defaultIsWritable(target: string): Promise<boolean> {
@@ -166,7 +145,7 @@ async function defaultIsWritable(target: string): Promise<boolean> {
   }
 }
 
-/** Pure: how the running binary was installed (`system` when the system-install deps are wired, i.e. the executable runs from `/opt/rp-code/current`). */
+/** Pure: how the running binary was installed (`system` when the system-install deps are wired, i.e. the executable runs from `/opt/rpchat/current`). */
 export function detectPackaging(deps: Pick<UpdateServiceDeps, 'isPackaged' | 'appImagePath' | 'execPath' | 'systemInstall'>): UpdatePackaging {
   if (!deps.isPackaged) return 'dev';
   if (deps.systemInstall) return 'system';
@@ -211,19 +190,18 @@ export function plainReleaseNotes(notes: UpdateInfoLike['releaseNotes']): string
   return stripped.length > 0 ? stripped.slice(0, 4000) : undefined;
 }
 
-/** Pure: user-facing text for an updater failure; 401/403 → token rejected. */
+/** Pure: user-facing text for an updater failure. */
 export function describeUpdateError(err: unknown): string {
   const status = typeof err === 'object' && err !== null && 'statusCode' in err ? Number((err as { statusCode: unknown }).statusCode) : undefined;
   const message = err instanceof Error ? err.message : String(err);
-  if (status === 401 || status === 403 || /\b(401|403)\b/.test(message)) return TOKEN_REJECTED_MESSAGE;
-  if (status === 404 || /\b404\b/.test(message)) return 'Release feed not found (404): the token has no access to the repository, or the latest release has no latest-linux.yml';
+  if (status === 401 || status === 403 || /\b(401|403)\b/.test(message)) return FEED_FORBIDDEN_MESSAGE;
+  if (status === 404 || /\b404\b/.test(message)) return 'Release feed not found (404): the repository has no releases, or the latest release has no latest-linux.yml';
   if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|net::ERR/i.test(message)) return `Cannot reach GitHub: ${message}`;
   return message.length > 0 ? message.slice(0, 500) : 'Update check failed';
 }
 
 export class UpdateService {
   readonly packaging: UpdatePackaging;
-  readonly tokenPath: string;
   private readonly isWritable: (target: string) => Promise<boolean>;
   private readonly now: () => Date;
   private readonly listeners = new Set<(status: UpdateStatus) => void>();
@@ -237,19 +215,16 @@ export class UpdateService {
   private canInstall: boolean | undefined;
   /** System install: what `update-downloaded` reported, for `install()`. */
   private downloaded: DownloadedUpdate | null = null;
-  private token: TokenRecord | null | undefined;
-  private feedToken: string | undefined;
+  private feedSet = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
   private started = false;
   private inflightCheck: Promise<UpdateStatus> | undefined;
   /** Serialises listener notifications so they arrive in transition order. */
   private emitChain: Promise<void> = Promise.resolve();
-  private warnedPlaintext = false;
 
   constructor(private readonly deps: UpdateServiceDeps) {
     this.packaging = detectPackaging(deps);
-    this.tokenPath = path.join(deps.userDataDir, TOKEN_FILENAME);
     this.isWritable = deps.isWritable ?? defaultIsWritable;
     this.now = deps.now ?? (() => new Date());
     if (this.packaging !== 'dev') this.attach();
@@ -274,7 +249,7 @@ export class UpdateService {
   }
 
   private async resolveStatus(snap: Snapshot): Promise<UpdateStatus> {
-    const [policyState, token, system] = await Promise.all([this.deps.policy.current(), this.loadToken(), this.systemAvailability()]);
+    const [policyState, system] = await Promise.all([this.deps.policy.current(), this.systemAvailability()]);
     const canInstallInPlace = system ? system.daemonConnected && system.daemonSupportsUpdates : await this.canInstallInPlace();
     const policy = policyState.policy?.settings?.updates;
     const managed = Boolean(policy && (policy.enabled !== undefined || policy.automatic !== undefined));
@@ -283,8 +258,6 @@ export class UpdateService {
       currentVersion: this.deps.appVersion,
       packaging: this.packaging,
       canInstallInPlace,
-      tokenPresent: token !== null,
-      tokenStorage: token?.storage ?? 'none',
       managed,
     };
     if (system && this.deps.systemInstall) {
@@ -304,13 +277,10 @@ export class UpdateService {
     } else if (policy?.enabled === false) {
       status.state = 'disabled';
       status.reason = 'Update checks are switched off by the system policy on this machine.';
-    } else if (token === null) {
-      status.state = 'no-token';
-      status.reason = 'Add a GitHub token to read the private release feed.';
     } else if (this.packaging === 'system') {
-      if (!system?.daemonConnected) status.reason = 'Updates are applied by the rp-code system service (rp-coded), which is not connected right now.';
-      else if (!system.daemonSupportsUpdates) status.reason = 'The installed rp-code system service is too old to apply updates; run the installer once more (Settings → System → Install system integration…).';
-      else status.reason = 'Updates are applied by the rp-code system service: no password prompt, and the previous version is kept for rollback.';
+      if (!system?.daemonConnected) status.reason = 'Updates are applied by the rpchat system service (rpchatd), which is not connected right now.';
+      else if (!system.daemonSupportsUpdates) status.reason = 'The installed rpchat system service is too old to apply updates; run the installer once more (Settings → System → Install system integration…).';
+      else status.reason = 'Updates are applied by the rpchat system service: no password prompt, and the previous version is kept for rollback.';
     } else if (this.packaging === 'deb') {
       status.reason = 'Installed from a package: new releases are announced here; install the .deb from the release page.';
     } else if (this.packaging === 'other') {
@@ -331,7 +301,7 @@ export class UpdateService {
   /** Settings changed (interval / automatic toggle): re-evaluate the schedule soon. */
   refreshSchedule(): void {
     if (!this.started || this.stopped) return;
-    this.arm(AFTER_TOKEN_DELAY_MS);
+    this.arm(RESCHEDULE_DELAY_MS);
   }
 
   stop(): void {
@@ -340,7 +310,7 @@ export class UpdateService {
     this.timer = undefined;
   }
 
-  /** Manual check. Throws when updates are unsupported, disabled by policy, or no token exists. */
+  /** Manual check. Throws when updates are unsupported or disabled by policy. */
   async check(): Promise<UpdateStatus> {
     await this.assertAllowed();
     if (this.inflightCheck) return this.inflightCheck;
@@ -354,7 +324,7 @@ export class UpdateService {
   async download(): Promise<UpdateStatus> {
     await this.assertAllowed();
     if (!(await this.canInstallInPlace())) {
-      if (this.packaging === 'system') throw new RpError('CAPABILITY_FAILED', 'The rp-code system service (rp-coded) is not connected or cannot apply updates; it installs updates for a system install.');
+      if (this.packaging === 'system') throw new RpError('CAPABILITY_FAILED', 'The rpchat system service (rpchatd) is not connected or cannot apply updates; it installs updates for a system install.');
       throw new RpError('CAPABILITY_FAILED', this.packaging === 'deb' ? 'Package installs are notified only: download the .deb from the release page.' : 'This build cannot replace itself; download the AppImage from the release page.');
     }
     if (this.state === 'downloading' || this.state === 'ready' || this.state === 'installing') return this.status();
@@ -368,7 +338,7 @@ export class UpdateService {
   /**
    * Quit and relaunch into the downloaded update. AppImage: `quitAndInstall`. System install:
    * the daemon verifies and swaps the downloaded file in (`apply-update`), the app waits for the
-   * daemon when it restarted itself, then relaunches from `/opt/rp-code/current`. A failure
+   * daemon when it restarted itself, then relaunches from `/opt/rpchat/current`. A failure
    * leaves the update `ready` with the error shown, so it can be retried.
    */
   async install(): Promise<void> {
@@ -385,7 +355,7 @@ export class UpdateService {
     const update = this.downloaded;
     if (!update) throw new RpError('CAPABILITY_FAILED', 'The downloaded update has no file path or checksum to hand to the system service; check for updates again.');
     this.setState('installing', { error: undefined });
-    this.deps.logger.info(`[updates] asking rp-coded to install ${update.version} from ${update.file}`);
+    this.deps.logger.info(`[updates] asking rpchatd to install ${update.version} from ${update.file}`);
     let result: { version: string; restartDaemon: boolean };
     try {
       result = await system.applyUpdate(update);
@@ -395,42 +365,15 @@ export class UpdateService {
       this.setState('ready', { error: text });
       throw err instanceof RpError ? err : new RpError('CAPABILITY_FAILED', text);
     }
-    this.deps.logger.info(`[updates] rp-coded installed ${result.version}${result.restartDaemon ? '; the daemon restarts itself' : ''}`);
+    this.deps.logger.info(`[updates] rpchatd installed ${result.version}${result.restartDaemon ? '; the daemon restarts itself' : ''}`);
     if (result.restartDaemon) {
       const back = await system.waitForDaemon(DAEMON_RESTART_WAIT_MS);
-      if (back) this.deps.logger.info('[updates] rp-coded is back after its restart');
-      else this.deps.logger.warn(`[updates] rp-coded did not come back within ${DAEMON_RESTART_WAIT_MS / 1000} s; relaunching anyway`);
+      if (back) this.deps.logger.info('[updates] rpchatd is back after its restart');
+      else this.deps.logger.warn(`[updates] rpchatd did not come back within ${DAEMON_RESTART_WAIT_MS / 1000} s; relaunching anyway`);
     }
     if (this.deps.beforeRestart) await this.deps.beforeRestart().catch((err: unknown) => this.deps.logger.warn('[updates] pre-restart hook failed', err));
     this.deps.logger.info(`[updates] relaunching from ${system.dir}`);
     system.relaunch();
-  }
-
-  /** Store (`string`) or remove (`null`) the GitHub token. Never logged. */
-  async setToken(token: string | null): Promise<UpdateStatus> {
-    if (this.packaging === 'dev') throw new RpError('CAPABILITY_FAILED', 'Updates are only available in packaged builds.');
-    if (token === null) {
-      await fs.rm(this.tokenPath, { force: true });
-      this.token = null;
-      this.feedToken = undefined;
-      this.resetProgress('idle');
-      this.deps.logger.info('[updates] token removed');
-      await this.emit();
-      return this.status();
-    }
-    if (typeof token !== 'string') throw new RpError('INVALID_ARGUMENT', 'token must be a string');
-    const trimmed = token.trim();
-    if (trimmed.length === 0) throw new RpError('INVALID_ARGUMENT', 'The token is empty');
-    if (trimmed.length > MAX_TOKEN_LENGTH) throw new RpError('INVALID_ARGUMENT', `The token is longer than ${MAX_TOKEN_LENGTH} characters; paste only the token itself`);
-    if (/[\s]/.test(trimmed)) throw new RpError('INVALID_ARGUMENT', 'The token must not contain whitespace');
-    const record = await this.writeToken(trimmed);
-    this.token = record;
-    this.applyFeed(record.token);
-    this.resetProgress('idle');
-    this.deps.logger.info(`[updates] token saved (${record.storage})`);
-    if (this.started && !this.stopped) this.arm(AFTER_TOKEN_DELAY_MS);
-    await this.emit();
-    return this.status();
   }
 
   // ---- internals ----------------------------------------------------------
@@ -471,19 +414,17 @@ export class UpdateService {
   private async assertAllowed(): Promise<void> {
     if (this.packaging === 'dev') throw new RpError('CAPABILITY_FAILED', 'Updates are only available in packaged builds.');
     if (await this.disabledByPolicy()) throw new RpError('PERMISSION_DENIED', 'Update checks are switched off by the system policy on this machine.');
-    const token = await this.loadToken();
-    if (!token) throw new RpError('PERMISSION_DENIED', 'Add a GitHub token first (Settings → Updates).');
-    this.applyFeed(token.token);
+    this.applyFeed();
   }
 
   private async disabledByPolicy(): Promise<boolean> {
     return (await this.deps.policy.current()).policy?.settings?.updates?.enabled === false;
   }
 
-  private applyFeed(token: string): void {
-    if (this.feedToken === token) return;
-    this.deps.updater.setFeedURL({ provider: 'github', owner: UPDATE_REPO.owner, repo: UPDATE_REPO.repo, private: true, token, releaseType: 'release' });
-    this.feedToken = token;
+  private applyFeed(): void {
+    if (this.feedSet) return;
+    this.deps.updater.setFeedURL({ provider: 'github', owner: UPDATE_REPO.owner, repo: UPDATE_REPO.repo, releaseType: 'release' });
+    this.feedSet = true;
   }
 
   private async runCheck(): Promise<UpdateStatus> {
@@ -528,12 +469,12 @@ export class UpdateService {
     if (this.stopped) return;
     let intervalMs = 6 * 3_600_000;
     try {
-      const [settings, policyState, token] = await Promise.all([this.deps.settings.get(), this.deps.policy.current(), this.loadToken()]);
+      const [settings, policyState] = await Promise.all([this.deps.settings.get(), this.deps.policy.current()]);
       const hours = Number(settings.updates.checkIntervalHours);
       intervalMs = Math.max(MIN_INTERVAL_MS, (Number.isFinite(hours) && hours > 0 ? hours : 6) * 3_600_000);
       const policy = policyState.policy?.settings?.updates;
       const automatic = policy?.enabled !== false && (policy?.automatic ?? settings.updates.automatic);
-      if (automatic && token && this.state !== 'downloading' && this.state !== 'ready' && this.state !== 'installing') {
+      if (automatic && this.state !== 'downloading' && this.state !== 'ready' && this.state !== 'installing') {
         this.deps.logger.debug('[updates] scheduled check');
         await this.check();
       }
@@ -582,15 +523,6 @@ export class UpdateService {
     if (JSON.stringify(this.snapshot()) !== before) void this.emit();
   }
 
-  private resetProgress(state: InternalState): void {
-    this.state = state;
-    this.latestVersion = undefined;
-    this.releaseNotes = undefined;
-    this.releaseDate = undefined;
-    this.progressPercent = undefined;
-    this.error = undefined;
-  }
-
   private emit(): Promise<void> {
     if (this.listeners.size === 0) return Promise.resolve();
     const snap = this.snapshot();
@@ -609,63 +541,5 @@ export class UpdateService {
       }
     });
     return this.emitChain;
-  }
-
-  // ---- token file ---------------------------------------------------------
-
-  private async loadToken(): Promise<TokenRecord | null> {
-    if (this.token !== undefined) return this.token;
-    let raw: Buffer;
-    try {
-      raw = await fs.readFile(this.tokenPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') this.deps.logger.warn(`[updates] cannot read ${this.tokenPath}: ${(err as Error).message}`);
-      this.token = null;
-      return null;
-    }
-    const header = raw.subarray(0, HEADER_KEYRING.length).toString('utf8');
-    const body = raw.subarray(HEADER_KEYRING.length);
-    let record: TokenRecord | null = null;
-    if (header === HEADER_KEYRING) {
-      if (this.deps.safeStorage.isEncryptionAvailable()) {
-        try {
-          record = { token: this.deps.safeStorage.decryptString(body).trim(), storage: 'keyring' };
-        } catch (err) {
-          this.deps.logger.warn(`[updates] cannot decrypt the stored token (${(err as Error).message}); enter it again`);
-        }
-      } else {
-        this.deps.logger.warn('[updates] the stored token is encrypted but the OS keyring is unavailable; enter it again');
-      }
-    } else if (header === HEADER_PLAIN) {
-      record = { token: body.toString('utf8').trim(), storage: 'file' };
-    } else {
-      this.deps.logger.warn(`[updates] ${this.tokenPath} has an unknown format; ignoring it`);
-    }
-    if (record && record.token.length === 0) record = null;
-    this.token = record;
-    if (record) this.applyFeed(record.token);
-    return record;
-  }
-
-  private async writeToken(token: string): Promise<TokenRecord> {
-    await fs.mkdir(path.dirname(this.tokenPath), { recursive: true });
-    let payload: Buffer;
-    let storage: TokenRecord['storage'];
-    if (this.deps.safeStorage.isEncryptionAvailable()) {
-      payload = Buffer.concat([Buffer.from(HEADER_KEYRING, 'utf8'), this.deps.safeStorage.encryptString(token)]);
-      storage = 'keyring';
-    } else {
-      payload = Buffer.concat([Buffer.from(HEADER_PLAIN, 'utf8'), Buffer.from(token, 'utf8')]);
-      storage = 'file';
-      if (!this.warnedPlaintext) {
-        this.warnedPlaintext = true;
-        this.deps.logger.warn(`[updates] no OS keyring available (safeStorage); the token is stored as a 0600 file at ${this.tokenPath}`);
-      }
-    }
-    const tmp = `${this.tokenPath}.tmp`;
-    await fs.writeFile(tmp, payload, { mode: 0o600 });
-    await fs.chmod(tmp, 0o600).catch(() => undefined);
-    await fs.rename(tmp, this.tokenPath);
-    return { token, storage };
   }
 }

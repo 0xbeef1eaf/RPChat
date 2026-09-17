@@ -1,6 +1,6 @@
 /**
  * The authoring side: generating the signing key, handing out the Remote Link and signing each new
- * version of the policy. The bytes it produces have to be exactly what `native/rp-coded/src/chain.rs`
+ * version of the policy. The bytes it produces have to be exactly what `native/rpchatd/src/chain.rs`
  * verifies, so the canonical form and the hash linking are pinned here as well as there.
  */
 import * as fs from 'node:fs/promises';
@@ -191,12 +191,12 @@ describe('ChainAuthor', () => {
 
   /**
    * The cross-language contract, pinned on both sides: `the_canonical_form_does_not_depend_on_key_order`
-   * and the link hashing in `native/rp-coded/src/chain.rs` must agree with these bytes, or an
+   * and the link hashing in `native/rpchatd/src/chain.rs` must agree with these bytes, or an
    * administrator's chain would verify here and be refused on every machine.
    */
   /**
    * The same key, link, hash and signature as `a_link_signed_by_the_app_verifies_here` in
-   * `native/rp-coded/src/chain.rs`. Pinned on both sides: if either canonicalisation drifts, a
+   * `native/rpchatd/src/chain.rs`. Pinned on both sides: if either canonicalisation drifts, a
    * chain would verify for the administrator who signed it and be refused on every machine.
    */
   it('signs a link exactly as the daemon verifies it', async () => {
@@ -215,7 +215,7 @@ describe('ChainAuthor', () => {
     expect(linkHash(pinned)).toBe('c0b2270f827b16d302b19afec2713a349c4d4ec02814e6fbbc6fcb3cbd7795e6');
     const { sign: signBytes, createPrivateKey: key } = await import('node:crypto');
     expect(signBytes(null, linkMessage(pinned), key(await a.exportKey())).toString('base64')).toBe(
-      'PRw8uOCY/W7y2F5lEaIjQgY2o3zrZ9NN32pM4hIeGocTPlmbDuHnbukaAqIgPlMvUXx7qaVQfzzE4FK+P7vtDw==',
+      '9WbRZ75BlBq3uuVzxGROCsK6UuB95mTnoepPKnQ+BwGV+Myw1yS80VJuiE7iX7Yl9LxhhvGQym50Xlexg+8iAw==',
     );
     // And the link the author actually produced verifies under the same key.
     expect(verifyRaw(status.publicKey!, link.signature.value, linkMessage(link))).toBe(true);
@@ -224,13 +224,13 @@ describe('ChainAuthor', () => {
   it('produces the canonical bytes the daemon hashes and verifies', () => {
     const link = { seq: 1, prev: '', policy: { version: 1, managedBy: 'x' } };
     const reordered = { policy: { managedBy: 'x', version: 1 }, prev: '', seq: 1 };
-    expect(linkMessage(link).toString('utf8')).toBe('rp-code-chain/v1\n{"policy":{"managedBy":"x","version":1},"prev":"","seq":1}');
+    expect(linkMessage(link).toString('utf8')).toBe('rpchat-chain/v1\n{"policy":{"managedBy":"x","version":1},"prev":"","seq":1}');
     expect(linkMessage(reordered)).toEqual(linkMessage(link));
     expect(linkHash(link)).toBe(createHash('sha256').update('{"policy":{"managedBy":"x","version":1},"prev":"","seq":1}', 'utf8').digest('hex'));
     // The signature member is never part of what is signed or hashed.
     expect(linkMessage({ ...link, signature: { alg: 'ed25519', value: 'x' } })).toEqual(linkMessage(link));
-    expect(packMessage('luna', '1.2.0', 'AABB')).toBe('rp-code-pack/v1\nluna\n1.2.0\naabb');
-    expect(packMessage('luna', undefined, 'aabb')).toBe('rp-code-pack/v1\nluna\n\naabb');
+    expect(packMessage('luna', '1.2.0', 'AABB')).toBe('rpchat-pack/v1\nluna\n1.2.0\naabb');
+    expect(packMessage('luna', undefined, 'aabb')).toBe('rpchat-pack/v1\nluna\n\naabb');
   });
 
   it('exports the public key in the 32-byte form a machine pins', async () => {

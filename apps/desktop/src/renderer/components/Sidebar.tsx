@@ -39,7 +39,7 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <span className="brand">rp-code</span>
+        <span className="brand">rpchat</span>
       </div>
       <nav className="nav" aria-label="Main">
         {nav.map((n) => (

@@ -40,7 +40,7 @@ function drafts(): Array<[string, PolicyDraft]> {
     extraDenySockets: ['/run/user/1000/some.sock'],
     allowBinaries: ['/usr/bin/systemctl'],
   };
-  strict.remote = { enabled: true, url: 'https://policies.example.com/rp-code.json', intervalMinutes: 15 };
+  strict.remote = { enabled: true, url: 'https://policies.example.com/rpchat.json', intervalMinutes: 15 };
   strict.packs = {
     sources: [
       { id: 'luna', url: 'https://packs.example.com/luna.rppack', signature: 'a'.repeat(86), version: '1.2.0' },

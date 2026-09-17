@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "rp-code browser bridge",
+  "name": "RPChat browser bridge",
   "version": "0.2.0",
-  "description": "Lets rp-code characters open, read and drive browser tabs, block pages, style images, set the home page, use bookmarks and history, and run page scripts through the app running on this computer (127.0.0.1 only).",
+  "description": "Lets rpchat characters open, read and drive browser tabs, block pages, style images, set the home page, use bookmarks and history, and run page scripts through the app running on this computer (127.0.0.1 only).",
   "minimum_chrome_version": "116",
   "permissions": [
     "tabs",
@@ -22,7 +22,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "rp-code browser bridge",
+    "default_title": "rpchat browser bridge",
     "default_popup": "popup.html"
   },
   "options_ui": {

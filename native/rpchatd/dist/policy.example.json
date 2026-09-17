@@ -74,7 +74,7 @@
     "allowBinaries": []
   },
   "remote": {
-    "url": "https://example.com/rp-code/chain.json",
+    "url": "https://example.com/rpchat/chain.json",
     "enabled": true,
     "intervalMinutes": 60
   },
@@ -82,7 +82,7 @@
     "sources": [
       {
         "id": "luna",
-        "url": "https://example.com/rp-code/luna.rppack",
+        "url": "https://example.com/rpchat/luna.rppack",
         "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
         "version": "1.0.0"
       }

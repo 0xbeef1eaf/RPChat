@@ -428,7 +428,7 @@ export function SettingsView() {
             <span className="field-label">Media windows</span>
             <label className="check">
               <input type="checkbox" checked={settings.closeToTray} onChange={(e) => patchSettings({ closeToTray: e.target.checked })} />
-              Closing the window keeps rp-code running in the tray (timers, self-wakes and the browser bridge stay active; quit from the tray menu)
+              Closing the window keeps rpchat running in the tray (timers, self-wakes and the browser bridge stay active; quit from the tray menu)
             </label>
             <label className="check">
               <input type="checkbox" checked={settings.mediaAlwaysOnTop} onChange={(e) => patchSettings({ mediaAlwaysOnTop: e.target.checked })} />

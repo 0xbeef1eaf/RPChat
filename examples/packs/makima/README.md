@@ -1,6 +1,6 @@
 # Makima (unofficial fan pack)
 
-A fan-made roleplay persona of **Makima** for rp-code. Makima is a character
+A fan-made roleplay persona of **Makima** for rpchat. Makima is a character
 created by **Tatsuki Fujimoto** (*Chainsaw Man*, Shueisha / MAPPA). This pack
 is unofficial fan content, not affiliated with or endorsed by the rights
 holders, and contains **no artwork, audio or text from the manga or anime**.

@@ -1,5 +1,5 @@
 /**
- * Service worker: keeps one WebSocket to the rp-code app on 127.0.0.1 (`ws://127.0.0.1:<port>/bridge`),
+ * Service worker: keeps one WebSocket to the rpchat app on 127.0.0.1 (`ws://127.0.0.1:<port>/bridge`),
  * answers its requests through `BridgeOps`, pushes tab events, and reconnects with backoff. A
  * 30 s alarm wakes the worker so a dropped connection is retried even when Chrome has put the
  * worker to sleep. The port comes from managed policy, then `chrome.storage.local`, then the default.
@@ -12,7 +12,7 @@ import { RULES_ALARM, RULES_STORAGE_KEY, readTable } from './lib/rules.js';
 
 declare const __EXTENSION_VERSION__: string;
 
-const ALARM = 'rp-code-bridge-keepalive';
+const ALARM = 'rpchat-bridge-keepalive';
 const VERSION = typeof __EXTENSION_VERSION__ === 'string' ? __EXTENSION_VERSION__ : chrome.runtime.getManifest().version;
 
 /** What the popup shows. */

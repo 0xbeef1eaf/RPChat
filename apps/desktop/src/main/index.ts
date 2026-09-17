@@ -36,7 +36,7 @@ if (devGuard.refuse) {
 }
 const logger = createLogger();
 const env = process.env;
-/** `rp-code --hidden` (autostart): start minimized to the tray, no window until Show. */
+/** `rpchat --hidden` (autostart): start minimized to the tray, no window until Show. */
 const START_HIDDEN = process.argv.includes('--hidden');
 let tray: Tray | undefined;
 /** Set by the tray's Quit (and before-quit) so the close-to-tray handler lets the window close. */
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
     },
   });
 
-  // Running `rp-code` while it is already up (e.g. after an autostart with --hidden) shows it.
+  // Running `rpchat` while it is already up (e.g. after an autostart with --hidden) shows it.
   app.on('second-instance', () => {
     const win = windows.getMainWindow() ?? windows.createMainWindow();
     if (win.isMinimized()) win.restore();
@@ -183,7 +183,7 @@ async function main(): Promise<void> {
       .catch(() => undefined);
   await refreshQuitPolicy();
   setInterval(() => void refreshQuitPolicy(), QUIT_POLICY_REFRESH_MS).unref();
-  // Tell the daemon how to bring this launch back (Linux only: that is where rp-coded runs). The
+  // Tell the daemon how to bring this launch back (Linux only: that is where rpchatd runs). The
   // daemon acts on it only while the policy says `app.allowQuit: false` for this user.
   if (process.platform === 'linux') active.keepalive.start();
 
@@ -207,7 +207,7 @@ async function main(): Promise<void> {
   });
   watchUpdateReady(active, windows);
   watchUnpromptedMessages(active, windows, () => visibleSession);
-  logger.info(`[main] rp-code ${version} ready; ${engine.packs.characters().length} character(s) available`);
+  logger.info(`[main] rpchat ${version} ready; ${engine.packs.characters().length} character(s) available`);
   if (isBrowserSmokeRun(env)) {
     setTimeout(() => void runBrowserSmoke({ engine: active.engine, loopback: active.loopback, browser: active.browser, senses: active.senses, userData: app.getPath('userData') }, logger, env), 500);
   } else if (isSmokeRun(env)) {
@@ -244,8 +244,8 @@ function watchUpdateReady(services: AppServices, windows: WindowManager): void {
           message: `Update to ${version} is ready`,
           detail:
             status.packaging === 'system'
-              ? `rp-code ${version} has been downloaded. Restart now to have the system service install it (the previous version is kept), or later from Settings → Updates.`
-              : `rp-code ${version} has been downloaded. Restart now to apply it, or later from Settings → Updates (it is also applied when you quit).`,
+              ? `rpchat ${version} has been downloaded. Restart now to have the system service install it (the previous version is kept), or later from Settings → Updates.`
+              : `rpchat ${version} has been downloaded. Restart now to apply it, or later from Settings → Updates (it is also applied when you quit).`,
           buttons: ['Restart now', 'Later'],
           defaultId: 0,
           cancelId: 1,
@@ -258,7 +258,7 @@ function watchUpdateReady(services: AppServices, windows: WindowManager): void {
       return;
     }
     if (!Notification.isSupported()) return;
-    const note = new Notification({ title: 'rp-code', body: `rp-code ${version} is ready to install` });
+    const note = new Notification({ title: 'rpchat', body: `rpchat ${version} is ready to install` });
     note.on('click', () => {
       const w = windows.getMainWindow() ?? windows.createMainWindow();
       w.show();
@@ -288,7 +288,7 @@ function watchUnpromptedMessages(services: AppServices, windows: WindowManager, 
       .get(m.sessionId)
       .then((session) => {
         const character = session ? services.engine.packs.characters().find((c) => c.ref === session.characterRef) : undefined;
-        const note = new Notification({ title: character?.name ?? 'rp-code', body: text.length > 240 ? `${text.slice(0, 237)}…` : text });
+        const note = new Notification({ title: character?.name ?? 'rpchat', body: text.length > 240 ? `${text.slice(0, 237)}…` : text });
         note.on('click', () => {
           const w = windows.getMainWindow() ?? windows.createMainWindow();
           w.show();
@@ -369,7 +369,7 @@ function createTray(windows: WindowManager, services: AppServices, quit: () => v
     const iconFile = [path.join(APP_ROOT, 'resources', 'tray.png'), path.join(process.resourcesPath ?? '', 'tray.png')].find((f) => fs.existsSync(f));
     const icon = iconFile ? nativeImage.createFromPath(iconFile) : nativeImage.createEmpty();
     const t = new Tray(icon.isEmpty() ? icon : icon.resize({ width: 22, height: 22 }));
-    t.setToolTip('rp-code');
+    t.setToolTip('rpchat');
     const show = (): void => {
       const existing = windows.getMainWindow();
       const w = existing ?? windows.createMainWindow();
@@ -387,8 +387,8 @@ function createTray(windows: WindowManager, services: AppServices, quit: () => v
         .check()
         .then((status) => {
           if (status.state === 'available' || status.state === 'downloading') {
-            if (Notification.isSupported()) new Notification({ title: 'rp-code', body: `rp-code ${status.latestVersion ?? ''} is available${status.canInstallInPlace ? ' and downloading' : ''}` }).show();
-          } else if (status.state === 'up-to-date' && Notification.isSupported()) new Notification({ title: 'rp-code', body: `rp-code ${status.currentVersion} is up to date` }).show();
+            if (Notification.isSupported()) new Notification({ title: 'rpchat', body: `rpchat ${status.latestVersion ?? ''} is available${status.canInstallInPlace ? ' and downloading' : ''}` }).show();
+          } else if (status.state === 'up-to-date' && Notification.isSupported()) new Notification({ title: 'rpchat', body: `rpchat ${status.currentVersion} is up to date` }).show();
           else if (status.state === 'error') logger.warn(`[updates] ${status.error ?? 'check failed'}`);
         })
         .catch((err: unknown) => {

@@ -1,0 +1,5 @@
+# rpchat: let members of the rpchat group use /dev/uinput directly.
+# The daemon (rpchatd) runs as root and does not need this rule; it only lets members of the
+# rpchat group open /dev/uinput themselves (the app does not use it for input injection).
+# Installed to /etc/udev/rules.d/70-rpchat.rules by native/rpchatd/install.sh.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="rpchat", MODE="0660", OPTIONS+="static_node=uinput"

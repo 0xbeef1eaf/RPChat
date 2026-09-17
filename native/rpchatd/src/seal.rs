@@ -1,7 +1,7 @@
 //! The **policy seal**: what turns the write-once policy file into one that can be replaced and
 //! removed, but only by someone holding the enrolled authenticator app.
 //!
-//! Before the seal, `/etc/rp-code/policy.json` was write-once from the app's side and anything
+//! Before the seal, `/etc/rpchat/policy.json` was write-once from the app's side and anything
 //! afterwards was root's business. The seal keeps root's file but adds a second, root-only file
 //! next to it (`policy.seal`, `0600`) holding a copy of the policy it sealed and the state that
 //! decides who may change it. Every operation that would loosen the policy — replacing it,
@@ -27,17 +27,17 @@
 //!    attempt is pushed to subscribers as `policy-tamper`. Editing the file therefore does not
 //!    change what the app enforces, it just produces an audit record.
 //! 2. **Mirrors.** The seal is kept in several places (`seal_paths`). Removing one copy restores
-//!    it from the next on the following tick, so `rm /etc/rp-code/policy.seal` does not unseal.
+//!    it from the next on the following tick, so `rm /etc/rpchat/policy.seal` does not unseal.
 //! 3. **Immutability.** With `lock.immutable` the policy, the seal and its mirrors carry the
 //!    ext2/4 immutable attribute, so a plain `rm`/`>`/editor save fails outright — the attacker
 //!    has to know to run `chattr -i` first.
 //! 4. **The guard.** With the session guard in `enforce`, the confined users' sessions — and
 //!    anything they start through `sudo`, which stays in the profile — cannot read or write
-//!    `/etc/rp-code/**` at all, and `lock.denyEscapes` also takes away the binaries that leave
+//!    `/etc/rpchat/**` at all, and `lock.denyEscapes` also takes away the binaries that leave
 //!    the profile behind (`run0`, `systemd-run`, `machinectl`, `pkexec`, `chattr`,
 //!    `apparmor_parser`). That is the part that answers "but I have sudo".
 //! 5. **The app fails closed.** The app caches the sealed policy and refuses to run unmanaged
-//!    once it has seen a seal, so even a machine whose `/etc/rp-code` was wiped stays managed
+//!    once it has seen a seal, so even a machine whose `/etc/rpchat` was wiped stays managed
 //!    until a code unseals it (`docs/system-integration.md`).
 //!
 //! What it does not buy: a root shell that is *not* confined by the guard can read this file and
@@ -58,15 +58,15 @@ use sha2::{Digest, Sha256};
 use crate::totp::{self, TotpConfig, VerifyError};
 
 /// Default seal location: next to the policy file, readable by root only.
-pub const DEFAULT_SEAL_PATH: &str = "/etc/rp-code/policy.seal";
+pub const DEFAULT_SEAL_PATH: &str = "/etc/rpchat/policy.seal";
 /// Mirror locations, tried in order when the primary is gone (see layer 2 above).
 pub const DEFAULT_SEAL_MIRRORS: [&str; 2] = [
-    "/var/lib/rp-code/policy.seal",
-    "/usr/local/libexec/rp-code/policy.seal",
+    "/var/lib/rpchat/policy.seal",
+    "/usr/local/libexec/rpchat/policy.seal",
 ];
 /// World-readable marker so the app (running as the user) can tell it is on a sealed machine
 /// without being able to read the secret.
-pub const DEFAULT_SEAL_MARKER_PATH: &str = "/etc/rp-code/policy.sealed";
+pub const DEFAULT_SEAL_MARKER_PATH: &str = "/etc/rpchat/policy.sealed";
 /// Refuse absurd seal files instead of parsing them.
 pub const MAX_SEAL_BYTES: u64 = 512 * 1024;
 /// Failed codes tolerated before the lockout ladder starts.
@@ -303,7 +303,7 @@ pub struct SealMarker {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub totp: Option<TotpConfig>,
     /// The sealed policy itself: the app reads this when the policy file has been removed, so
-    /// wiping `/etc/rp-code/policy.json` does not leave the app unmanaged.
+    /// wiping `/etc/rpchat/policy.json` does not leave the app unmanaged.
     pub policy: Value,
 }
 
@@ -689,7 +689,7 @@ impl SealStore {
             tampers: Vec::new(),
         };
         self.save(&seal, immutable)?;
-        Ok((seal, totp::otpauth_uri("rp-code", "policy", &secret, cfg)))
+        Ok((seal, totp::otpauth_uri("rpchat", "policy", &secret, cfg)))
     }
 
     /// Seal `policy` in `chain` mode: no secret is generated, because there is nothing for one to
@@ -880,7 +880,7 @@ mod tests {
                 1_700_000_000,
             )
             .unwrap();
-        assert!(uri.starts_with("otpauth://totp/rp-code:policy?secret="));
+        assert!(uri.starts_with("otpauth://totp/rpchat:policy?secret="));
         for p in store.paths.all() {
             assert!(p.exists(), "{} missing", p.display());
             let mode = fs::metadata(&p).unwrap().permissions().mode() & 0o777;
@@ -1033,7 +1033,7 @@ mod tests {
                 TamperRecord {
                     at: iso_secs(i as u64),
                     kind: "policy-edited".into(),
-                    path: "/etc/rp-code/policy.json".into(),
+                    path: "/etc/rpchat/policy.json".into(),
                     healed: true,
                 },
                 false,

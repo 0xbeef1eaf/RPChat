@@ -38,7 +38,7 @@ function decode(text: string, correction: QrErrorCorrection = 'M'): string | nul
 
 describe('the enrolment QR code', () => {
   it('scans back as the otpauth URI it was given', () => {
-    const uri = 'otpauth://totp/rp-code:policy?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=rp-code&algorithm=SHA1&digits=6&period=30';
+    const uri = 'otpauth://totp/rpchat:policy?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=rpchat&algorithm=SHA1&digits=6&period=30';
     expect(decode(uri)).toBe(uri);
   });
 
@@ -52,7 +52,7 @@ describe('the enrolment QR code', () => {
   });
 
   it('reads back at every error-correction level', () => {
-    const uri = 'otpauth://totp/rp-code:policy?secret=JBSWY3DPEHPK3PXP&issuer=rp-code';
+    const uri = 'otpauth://totp/rpchat:policy?secret=JBSWY3DPEHPK3PXP&issuer=rpchat';
     for (const correction of ['L', 'M', 'Q', 'H'] as const) {
       expect(decode(uri, correction)).toBe(uri);
     }

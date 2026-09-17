@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Publish a policy chain for rp-code machines, from a terminal.
+ * Publish a policy chain for rpchat machines, from a terminal.
  *
  * The app does all of this under Settings → System → Remote Link → *Publish a chain*, and that is
  * the easier way. This exists for the administrator who would rather keep the signing key on a
@@ -12,12 +12,12 @@
  *      bytes ("" for the first).
  *   2. Canonical bytes = the link without its `signature`, as compact JSON with every object's
  *      keys sorted (no spaces, no newlines).
- *   3. The signature is Ed25519 over `"rp-code-chain/v1\n" + canonical`, base64, in
+ *   3. The signature is Ed25519 over `"rpchat-chain/v1\n" + canonical`, base64, in
  *      `{ "alg": "ed25519", "value": … }`.
  *   4. The published file is `{ "version": 1, "links": [ … ] }`. Serve at least every link from
  *      the oldest machine's position onwards; a machine walks from where it is to the end.
  *
- * A pack signature is the same key over `"rp-code-pack/v1\n<id>\n<version>\n<sha256 hex>"`.
+ * A pack signature is the same key over `"rpchat-pack/v1\n<id>\n<version>\n<sha256 hex>"`.
  *
  * Usage:
  *   rp-policy-chain.mjs keygen [--out key.pem]
@@ -30,8 +30,8 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const CHAIN_PREFIX = 'rp-code-chain/v1';
-const PACK_PREFIX = 'rp-code-pack/v1';
+const CHAIN_PREFIX = 'rpchat-chain/v1';
+const PACK_PREFIX = 'rpchat-pack/v1';
 
 /** Compact JSON with every object's keys sorted — what `serde_json` writes for the same value. */
 export function canonicalJson(value) {

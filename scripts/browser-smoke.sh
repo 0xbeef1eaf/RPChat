@@ -21,7 +21,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-/tmp/rp-browser-smoke}"
 DISPLAY_NUM="${RP_DISPLAY:-:96}"
 EXT_DIR="$ROOT/apps/desktop/resources/extension"
-INSTALLER="$ROOT/native/rp-coded/install.sh"
+INSTALLER="$ROOT/native/rpchatd/install.sh"
 POLICY_MODE="${RP_SMOKE_POLICY:-auto}"
 rm -rf "$OUT"; mkdir -p "$OUT"
 

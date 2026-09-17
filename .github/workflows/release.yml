@@ -67,7 +67,7 @@ jobs:
           shared-key: native-linux
           workspaces: |
             native/overlay-wlr
-            native/rp-coded
+            native/rpchatd
       - name: Install system packages (native helper build)
         run: |
           sudo apt-get update
@@ -101,7 +101,7 @@ jobs:
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: rp-code ${{ needs.version.outputs.version }}
+          name: rpchat ${{ needs.version.outputs.version }}
           generate_release_notes: true
           files: dist-out/*
           body: |

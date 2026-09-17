@@ -17,7 +17,7 @@ import { writeWavFile } from './voice-engine.js';
 import type { VoiceModel } from './voice-models.js';
 
 /** Synthetic pack id under which rendered previews are served to the editor. */
-export const VOICE_PREVIEW_PACK_ID = 'app.rp-code.voice-preview';
+export const VOICE_PREVIEW_PACK_ID = 'app.rpchat.voice-preview';
 /** Directory under `userData` holding rendered previews. */
 export const VOICE_PREVIEW_DIRNAME = 'voice-preview';
 /** Previews kept on disk; the oldest are dropped so auditioning seeds cannot fill the disk. */

@@ -1,8 +1,8 @@
-# `/etc/rp-code/policy.json` reference
+# `/etc/rpchat/policy.json` reference
 
 The policy file is owned by root (`root:root 0644`) and read by two parties:
 
-- **`rp-coded`** (the root daemon) reads `inputLock` and enforces it regardless of what the app
+- **`rpchatd`** (the root daemon) reads `inputLock` and enforces it regardless of what the app
   asks for. It re-reads the file whenever its mtime or size changes, so edits apply to the next
   `lock` without a restart.
 - **The desktop app** reads `settings` and forces those values over the user's own settings;
@@ -15,15 +15,15 @@ manage — anything absent keeps the user's own setting / the daemon default. Th
 strict JSON (no comments, no trailing commas) and at most 256 KiB. **Unknown top-level or
 `inputLock` keys make the whole file invalid**, and an invalid or unreadable file makes the
 daemon refuse `lock` (`code: "POLICY"`) until it is fixed — it never falls back to defaults
-silently once a file exists. `rp-coded --check-devices` does not validate the policy; check
-with `python3 -m json.tool /etc/rp-code/policy.json` or by watching `journalctl -u rp-coded`.
+silently once a file exists. `rpchatd --check-devices` does not validate the policy; check
+with `python3 -m json.tool /etc/rpchat/policy.json` or by watching `journalctl -u rpchatd`.
 
 ## Creating the file without root (write once)
 
 The file is normally written by root (`sudo`, or `install.sh --policy-template`). When it does
-not exist yet, **any member of the `rp-code` group can create it once** through the daemon
+not exist yet, **any member of the `rpchat` group can create it once** through the daemon
 (Settings → System → *Create policy…*, or the `set-policy` request): the daemon validates the
-object exactly like the file, creates `/etc/rp-code` if needed and writes `policy.json` as
+object exactly like the file, creates `/etc/rpchat` if needed and writes `policy.json` as
 `root:root 0644`. After that the daemon refuses further `set-policy` requests (`code: "EXISTS"`)
 and **only root can edit or delete the file** — there is no undo from the app. Because the
 first person in the group to do it sets the policy for every user of the machine, this is meant
@@ -41,13 +41,13 @@ two mutually exclusive modes — a machine with both would be only as strong as 
 Settings → System → *Lock policy* (or the `seal-policy` request) makes the daemon generate a TOTP
 secret, pin the current policy to it, and answer **once** with the secret and an `otpauth://` URI.
 The app renders that URI as a QR code to scan, with the secret and the URI behind a *Can't scan
-it?* disclosure. Nothing shows either again: the secret exists in `/etc/rp-code/policy.seal`,
+it?* disclosure. Nothing shows either again: the secret exists in `/etc/rpchat/policy.seal`,
 `0600 root:root`, and nowhere else. Afterwards:
 
 - `set-policy` **replaces** the policy when it carries a valid `code`, and re-pins the seal to
   what was written. Without one, or with a wrong one, the answer is `code: "CODE"`.
 - `unseal-policy` removes the lock with a code, optionally taking the policy file with it.
-  `rp-coded --unseal <code>` does the same from a root terminal — being root is not enough.
+  `rpchatd --unseal <code>` does the same from a root terminal — being root is not enough.
 - Three wrong codes are free; after that the lock refuses everything for 30 s, doubling per
   failure to 15 minutes. A code is spent once it is used, so watching someone type one is
   worthless.
@@ -74,29 +74,29 @@ Sealing is layered rather than absolute, and the app says so — `seal-status` r
 `residual` list that Settings → System shows under *What the lock cannot do*. The layers:
 
 1. **The policy that counts is not the file.** The daemon publishes the sealed policy into
-   `/run/rp-code/policy`, a tmpfs it mounts itself and remounts read-only after each write
-   (`0750 root:rp-code`, the policy `0640`), and the app reads it from there. Editing
-   `/etc/rp-code/policy.json` therefore changes nothing until the daemon agrees.
+   `/run/rpchat/policy`, a tmpfs it mounts itself and remounts read-only after each write
+   (`0750 root:rpchat`, the policy `0640`), and the app reads it from there. Editing
+   `/etc/rpchat/policy.json` therefore changes nothing until the daemon agrees.
 2. **Self-heal.** Every few seconds the daemon compares the file against the sealed copy. An
    edited or deleted policy is rewritten and the attempt is pushed to the app as a
    `policy-tamper` event, which Settings → System keeps in a tamper log (`lock.selfHeal`).
-3. **Mirrors.** The seal is kept in `/etc/rp-code`, `/var/lib/rp-code` and
-   `/usr/local/libexec/rp-code`. Removing one copy restores it from the next.
+3. **Mirrors.** The seal is kept in `/etc/rpchat`, `/var/lib/rpchat` and
+   `/usr/local/libexec/rpchat`. Removing one copy restores it from the next.
 4. **Immutability.** `lock.immutable` sets the ext2/4 immutable attribute on the policy, the
    seal and its mirrors, so a plain `rm` or editor save fails until someone runs `chattr -i`.
 5. **The session guard.** With `guard.mode: "enforce"`, a policy that has a `lock` block also
-   denies the confined sessions everything under `/etc/rp-code`, `/var/lib/rp-code`,
-   `/run/rp-code` and the unit files — read as well as write, because in `totp` mode reading the
+   denies the confined sessions everything under `/etc/rpchat`, `/var/lib/rpchat`,
+   `/run/rpchat` and the unit files — read as well as write, because in `totp` mode reading the
    secret is as good as owning the lock — and, with `lock.denyEscapes`, the binaries that would
    leave the confinement behind or undo it: `run0`, `systemd-run`, `machinectl`, `pkexec`,
    `chattr`, `apparmor_parser`, `aa-teardown`. **`sudo` is deliberately still there**: a `sudo`
    child is a child, so it stays inside the profile and gains nothing. `run0` and `systemd-run`
    are the ones that matter, because they ask PID 1 to start the shell and it is born outside.
 6. **`RefuseManualStop`.** `lock.refuseManualStop` writes
-   `/etc/systemd/system/rp-coded.service.d/50-rp-code-sealed.conf` with `RefuseManualStop=yes`
-   and `Restart=always`, so `systemctl stop rp-coded` is declined and a killed daemon comes back.
+   `/etc/systemd/system/rpchatd.service.d/50-rpchat-sealed.conf` with `RefuseManualStop=yes`
+   and `Restart=always`, so `systemctl stop rpchatd` is declined and a killed daemon comes back.
 7. **The app fails closed.** The app keeps its own copy of a sealed policy in its user data.
-   Once it has seen a seal it keeps enforcing it even if `/etc/rp-code` and the daemon are both
+   Once it has seen a seal it keeps enforcing it even if `/etc/rpchat` and the daemon are both
    gone, and reports that as tampering (Settings → System) rather than as freedom. It drops
    that copy only when a *connected* daemon reports an unsealed machine — which cannot happen
    without a code.
@@ -157,7 +157,7 @@ A chain file is a list of links:
   chain last set stays in place, and the machine is an ordinary one again.
 - **`policy` may be omitted** — a link that only rotates the key or unseals leaves the policy alone.
 
-Signing is Ed25519 over `rp-code-chain/v1\n` followed by the link's canonical bytes: the link
+Signing is Ed25519 over `rpchat-chain/v1\n` followed by the link's canonical bytes: the link
 without its `signature`, as compact JSON with object keys sorted. That is what `serde_json` writes
 for a value and what `JSON.stringify` writes over recursively sorted entries, so both ends agree
 without either implementing a canonicalisation spec.
@@ -196,7 +196,7 @@ policy named" — and on a managed machine the policy itself arrived over the ne
 can change the policy can change the checksum with it. The signature is the administrator's key
 vouching for the pack, which is a claim the machine can check against a key it already trusts. It
 covers the id, the version and the SHA-256 of the file **together**
-(`rp-code-pack/v1\n<id>\n<version>\n<sha256>`), so a signed pack cannot be re-labelled as a
+(`rpchat-pack/v1\n<id>\n<version>\n<sha256>`), so a signed pack cannot be re-labelled as a
 different one. Produce it with:
 
 ```bash
@@ -272,7 +272,7 @@ Notes:
 - The emergency chord is read from the grabbed keyboards. A `devices: "mouse"` lock leaves the
   keyboard free, so the chord is not needed (and not available) there.
 - The daemon logs every lock with the requesting uid/pid to the journal
-  (`journalctl -u rp-coded`).
+  (`journalctl -u rpchatd`).
 
 ## `app` — keeping the app running
 
@@ -288,9 +288,9 @@ that connection drops without an `unregister` — the app was killed or crashed 
 re-reads the policy, checks the user list and the active session, waits 1.5 s, confirms the
 process is really gone and starts it again as that user (never as root) with exactly the
 registered environment. Crash loops back off (1.5 s → 3 → 6 → 12 → 30 s) and stop after 10
-relaunches in 10 minutes (`journalctl -u rp-coded` says so); five minutes of uptime reset the
+relaunches in 10 minutes (`journalctl -u rpchatd` says so); five minutes of uptime reset the
 counters. If another user becomes the active session in the meantime the relaunch is dropped;
-the app comes back through the user's autostart at their next login. `systemctl stop rp-coded`
+the app comes back through the user's autostart at their next login. `systemctl stop rpchatd`
 switches the guard off entirely, and `kill` from a root shell followed by removing the policy
 line lets the app be quit normally again (the app re-reads the file within a minute).
 
@@ -357,7 +357,7 @@ this file, so `dev.allow: false` takes them away.
 | `devTools` | boolean | follows `allow` | Whether DevTools may be opened in the app's windows. Set it to `true` next to `allow: false` to keep the inspector for support, or to `false` on its own to close the inspector while the environment switches stay. |
 
 How it is read matters as much as what it says: the app reads this block **synchronously at
-startup and only from `/etc/rp-code/policy.json`** — never through `RP_POLICY_FILE`, which is one
+startup and only from `/etc/rpchat/policy.json`** — never through `RP_POLICY_FILE`, which is one
 of the switches being taken away. A policy file that exists but cannot be read or does not parse
 locks the switches too, rather than falling back to "allowed". Because it is read once, changing
 `dev` takes effect at the app's next start, not within the minute like the rest of this file.
@@ -365,7 +365,7 @@ Settings → System shows what the running app started with, under *Development*
 
 What it is not: a boundary against someone who can replace the app itself or run its code in
 another Electron binary (`ELECTRON_RUN_AS_NODE` set on a *different* executable, for instance).
-A system install under `/opt/rp-code` with the session guard is what makes the binary itself hard
+A system install under `/opt/rpchat` with the session guard is what makes the binary itself hard
 to swap; this keeps a normal user from launching the app you installed in a mode that ignores the
 rest of the policy.
 
@@ -388,8 +388,8 @@ rest of the policy.
 Confines the login sessions of the users in `app.users` so that their own terminals, keybind
 scripts and pickers cannot undo what the character did: connecting to the compositor's and the
 desktop shell's IPC sockets, writing the wallpaper/shell config and state files, and signalling
-or tracing rp-code are logged (`audit`) or refused (`enforce`). rp-code itself (launched from
-`/opt/rp-code/current/rp-code`) runs in its own profile that allows all of it. Needs the AppArmor
+or tracing rpchat are logged (`audit`) or refused (`enforce`). rpchat itself (launched from
+`/opt/rpchat/current/rpchat`) runs in its own profile that allows all of it. Needs the AppArmor
 LSM (`/sys/kernel/security/apparmor`), `apparmor_parser` and the `pam_apparmor` line
 `install.sh --guard` adds; `mode` other than `off` requires a non-empty `app.users`. Details,
 verified AppArmor facts and the recovery steps: `docs/system-integration.md` "Session guard".
@@ -397,17 +397,17 @@ verified AppArmor facts and the recovery steps: `docs/system-integration.md` "Se
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `mode` | `"off"` \| `"audit"` \| `"enforce"` | `"off"` | `audit` loads the profiles in complain mode with audit rules: nothing is blocked, every attempt is logged and reported to the app as a `guard-attempt` event. `enforce` blocks. `off` unloads the profiles. |
-| `protectApp` | boolean | `true` | Signals (`kill`, `pkill`) and `ptrace` from the session to rp-code are guarded. |
-| `wallpaper` | boolean | `true` | The shell's IPC socket and its config/state files are guarded; the shell itself runs in `rp-code-shell` (may serve its socket, may not connect to it). |
-| `compositorIpc` | `"allow"` \| `"shell-only"` \| `"deny"` | `"shell-only"` | Who may reach the compositor's control socket (Hyprland `.socket.sock`/`.socket2.sock`, sway, niri): everyone, only the shell and rp-code, or only rp-code. Anything but `allow` runs the compositor in `rp-code-compositor` so its keybind/exec children return to the session confinement. |
-| `shell` | one of `"auto"`, `"noctalia"`, `"quickshell"`, `"hyprpaper"`, `"swww"`, `"none"` — **or a non-empty list of them** | `"auto"` | Which shell table rows apply. `auto` takes **every** row whose binary exists. Name several (`["noctalia","hyprpaper"]`) when a bar and a separate wallpaper daemon are both running: they share one `rp-code-shell` profile where each may *serve* its own socket but none may *connect* to any of them, so neither can drive the other — a bar cannot set the wallpaper through a wallpaper daemon. Guarding a socket nobody serves costs nothing, so listing extra rows is safe. |
+| `protectApp` | boolean | `true` | Signals (`kill`, `pkill`) and `ptrace` from the session to rpchat are guarded. |
+| `wallpaper` | boolean | `true` | The shell's IPC socket and its config/state files are guarded; the shell itself runs in `rpchat-shell` (may serve its socket, may not connect to it). |
+| `compositorIpc` | `"allow"` \| `"shell-only"` \| `"deny"` | `"shell-only"` | Who may reach the compositor's control socket (Hyprland `.socket.sock`/`.socket2.sock`, sway, niri): everyone, only the shell and rpchat, or only rpchat. Anything but `allow` runs the compositor in `rpchat-compositor` so its keybind/exec children return to the session confinement. |
+| `shell` | one of `"auto"`, `"noctalia"`, `"quickshell"`, `"hyprpaper"`, `"swww"`, `"none"` — **or a non-empty list of them** | `"auto"` | Which shell table rows apply. `auto` takes **every** row whose binary exists. Name several (`["noctalia","hyprpaper"]`) when a bar and a separate wallpaper daemon are both running: they share one `rpchat-shell` profile where each may *serve* its own socket but none may *connect* to any of them, so neither can drive the other — a bar cannot set the wallpaper through a wallpaper daemon. Guarding a socket nobody serves costs nothing, so listing extra rows is safe. |
 | `loginHelpers` | non-empty string[] | auto-detect | The PAM login helpers whose profile carries the per-user hats (`/usr/lib/sddm/sddm-helper`, `greetd`, `/usr/bin/login`, `sshd` — those present on the box). |
 | `extraDenyPaths` | string[] | `[]` | More files the session may not write (absolute, `~/…` or `@{HOME}/…` globs). |
 | `extraDenySockets` | string[] | `[]` | More unix socket paths the session may not connect to. |
 | `allowBinaries` | string[] | `[]` | Absolute paths that leave the confinement entirely when executed (`ux`); use sparingly. |
 
-Recovery as root: `guard.mode: "off"` (picked up within seconds, or `rp-coded --guard-apply`),
-`rp-coded --guard-off`, or `apparmor_parser -R /etc/apparmor.d/rp-code-*`. `install.sh --no-guard`
+Recovery as root: `guard.mode: "off"` (picked up within seconds, or `rpchatd --guard-apply`),
+`rpchatd --guard-off`, or `apparmor_parser -R /etc/apparmor.d/rpchat-*`. `install.sh --no-guard`
 also removes the PAM line. Sessions already open when the guard engages are confined at their
 next login.
 

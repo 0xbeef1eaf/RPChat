@@ -31,7 +31,7 @@ export interface TrayMenuItem {
 /** Pure: the tray menu, in order; a separator precedes Quit. Without `allowQuit` there is no Quit item at all. */
 export function trayMenuTemplate(allowQuit: boolean): Array<TrayMenuItem | { type: 'separator' }> {
   const items: Array<TrayMenuItem | { type: 'separator' }> = [
-    { id: 'show', label: 'Show rp-code' },
+    { id: 'show', label: 'Show rpchat' },
     { id: 'hide', label: 'Hide window' },
     { id: 'check-updates', label: 'Check for updates…' },
   ];

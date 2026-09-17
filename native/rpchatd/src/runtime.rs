@@ -1,7 +1,7 @@
-//! The **runtime policy filesystem**: `/run/rp-code/policy`, a tmpfs the daemon mounts, fills and
+//! The **runtime policy filesystem**: `/run/rpchat/policy`, a tmpfs the daemon mounts, fills and
 //! remounts read-only, and the only place the app reads its policy from.
 //!
-//! Why this exists rather than letting everyone read `/etc/rp-code/policy.json`: a file on disk is
+//! Why this exists rather than letting everyone read `/etc/rpchat/policy.json`: a file on disk is
 //! whatever the last writer made it. Once a machine is sealed (`seal.rs`) the *effective* policy is
 //! the one in the seal, and the daemon is the only thing allowed to decide it changed — which needs
 //! a TOTP code. Publishing it into a filesystem the daemon owns makes that structural instead of
@@ -12,7 +12,7 @@
 //! - It is **remounted read-only** after every publish, so even root cannot write into it without
 //!   first remounting it read-write — an act the guard denies confined sessions and which the
 //!   daemon undoes on its next tick.
-//! - It is `0750 root:rp-code` with the policy `0640`, so exactly the members of the `rp-code`
+//! - It is `0750 root:rpchat` with the policy `0640`, so exactly the members of the `rpchat`
 //!   group — the app — can read it, and nobody else on the machine can.
 //! - Every tick compares what is published against what the daemon means to publish, and republishes
 //!   (and reports a tamper) when they differ.
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Where the effective policy is published.
-pub const DEFAULT_RUNTIME_DIR: &str = "/run/rp-code/policy";
+pub const DEFAULT_RUNTIME_DIR: &str = "/run/rpchat/policy";
 /// The effective policy inside it (what the app reads).
 pub const POLICY_FILE: &str = "policy.json";
 /// The state document beside it: where the policy came from and whether the machine is sealed.
@@ -176,7 +176,7 @@ impl MountOps for RealMounts {
 /// Publishes the effective policy into the runtime filesystem.
 pub struct RuntimeFs {
     pub dir: PathBuf,
-    /// gid of the `rp-code` group, so the app can read the published policy. `None` leaves the
+    /// gid of the `rpchat` group, so the app can read the published policy. `None` leaves the
     /// group as root's (tests, and a machine without the group).
     pub group: Option<u32>,
     /// Whether to mount a tmpfs at all (`lock.runtimeFs: false`, or a platform that cannot).
@@ -252,7 +252,7 @@ impl RuntimeFs {
         use nix::unistd::{chown, Gid};
         if let Err(e) = chown(path, None, Some(Gid::from_raw(gid))) {
             degraded.push(format!(
-                "cannot give {} to the rp-code group: {e}",
+                "cannot give {} to the rpchat group: {e}",
                 path.display()
             ));
         }
@@ -480,13 +480,13 @@ mod tests {
     #[test]
     fn mount_state_reads_the_point_and_the_read_only_flag() {
         let info = "22 25 0:21 / /run rw,nosuid shared:5 - tmpfs tmpfs rw\n\
-                    42 22 0:44 / /run/rp-code/policy ro,nosuid,nodev,noexec shared:9 - tmpfs tmpfs ro,mode=750\n";
+                    42 22 0:44 / /run/rpchat/policy ro,nosuid,nodev,noexec shared:9 - tmpfs tmpfs ro,mode=750\n";
         assert_eq!(
-            mount_state(info, Path::new("/run/rp-code/policy")),
+            mount_state(info, Path::new("/run/rpchat/policy")),
             Some(true)
         );
         assert_eq!(mount_state(info, Path::new("/run")), Some(false));
-        assert_eq!(mount_state(info, Path::new("/run/rp-code")), None);
+        assert_eq!(mount_state(info, Path::new("/run/rpchat")), None);
         assert!(mount_state(info, Path::new("/nowhere")).is_none());
         // A later mount at the same point wins.
         let stacked = "42 22 0:44 / /x rw - tmpfs tmpfs rw\n43 22 0:45 / /x ro - tmpfs tmpfs ro\n";

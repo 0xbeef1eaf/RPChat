@@ -15,7 +15,7 @@ coverage/
 !examples/**/*.rppack
 native/*/target/
 apps/desktop/resources/bin/
-!native/rp-coded/dist/
+!native/rpchatd/dist/
 apps/desktop/resources/system/
 apps/desktop/resources/extension/
 !apps/desktop/build/

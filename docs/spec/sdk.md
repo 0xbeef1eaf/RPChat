@@ -34,7 +34,7 @@ Permission levels (`CapabilityModuleSpec.permission`, per-method override in `me
 ## Generated typings format
 
 ```ts
-// ---- rp-code character SDK (generated) ----
+// ---- rpchat character SDK (generated) ----
 <SDK_PREAMBLE_TYPINGS>
 /** The SDK available to character code as the global `sdk`. */
 declare const sdk: Sdk;

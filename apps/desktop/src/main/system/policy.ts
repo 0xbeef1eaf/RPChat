@@ -358,7 +358,7 @@ function guardPathList(v: unknown, what: string, allowHome: boolean, problems: s
   return list;
 }
 
-/** The `guard` block, mirroring the daemon's `GuardPolicy` validation (`native/rp-coded/src/policy.rs`). */
+/** The `guard` block, mirroring the daemon's `GuardPolicy` validation (`native/rpchatd/src/policy.rs`). */
 export function parseGuard(raw: unknown, problems: string[]): GuardPolicy | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     problems.push('guard must be an object');
@@ -503,11 +503,11 @@ export function stripManagedPatch(patch: Partial<AppSettings>, managed: ManagedS
 
 /** Where the policy the app is enforcing came from. */
 export type PolicySource =
-  /** `/run/rp-code/policy/policy.json`: the daemon's own filesystem, republished on every tick. */
+  /** `/run/rpchat/policy/policy.json`: the daemon's own filesystem, republished on every tick. */
   | 'runtime'
-  /** `/etc/rp-code/policy.json`. */
+  /** `/etc/rpchat/policy.json`. */
   | 'file'
-  /** `/etc/rp-code/policy.sealed`: the seal's world-readable copy, when the policy file is gone. */
+  /** `/etc/rpchat/policy.sealed`: the seal's world-readable copy, when the policy file is gone. */
   | 'seal'
   /** The app's own memory of a sealed policy, because nothing on the machine had one. */
   | 'cache'
@@ -536,11 +536,11 @@ export interface PolicyState {
 
 /** The places `loadPolicy` looks, in order. Overridable so the tests need no root-owned paths. */
 export interface PolicySources {
-  /** `/etc/rp-code/policy.json`. */
+  /** `/etc/rpchat/policy.json`. */
   file?: string;
-  /** `/run/rp-code/policy/policy.json`, the daemon's runtime filesystem. */
+  /** `/run/rpchat/policy/policy.json`, the daemon's runtime filesystem. */
   runtime?: string;
-  /** `/etc/rp-code/policy.sealed`, the seal's world-readable copy. */
+  /** `/etc/rpchat/policy.sealed`, the seal's world-readable copy. */
   marker?: string;
   /** The app's own memory of a sealed policy (`seal-cache.ts`). */
   cache?: SealCache;
@@ -600,7 +600,7 @@ async function readJson(path: string): Promise<{ value: unknown } | { missing: t
  * 3. **The seal's world-readable marker**, when the policy file has been removed but the seal has
  *    not: the machine is still managed, and the sealed policy says how.
  * 4. **The app's own cache**, when none of the above is there but the app has seen a seal before.
- *    A wiped `/etc/rp-code` is treated as tampering, not as freedom.
+ *    A wiped `/etc/rpchat` is treated as tampering, not as freedom.
  *
  * Missing everywhere → `policy: null`, no error, which is the unmanaged machine most people have.
  */

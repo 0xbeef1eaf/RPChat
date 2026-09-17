@@ -11,15 +11,15 @@ import { GuardAttemptLog, SystemIntegration, autostartDesktopEntry, guardStatusO
 import { KeepaliveLink, reconnectDelay } from './keepalive-link.js';
 import { PolicyWatcher, appPolicy, applyPolicy, guardMode, loadPolicy, managedPaths, parsePolicy, stripManagedPatch } from './policy.js';
 
-/** Fake rp-coded: answers the protocol from an in-memory lock state. */
+/** Fake rpchatd: answers the protocol from an in-memory lock state. */
 function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: string; install?: InstallInfo; applyDelayMs?: number; restartDaemon?: boolean; guard?: GuardInfo; noSubscribe?: boolean } = {}) {
   let locked: { until: string; reason?: string; devices: 'keyboard' | 'mouse' | 'both' } | null = null;
   const seen: DaemonRequest[] = [];
   const conns = new Set<net.Socket>();
-  /** Like rp-coded: subscriptions live on their connection. */
+  /** Like rpchatd: subscriptions live on their connection. */
   const subscriptions = new Map<net.Socket, string[]>();
   let guardApplies = 0;
-  /** Like rp-coded: a registration lives on its connection; `unregister` clears it, a drop without it counts as a crash. */
+  /** Like rpchatd: a registration lives on its connection; `unregister` clears it, a drop without it counts as a crash. */
   const registrations = new Map<net.Socket, Extract<DaemonRequest, { op: 'register' }>>();
   const crashed: Array<Extract<DaemonRequest, { op: 'register' }>> = [];
   const server = net.createServer((conn) => {
@@ -69,7 +69,7 @@ function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: str
             break;
           }
           case 'apply-update': {
-            // Like rp-coded: a bad checksum is INVALID, root/foreign files REFUSED; success may take a while.
+            // Like rpchatd: a bad checksum is INVALID, root/foreign files REFUSED; success may take a while.
             const answer = (): DaemonResponse =>
               req.sha512 === 'bad'
                 ? { ok: false, error: 'sha512 mismatch for ' + req.file, code: 'INVALID' }
@@ -108,7 +108,7 @@ function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: str
             res = { ok: true, op: 'unregister' };
             break;
           case 'set-policy': {
-            // Like rp-coded: strict validation (unknown keys), write once, 0644 pretty JSON.
+            // Like rpchatd: strict validation (unknown keys), write once, 0644 pretty JSON.
             const file = opts.policyPath ?? '/nonexistent/policy.json';
             const unknown = Object.keys((req.policy as { settings?: object }).settings ?? {}).find((k) => k === 'theme');
             if (unknown) res = { ok: false, error: `policy invalid: settings.${unknown} is not a managed setting`, code: 'INVALID' };
@@ -207,7 +207,7 @@ describe('DaemonClient', () => {
     // A 150 ms request timeout would kill the 400 ms apply; the apply timeout is what counts.
     const client = new DaemonClient({ socketPath: sock, timeoutMs: 150, applyTimeoutMs: 3000 });
     expect(await client.status()).toMatchObject({ connected: true, install });
-    const update = { file: '/home/alice/.cache/rp-code-updater/pending/rp-code-0.2.0.AppImage', version: '0.2.0', sha512: 'ok' };
+    const update = { file: '/home/alice/.cache/rpchat-updater/pending/rpchat-0.2.0.AppImage', version: '0.2.0', sha512: 'ok' };
     expect(await client.applyUpdate(update)).toEqual({ version: '0.2.0', restartDaemon: true });
     expect(daemon.seen.at(-1)).toEqual({ op: 'apply-update', ...update });
     await expect(client.applyUpdate({ ...update, sha512: 'bad' })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', message: /sha512 mismatch/, details: { daemonCode: 'INVALID' } });
@@ -232,26 +232,26 @@ describe('DaemonClient', () => {
 
 describe('system install detection', () => {
   it('decides from the real executable path and what the daemon reports', () => {
-    expect(isSystemInstallExec('/opt/rp-code/current/rp-code')).toBe(true);
-    expect(isSystemInstallExec('/opt/rp-code/current/rp-code', '/opt/rp-code/current/')).toBe(true);
-    expect(isSystemInstallExec('/opt/rp-code/rp-code')).toBe(false);
-    expect(isSystemInstallExec('/opt/rp-code/previous/rp-code')).toBe(false);
-    expect(isSystemInstallExec('/opt/rp-code/currently/rp-code')).toBe(false);
-    expect(isSystemInstallExec('/tmp/.mount_rpXYZ/rp-code')).toBe(false);
+    expect(isSystemInstallExec('/opt/rpchat/current/rpchat')).toBe(true);
+    expect(isSystemInstallExec('/opt/rpchat/current/rpchat', '/opt/rpchat/current/')).toBe(true);
+    expect(isSystemInstallExec('/opt/rpchat/rpchat')).toBe(false);
+    expect(isSystemInstallExec('/opt/rpchat/previous/rpchat')).toBe(false);
+    expect(isSystemInstallExec('/opt/rpchat/currently/rpchat')).toBe(false);
+    expect(isSystemInstallExec('/tmp/.mount_rpXYZ/rpchat')).toBe(false);
     expect(isSystemInstallExec('/x', '')).toBe(false);
     const connected = { connected: true, install: { systemInstall: true, current: '0.1.9', previous: '0.1.8', daemonVersion: '0.2.0' } };
-    expect(systemInstallStatus({ execPath: '/opt/rp-code/current/rp-code', dir: '/opt/rp-code/current', appImage: false, daemon: connected })).toEqual({
-      systemInstall: true, dir: '/opt/rp-code/current', execInDir: true, daemonSupportsUpdates: true, canSystemInstall: false, current: '0.1.9', previous: '0.1.8', daemonVersion: '0.2.0',
+    expect(systemInstallStatus({ execPath: '/opt/rpchat/current/rpchat', dir: '/opt/rpchat/current', appImage: false, daemon: connected })).toEqual({
+      systemInstall: true, dir: '/opt/rpchat/current', execInDir: true, daemonSupportsUpdates: true, canSystemInstall: false, current: '0.1.9', previous: '0.1.8', daemonVersion: '0.2.0',
     });
     // Running from the directory without the daemon: not a system install (nothing can apply updates).
-    expect(systemInstallStatus({ execPath: '/opt/rp-code/current/rp-code', dir: '/opt/rp-code/current', appImage: false, daemon: { connected: false } })).toEqual({
-      systemInstall: false, dir: '/opt/rp-code/current', execInDir: true, daemonSupportsUpdates: false, canSystemInstall: false,
+    expect(systemInstallStatus({ execPath: '/opt/rpchat/current/rpchat', dir: '/opt/rpchat/current', appImage: false, daemon: { connected: false } })).toEqual({
+      systemInstall: false, dir: '/opt/rpchat/current', execInDir: true, daemonSupportsUpdates: false, canSystemInstall: false,
     });
     // An old daemon (no `install` in status) is connected but cannot apply updates.
-    expect(systemInstallStatus({ execPath: '/opt/rp-code/current/rp-code', dir: '/opt/rp-code/current', appImage: false, daemon: { connected: true } })).toMatchObject({ systemInstall: true, daemonSupportsUpdates: false });
+    expect(systemInstallStatus({ execPath: '/opt/rpchat/current/rpchat', dir: '/opt/rpchat/current', appImage: false, daemon: { connected: true } })).toMatchObject({ systemInstall: true, daemonSupportsUpdates: false });
     // An AppImage launch can become a system install through the installer.
-    expect(systemInstallStatus({ execPath: '/tmp/.mount_rp/rp-code', dir: '/opt/rp-code/current', appImage: true, daemon: connected })).toMatchObject({ systemInstall: false, execInDir: false, canSystemInstall: true, current: '0.1.9' });
-    expect(systemInstallStatus({ execPath: undefined, dir: '/opt/rp-code/current', appImage: false, daemon: { connected: false } }).execInDir).toBe(false);
+    expect(systemInstallStatus({ execPath: '/tmp/.mount_rp/rpchat', dir: '/opt/rpchat/current', appImage: true, daemon: connected })).toMatchObject({ systemInstall: false, execInDir: false, canSystemInstall: true, current: '0.1.9' });
+    expect(systemInstallStatus({ execPath: undefined, dir: '/opt/rpchat/current', appImage: false, daemon: { connected: false } }).execInDir).toBe(false);
   });
 });
 
@@ -261,7 +261,7 @@ describe('KeepaliveLink', () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rpk-'));
   });
   afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
-  const registration = { exec: '/usr/bin/rp-code', args: ['--hidden'], cwd: '/home/alice', env: { HOME: '/home/alice', DISPLAY: ':0' } };
+  const registration = { exec: '/usr/bin/rpchat', args: ['--hidden'], cwd: '/home/alice', env: { HOME: '/home/alice', DISPLAY: ':0' } };
   const until = async (cond: () => boolean, ms = 3000): Promise<void> => {
     const t0 = Date.now();
     while (!cond()) {
@@ -325,7 +325,7 @@ describe('KeepaliveLink', () => {
     await until(() => link.subscribed);
     expect(daemon.seen.map((r) => r.op)).toEqual(['hello', 'register', 'subscribe']);
     expect(daemon.subscribed()).toEqual([['guard-attempt']]);
-    const attempt: DaemonEvent = { ev: 'guard-attempt', at: '2026-09-14T12:00:00.000Z', kind: 'ipc', target: '/run/user/1000/hypr/x/.socket.sock', command: 'hyprctl', pid: 42, blocked: false, profile: 'rp-code-session', operation: 'connect', requested: 'wr' };
+    const attempt: DaemonEvent = { ev: 'guard-attempt', at: '2026-09-14T12:00:00.000Z', kind: 'ipc', target: '/run/user/1000/hypr/x/.socket.sock', command: 'hyprctl', pid: 42, blocked: false, profile: 'rpchat-session', operation: 'connect', requested: 'wr' };
     daemon.push(attempt);
     await until(() => events.length === 1);
     expect(events[0]).toEqual(attempt);
@@ -553,7 +553,7 @@ describe('policy', () => {
 });
 
 describe('guard status and attempt log', () => {
-  const engaged: GuardInfo = { available: true, mode: 'audit', loaded: ['rp-code-session', 'rp-code-app'], users: ['work'], residual: ['audit mode: nothing is blocked'], pamConfigured: true, shell: 'noctalia', compositor: 'hyprland', appliedAt: '2026-09-14T12:00:00.000Z' };
+  const engaged: GuardInfo = { available: true, mode: 'audit', loaded: ['rpchat-session', 'rpchat-app'], users: ['work'], residual: ['audit mode: nothing is blocked'], pamConfigured: true, shell: 'noctalia', compositor: 'hyprland', appliedAt: '2026-09-14T12:00:00.000Z' };
   const policy = parsePolicy({ version: 1, app: { users: ['work'] }, guard: { mode: 'audit' } });
 
   it('guardStatusOf combines the policy with what the daemon reports', () => {
@@ -569,8 +569,8 @@ describe('guard status and attempt log', () => {
 
   it('GuardAttemptLog keeps the newest 50 without the ev tag', () => {
     const log = new GuardAttemptLog(3);
-    const ev = (n: number): DaemonEvent => ({ ev: 'guard-attempt', at: `t${n}`, kind: 'config', target: `/f${n}`, command: 'vim', pid: n, blocked: false, profile: 'rp-code-session', operation: 'open' });
-    expect(log.push(ev(1))).toEqual({ at: 't1', kind: 'config', target: '/f1', command: 'vim', pid: 1, blocked: false, profile: 'rp-code-session', operation: 'open' });
+    const ev = (n: number): DaemonEvent => ({ ev: 'guard-attempt', at: `t${n}`, kind: 'config', target: `/f${n}`, command: 'vim', pid: n, blocked: false, profile: 'rpchat-session', operation: 'open' });
+    expect(log.push(ev(1))).toEqual({ at: 't1', kind: 'config', target: '/f1', command: 'vim', pid: 1, blocked: false, profile: 'rpchat-session', operation: 'open' });
     for (const n of [2, 3, 4]) log.push(ev(n));
     expect(log.list().map((r) => r.pid)).toEqual([4, 3, 2]);
     expect(new GuardAttemptLog().list()).toEqual([]);
@@ -617,12 +617,12 @@ describe('guard status and attempt log', () => {
       policy: new PolicyWatcher(policyPath),
       resourcesDirs: [resources],
       homeDir: path.join(tmp, 'home'),
-      appBin: '/opt/rp-code/current/rp-code',
+      appBin: '/opt/rpchat/current/rpchat',
       userName: 'work',
       guardLog: log,
       run: async (file, args) => {
         commands.push([file, ...args]);
-        return { code: 0, stdout: file === 'id' ? 'work rp-code\n' : '[ok]\n', stderr: '' };
+        return { code: 0, stdout: file === 'id' ? 'work rpchat\n' : '[ok]\n', stderr: '' };
       },
       logger: { info: () => undefined, warn: () => undefined, debug: () => undefined },
     });
@@ -630,8 +630,8 @@ describe('guard status and attempt log', () => {
     expect(status.guard).toEqual({ ...engaged, configured: true, daemonSupportsGuard: true });
     expect((await integration.guardApply()).guard.loaded).toEqual(engaged.loaded);
     expect(daemon.guardApplies()).toBe(1);
-    log.push({ ev: 'guard-attempt', at: 't', kind: 'signal', target: 'rp-code-app', command: 'kill', pid: 9, blocked: false, profile: 'rp-code-session', operation: 'signal' });
-    expect(await integration.guardAttempts()).toEqual([{ at: 't', kind: 'signal', target: 'rp-code-app', command: 'kill', pid: 9, blocked: false, profile: 'rp-code-session', operation: 'signal' }]);
+    log.push({ ev: 'guard-attempt', at: 't', kind: 'signal', target: 'rpchat-app', command: 'kill', pid: 9, blocked: false, profile: 'rpchat-session', operation: 'signal' });
+    expect(await integration.guardAttempts()).toEqual([{ at: 't', kind: 'signal', target: 'rpchat-app', command: 'kill', pid: 9, blocked: false, profile: 'rpchat-session', operation: 'signal' }]);
     await integration.install({ autostart: false });
     expect(commands.at(-1)!.slice(-1)).toEqual(['--guard']);
     // Without the guard in the policy the flag stays off.
@@ -678,7 +678,7 @@ describe('SystemIntegration.createPolicy', () => {
       policy: new PolicyWatcher(policyPath),
       resourcesDirs: [],
       homeDir: path.join(tmp, 'home'),
-      appBin: '/opt/rp-code',
+      appBin: '/opt/rpchat',
       userName: 'alice',
       udevRulePath: path.join(tmp, 'rules'),
       run: async () => ({ code: 0, stdout: '', stderr: '' }),
@@ -726,9 +726,9 @@ describe('SystemIntegration', () => {
     const resources = path.join(tmp, 'resources');
     fs.mkdirSync(path.join(resources, 'system'), { recursive: true });
     fs.writeFileSync(path.join(resources, 'system', 'install.sh'), '#!/bin/sh\necho ok\n');
-    fs.writeFileSync(path.join(resources, 'system', 'rp-coded.service'), '[Unit]\n');
+    fs.writeFileSync(path.join(resources, 'system', 'rpchatd.service'), '[Unit]\n');
     fs.mkdirSync(path.join(resources, 'bin'));
-    fs.writeFileSync(path.join(resources, 'bin', 'rp-coded'), 'ELF');
+    fs.writeFileSync(path.join(resources, 'bin', 'rpchatd'), 'ELF');
     const commands: string[][] = [];
     const integration = new SystemIntegration({
       platform: 'linux',
@@ -736,41 +736,41 @@ describe('SystemIntegration', () => {
       policy: new PolicyWatcher(path.join(tmp, 'policy.json')),
       resourcesDirs: [path.join(tmp, 'nope'), resources],
       homeDir: path.join(tmp, 'home'),
-      appBin: '/opt/rp code/rp-code',
+      appBin: '/opt/rp chat/rpchat',
       appImage: true,
-      execPath: '/tmp/.mount_rp/rp-code',
+      execPath: '/tmp/.mount_rp/rpchat',
       userName: 'alice',
-      udevRulePath: path.join(tmp, '70-rp-code.rules'),
+      udevRulePath: path.join(tmp, '70-rpchat.rules'),
       run: async (file, args, onOutput) => {
         commands.push([file, ...args]);
-        if (file === 'id') return { code: 0, stdout: 'alice wheel rp-code\n', stderr: '' };
+        if (file === 'id') return { code: 0, stdout: 'alice wheel rpchat\n', stderr: '' };
         onOutput?.('[ok] group\n');
         return { code: 0, stdout: '[ok] group\n', stderr: '' };
       },
       logger: { info: () => undefined, warn: () => undefined, debug: () => undefined },
     });
     const status = await integration.status();
-    expect(status).toMatchObject({ platform: 'linux', daemon: { connected: false }, policy: { present: false, canCreate: false, managed: [], allowQuit: true, users: [] }, udev: { rulePresent: false, inGroup: true, groupName: 'rp-code' }, autostart: { enabled: false, method: 'none' }, installerAvailable: true });
-    expect(status.install).toEqual({ systemInstall: false, dir: '/opt/rp-code/current', execInDir: false, daemonSupportsUpdates: false, canSystemInstall: true });
+    expect(status).toMatchObject({ platform: 'linux', daemon: { connected: false }, policy: { present: false, canCreate: false, managed: [], allowQuit: true, users: [] }, udev: { rulePresent: false, inGroup: true, groupName: 'rpchat' }, autostart: { enabled: false, method: 'none' }, installerAvailable: true });
+    expect(status.install).toEqual({ systemInstall: false, dir: '/opt/rpchat/current', execInDir: false, daemonSupportsUpdates: false, canSystemInstall: true });
     expect(status.guard).toEqual({ configured: false, daemonSupportsGuard: false, available: false, mode: 'off', loaded: [], users: [], residual: [] });
     expect(await integration.installerPath()).toBe(path.join(resources, 'system', 'install.sh'));
     const enabled = await integration.setAutostart(true);
-    expect(enabled.autostart).toEqual({ enabled: true, method: 'xdg', path: path.join(tmp, 'home', '.config', 'autostart', 'rp-code.desktop') });
+    expect(enabled.autostart).toEqual({ enabled: true, method: 'xdg', path: path.join(tmp, 'home', '.config', 'autostart', 'rpchat.desktop') });
     const entry = fs.readFileSync(enabled.autostart.path!, 'utf8');
-    expect(entry).toContain('Exec="/opt/rp code/rp-code" --hidden');
-    expect(autostartDesktopEntry('/usr/bin/rp-code')).toContain('Exec=/usr/bin/rp-code --hidden');
+    expect(entry).toContain('Exec="/opt/rp chat/rpchat" --hidden');
+    expect(autostartDesktopEntry('/usr/bin/rpchat')).toContain('Exec=/usr/bin/rpchat --hidden');
     expect((await integration.setAutostart(false)).autostart.enabled).toBe(false);
     const result = await integration.install({ autostart: false });
     expect(result).toEqual({ ok: true, output: '[ok] group\n' });
     // The installer runs from a staged copy (an AppImage's FUSE mount is unreadable to root).
-    const stage = path.join(tmp, 'home', '.cache', 'rp-code', 'system-install');
-    expect(commands.at(-1)).toEqual(['pkexec', path.join(stage, 'install.sh'), '--app-bin', '/opt/rp code/rp-code', '--user', 'alice', '--autostart', 'none']);
+    const stage = path.join(tmp, 'home', '.cache', 'rpchat', 'system-install');
+    expect(commands.at(-1)).toEqual(['pkexec', path.join(stage, 'install.sh'), '--app-bin', '/opt/rp chat/rpchat', '--user', 'alice', '--autostart', 'none']);
     await integration.install({ autostart: true, systemInstall: false });
-    expect(commands.at(-1)).toEqual(['pkexec', path.join(stage, 'install.sh'), '--app-bin', '/opt/rp code/rp-code', '--user', 'alice', '--autostart', 'xdg', '--no-system-install']);
-    expect(fs.readdirSync(stage).sort()).toEqual(['install.sh', 'rp-coded', 'rp-coded.service']);
+    expect(commands.at(-1)).toEqual(['pkexec', path.join(stage, 'install.sh'), '--app-bin', '/opt/rp chat/rpchat', '--user', 'alice', '--autostart', 'xdg', '--no-system-install']);
+    expect(fs.readdirSync(stage).sort()).toEqual(['install.sh', 'rpchatd', 'rpchatd.service']);
     expect(fs.statSync(path.join(stage, 'install.sh')).mode & 0o111).toBe(0o111);
-    expect(fs.statSync(path.join(stage, 'rp-coded')).mode & 0o111).toBe(0o111);
-    expect(fs.readFileSync(path.join(stage, 'rp-coded.service'), 'utf8')).toBe('[Unit]\n');
+    expect(fs.statSync(path.join(stage, 'rpchatd')).mode & 0o111).toBe(0o111);
+    expect(fs.readFileSync(path.join(stage, 'rpchatd.service'), 'utf8')).toBe('[Unit]\n');
     // Browser policy: the staged installer with the browser-only flags, then the removal flag.
     const policy = await integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821 });
     expect(policy).toEqual({ ok: true, output: '[ok] group\n' });

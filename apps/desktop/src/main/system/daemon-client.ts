@@ -1,5 +1,5 @@
 /**
- * Client for the `rp-coded` root daemon (docs/spec/system.md): JSON lines over a unix
+ * Client for the `rpchatd` root daemon (docs/spec/system.md): JSON lines over a unix
  * socket, connect on demand, `hello` handshake, one request in flight at a time with a
  * 10 s timeout (`apply-update`: 5 min), reconnect on the next request after the socket drops.
  */
@@ -55,7 +55,7 @@ export function rpErrorCodeFor(code: DaemonErrorResponse['code']): RpErrorCode {
 
 /** Turn a `DaemonError` into the `RpError` callers expect; anything else is returned as is. */
 export function toRpError(err: unknown, op: DaemonRequest['op']): unknown {
-  if (err instanceof DaemonError) return new RpError(rpErrorCodeFor(err.code), `rp-coded refused ${op}: ${err.message}`, { daemonCode: err.code });
+  if (err instanceof DaemonError) return new RpError(rpErrorCodeFor(err.code), `rpchatd refused ${op}: ${err.message}`, { daemonCode: err.code });
   return err;
 }
 
@@ -190,7 +190,7 @@ export class DaemonClient {
    */
   async waitForHello(timeoutMs: number, initialDelayMs = 500): Promise<boolean> {
     // A fresh handshake, not the cached one: the point is to prove the daemon answers *now*.
-    this.dropSocket(new Error('waiting for rp-coded to come back'));
+    this.dropSocket(new Error('waiting for rpchatd to come back'));
     const deadline = Date.now() + timeoutMs;
     let delay = initialDelayMs;
     for (;;) {
@@ -332,7 +332,7 @@ export class DaemonClient {
     }
     if (res.op !== 'hello' || res.protocol !== 1) {
       this.dropSocket(new Error('bad hello'));
-      throw new RpError('CAPABILITY_FAILED', `rp-coded answered hello with protocol ${String((res as { protocol?: unknown }).protocol)}; expected 1`);
+      throw new RpError('CAPABILITY_FAILED', `rpchatd answered hello with protocol ${String((res as { protocol?: unknown }).protocol)}; expected 1`);
     }
     this.hello = res;
     this.lastError = undefined;
@@ -348,7 +348,7 @@ export class DaemonClient {
         if (settled) return;
         settled = true;
         socket.destroy();
-        reject(new RpError('CAPABILITY_FAILED', `rp-coded did not accept the connection within ${timeoutMs} ms`));
+        reject(new RpError('CAPABILITY_FAILED', `rpchatd did not accept the connection within ${timeoutMs} ms`));
       }, timeoutMs);
       socket.setEncoding('utf8');
       socket.once('connect', () => {
@@ -364,13 +364,13 @@ export class DaemonClient {
         if (!settled) {
           settled = true;
           clearTimeout(timer);
-          reject(new RpError('CAPABILITY_FAILED', `rp-coded is not reachable at ${this.socketPath}: ${err.message}`));
+          reject(new RpError('CAPABILITY_FAILED', `rpchatd is not reachable at ${this.socketPath}: ${err.message}`));
           return;
         }
         if (this.socket === socket) this.dropSocket(err);
       });
       socket.on('close', () => {
-        if (this.socket === socket) this.dropSocket(new Error('rp-coded closed the connection'));
+        if (this.socket === socket) this.dropSocket(new Error('rpchatd closed the connection'));
       });
     });
   }
@@ -380,14 +380,14 @@ export class DaemonClient {
       new Promise((resolve, reject) => {
         const socket = this.socket;
         if (!socket || socket.destroyed) {
-          reject(new RpError('CAPABILITY_FAILED', 'rp-coded is not connected'));
+          reject(new RpError('CAPABILITY_FAILED', 'rpchatd is not connected'));
           return;
         }
         const timer = setTimeout(() => {
           const idx = this.pending.findIndex((p) => p.timer === timer);
           if (idx >= 0) this.pending.splice(idx, 1);
-          this.dropSocket(new Error(`rp-coded did not answer "${req.op}" within ${timeoutMs} ms`));
-          reject(new RpError('CAPABILITY_FAILED', `rp-coded did not answer "${req.op}" within ${timeoutMs} ms`));
+          this.dropSocket(new Error(`rpchatd did not answer "${req.op}" within ${timeoutMs} ms`));
+          reject(new RpError('CAPABILITY_FAILED', `rpchatd did not answer "${req.op}" within ${timeoutMs} ms`));
         }, timeoutMs);
         this.pending.push({ resolve, reject, timer });
         socket.write(`${JSON.stringify(req)}\n`, (err) => {
@@ -416,7 +416,7 @@ export class DaemonClient {
       try {
         pending.resolve(JSON.parse(line) as DaemonResponse);
       } catch {
-        pending.reject(new RpError('CAPABILITY_FAILED', `rp-coded sent invalid JSON: ${line.slice(0, 120)}`));
+        pending.reject(new RpError('CAPABILITY_FAILED', `rpchatd sent invalid JSON: ${line.slice(0, 120)}`));
       }
     }
   }

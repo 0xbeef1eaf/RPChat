@@ -39,7 +39,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
     'authorChain', 'authorSignPack',
   ],
   browser: ['status', 'setPort', 'trust', 'untrust', 'installPolicy', 'removePolicy', 'extensionDir', 'blocks', 'clearBlocks', 'setHomePage'],
-  updates: ['status', 'check', 'download', 'install', 'setToken'],
+  updates: ['status', 'check', 'download', 'install'],
   plugins: ['pluginsDir', 'list', 'install', 'remove', 'setEnabled', 'reload', 'openFolder'],
   editor: [
     'workspaceDir', 'listProjects', 'create', 'open', 'importInstalled', 'forget', 'read', 'saveManifest', 'saveCharacter', 'saveScript', 'removeScript', 'scriptTemplate',

@@ -1,5 +1,5 @@
 /**
- * In-place application updates (Linux AppImage) from the private GitHub releases of this
+ * In-place application updates (Linux AppImage) from the public GitHub releases of this
  * repository. The main-process `UpdateService` owns the state machine; the renderer only
  * renders `UpdateStatus` and calls the `IpcApi.updates` methods.
  */
@@ -9,8 +9,6 @@ export type UpdateState =
   | 'unsupported'
   /** Checking is switched off by the system policy (`settings.updates.enabled: false`). */
   | 'disabled'
-  /** No GitHub token stored yet; the private release feed cannot be read. */
-  | 'no-token'
   | 'idle'
   | 'checking'
   | 'up-to-date'
@@ -24,7 +22,7 @@ export type UpdateState =
 
 /**
  * How the running binary was installed; decides what "update" can mean. `system`: the unpacked
- * app under `/opt/rp-code/current` (see docs/system-integration.md), updated by the daemon.
+ * app under `/opt/rpchat/current` (see docs/system-integration.md), updated by the daemon.
  */
 export type UpdatePackaging = 'appimage' | 'deb' | 'dev' | 'other' | 'system';
 
@@ -44,9 +42,6 @@ export interface UpdateStatus {
   canInstallInPlace: boolean;
   /** `packaging === 'system'`: what the daemon reports about the install. */
   systemInstall?: { dir: string; daemonConnected: boolean; daemonSupportsUpdates: boolean; current?: string; previous?: string };
-  tokenPresent: boolean;
-  /** Where the token lives: encrypted through the OS keyring (`safeStorage`) or a 0600 plaintext file. */
-  tokenStorage: 'keyring' | 'file' | 'none';
   /** Human-readable explanation for `unsupported` / `disabled` / a `deb` install. */
   reason?: string;
   /** Whether the policy file forces any `updates.*` setting. */
@@ -54,13 +49,10 @@ export interface UpdateStatus {
 }
 
 /** Repository whose releases carry the update feed (`latest-linux.yml` + AppImage). */
-export const UPDATE_REPO = { owner: '0xbeef1eaf', repo: 'llm-rp-code' } as const;
+export const UPDATE_REPO = { owner: '0xbeef1eaf', repo: 'RPChat' } as const;
 
 /** Release page for a given version tag (used for package installs, which are only notified). */
 export function releasePageUrl(version: string): string {
   const tag = version.startsWith('v') ? version : `v${version}`;
   return `https://github.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/tag/${tag}`;
 }
-
-/** Where to create the fine-grained personal access token (read-only Contents on the repository). */
-export const UPDATE_TOKEN_HELP_URL = 'https://github.com/settings/personal-access-tokens';

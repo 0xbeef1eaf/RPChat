@@ -20,7 +20,7 @@ use crate::protocol::DeviceCounts;
 /// Directory scanned for input devices.
 pub const INPUT_DIR: &str = "/dev/input";
 /// Name of the virtual device created for injection; excluded from grabbing.
-pub const VIRTUAL_DEVICE_NAME: &str = "rp-coded virtual input";
+pub const VIRTUAL_DEVICE_NAME: &str = "rpchatd virtual input";
 /// Where connector modes are read from.
 pub const DRM_DIR: &str = "/sys/class/drm";
 /// Time a key is held down when injecting (slept after each press, not after releases, so a
@@ -401,10 +401,10 @@ pub fn check_devices_report() -> String {
         out.push_str("uinput: /dev/uinput is writable (injection available)\n");
     } else if Path::new("/dev/uinput").exists() {
         out.push_str(
-            "uinput: /dev/uinput exists but is not writable (need root or the rp-code udev rule)\n",
+            "uinput: /dev/uinput exists but is not writable (need root or the rpchat udev rule)\n",
         );
     } else {
-        out.push_str("uinput: /dev/uinput missing — `modprobe uinput` (the installer adds modules-load.d/rp-code.conf)\n");
+        out.push_str("uinput: /dev/uinput missing — `modprobe uinput` (the installer adds modules-load.d/rpchat.conf)\n");
     }
     let s = screen_size();
     out.push_str(&format!(

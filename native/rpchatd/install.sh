@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# rp-code system integration installer (Linux).
+# rpchat system integration installer (Linux).
 #
-# Installs the rp-coded daemon (input lock + injection), its systemd unit, the rp-code group,
+# Installs the rpchatd daemon (input lock + injection), its systemd unit, the rpchat group,
 # the udev rule / uinput module for fallback tools, the policy directory, an application menu
 # entry + icon for the app (AppImage users get one this way), an autostart entry for one user,
-# and optionally the Chromium browser policy that force-installs the rp-code browser extension
+# and optionally the Chromium browser policy that force-installs the rpchat browser extension
 # (docs/browser-extension.md). With an AppImage as --app-bin it also does a "system install":
-# the AppImage is unpacked to /opt/rp-code/current (root-owned; /opt/rp-code/previous keeps the
-# last version, versions.json describes both, /usr/local/bin/rp-code points at it) so that later
+# the AppImage is unpacked to /opt/rpchat/current (root-owned; /opt/rpchat/previous keeps the
+# last version, versions.json describes both, /usr/local/bin/rpchat points at it) so that later
 # updates are applied by the daemon without a password prompt. Idempotent: every step prints
 # "[ok] ..." when it changed something and "[skip] ..." when it was already done. Run as root
 # (sudo or pkexec; the app runs it with pkexec and passes --app-bin). See docs/system-integration.md.
@@ -18,7 +18,7 @@
 #              [--system-install | --no-system-install] [--guard | --no-guard]
 #              [--browser-extension <id> --browser-update-url <url> [--browser-port <n>] [--browser-home <url>]
 #               [--browser-policy-dir <dir>]... [--browser-only]]
-#   install.sh --rollback [--dry-run]            swap /opt/rp-code/previous back to current
+#   install.sh --rollback [--dry-run]            swap /opt/rpchat/previous back to current
 #   install.sh --remove [--dry-run]              remove the system install (daemon stays)
 #   install.sh --refresh-daemon-files [--dry-run] reinstall the daemon binary/unit/udev files (no restart)
 #   install.sh --remove-browser-policy [--dry-run]
@@ -31,29 +31,29 @@ set -euo pipefail
 # login path includes — Arch: system-login (sddm, login and sshd include it); Debian/Ubuntu:
 # common-session. Marked so it can be found, replaced and removed.
 PAM_FILES="/etc/pam.d/system-login /etc/pam.d/common-session"
-PAM_MARK="# rp-code session guard"
+PAM_MARK="# rpchat session guard"
 PAM_LINE="session    optional   pam_apparmor.so      order=user,group,default $PAM_MARK"
 
-GROUP=rp-code
-LIBEXEC=/usr/local/libexec/rp-code
-DAEMON_DST="$LIBEXEC/rp-coded"
-UNIT_DST=/etc/systemd/system/rp-coded.service
-UDEV_DST=/etc/udev/rules.d/70-rp-code.rules
-MODULES_DST=/etc/modules-load.d/rp-code.conf
-POLICY_DIR=/etc/rp-code
+GROUP=rpchat
+LIBEXEC=/usr/local/libexec/rpchat
+DAEMON_DST="$LIBEXEC/rpchatd"
+UNIT_DST=/etc/systemd/system/rpchatd.service
+UDEV_DST=/etc/udev/rules.d/70-rpchat.rules
+MODULES_DST=/etc/modules-load.d/rpchat.conf
+POLICY_DIR=/etc/rpchat
 POLICY_DST="$POLICY_DIR/policy.json"
 # Where the policy seal keeps a mirror copy (see POLICY.md "Sealing the policy"): outside /etc,
 # so removing one directory does not unseal the machine.
-STATE_DIR=/var/lib/rp-code
-RUN_DIR=/run/rp-code
-MENU_DST=/usr/local/share/applications/rp-code.desktop
-ICON_DST=/usr/local/share/icons/hicolor/512x512/apps/rp-code.png
+STATE_DIR=/var/lib/rpchat
+RUN_DIR=/run/rpchat
+MENU_DST=/usr/local/share/applications/rpchat.desktop
+ICON_DST=/usr/local/share/icons/hicolor/512x512/apps/rpchat.png
 # System install: the unpacked app (docs/system-integration.md "System install").
-INSTALL_ROOT=/opt/rp-code
-BIN_LINK=/usr/local/bin/rp-code
+INSTALL_ROOT=/opt/rpchat
+BIN_LINK=/usr/local/bin/rpchat
 # Chromium-based browsers on Linux read managed policies from these directories (each browser its
 # own). Format: "<policy dir>|<config dir whose presence means the browser is installed>|<binaries on PATH>".
-BROWSER_POLICY_FILE=rp-code.json
+BROWSER_POLICY_FILE=rpchat.json
 BROWSER_POLICY_DIRS="/etc/chromium/policies/managed|/etc/chromium|chromium chromium-browser
 /etc/opt/chrome/policies/managed|/etc/opt/chrome|google-chrome google-chrome-stable
 /etc/brave/policies/managed|/etc/brave|brave-browser brave
@@ -142,7 +142,7 @@ done
 case "$AUTOSTART" in xdg|systemd|none) ;; *) echo "install.sh: --autostart must be xdg, systemd or none" >&2; exit 64 ;; esac
 if [ -n "$PREFIX" ]; then
   # Relocate every system path (tests run the real steps against a scratch directory).
-  LIBEXEC="$PREFIX$LIBEXEC"; DAEMON_DST="$LIBEXEC/rp-coded"; UNIT_DST="$PREFIX$UNIT_DST"
+  LIBEXEC="$PREFIX$LIBEXEC"; DAEMON_DST="$LIBEXEC/rpchatd"; UNIT_DST="$PREFIX$UNIT_DST"
   UDEV_DST="$PREFIX$UDEV_DST"; MODULES_DST="$PREFIX$MODULES_DST"; POLICY_DIR="$PREFIX$POLICY_DIR"
   POLICY_DST="$POLICY_DIR/policy.json"; STATE_DIR="$PREFIX$STATE_DIR"
   RUN_DIR="$PREFIX$RUN_DIR"; MENU_DST="$PREFIX$MENU_DST"
@@ -206,31 +206,31 @@ fi
 
 # --- where the files come from ---------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-# Source tree: native/rp-coded/{install.sh,dist/,target/release/rp-coded}.
-# Packaged app: resources/system/{install.sh,<dist files>} and resources/bin/rp-coded.
+# Source tree: native/rpchatd/{install.sh,dist/,target/release/rpchatd}.
+# Packaged app: resources/system/{install.sh,<dist files>} and resources/bin/rpchatd.
 if [ -d "$SCRIPT_DIR/dist" ]; then DIST="$SCRIPT_DIR/dist"; else DIST="$SCRIPT_DIR"; fi
 if [ -z "$DAEMON_BIN" ]; then
-  for c in "$SCRIPT_DIR/rp-coded" "$SCRIPT_DIR/../bin/rp-coded" "$SCRIPT_DIR/target/release/rp-coded"; do
+  for c in "$SCRIPT_DIR/rpchatd" "$SCRIPT_DIR/../bin/rpchatd" "$SCRIPT_DIR/target/release/rpchatd"; do
     if [ -x "$c" ]; then DAEMON_BIN="$c"; break; fi
   done
 fi
 APP_BIN_EXPLICIT=false
 [ -n "$APP_BIN" ] && APP_BIN_EXPLICIT=true
-if [ -z "$APP_BIN" ] && [ -x "$INSTALL_ROOT/current/rp-code" ]; then
+if [ -z "$APP_BIN" ] && [ -x "$INSTALL_ROOT/current/rpchat" ]; then
   # An existing system install is the app: nothing to look for.
-  APP_BIN="$INSTALL_ROOT/current/rp-code"
+  APP_BIN="$INSTALL_ROOT/current/rpchat"
 fi
 if [ -z "$APP_BIN" ]; then
   # An AppImage next to the user's usual places wins over an extracted tree (see below).
   if [ -n "$USER_HOME" ]; then
     for d in "$USER_HOME/Applications" "$USER_HOME/.local/bin" "$USER_HOME/Downloads" "$USER_HOME"; do
-      c="$(ls -t "$d"/rp-code*.AppImage 2>/dev/null | head -n 1 || true)"
+      c="$(ls -t "$d"/rpchat*.AppImage 2>/dev/null | head -n 1 || true)"
       if [ -n "$c" ] && [ -x "$c" ]; then APP_BIN="$(readlink -f "$c")"; break; fi
     done
   fi
 fi
 if [ -z "$APP_BIN" ]; then
-  for c in "${APPIMAGE:-}" "$SCRIPT_DIR/../../rp-code" "$SCRIPT_DIR/../../../rp-code" /opt/rp-code/rp-code /usr/lib/rp-code/rp-code /usr/bin/rp-code /usr/local/bin/rp-code; do
+  for c in "${APPIMAGE:-}" "$SCRIPT_DIR/../../rpchat" "$SCRIPT_DIR/../../../rpchat" /opt/rpchat/rpchat /usr/lib/rpchat/rpchat /usr/bin/rpchat /usr/local/bin/rpchat; do
     if [ -n "$c" ] && [ -x "$c" ]; then APP_BIN="$(readlink -f "$c")"; break; fi
   done
 fi
@@ -250,7 +250,7 @@ if [ -n "$APP_BIN" ] && ! is_appimage "$APP_BIN"; then
       if $APP_BIN_EXPLICIT; then
         warn "$APP_BIN is inside an extracted AppImage tree; launchers will break if that folder is removed. Prefer --app-bin <path to the .AppImage>."
       else
-        die "found only $APP_BIN (an extracted AppImage tree). Pass --app-bin with the path to the .AppImage itself, e.g. --app-bin \"\$(readlink -f rp-code-*.AppImage)\""
+        die "found only $APP_BIN (an extracted AppImage tree). Pass --app-bin with the path to the .AppImage itself, e.g. --app-bin \"\$(readlink -f rpchat-*.AppImage)\""
       fi
       ;;
     *)
@@ -260,11 +260,11 @@ if [ -n "$APP_BIN" ] && ! is_appimage "$APP_BIN"; then
       ;;
   esac
 fi
-APP_EXEC="${APP_BIN:-rp-code}"
+APP_EXEC="${APP_BIN:-rpchat}"
 # With a system install every launcher points at the stable root-owned copy, never at the AppImage.
-if [ "$SYSTEM_INSTALL" = yes ]; then APP_EXEC="$INSTALL_ROOT/current/rp-code"; fi
+if [ "$SYSTEM_INSTALL" = yes ]; then APP_EXEC="$INSTALL_ROOT/current/rpchat"; fi
 ICON_SRC=""
-for c in "$SCRIPT_DIR/rp-code.png" "$SCRIPT_DIR/../../apps/desktop/build/icon.png"; do
+for c in "$SCRIPT_DIR/rpchat.png" "$SCRIPT_DIR/../../apps/desktop/build/icon.png"; do
   if [ -f "$c" ]; then ICON_SRC="$c"; break; fi
 done
 
@@ -310,7 +310,7 @@ as_user_write() { # as_user_write <dst> <content...>
   chown -R "$TARGET_USER" "$(dirname "$dst")" 2>/dev/null || chown "$TARGET_USER" "$dst"
 }
 
-# --- system install helpers (/opt/rp-code) --------------------------------------------------
+# --- system install helpers (/opt/rpchat) --------------------------------------------------
 # versions.json is written by this script and by the daemon (serde, pretty JSON, one key per
 # line), so a line-based reader is enough: json_field <file> <current|previous> <key>.
 json_field() {
@@ -342,7 +342,7 @@ tree_version() { # tree_version <tree> [<appimage path>]
   local v=""
   v="$(grep -h -m1 '^X-AppImage-Version=' "$1"/*.desktop 2>/dev/null | head -n 1 | cut -d= -f2- || true)"
   if [ -z "$v" ] && [ -n "${2:-}" ]; then
-    v="$(basename "$2" | sed -nE 's/^rp-code-([0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.-]*)-.*$/\1/p')"
+    v="$(basename "$2" | sed -nE 's/^rpchat-([0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.-]*)-.*$/\1/p')"
   fi
   printf '%s' "${v:-0.0.0}"
 }
@@ -351,8 +351,8 @@ tree_version() { # tree_version <tree> [<appimage path>]
 # setuid/setgid bits, no hard links, no symlinks leaving the tree, only files/dirs/symlinks.
 check_tree() { # check_tree <tree>
   local t="$1" f target
-  for f in rp-code libffmpeg.so resources/app.asar; do
-    [ -f "$t/$f" ] || die "not an rp-code app tree: $f is missing in $t"
+  for f in rpchat libffmpeg.so resources/app.asar; do
+    [ -f "$t/$f" ] || die "not an rpchat app tree: $f is missing in $t"
   done
   f="$(find "$t" -perm /6000 -print -quit)"; [ -z "$f" ] || die "refusing $t: $f has a setuid/setgid bit"
   f="$(find "$t" -type f -links +1 -print -quit)"; [ -z "$f" ] || die "refusing $t: $f is a hard link"
@@ -371,7 +371,7 @@ system_install_app() {
   if $DRY_RUN; then
     note "+ $APP_BIN --appimage-extract  (in $staging)"
     note "+ check, chown -R root:root, chmod 0755/0644, mv current previous, mv squashfs-root current"
-    note "+ write $versions; ln -s $INSTALL_ROOT/current/rp-code $BIN_LINK"
+    note "+ write $versions; ln -s $INSTALL_ROOT/current/rpchat $BIN_LINK"
     ok "would install $APP_BIN to $INSTALL_ROOT/current"
     return
   fi
@@ -386,7 +386,7 @@ system_install_app() {
   # (subshell: check_tree dies with the reason; the staging area must still go)
   ( check_tree "$tree" ) || { rm -rf "$staging"; exit 1; }
   version="$(tree_version "$tree" "$APP_BIN")"
-  if [ -f "$INSTALL_ROOT/current/rp-code" ] && [ "$(json_field "$versions" current version)" = "$version" ] && [ "$(json_field "$versions" current source)" = "$APP_BIN" ]; then
+  if [ -f "$INSTALL_ROOT/current/rpchat" ] && [ "$(json_field "$versions" current version)" = "$version" ] && [ "$(json_field "$versions" current source)" = "$APP_BIN" ]; then
     rm -rf "$staging"
     skip "$INSTALL_ROOT/current is already $version from $APP_BIN"
   else
@@ -409,19 +409,19 @@ system_install_app() {
     fi
     ok "installed $APP_BIN ($version) to $INSTALL_ROOT/current${prev_version:+ (previous: $prev_version)}"
   fi
-  if [ "$(readlink "$BIN_LINK" 2>/dev/null || true)" = "$INSTALL_ROOT/current/rp-code" ]; then
-    skip "$BIN_LINK → $INSTALL_ROOT/current/rp-code"
+  if [ "$(readlink "$BIN_LINK" 2>/dev/null || true)" = "$INSTALL_ROOT/current/rpchat" ]; then
+    skip "$BIN_LINK → $INSTALL_ROOT/current/rpchat"
   else
     install -d -m 0755 "$(dirname "$BIN_LINK")"
-    ln -sfn "$INSTALL_ROOT/current/rp-code" "$BIN_LINK"
-    ok "linked $BIN_LINK → $INSTALL_ROOT/current/rp-code"
+    ln -sfn "$INSTALL_ROOT/current/rpchat" "$BIN_LINK"
+    ok "linked $BIN_LINK → $INSTALL_ROOT/current/rpchat"
   fi
-  note "the AppImage can be deleted now; launch rp-code from the menu or as $BIN_LINK"
+  note "the AppImage can be deleted now; launch rpchat from the menu or as $BIN_LINK"
 }
 
 remove_system_install() {
   local d
-  if [ -L "$BIN_LINK" ] && [ "$(readlink "$BIN_LINK")" = "$INSTALL_ROOT/current/rp-code" ]; then
+  if [ -L "$BIN_LINK" ] && [ "$(readlink "$BIN_LINK")" = "$INSTALL_ROOT/current/rpchat" ]; then
     run rm -f "$BIN_LINK"; ok "removed $BIN_LINK"
   else
     skip "$BIN_LINK absent"
@@ -431,7 +431,7 @@ remove_system_install() {
       if [ -e "$d" ]; then run rm -rf "$d"; ok "removed $d"; fi
     done
     if [ -e "$INSTALL_ROOT/versions.json" ]; then run rm -f "$INSTALL_ROOT/versions.json"; ok "removed $INSTALL_ROOT/versions.json"; fi
-    # The .deb keeps its own files in /opt/rp-code; only an empty directory goes.
+    # The .deb keeps its own files in /opt/rpchat; only an empty directory goes.
     if ! $DRY_RUN && [ -z "$(ls -A "$INSTALL_ROOT" 2>/dev/null)" ]; then rmdir "$INSTALL_ROOT" && ok "removed $INSTALL_ROOT"; fi
   else
     skip "$INSTALL_ROOT absent"
@@ -440,8 +440,8 @@ remove_system_install() {
 
 rollback_system_install() {
   local versions="$INSTALL_ROOT/versions.json" cv ca cs pv pa ps
-  [ -f "$INSTALL_ROOT/previous/rp-code" ] || die "nothing to roll back to: $INSTALL_ROOT/previous is missing"
-  [ -f "$INSTALL_ROOT/current/rp-code" ] || die "$INSTALL_ROOT/current is not an rp-code install"
+  [ -f "$INSTALL_ROOT/previous/rpchat" ] || die "nothing to roll back to: $INSTALL_ROOT/previous is missing"
+  [ -f "$INSTALL_ROOT/current/rpchat" ] || die "$INSTALL_ROOT/current is not an rpchat install"
   cv="$(json_field "$versions" current version)"; ca="$(json_field "$versions" current installedAt)"; cs="$(json_field "$versions" current source)"
   pv="$(json_field "$versions" previous version)"; pa="$(json_field "$versions" previous installedAt)"; ps="$(json_field "$versions" previous source)"
   if $DRY_RUN; then
@@ -455,7 +455,7 @@ rollback_system_install() {
   mv "$INSTALL_ROOT/.rollback" "$INSTALL_ROOT/previous"
   write_versions "${pv:-unknown}" "${pa:-unknown}" "${ps:-unknown}" "${cv:-unknown}" "${ca:-unknown}" "${cs:-unknown}"
   ok "rolled back $INSTALL_ROOT/current to ${pv:-the previous version} (${cv:-the replaced version} is now previous)"
-  note "restart rp-code to run it; the next update goes forward again"
+  note "restart rpchat to run it; the next update goes forward again"
 }
 
 # --- session guard helpers ----------------------------------------------------------------
@@ -497,15 +497,15 @@ pam_insert() { # pam_insert <file>
 
 pam_remove() { # pam_remove <file>
   local f="$1" tmp
-  if ! grep -qF -- "$PAM_MARK" "$f"; then skip "$f has no pam_apparmor line from rp-code"; return 0; fi
+  if ! grep -qF -- "$PAM_MARK" "$f"; then skip "$f has no pam_apparmor line from rpchat"; return 0; fi
   if $DRY_RUN; then note "+ remove the marked line from $f"; ok "would remove the pam_apparmor line from $f"; return 0; fi
   tmp="$(mktemp "$f.XXXX")"
   awk -v mark="$PAM_MARK" 'index($0, mark) { next } { print }' "$f" > "$tmp" && chmod --reference="$f" "$tmp" && mv -f "$tmp" "$f"
   ok "removed the pam_apparmor line from $f"
-  # Only rp-code's own line goes; say so if another one is left, since one alone is harmless
+  # Only rpchat's own line goes; say so if another one is left, since one alone is harmless
   # but a second one alongside a future --guard hangs every login.
   local left; left="$(grep -E '^[[:space:]]*-?session[[:space:]]' "$f" | grep -c 'pam_apparmor\.so' || true)"
-  if [ "$left" -gt 0 ]; then warn "$f still has $left pam_apparmor session line(s) rp-code did not add; remove them by hand unless you put them there deliberately"; fi
+  if [ "$left" -gt 0 ]; then warn "$f still has $left pam_apparmor session line(s) rpchat did not add; remove them by hand unless you put them there deliberately"; fi
   return 0
 }
 
@@ -525,7 +525,7 @@ policy_guard_mode() {
   awk '/"guard"[[:space:]]*:/ { inside = 1 } inside && /"mode"[[:space:]]*:/ { v = $0; sub(/^[^:]*:[[:space:]]*"/, "", v); sub(/".*$/, "", v); print v; exit }' "$POLICY_DST" | grep -E '^(off|audit|enforce)$' || echo off
 }
 
-# Engage: PAM line + `rp-coded --guard-apply` (writes and loads the profiles from the policy).
+# Engage: PAM line + `rpchatd --guard-apply` (writes and loads the profiles from the policy).
 guard_engage() {
   local f
   if [ ! -d /sys/kernel/security/apparmor ] && $SYSTEM_CMDS; then
@@ -537,7 +537,7 @@ guard_engage() {
   if f="$(pam_file)"; then pam_insert "$f"; else warn "no PAM file to edit (${PAM_FILES}); add manually: $PAM_LINE"; fi
   if $SYSTEM_CMDS && [ -x "$DAEMON_DST" ]; then
     if $DRY_RUN; then note "+ $DAEMON_DST --guard-apply"; else
-      if "$DAEMON_DST" --guard-apply | sed 's/^/       /'; then ok "session guard applied from $POLICY_DST"; else warn "rp-coded --guard-apply reported a problem (see above and journalctl -u rp-coded)"; fi
+      if "$DAEMON_DST" --guard-apply | sed 's/^/       /'; then ok "session guard applied from $POLICY_DST"; else warn "rpchatd --guard-apply reported a problem (see above and journalctl -u rpchatd)"; fi
     fi
   else
     skip "profile load (no daemon binary, or --prefix); the daemon applies the guard when it starts"
@@ -550,7 +550,7 @@ guard_disengage() {
   if f="$(pam_file)"; then pam_remove "$f"; else skip "no PAM file (${PAM_FILES})"; fi
   if $SYSTEM_CMDS && [ -x "$DAEMON_DST" ]; then
     if $DRY_RUN; then note "+ $DAEMON_DST --guard-off"; else
-      if "$DAEMON_DST" --guard-off | sed 's/^/       /'; then ok "session guard profiles unloaded"; else warn "rp-coded --guard-off reported a problem"; fi
+      if "$DAEMON_DST" --guard-off | sed 's/^/       /'; then ok "session guard profiles unloaded"; else warn "rpchatd --guard-off reported a problem"; fi
     fi
   else
     skip "profile unload (no daemon binary, or --prefix)"
@@ -621,14 +621,14 @@ remove_browser_policy() {
 }
 
 if $REMOVE_BROWSER_POLICY; then
-  echo "rp-code browser policy: remove"
+  echo "rpchat browser policy: remove"
   remove_browser_policy
   ok "browser policy removed"
   exit 0
 fi
 
 if $BROWSER_ONLY; then
-  echo "rp-code browser policy: install"
+  echo "rpchat browser policy: install"
   install_browser_policy
   ok "browser policy installed"
   exit 0
@@ -636,11 +636,11 @@ fi
 
 if $GUARD_ONLY; then
   if [ "$GUARD" = yes ]; then
-    echo "rp-code session guard: engage"
+    echo "rpchat session guard: engage"
     guard_engage
     ok "session guard engaged"
   else
-    echo "rp-code session guard: disengage"
+    echo "rpchat session guard: disengage"
     guard_disengage
     ok "session guard disengaged"
   fi
@@ -648,39 +648,39 @@ if $GUARD_ONLY; then
 fi
 
 if $ROLLBACK; then
-  echo "rp-code system install: rollback"
+  echo "rpchat system install: rollback"
   rollback_system_install
   exit 0
 fi
 
 if $REMOVE_SYSTEM; then
-  echo "rp-code system install: remove"
+  echo "rpchat system install: remove"
   remove_system_install
   ok "system install removed"
   exit 0
 fi
 
 # =============================================================================================
-# Refresh the daemon's own files (run by rp-coded after an update whose bundle ships a newer
+# Refresh the daemon's own files (run by rpchatd after an update whose bundle ships a newer
 # daemon): binary, unit, udev rule, module list, docs, menu entry and icon — the same list as the
 # install below, no group/user/autostart/policy steps and no service restart (the daemon
 # restarts itself once the input lock is free).
 # =============================================================================================
 if $REFRESH_DAEMON; then
-  echo "rp-code system integration: refresh daemon files"
-  [ -n "$DAEMON_BIN" ] || die "rp-coded binary not found next to $SCRIPT_DIR"
+  echo "rpchat system integration: refresh daemon files"
+  [ -n "$DAEMON_BIN" ] || die "rpchatd binary not found next to $SCRIPT_DIR"
   note "daemon binary: $DAEMON_BIN"
   install_file "$DAEMON_BIN" "$DAEMON_DST" 0755 || true
   for f in README.md POLICY.md policy.example.json policy.all-on.json; do
     src="$SCRIPT_DIR/$f"; [ -f "$src" ] || src="$DIST/$f"
     [ -f "$src" ] && install_file "$src" "$LIBEXEC/$f" 0644 || true
   done
-  install_file "$DIST/rp-coded.service" "$UNIT_DST" 0644 || true
+  install_file "$DIST/rpchatd.service" "$UNIT_DST" 0644 || true
   udev_changed=false
-  install_file "$DIST/70-rp-code.rules" "$UDEV_DST" 0644 && udev_changed=true || true
-  install_file "$DIST/rp-code.conf" "$MODULES_DST" 0644 || true
+  install_file "$DIST/70-rpchat.rules" "$UDEV_DST" 0644 && udev_changed=true || true
+  install_file "$DIST/rpchat.conf" "$MODULES_DST" 0644 || true
   if [ -f "$MENU_DST" ]; then
-    content="$(sed "s|^Exec=.*|Exec=$APP_EXEC %U|; s|^TryExec=.*|TryExec=$APP_EXEC|" "$DIST/rp-code.desktop")"
+    content="$(sed "s|^Exec=.*|Exec=$APP_EXEC %U|; s|^TryExec=.*|TryExec=$APP_EXEC|" "$DIST/rpchat.desktop")"
     if [ "$(cat "$MENU_DST")" = "$content" ]; then skip "$MENU_DST is up to date"; else
       if $DRY_RUN; then note "+ write $MENU_DST"; else printf '%s\n' "$content" > "$MENU_DST.new" && chmod 0644 "$MENU_DST.new" && mv -f "$MENU_DST.new" "$MENU_DST"; fi
       ok "wrote $MENU_DST"
@@ -690,7 +690,7 @@ if $REFRESH_DAEMON; then
   fi
   if $SYSTEM_CMDS && have systemctl && [ -d /run/systemd/system ]; then run systemctl daemon-reload; fi
   if $SYSTEM_CMDS && $udev_changed && have udevadm; then run udevadm control --reload || true; fi
-  ok "daemon files refreshed ($DAEMON_DST); restart rp-coded to run the new binary"
+  ok "daemon files refreshed ($DAEMON_DST); restart rpchatd to run the new binary"
   exit 0
 fi
 
@@ -698,13 +698,13 @@ fi
 # Uninstall
 # =============================================================================================
 if $UNINSTALL; then
-  echo "rp-code system integration: uninstall"
+  echo "rpchat system integration: uninstall"
   guard_disengage
   if $SYSTEM_CMDS && have systemctl; then
-    if systemctl is-enabled rp-coded >/dev/null 2>&1 || systemctl is-active rp-coded >/dev/null 2>&1; then
-      run systemctl disable --now rp-coded; ok "stopped and disabled rp-coded.service"
+    if systemctl is-enabled rpchatd >/dev/null 2>&1 || systemctl is-active rpchatd >/dev/null 2>&1; then
+      run systemctl disable --now rpchatd; ok "stopped and disabled rpchatd.service"
     else
-      skip "rp-coded.service not enabled"
+      skip "rpchatd.service not enabled"
     fi
   fi
   for f in "$UNIT_DST" "$UDEV_DST" "$MODULES_DST"; do
@@ -720,10 +720,10 @@ if $UNINSTALL; then
   refresh_menus
   if [ -d "$RUN_DIR" ]; then run rm -rf "$RUN_DIR"; ok "removed $RUN_DIR"; fi
   if [ -n "$TARGET_USER" ]; then
-    xdg="$USER_HOME/.config/autostart/rp-code.desktop"
-    unit="$USER_HOME/.config/systemd/user/rp-code.service"
+    xdg="$USER_HOME/.config/autostart/rpchat.desktop"
+    unit="$USER_HOME/.config/systemd/user/rpchat.service"
     if [ -f "$unit" ]; then
-      user_systemctl disable --now rp-code || note "run as $TARGET_USER: systemctl --user disable --now rp-code"
+      user_systemctl disable --now rpchat || note "run as $TARGET_USER: systemctl --user disable --now rpchat"
       run rm -f "$unit"; ok "removed $unit"
     else
       skip "$unit absent"
@@ -757,11 +757,11 @@ fi
 # =============================================================================================
 # Install
 # =============================================================================================
-echo "rp-code system integration: install"
-[ -n "$DAEMON_BIN" ] || die "rp-coded binary not found (pass --daemon-bin, or build it: cargo build --release --manifest-path native/rp-coded/Cargo.toml)"
+echo "rpchat system integration: install"
+[ -n "$DAEMON_BIN" ] || die "rpchatd binary not found (pass --daemon-bin, or build it: cargo build --release --manifest-path native/rpchatd/Cargo.toml)"
 note "daemon binary: $DAEMON_BIN"
 note "dist files:    $DIST"
-note "app binary:    ${APP_BIN:-not found (autostart entry will use plain 'rp-code'; pass --app-bin)}"
+note "app binary:    ${APP_BIN:-not found (autostart entry will use plain 'rpchat'; pass --app-bin)}"
 if [ "$SYSTEM_INSTALL" = yes ]; then note "system install: $INSTALL_ROOT/current (from the AppImage; launchers use $APP_EXEC)"; else note "system install: no (--no-system-install, or --app-bin is not an AppImage)"; fi
 note "user:          ${TARGET_USER:-none (user steps skipped; pass --user)}"
 [ -z "$PREFIX" ] || note "prefix:        $PREFIX (files only; no groups, services or udev)"
@@ -791,7 +791,7 @@ for f in README.md POLICY.md policy.example.json policy.all-on.json; do
   [ -f "$src" ] && install_file "$src" "$LIBEXEC/$f" 0644 || true
 done
 unit_changed=false
-install_file "$DIST/rp-coded.service" "$UNIT_DST" 0644 && unit_changed=true || true
+install_file "$DIST/rpchatd.service" "$UNIT_DST" 0644 && unit_changed=true || true
 # The policy directory must exist before the unit starts: it is the one path under /etc the
 # hardened service may write to (write-once policy creation from the app, see POLICY.md).
 if [ -d "$POLICY_DIR" ]; then skip "$POLICY_DIR exists"; else run install -d -m 0755 -o root -g root "$POLICY_DIR"; ok "created $POLICY_DIR"; fi
@@ -801,14 +801,14 @@ if ! $SYSTEM_CMDS; then
   skip "systemd service (--prefix)"
 elif have systemctl && [ -d /run/systemd/system ]; then
   run systemctl daemon-reload
-  if systemctl is-enabled rp-coded >/dev/null 2>&1 && systemctl is-active rp-coded >/dev/null 2>&1; then
+  if systemctl is-enabled rpchatd >/dev/null 2>&1 && systemctl is-active rpchatd >/dev/null 2>&1; then
     if $daemon_changed || $unit_changed; then
-      run systemctl restart rp-coded; ok "restarted rp-coded.service"
+      run systemctl restart rpchatd; ok "restarted rpchatd.service"
     else
-      skip "rp-coded.service enabled and running"
+      skip "rpchatd.service enabled and running"
     fi
   else
-    run systemctl enable --now rp-coded; ok "enabled and started rp-coded.service"
+    run systemctl enable --now rpchatd; ok "enabled and started rpchatd.service"
   fi
 else
   warn "systemd not running; start $DAEMON_DST as root yourself (or use $UNIT_DST as a reference)"
@@ -816,8 +816,8 @@ fi
 
 # 3. udev rule + uinput module ---------------------------------------------------------------------
 udev_changed=false
-install_file "$DIST/70-rp-code.rules" "$UDEV_DST" 0644 && udev_changed=true || true
-install_file "$DIST/rp-code.conf" "$MODULES_DST" 0644 || true
+install_file "$DIST/70-rpchat.rules" "$UDEV_DST" 0644 && udev_changed=true || true
+install_file "$DIST/rpchat.conf" "$MODULES_DST" 0644 || true
 if ! $SYSTEM_CMDS; then
   skip "uinput module / udev reload (--prefix)"
 elif [ -e /dev/uinput ]; then
@@ -845,7 +845,7 @@ else
   skip "no policy file (defaults apply; create one once from Settings → System, or --policy-template writes the example to $POLICY_DST, see $LIBEXEC/POLICY.md)"
 fi
 
-# 5. system install: the unpacked app under /opt/rp-code (AppImage only) ------------------------------
+# 5. system install: the unpacked app under /opt/rpchat (AppImage only) ------------------------------
 if [ "$SYSTEM_INSTALL" = yes ]; then
   system_install_app
 else
@@ -854,7 +854,7 @@ fi
 
 # 6. application menu entry and icon (system-wide, so AppImage users get a launcher) ----------------
 if [ "$MENU_ENTRY" = yes ]; then
-  content="$(sed "s|^Exec=.*|Exec=$APP_EXEC %U|; s|^TryExec=.*|TryExec=$APP_EXEC|" "$DIST/rp-code.desktop")"
+  content="$(sed "s|^Exec=.*|Exec=$APP_EXEC %U|; s|^TryExec=.*|TryExec=$APP_EXEC|" "$DIST/rpchat.desktop")"
   if [ -f "$MENU_DST" ] && [ "$(cat "$MENU_DST")" = "$content" ]; then
     skip "$MENU_DST is up to date"
     changed=false
@@ -875,32 +875,32 @@ fi
 
 # 7. autostart for the user ------------------------------------------------------------------------
 if [ -n "$TARGET_USER" ]; then
-  xdg="$USER_HOME/.config/autostart/rp-code.desktop"
-  unit="$USER_HOME/.config/systemd/user/rp-code.service"
+  xdg="$USER_HOME/.config/autostart/rpchat.desktop"
+  unit="$USER_HOME/.config/systemd/user/rpchat.service"
   case "$AUTOSTART" in
     xdg)
-      content="$(sed "s|^Exec=.*|Exec=$APP_EXEC --hidden|" "$DIST/rp-code-autostart.desktop")"
+      content="$(sed "s|^Exec=.*|Exec=$APP_EXEC --hidden|" "$DIST/rpchat-autostart.desktop")"
       if [ -f "$xdg" ] && [ "$(cat "$xdg")" = "$content" ]; then
         skip "$xdg is up to date"
       else
         as_user_write "$xdg" "$content"; ok "wrote $xdg"
       fi
       if [ -f "$unit" ]; then
-        user_systemctl disable --now rp-code || note "run as $TARGET_USER: systemctl --user disable --now rp-code"
+        user_systemctl disable --now rpchat || note "run as $TARGET_USER: systemctl --user disable --now rpchat"
         run rm -f "$unit"; ok "removed $unit (switched to XDG autostart)"
       fi
       ;;
     systemd)
-      content="$(sed "s|^ExecStart=.*|ExecStart=$APP_EXEC --hidden|" "$DIST/rp-code.service")"
+      content="$(sed "s|^ExecStart=.*|ExecStart=$APP_EXEC --hidden|" "$DIST/rpchat.service")"
       if [ -f "$unit" ] && [ "$(cat "$unit")" = "$content" ]; then
         skip "$unit is up to date"
       else
         as_user_write "$unit" "$content"; ok "wrote $unit"
       fi
-      if user_systemctl daemon-reload && user_systemctl enable rp-code; then
-        ok "enabled rp-code user unit for $TARGET_USER"
+      if user_systemctl daemon-reload && user_systemctl enable rpchat; then
+        ok "enabled rpchat user unit for $TARGET_USER"
       else
-        note "no session bus for $TARGET_USER; run as that user: systemctl --user enable --now rp-code"
+        note "no session bus for $TARGET_USER; run as that user: systemctl --user enable --now rpchat"
       fi
       if [ -f "$xdg" ]; then run rm -f "$xdg"; ok "removed $xdg (switched to systemd user unit)"; fi
       ;;

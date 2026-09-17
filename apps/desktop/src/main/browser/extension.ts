@@ -2,7 +2,7 @@
  * The bundled browser extension as the app serves it: locates `resources/extension/`, owns the
  * per-user signing key (`<userData>/extension-key.pem`), packs the CRX (re-packed when the bundled
  * manifest version changes) and answers the loopback routes Chromium's force-install polls:
- * `GET /extension/update.xml`, `GET /extension/rp-code.crx`, `GET /extension/id`.
+ * `GET /extension/update.xml`, `GET /extension/rpchat.crx`, `GET /extension/id`.
  */
 import * as fs from 'node:fs';
 import * as http from 'node:http';
@@ -123,7 +123,7 @@ export class ExtensionService {
         res.end(req.method === 'HEAD' ? undefined : body);
         return;
       }
-      if (rel === 'rp-code.crx') {
+      if (rel === 'rpchat.crx') {
         const packed = await this.crx();
         res.writeHead(200, { 'Content-Type': 'application/x-chrome-extension', 'Cache-Control': 'no-store', 'Content-Length': String(packed.crx.length) });
         res.end(req.method === 'HEAD' ? undefined : packed.crx);

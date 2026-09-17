@@ -35,7 +35,7 @@ jobs:
           shared-key: native-linux
           workspaces: |
             native/overlay-wlr
-            native/rp-coded
+            native/rpchatd
       - name: Install system packages (helper build, Xvfb and nested Sway for smoke tests, apparmor_parser for the guard profiles)
         run: |
           sudo apt-get update
@@ -53,10 +53,10 @@ jobs:
         run: cargo test --manifest-path native/overlay-wlr/Cargo.toml
       - name: Daemon unit tests and lint
         run: |
-          cargo test --manifest-path native/rp-coded/Cargo.toml
-          cargo clippy --manifest-path native/rp-coded/Cargo.toml --all-targets -- -D warnings
-          cargo fmt --manifest-path native/rp-coded/Cargo.toml --check
-          native/rp-coded/target/release/rp-coded --check-devices || true
+          cargo test --manifest-path native/rpchatd/Cargo.toml
+          cargo clippy --manifest-path native/rpchatd/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path native/rpchatd/Cargo.toml --check
+          native/rpchatd/target/release/rpchatd --check-devices || true
       - name: Installer smoke (install.sh against a scratch prefix, fake AppImage)
         run: sudo scripts/install-smoke.sh "$RUNNER_TEMP/install-smoke"
       - name: Headful smoke (Xvfb, mock LLM, pixel checks)
@@ -70,7 +70,7 @@ jobs:
       - name: Package (unpacked) and smoke the packaged app
         run: |
           pnpm --filter @rp/desktop exec electron-builder --linux dir --publish never
-          RP_APP_BIN=apps/desktop/release/linux-unpacked/rp-code scripts/headful-smoke.sh "$RUNNER_TEMP/packaged"
+          RP_APP_BIN=apps/desktop/release/linux-unpacked/rpchat scripts/headful-smoke.sh "$RUNNER_TEMP/packaged"
       - name: Upload smoke screenshots
         if: always()
         continue-on-error: true # diagnostics only; an artifact-storage quota must not fail CI

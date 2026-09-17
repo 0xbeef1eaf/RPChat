@@ -31,7 +31,7 @@ const MONITORS: HyprMonitorJson[] = [
 /** Shape taken from real `hyprctl -j clients` output. */
 const CLIENTS: HyprClientJson[] = [
   { address: '0x55d2a1b2c3d0', mapped: true, hidden: false, at: [100, 100], size: [800, 600], monitor: 0, class: 'kitty', title: 'zsh', floating: false, pinned: false, pid: 4242 },
-  { address: '0x55d2a1ff0000', mapped: true, hidden: false, at: [0, 0], size: [480, 320], monitor: 1, class: 'rp-code', title: 'rp-overlay:abc-1', floating: true, pinned: false, pid: 4300 },
+  { address: '0x55d2a1ff0000', mapped: true, hidden: false, at: [0, 0], size: [480, 320], monitor: 1, class: 'rpchat', title: 'rp-overlay:abc-1', floating: true, pinned: false, pid: 4300 },
 ];
 
 describe('parseMonitors', () => {
@@ -258,7 +258,7 @@ describe('HyprlandIpcBackend', () => {
 
     // The rules go out as Lua, and nothing is retried with the legacy syntax.
     const evals = t.commands.filter((c) => c.startsWith('eval '));
-    expect(evals.some((c) => c.includes('hl.window_rule({ name = "rp-code-overlays"'))).toBe(true);
+    expect(evals.some((c) => c.includes('hl.window_rule({ name = "rpchat-overlays"'))).toBe(true);
     const placement = evals.find((c) => c.includes('hl.dsp.window.move'));
     expect(placement).toBeDefined();
     expect(placement).toContain('if x.address == "0x55d2a1ff0000" then w = x end');

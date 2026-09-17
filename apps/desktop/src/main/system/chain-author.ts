@@ -19,7 +19,7 @@
  *   bookkeeping the administrator has to get right by hand.
  *
  * The signing itself is Node's Ed25519 (`crypto.sign(null, …)`), over exactly the bytes
- * `native/rp-coded/src/chain.rs` verifies: `rp-code-chain/v1\n` followed by the link's canonical
+ * `native/rpchatd/src/chain.rs` verifies: `rpchat-chain/v1\n` followed by the link's canonical
  * JSON. `canonicalJson` here and `serde_json` there produce the same bytes for the same value.
  */
 import * as fs from 'node:fs/promises';
@@ -31,9 +31,9 @@ import { RpError } from '@rp/shared';
 import { canonicalJson } from './seal-cache.js';
 
 /** Prefixed to a link's canonical bytes before signing (`chain.rs`). */
-export const CHAIN_SIGNING_PREFIX = 'rp-code-chain/v1';
+export const CHAIN_SIGNING_PREFIX = 'rpchat-chain/v1';
 /** The string a pack signature covers (`remote.rs`). */
-export const PACK_SIGNING_PREFIX = 'rp-code-pack/v1';
+export const PACK_SIGNING_PREFIX = 'rpchat-pack/v1';
 /** Marks a key file that went through the OS keyring, so a fallback file is not fed to it. */
 const HEADER_KEYRING = 'rp-chain-key:v1:keyring\n';
 const HEADER_PLAIN = 'rp-chain-key:v1:plain\n';

@@ -725,7 +725,7 @@ export class EditorService {
     const validation = await this.validate(key);
     if (!validation.ok) throw new RpError('PACK_INVALID', `Fix the pack first:\n${validation.problems.join('\n')}`);
     const suggested = `${manifest.id || path.basename(dir)}-${manifest.version}.rppack`;
-    const target = await this.deps.dialogs.saveFile('Export pack', suggested, [{ name: 'rp-code pack', extensions: ['rppack'] }]);
+    const target = await this.deps.dialogs.saveFile('Export pack', suggested, [{ name: 'rpchat pack', extensions: ['rppack'] }]);
     if (!target) return null;
     await packDirectory(dir, target);
     return target;

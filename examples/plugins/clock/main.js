@@ -1,4 +1,4 @@
-// Example rp-code plugin: the `clock` module. Plain ESM, no dependencies.
+// Example rpchat plugin: the `clock` module. Plain ESM, no dependencies.
 // Loaded by the app's main process; `activate(host)` returns one handler per module.
 
 const MAX_SECONDS = 24 * 60 * 60;

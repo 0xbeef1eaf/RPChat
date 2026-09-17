@@ -1,6 +1,6 @@
 # Browser extension: characters in your browser
 
-With the **rp-code browser bridge** extension installed, a character that has the `browser`
+With the **rpchat browser bridge** extension installed, a character that has the `browser`
 capability can list your tabs, open pages, read them, click links, fill in fields, scroll,
 take screenshots and react when a page finishes loading — in your real browser, with your
 real logins. Since `sdk.browser` 2.1 it can also keep pages from opening for a while, restyle
@@ -18,10 +18,10 @@ Vivaldi, Opera. Firefox is not supported (different extension platform).
 ## How it works
 
 ```
- ┌──────────────── rp-code (Electron main) ────────────────┐         ┌──────── browser ────────┐
- │ loopback http server on 127.0.0.1:<bridgePort>          │         │ rp-code browser bridge  │
+ ┌──────────────── rpchat (Electron main) ────────────────┐         ┌──────── browser ────────┐
+ │ loopback http server on 127.0.0.1:<bridgePort>          │         │ rpchat browser bridge  │
  │   GET /extension/update.xml   Omaha update manifest     │◄── poll ┤   (MV3 service worker)  │
- │   GET /extension/rp-code.crx  CRX3 signed with your key │         │                         │
+ │   GET /extension/rpchat.crx  CRX3 signed with your key │         │                         │
  │   GET /extension/id           the extension id          │         │  ws://127.0.0.1:<port>/ │
  │   WS  /bridge  ◄── Origin: chrome-extension://<id> ─────┼─────────┤    bridge, reconnecting │
  │ BrowserBridge: hello → trust prompt → request/response  │         │  chrome.tabs / scripting│
@@ -74,7 +74,7 @@ subdomain), `*.example.com` (the same), `example.com/path*` (a path prefix), `ex
 navigations are affected — embedded resources, the extension's own traffic and the app's pages
 are not. Without `redirect` the rule sends the navigation to the extension's `blocked.html`
 ("This page is unavailable right now — blocked by *character* until *time*", the reason, and an
-"Ask in rp-code" hint); with `redirect` it goes to that URL instead. Tabs already showing a
+"Ask in rpchat" hint); with `redirect` it goes to that URL instead. Tabs already showing a
 newly blocked page are moved the same way. The rule table lives in `chrome.storage.local`
 (dynamic DNR rules persist on their own) and a `chrome.alarms` alarm removes expired rules; the
 list and the popup's counter are refreshed from it.
@@ -114,7 +114,7 @@ filter there, or `clearImageEffects`.
 `sdk.browser.setHomePage(url | null)`, `homePage()`. The extension overrides the browser's
 new-tab page (`chrome_url_overrides.newtab` → `newtab.html`): when a home page is stored in
 `chrome.storage.local.homePage` and it is http(s), the page does `location.replace(url)`;
-otherwise it shows a plain "rp-code" page. The value lives in `settings.browser.homePage` (Settings → Browser "Home page";
+otherwise it shows a plain "rpchat" page. The value lives in `settings.browser.homePage` (Settings → Browser "Home page";
 policy key `browser.homePage`) and is pushed to the extension every time one connects, so it
 survives extension re-installs. **Install browser policy…** also writes it as
 `HomepageLocation` + `HomepageIsNewTabPage: false` (`install.sh --browser-home <url>`), which
@@ -172,18 +172,18 @@ access is disabled in Settings → Browser".
 install.sh --browser-only --browser-extension <id> --browser-update-url http://127.0.0.1:<port>/extension/update.xml --browser-port <port>
 ```
 
-It writes `rp-code.json` into the managed-policy directory of every Chromium-based browser
+It writes `rpchat.json` into the managed-policy directory of every Chromium-based browser
 that looks installed (binary on `PATH` or its `/etc` config directory present); Chromium and
 Chrome always get one:
 
 | Browser | Policy file |
 |---|---|
-| Chromium | `/etc/chromium/policies/managed/rp-code.json` |
-| Google Chrome | `/etc/opt/chrome/policies/managed/rp-code.json` |
-| Brave | `/etc/brave/policies/managed/rp-code.json` |
-| Microsoft Edge | `/etc/opt/edge/policies/managed/rp-code.json` |
-| Vivaldi | `/etc/vivaldi/policies/managed/rp-code.json` |
-| Opera | `/etc/opera/policies/managed/rp-code.json` |
+| Chromium | `/etc/chromium/policies/managed/rpchat.json` |
+| Google Chrome | `/etc/opt/chrome/policies/managed/rpchat.json` |
+| Brave | `/etc/brave/policies/managed/rpchat.json` |
+| Microsoft Edge | `/etc/opt/edge/policies/managed/rpchat.json` |
+| Vivaldi | `/etc/vivaldi/policies/managed/rpchat.json` |
+| Opera | `/etc/opera/policies/managed/rpchat.json` |
 
 The file (`apps/desktop/src/main/browser/policy.ts` builds the same JSON):
 
@@ -206,7 +206,7 @@ The browser polls the update URL (at start and every few hours; `chrome://policy
 policies* and `chrome://extensions` → *Update* hurry it along), downloads the CRX **from the
 app on this computer**, installs it as a force-installed extension the user cannot remove,
 and the extension connects. The app must be running for the download to succeed; a browser
-started while rp-code is closed retries later. `chrome://policy` shows the policy and any
+started while rpchat is closed retries later. `chrome://policy` shows the policy and any
 error; `chrome://extensions` shows the extension as "Installed by your administrator".
 
 With a home page set (Settings → Browser), the file also carries `"HomepageLocation": "<url>"`
@@ -222,7 +222,7 @@ names the platform policy path when a policy is loaded) or watch it look for the
 `strace -f -e trace=openat <browser> 2>&1 | grep policies/managed`.
 
 **Remove policy** (`install.sh --remove-browser-policy [--browser-policy-dir <dir>]…`) deletes
-every `rp-code.json` the installer wrote; browsers uninstall the extension at their next policy
+every `rpchat.json` the installer wrote; browsers uninstall the extension at their next policy
 refresh.
 `install.sh --uninstall` removes them as well. The `.deb` post-install never writes this
 policy: the extension id is derived from a per-user key (below), so it has to be done from
@@ -249,14 +249,14 @@ Caveats:
 **Settings → Browser → Developers** (`<resources>/extension`, a copy of
 `apps/browser-extension/dist`; a *Copy* button is next to it). An unpacked extension gets an
 id derived from its path, not from the key, so it differs from the policy id — that is fine:
-the first time it connects rp-code asks you to allow it. Set the port in the extension's
+the first time it connects rpchat asks you to allow it. Set the port in the extension's
 popup when it is not the default.
 
 ### The first connection
 
 When an extension whose id is not yet in **Settings → Browser → Allowed extensions** says
-hello, rp-code opens a question window: *"Browser extension `<id>` (`<browser>`) wants to
-connect to rp-code — Allow?"*. *Yes* stores the id in `settings.browser.trustedExtensionIds`
+hello, rpchat opens a question window: *"Browser extension `<id>` (`<browser>`) wants to
+connect to rpchat — Allow?"*. *Yes* stores the id in `settings.browser.trustedExtensionIds`
 and the extension is connected from then on, across restarts. *No* (or closing the window)
 refuses it for the rest of this app run without asking again; Settings → Browser lists such
 refused ids and lets you allow them, or add any id by hand. *Remove* forgets an id and drops

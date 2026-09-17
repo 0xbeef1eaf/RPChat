@@ -38,7 +38,7 @@ import {
 } from './voice-models.js';
 
 /** Synthetic pack id under which generated speech files are served to the audio window. */
-export const TTS_PACK_ID = 'app.rp-code.tts';
+export const TTS_PACK_ID = 'app.rpchat.tts';
 export const VOICE_TEXT_MAX = 2000;
 export const LISTEN_MAX_SECONDS = 60;
 /** How long a fire-and-forget `speak()` waits for the TTS command to fail before reporting success. */

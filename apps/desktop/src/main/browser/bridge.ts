@@ -87,7 +87,7 @@ export function extensionIdFromOrigin(origin: string | undefined): string | unde
 }
 
 /** Map the extension's error codes onto `RpError` codes so callers see familiar failures. */
-export function rpCodeFor(code: string): 'NOT_FOUND' | 'INVALID_ARGUMENT' | 'CAPABILITY_FAILED' {
+export function rpChatFor(code: string): 'NOT_FOUND' | 'INVALID_ARGUMENT' | 'CAPABILITY_FAILED' {
   switch (code) {
     case 'NOT_FOUND':
       return 'NOT_FOUND';
@@ -291,7 +291,7 @@ export class BrowserBridge {
     }
     const code = typeof frame.error?.code === 'string' ? frame.error.code : 'FAILED';
     const message = typeof frame.error?.message === 'string' ? frame.error.message : 'the browser extension reported an error';
-    p.reject(new RpError(rpCodeFor(code), `${p.op}: ${message}`, { extensionCode: code }));
+    p.reject(new RpError(rpChatFor(code), `${p.op}: ${message}`, { extensionCode: code }));
   }
 
   // ---- API ---------------------------------------------------------------------------------

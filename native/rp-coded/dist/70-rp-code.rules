@@ -1,5 +1,0 @@
-# rp-code: let members of the rp-code group use /dev/uinput directly.
-# The daemon (rp-coded) runs as root and does not need this rule; it only lets members of the
-# rp-code group open /dev/uinput themselves (the app does not use it for input injection).
-# Installed to /etc/udev/rules.d/70-rp-code.rules by native/rp-coded/install.sh.
-KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="rp-code", MODE="0660", OPTIONS+="static_node=uinput"

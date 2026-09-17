@@ -1,4 +1,4 @@
-//! The root-owned policy file (`/etc/rp-code/policy.json`).
+//! The root-owned policy file (`/etc/rpchat/policy.json`).
 //!
 //! The daemon only interprets `inputLock`; the `settings` block is validated for shape and
 //! handed to the app verbatim through the `policy` request. Loading is cached on the file's
@@ -17,7 +17,7 @@ use crate::remote::{PackRules, PacksPolicy, RemotePolicy, RemoteRules};
 use crate::seal::{LockPolicy, LockRules};
 
 /// Default policy file location (`POLICY_FILE_PATH` in `@rp/shared`).
-pub const DEFAULT_POLICY_PATH: &str = "/etc/rp-code/policy.json";
+pub const DEFAULT_POLICY_PATH: &str = "/etc/rpchat/policy.json";
 
 /// Shortest lock the daemon will hold (matches the app's `INPUT_LOCK_MIN_MS`).
 pub const MIN_LOCK_MS: u64 = 1000;
@@ -928,7 +928,7 @@ mod tests {
         assert_eq!(d.max_duration_ms, 300_000);
         assert_eq!(d.emergency_key, EmergencyKey::Esc);
         assert_eq!(d.emergency_hold_ms, 5000);
-        let mut store = PolicyStore::new("/nonexistent/rp-code/policy.json");
+        let mut store = PolicyStore::new("/nonexistent/rpchat/policy.json");
         assert_eq!(store.load(), Ok(None));
         assert_eq!(store.lock_limits(), Ok(LockLimits::default()));
     }
@@ -1233,7 +1233,7 @@ mod tests {
     #[test]
     fn create_writes_once_with_mode_0644_and_pretty_json() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("etc").join("rp-code").join("policy.json");
+        let path = dir.path().join("etc").join("rpchat").join("policy.json");
         let mut store = PolicyStore::new(&path);
         assert_eq!(store.load(), Ok(None));
 

@@ -1,0 +1,17 @@
+# rpchat — systemd *user* unit alternative to the XDG autostart entry.
+# Installed to ~/.config/systemd/user/rpchat.service by install.sh --autostart systemd and
+# enabled with `systemctl --user enable --now rpchat`. install.sh replaces the executable path.
+[Unit]
+Description=rp desktop app (start hidden in the tray)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=rpchat --hidden
+Restart=on-failure
+RestartSec=5
+Slice=app.slice
+
+[Install]
+WantedBy=graphical-session.target

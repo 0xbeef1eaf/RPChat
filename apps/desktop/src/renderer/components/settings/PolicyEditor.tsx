@@ -47,7 +47,7 @@ const GUARD_MODE_HINTS: Record<string, string> = {
 
 const COMPOSITOR_HINTS: Record<string, string> = {
   allow: 'Anything in the session may drive the compositor.',
-  'shell-only': 'Only the shell and rp-code may; the user’s terminals and scripts may not.',
+  'shell-only': 'Only the shell and rpchat may; the user’s terminals and scripts may not.',
   deny: 'Nothing in the session may, not even the shell.',
 };
 
@@ -301,12 +301,12 @@ export function CreatePolicyDialog({
       <div className="callout callout-warning small">
         {sealed ? (
           <>
-            Replaces <code className="nowrap">{path}</code> through the rp-code daemon. This machine is locked, so the code your authenticator app is showing is asked for before
+            Replaces <code className="nowrap">{path}</code> through the rpchat daemon. This machine is locked, so the code your authenticator app is showing is asked for before
             anything is written, and the lock is re-pinned to whatever you write here.
           </>
         ) : (
           <>
-            Writes <code className="nowrap">{path}</code> through the rp-code daemon — no password needed, but <strong>only once</strong>. Afterwards only root can change or remove
+            Writes <code className="nowrap">{path}</code> through the rpchat daemon — no password needed, but <strong>only once</strong>. Afterwards only root can change or remove
             it, and what it says overrides the settings of every user on this machine. Lock it behind an authenticator code afterwards and you can change it again from here.
           </>
         )}
@@ -451,7 +451,7 @@ export function CreatePolicyDialog({
           <div className="stack" style={{ gap: 14 }}>
             <p className="field-hint" style={{ margin: 0 }}>
               AppArmor confinement of the listed users’ login sessions, so their own terminals, keybind scripts and pickers cannot reach the
-              compositor’s and shell’s sockets, rewrite the wallpaper and shell config, or signal rp-code — while rp-code itself still may.
+              compositor’s and shell’s sockets, rewrite the wallpaper and shell config, or signal rpchat — while rpchat itself still may.
             </p>
             <div className="field">
               <span className="field-label">Mode</span>
@@ -462,7 +462,7 @@ export function CreatePolicyDialog({
               <div className="callout callout-danger small">The guard confines the users listed on the <strong>The app</strong> tab, and none are listed. The daemon refuses a policy like this.</div>
             ) : null}
             <div className="stack" style={{ gap: 2 }}>
-              <SwitchRow label="Protect rp-code" hint="Signals and ptrace from the session to rp-code are refused, so the session cannot kill or attach to it." checked={draft.guard.protectApp} disabled={busy} onChange={(v) => setDraft({ ...draft, guard: { ...draft.guard, protectApp: v } })} />
+              <SwitchRow label="Protect rpchat" hint="Signals and ptrace from the session to rpchat are refused, so the session cannot kill or attach to it." checked={draft.guard.protectApp} disabled={busy} onChange={(v) => setDraft({ ...draft, guard: { ...draft.guard, protectApp: v } })} />
               <SwitchRow label="Protect the wallpaper and shell" hint="The shell’s IPC socket and its config and state files are guarded from the session." checked={draft.guard.wallpaper} disabled={busy} onChange={(v) => setDraft({ ...draft, guard: { ...draft.guard, wallpaper: v } })} />
             </div>
             <div className="field">
@@ -536,7 +536,7 @@ export function CreatePolicyDialog({
                   <input
                     id="policy-remote-url"
                     type="text"
-                    placeholder="https://example.com/rp-code/policy.json"
+                    placeholder="https://example.com/rpchat/policy.json"
                     value={draft.remote.url}
                     disabled={busy}
                     onChange={(e) => setDraft({ ...draft, remote: { ...draft.remote, url: e.target.value } })}
@@ -625,7 +625,7 @@ export function CreatePolicyDialog({
                 </div>
                 <SwitchRow label="Put the policy back when it is edited" hint="The daemon compares the file against the locked copy every few seconds and rewrites it, logging the attempt." checked={draft.lock.selfHeal} disabled={busy} onChange={(selfHeal) => setDraft({ ...draft, lock: { ...draft.lock, selfHeal } })} />
                 <SwitchRow label="Mark the files immutable" hint="Sets the immutable attribute, so a plain delete or editor save fails until someone runs chattr -i first." checked={draft.lock.immutable} disabled={busy} onChange={(immutable) => setDraft({ ...draft, lock: { ...draft.lock, immutable } })} />
-                <SwitchRow label="Refuse a manual stop of the service" hint="Writes a systemd drop-in with RefuseManualStop, so `systemctl stop rp-coded` is declined." checked={draft.lock.refuseManualStop} disabled={busy} onChange={(refuseManualStop) => setDraft({ ...draft, lock: { ...draft.lock, refuseManualStop } })} />
+                <SwitchRow label="Refuse a manual stop of the service" hint="Writes a systemd drop-in with RefuseManualStop, so `systemctl stop rpchatd` is declined." checked={draft.lock.refuseManualStop} disabled={busy} onChange={(refuseManualStop) => setDraft({ ...draft, lock: { ...draft.lock, refuseManualStop } })} />
                 <SwitchRow
                   label="Take away the ways out of the session guard"
                   hint="With the guard in enforce mode, the confined users lose run0, systemd-run, machinectl, pkexec, chattr and apparmor_parser — the commands that would start a shell outside the confinement or undo the lock. sudo stays: its children stay confined."

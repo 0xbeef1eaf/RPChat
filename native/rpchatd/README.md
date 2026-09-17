@@ -1,4 +1,4 @@
-# rp-coded
+# rpchatd
 
 Small root daemon for the rp desktop app on Linux. It owns the two things an unprivileged
 desktop process cannot do safely — **grabbing the user's input devices** (`EVIOCGRAB` on
@@ -6,12 +6,12 @@ desktop process cannot do safely — **grabbing the user's input devices** (`EVI
 one uinput virtual device — and enforces a root-owned **policy file** so the limits cannot be
 loosened from the app. When that policy says the app may not be quit (`app.allowQuit: false`)
 it also **relaunches the app** in the user's session after a kill or crash, and for a **system
-install** (`/opt/rp-code`) it **applies app updates** the user downloaded — verified, extracted
+install** (`/opt/rpchat`) it **applies app updates** the user downloaded — verified, extracted
 as the user, swapped in as root — and updates itself from the same bundle. The app talks to it
 over a group-restricted unix socket. With a `guard` block in the policy it also runs the
 **session guard**: AppArmor profiles, generated from the policy, that confine the listed users'
 login sessions so their own terminals and scripts cannot reach the compositor/shell IPC, edit
-the wallpaper config or kill rp-code — and it reports every attempt to the app.
+the wallpaper config or kill rpchat — and it reports every attempt to the app.
 
 Spec: `docs/spec/system.md`. User guide: `docs/system-integration.md`. Wire contract:
 `packages/shared/src/system.ts` (`DaemonRequest` / `DaemonResponse` / `PolicyFile`).
@@ -19,17 +19,17 @@ Spec: `docs/spec/system.md`. User guide: `docs/system-integration.md`. Wire cont
 ## Build and test
 
 ```sh
-cargo build --release          # → target/release/rp-coded (no system libraries needed)
+cargo build --release          # → target/release/rpchatd (no system libraries needed)
 cargo test                     # 89 tests, all run without /dev/input or /dev/uinput (the chown/swap
                                # parts of the update tests need root and are skipped otherwise; the
                                # generated AppArmor profiles go through apparmor_parser -Q when installed)
 cargo clippy --all-targets
 pnpm run build:daemon          # same build, from the monorepo root
-./target/release/rp-coded --check-devices
+./target/release/rpchatd --check-devices
 ```
 
 Rust 1.75+. Dependencies: `evdev` 0.13 (ioctls, uinput), `nix` 0.29 (signals, chown, peer
-credentials), `serde`/`serde_json`, `sha2`/`base64` (update checksums). `RP_CODED_VERSION=<semver>`
+credentials), `serde`/`serde_json`, `sha2`/`base64` (update checksums). `RPCHATD_VERSION=<semver>`
 at build time overrides the version the binary reports (test builds that must look newer than the
 running daemon).
 
@@ -38,52 +38,52 @@ running daemon).
 `install.sh` (run as root) does everything described in `docs/system-integration.md`:
 
 ```sh
-sudo native/rp-coded/install.sh --user "$USER" --app-bin /path/to/rp-code.AppImage [--autostart xdg|systemd|none] [--policy-template] [--no-system-install]
-sudo native/rp-coded/install.sh --rollback        # system install: previous ⇄ current
-sudo native/rp-coded/install.sh --remove          # system install: delete /opt/rp-code/{current,previous,versions.json}
-sudo native/rp-coded/install.sh --guard           # session guard: pam_apparmor line + rp-coded --guard-apply
-sudo native/rp-coded/install.sh --no-guard        # remove the PAM line, unload the profiles
-sudo native/rp-coded/install.sh --uninstall --user "$USER"
+sudo native/rpchatd/install.sh --user "$USER" --app-bin /path/to/rpchat.AppImage [--autostart xdg|systemd|none] [--policy-template] [--no-system-install]
+sudo native/rpchatd/install.sh --rollback        # system install: previous ⇄ current
+sudo native/rpchatd/install.sh --remove          # system install: delete /opt/rpchat/{current,previous,versions.json}
+sudo native/rpchatd/install.sh --guard           # session guard: pam_apparmor line + rpchatd --guard-apply
+sudo native/rpchatd/install.sh --no-guard        # remove the PAM line, unload the profiles
+sudo native/rpchatd/install.sh --uninstall --user "$USER"
 ./install.sh --dry-run ...      # print what would happen, no root needed
 sudo scripts/install-smoke.sh   # the whole thing against a scratch --prefix with a fake AppImage
 ```
 
-With an AppImage as `--app-bin` the installer unpacks it to `/opt/rp-code/current` (the "system
+With an AppImage as `--app-bin` the installer unpacks it to `/opt/rpchat/current` (the "system
 install"; `--no-system-install` keeps the AppImage as the launcher). From then on the app's
 updater hands downloaded releases to the daemon (`apply-update`) instead of asking for a password.
 
 The desktop app ships the script and `dist/` under `resources/system/` and runs it through
-`pkexec` from Settings → System, after copying everything to `~/.cache/rp-code/system-install/`
+`pkexec` from Settings → System, after copying everything to `~/.cache/rpchat/system-install/`
 (root cannot read inside an AppImage's FUSE mount). From an AppImage by hand, extract first:
-`./rp-code-*.AppImage --appimage-extract 'resources/system/*' 'resources/bin/rp-coded'`, then
-run `sudo squashfs-root/resources/system/install.sh --app-bin "$(readlink -f rp-code-*.AppImage)"`.
+`./rpchat-*.AppImage --appimage-extract 'resources/system/*' 'resources/bin/rpchatd'`, then
+run `sudo squashfs-root/resources/system/install.sh --app-bin "$(readlink -f rpchat-*.AppImage)"`.
 
 ## CLI
 
 ```
-rp-coded [--socket <path>] [--policy <path>] [--sessions-dir <path>] [--install-root <path>]
+rpchatd [--socket <path>] [--policy <path>] [--sessions-dir <path>] [--install-root <path>]
          [--system-prefix <path>] [--profile-dir <path>] [--guard-state <path>]
          [--no-restart] [--no-uinput] [--log-level error|warn|info|debug]
-rp-coded --check-devices
-rp-coded --guard-apply | --guard-off [--policy <path>] [--profile-dir <path>] [--guard-state <path>]
-rp-coded --seal-status | --unseal <code> [--policy <path>]
-rp-coded --help | --version
+rpchatd --check-devices
+rpchatd --guard-apply | --guard-off [--policy <path>] [--profile-dir <path>] [--guard-state <path>]
+rpchatd --seal-status | --unseal <code> [--policy <path>]
+rpchatd --help | --version
 ```
 
-- `--socket` (env `RP_CODED_SOCKET`): default `/run/rp-code/daemon.sock`. The parent directory
-  is created `0750 root:rp-code`, the socket `0660 root:rp-code`; without the group only root
+- `--socket` (env `RPCHATD_SOCKET`): default `/run/rpchat/daemon.sock`. The parent directory
+  is created `0750 root:rpchat`, the socket `0660 root:rpchat`; without the group only root
   can connect (a warning is logged).
-- `--policy` (env `RP_CODED_POLICY`): default `/etc/rp-code/policy.json`.
-- `--sessions-dir` (env `RP_CODED_SESSIONS_DIR`): logind session state files used to find the
+- `--policy` (env `RPCHATD_POLICY`): default `/etc/rpchat/policy.json`.
+- `--sessions-dir` (env `RPCHATD_SESSIONS_DIR`): logind session state files used to find the
   active graphical user before relaunching the app; default `/run/systemd/sessions`, with
   `loginctl` as the fallback. Meant for tests (point it at a directory with a fake session file).
-- `--install-root` (env `RP_CODED_INSTALL_ROOT`): the system install (`current/`, `previous/`,
-  `versions.json`); default `/opt/rp-code`. `--system-prefix` (env `RP_CODED_SYSTEM_PREFIX`) is
+- `--install-root` (env `RPCHATD_INSTALL_ROOT`): the system install (`current/`, `previous/`,
+  `versions.json`); default `/opt/rpchat`. `--system-prefix` (env `RPCHATD_SYSTEM_PREFIX`) is
   handed to `install.sh --prefix` when the daemon refreshes its own files after an update, and
-  `--no-restart` (env `RP_CODED_NO_RESTART=1`) makes it log instead of restarting — both for tests.
-- `--profile-dir` (env `RP_CODED_PROFILE_DIR`): where the session-guard AppArmor profiles are
-  written, default `/etc/apparmor.d`; `--guard-state` (env `RP_CODED_GUARD_STATE`): the guard
-  state file, default `/etc/rp-code/guard-state.json`.
+  `--no-restart` (env `RPCHATD_NO_RESTART=1`) makes it log instead of restarting — both for tests.
+- `--profile-dir` (env `RPCHATD_PROFILE_DIR`): where the session-guard AppArmor profiles are
+  written, default `/etc/apparmor.d`; `--guard-state` (env `RPCHATD_GUARD_STATE`): the guard
+  state file, default `/etc/rpchat/guard-state.json`.
 - `--guard-apply` / `--guard-off`: one engage (from the policy) or unload of the session guard
   from the command line — what `install.sh --guard`/`--no-guard` run. Prints the `GuardInfo`
   JSON; exit 1 when it reports an error.
@@ -94,7 +94,7 @@ rp-coded --help | --version
   and counts towards the lockout, exactly as over the socket.
 - `--check-devices`: lists the keyboards/pointers it can open, whether `/dev/uinput` is
   writable, and the screen size it would use. Exit 0 even with no devices.
-- Logs go to stderr (`rp-coded [level] message`), i.e. the journal under systemd. Every lock
+- Logs go to stderr (`rpchatd [level] message`), i.e. the journal under systemd. Every lock
   is logged with the requester's uid/pid (`SO_PEERCRED`).
 
 Exit codes: `0` (SIGTERM/SIGINT/SIGHUP → lock released, socket removed), `2` cannot bind the
@@ -140,7 +140,7 @@ created it. Unknown fields in requests are ignored; a malformed line gets
 **Pushed events** (the only lines the daemon writes without a request): after `subscribe`, a
 connection receives `{ "ev": "guard-attempt", "at", "kind": "ipc"|"config"|"signal"|"ptrace"|"exec",
 "target", "command", "pid", "blocked", "profile", "operation", "requested"? }` for every AppArmor
-audit record about an `rp-code-*` profile (one per target every 10 s). Clients tell them apart
+audit record about an `rpchat-*` profile (one per target every 10 s). Clients tell them apart
 from responses by the `ev` key; they may arrive between a request and its response but never
 inside a line.
 
@@ -163,17 +163,17 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 
 - **Session guard** (`policy.guard`, `docs/system-integration.md` "Session guard"): at start,
   whenever the policy file changes (checked every ~5 s) and on `guard-apply`, the daemon renders
-  `/etc/apparmor.d/rp-code-{session,app,shell,compositor,login}` from the policy, the shell/
+  `/etc/apparmor.d/rpchat-{session,app,shell,compositor,login}` from the policy, the shell/
   compositor table, the login helpers and binaries present, and the sockets discovered from
   `/proc/net/unix` + `/proc/<pid>/fd` of the listed users' shell/compositor processes (cached in
-  `/etc/rp-code/guard-state.json`), validates them with `apparmor_parser -Q -K`, loads them with
+  `/etc/rpchat/guard-state.json`), validates them with `apparmor_parser -Q -K`, loads them with
   `-r -K` and records the result; `mode: off` unloads (`-R`) and removes the files. `available`
   is false without `/sys/kernel/security/apparmor`, in which case nothing is written and
   `lastError` says so. `pamConfigured` reports the `pam_apparmor.so` line in
   `/etc/pam.d/system-login` or `common-session` (the installer's `--guard` adds it; the daemon
   never edits PAM). `residual` lists the documented gaps for this configuration. Once something
   is loaded, the audit tail (`journalctl -f -o json _TRANSPORT=kernel + _TRANSPORT=audit`, else
-  `/dev/kmsg`) turns `apparmor="DENIED|ALLOWED|AUDIT"` records with `profile="rp-code-…"` into
+  `/dev/kmsg`) turns `apparmor="DENIED|ALLOWED|AUDIT"` records with `profile="rpchat-…"` into
   `guard-attempt` events (`blocked` only for `DENIED`, i.e. enforce mode).
 
 - **Lock**: `durationMs` is rounded and clamped to `[1000, inputLock.maxDurationMs]` (default max
@@ -203,9 +203,9 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   two callers cannot both succeed and nothing existing is ever replaced (a crash mid-write
   leaves a truncated file the loader rejects, i.e. locks are refused until root fixes it). The
   creation is logged with the requester's uid/pid and `managedBy`; the next `policy`/`lock`
-  request reads the new file. Any member of `rp-code` can do this once for the whole machine;
+  request reads the new file. Any member of `rpchat` can do this once for the whole machine;
   afterwards only root can edit or delete the file (`ProtectSystem=strict` leaves
-  `/etc/rp-code` writable for exactly this).
+  `/etc/rpchat` writable for exactly this).
 - **`register` / `unregister`** (keepalive, `app.allowQuit: false`): the registration belongs
   to the connection that sent it (a second `register` replaces it) and is remembered together
   with the peer's uid/gid/pid from `SO_PEERCRED` and the process start time from
@@ -226,34 +226,34 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   `setuid`; never root); its exit status is logged. Every register/unregister/relaunch/give-up
   line carries the uid and pid.
 - **`apply-update`** (system install, `docs/system-integration.md` "System install"): the peer
-  must be a non-root user; `<install-root>/versions.json` and `current/rp-code` must exist;
+  must be a non-root user; `<install-root>/versions.json` and `current/rpchat` must exist;
   `version` must be semver and not older than `versions.json.current.version` unless the policy
   has `settings.updates.allowDowngrade: true` (equal is fine: a reinstall); `file` must be an
   absolute path without `.`/`..` under the peer's home, opened `O_NOFOLLOW`, a regular file the
   peer owns, 1 byte to 1 GiB. The file is copied into `<root>/.staging-<uid>` (`0700`, the peer's)
   while hashed — the hashed bytes are the extracted bytes — and `sha512` (base64 as in
   `latest-linux.yml`; hex accepted) must match. `<copy> --appimage-extract` then runs **as the
-  peer** (uid/gid, empty environment, 4-minute limit). The tree must contain `rp-code`,
+  peer** (uid/gid, empty environment, 4-minute limit). The tree must contain `rpchat`,
   `libffmpeg.so` and `resources/app.asar`, no setuid/setgid bit, no hard link, no device/fifo/socket
   and no symlink leaving the tree; it is chowned `root:root` (`0755` dirs, `0755`/`0644` files) and
   verified again. Swap: `previous` removed, `current` → `previous`, tree → `current` (a failed last
   rename restores `current`); `versions.json` rewritten (`current: { version, installedAt, source:
   file }`, `previous`: the old entry). Then, when the bundled
-  `current/resources/bin/rp-coded` is newer than the running daemon — or is the *same version but a
+  `current/resources/bin/rpchatd` is newer than the running daemon — or is the *same version but a
   different build*, which is the ordinary case since the version is not bumped for every build, and
   is decided by hashing it against `/proc/self/exe` — `current/resources/system/install.sh --refresh-daemon-files` runs
   as root and the answer says `restartDaemon: true`; once the reply is out and no input lock is
-  active the daemon restarts (`systemctl restart rp-coded` under systemd, else a re-exec of the
+  active the daemon restarts (`systemctl restart rpchatd` under systemd, else a re-exec of the
   replaced binary with the same arguments). A failed refresh keeps the app update and answers
   `false`. Everything is logged with the peer's uid/pid. The app relaunches from
-  `/opt/rp-code/current/rp-code` afterwards (waiting for the daemon first when it restarts).
+  `/opt/rpchat/current/rpchat` afterwards (waiting for the daemon first when it restarts).
 - **`click` / `move`**: absolute coordinates in the primary screen's pixel space. The virtual
   device's ABS_X/ABS_Y range is `0..W-1` / `0..H-1` where `W×H` is the first connected DRM
   connector's preferred mode (`/sys/class/drm/*/modes`), fallback 1920×1080; coordinates are
   rounded and clamped into that range. The compositor maps the range onto the output the device
   is assigned to (the whole layout on wlroots/Hyprland by default), so on a single-monitor setup
   `x`/`y` are global logical pixels. Multi-monitor or scaled layouts need a per-compositor device
-  mapping (e.g. Hyprland `device { name = rp-coded-virtual-input; output = DP-1 }`).
+  mapping (e.g. Hyprland `device { name = rpchatd-virtual-input; output = DP-1 }`).
   `click` moves, waits 5 ms, then presses and releases `BTN_LEFT`/`BTN_RIGHT`/`BTN_MIDDLE`.
 
 ## Layout
@@ -266,7 +266,7 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 | `src/seal.rs` | The policy seal: its two modes (`totp`, `chain`), the seal file and its mirrors, the world-readable marker, the lockout ladder, the tamper log, the immutable attribute (`FS_IOC_SETFLAGS`), `LockPolicy`/`LockRules`; pure parts tested |
 | `src/chain.rs` | The policy chain and the Remote Link: canonical bytes, link hashing, Ed25519 verification (`verify_strict`), the walk from the machine's head to the tip, key rotation; pure, with a test vector shared with the app and `scripts/rp-policy-chain.mjs` |
 | `src/totp.rs` | RFC 6238 codes: SHA-1, HMAC, base32, `otpauth://` URIs, replay-checked verification; tested against the RFC 2202/4231/6238 vectors |
-| `src/runtime.rs` | The runtime policy filesystem (`/run/rp-code/policy`): tmpfs mount, read-only remount, published policy and state, `mountinfo` parsing; `MountOps` is injectable so the tests need no privileges |
+| `src/runtime.rs` | The runtime policy filesystem (`/run/rpchat/policy`): tmpfs mount, read-only remount, published policy and state, `mountinfo` parsing; `MountOps` is injectable so the tests need no privileges |
 | `src/remote.rs` | The `remote`/`packs` policy blocks and pack-signature verification (Ed25519 over id + version + hash); pure |
 | `src/guard.rs` | Session guard: shell/compositor table, profile rendering (`render`), audit-line parsing, per-target rate limiting, `/proc` discovery parsing and socket-path generalisation, `GuardState` file, `apply`/`current_info` behind `GuardHooks` (fakes in tests, `apparmor_parser -Q` when installed) |
 | `src/keepalive.rs` | Pure relaunch logic: registration validation, the gate (policy, users, active session, process), `RelaunchTracker` backoff/give-up, logind session-file and `loginctl` parsing, `command_spec`/`build_command`; all tested |
@@ -274,12 +274,12 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 | `src/lock.rs` | `LockEngine` state machine (grab, timer, emergency chord, hot-plug, device classes) behind `DeviceSource`/`GrabbedDevice`; fakes and tests |
 | `src/inject.rs` | US keymap, `plan_text`, `parse_combo`, `ScreenSize` clamping, `Injector` trait, `NullInjector`, `FakeInjector` |
 | `src/devices.rs` | evdev `DeviceSource`, capability classification, DRM screen size, uinput `Injector`, `--check-devices` report |
-| `dist/` | `rp-coded.service`, `70-rp-code.rules`, `rp-code.conf`, `policy.example.json`, `POLICY.md`, `rp-code-autostart.desktop`, `rp-code.service` (user unit) |
+| `dist/` | `rpchatd.service`, `70-rpchat.rules`, `rpchat.conf`, `policy.example.json`, `POLICY.md`, `rpchat-autostart.desktop`, `rpchat.service` (user unit) |
 | `install.sh` | Idempotent installer / uninstaller, system install (`--system-install`, `--rollback`, `--remove`), `--refresh-daemon-files`, session guard (`--guard`/`--no-guard`: PAM line + `--guard-apply`/`--guard-off`), `--prefix` for tests (see the docs; `scripts/install-smoke.sh`) |
 
 ## Security model
 
-- Only root and members of `rp-code` can reach the socket; being in that group means "may lock
+- Only root and members of `rpchat` can reach the socket; being in that group means "may lock
   this machine's input and inject keystrokes into whatever is focused" — treat it like `input`.
 - The daemon never trusts the app's numbers: the policy clamps durations and can disable locking
   entirely; the policy file must be root-owned and lives outside the user's reach.
@@ -294,7 +294,7 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   daemon then defends the policy actively: it publishes the effective copy into a read-only tmpfs
   it mounts, restores an edited file, keeps mirrors of the seal, sets the immutable attribute,
   writes a `RefuseManualStop` drop-in, and (with the guard enforcing) denies the confined sessions
-  `/etc/rp-code` and the binaries that would escape the profile. It is layered, not absolute: in
+  `/etc/rpchat` and the binaries that would escape the profile. It is layered, not absolute: in
   code mode an unconfined root shell can read the secret, and in either mode another boot medium
   bypasses the daemon entirely. `seal-status` returns exactly that list.
 - **The chain is verified, not trusted.** The app fetches; the daemon verifies an Ed25519
@@ -307,7 +307,7 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   extracted with the requesting user's privileges (never root), pass the tree checks, and only
   then become root-owned; the previous version is kept for `install.sh --rollback`. Release
   signing is not implemented yet: the manifest fetched over HTTPS with the user's token is the
-  root of trust, and any `rp-code` member can install a genuine release (an older one only when
+  root of trust, and any `rpchat` member can install a genuine release (an older one only when
   the policy allows downgrades).
 - Relaunching (`app.allowQuit: false`) only ever runs what a non-root client registered, as
   that client's uid/gid with its own whitelisted environment; the daemon never keeps root in
@@ -315,9 +315,9 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 - The session guard confines the listed users, never root: root (or the user with `sudo`) can
   unload the profiles or change the policy at any time, and the guarded session keeps
   `capability mac_admin` so a TTY login plus `sudo` is always a way out. The daemon writes only
-  its own `rp-code-*` profiles and never edits PAM (the installer does, with a marker line).
+  its own `rpchat-*` profiles and never edits PAM (the installer does, with a marker line).
 - The systemd unit runs with `NoNewPrivileges`, read-only `/usr` and `/etc` (except
-  `/etc/rp-code`, `/etc/apparmor.d`, `/opt/rp-code` and the daemon's own file locations it
+  `/etc/rpchat`, `/etc/apparmor.d`, `/opt/rpchat` and the daemon's own file locations it
   refreshes after a self-update), kernel/cgroup protection and a capability bounding set of chown +
   setuid/setgid + `mac_admin` (loading AppArmor policy). Because a relaunched app is a child of the service and inherits its sandbox,
   the unit does **not** use `ProtectHome`, `PrivateTmp`, a system-call filter,

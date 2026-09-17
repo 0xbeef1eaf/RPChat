@@ -1,20 +1,17 @@
 import { EventEmitter } from 'node:events';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettings, PolicyFile, UpdateStatus } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import { defaultSettings, mergeSettings } from '@rp/core';
-import { DAEMON_RESTART_WAIT_MS, DEFAULT_INITIAL_DELAY_MS, TOKEN_FILENAME, TOKEN_REJECTED_MESSAGE, UpdateService, appImageSha512, describeUpdateError, detectPackaging, downloadedUpdate, plainReleaseNotes } from './service.js';
-import type { DownloadedUpdate, SafeStorageLike, SystemInstallAvailability, SystemInstallDeps, UpdateInfoLike, UpdateServiceDeps, UpdaterLike } from './service.js';
+import { DAEMON_RESTART_WAIT_MS, DEFAULT_INITIAL_DELAY_MS, FEED_FORBIDDEN_MESSAGE, UpdateService, appImageSha512, describeUpdateError, detectPackaging, downloadedUpdate, plainReleaseNotes } from './service.js';
+import type { DownloadedUpdate, SystemInstallAvailability, SystemInstallDeps, UpdateInfoLike, UpdateServiceDeps, UpdaterLike } from './service.js';
 
 const SHA = 'EV5qw9s6myz4qOYqpSdkdnAXgkGaE6sY6WbkRk4UN8uKUmeuHFDiSvQmFBB1/Wl/KOkcyWALmn53p4t5fr1ByQ==';
 const INFO: UpdateInfoLike = {
   version: '0.1.42',
   releaseNotes: '<p>Fixes &amp; <b>features</b></p><ul><li>one</li></ul>',
   releaseDate: '2026-09-01T00:00:00.000Z',
-  files: [{ url: 'rp-code-0.1.42-linux-x86_64.AppImage', sha512: SHA, size: 142018248 }],
+  files: [{ url: 'rpchat-0.1.42-linux-x86_64.AppImage', sha512: SHA, size: 142018248 }],
   sha512: SHA,
 };
 
@@ -56,25 +53,13 @@ class FakeUpdater extends EventEmitter implements UpdaterLike {
     await new Promise((r) => setTimeout(r, 1));
     this.emit('download-progress', { percent: 40, transferred: 40, total: 100 });
     await Promise.resolve();
-    this.emit('update-downloaded', { ...INFO, downloadedFile: '/home/alice/.cache/rp-code-updater/pending/rp-code-0.1.42-linux-x86_64.AppImage' });
-    return ['/home/alice/.cache/rp-code-updater/pending/rp-code-0.1.42-linux-x86_64.AppImage'];
+    this.emit('update-downloaded', { ...INFO, downloadedFile: '/home/alice/.cache/rpchat-updater/pending/rpchat-0.1.42-linux-x86_64.AppImage' });
+    return ['/home/alice/.cache/rpchat-updater/pending/rpchat-0.1.42-linux-x86_64.AppImage'];
   }
 
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void {
     this.installs.push([isSilent, isForceRunAfter]);
   }
-}
-
-function fakeSafeStorage(available: boolean): SafeStorageLike {
-  return {
-    isEncryptionAvailable: () => available,
-    encryptString: (s) => Buffer.from(`ENC(${Buffer.from(s, 'utf8').toString('base64')})`, 'utf8'),
-    decryptString: (b) => {
-      const m = /^ENC\((.*)\)$/.exec(b.toString('utf8'));
-      if (!m) throw new Error('not encrypted by this fake');
-      return Buffer.from(m[1]!, 'base64').toString('utf8');
-    },
-  };
 }
 
 interface Harness {
@@ -83,29 +68,25 @@ interface Harness {
   settings: AppSettings;
   policy: { policy: PolicyFile | null };
   logs: string[];
-  dir: string;
   statuses: UpdateStatus[];
 }
 
-function harness(overrides: Partial<UpdateServiceDeps> & { policy?: { policy: PolicyFile | null }; settings?: Partial<AppSettings['updates']>; encryption?: boolean } = {}): Harness {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-upd-'));
+function harness(overrides: Partial<UpdateServiceDeps> & { policy?: { policy: PolicyFile | null }; settings?: Partial<AppSettings['updates']> } = {}): Harness {
   const updater = new FakeUpdater();
   const settings = defaultSettings();
   settings.updates = { ...settings.updates, ...(overrides.settings ?? {}) };
   const policy = overrides.policy ?? { policy: null };
   const logs: string[] = [];
   const log = (level: string) => (...args: unknown[]) => logs.push(`${level}: ${args.map(String).join(' ')}`);
-  const { policy: _p, settings: _s, encryption, ...rest } = overrides;
+  const { policy: _p, settings: _s, ...rest } = overrides;
   const deps: UpdateServiceDeps = {
     updater,
     appVersion: '0.1.7',
     isPackaged: true,
-    appImagePath: '/home/alice/Apps/rp-code.AppImage',
-    execPath: '/tmp/.mount_rp-codeXYZ/rp-code',
-    userDataDir: dir,
+    appImagePath: '/home/alice/Apps/rpchat.AppImage',
+    execPath: '/tmp/.mount_rpchatXYZ/rpchat',
     settings: { get: async () => settings },
     policy: { current: async () => policy },
-    safeStorage: fakeSafeStorage(encryption ?? true),
     logger: { debug: log('debug'), info: log('info'), warn: log('warn'), error: log('error') },
     isWritable: async () => true,
     initialDelayMs: DEFAULT_INITIAL_DELAY_MS,
@@ -114,13 +95,7 @@ function harness(overrides: Partial<UpdateServiceDeps> & { policy?: { policy: Po
   const service = new UpdateService(deps);
   const statuses: UpdateStatus[] = [];
   service.subscribe((s) => statuses.push(s));
-  return { service, updater, settings, policy, logs, dir, statuses };
-}
-
-const dirs: string[] = [];
-function tmp(h: Harness): Harness {
-  dirs.push(h.dir);
-  return h;
+  return { service, updater, settings, policy, logs, statuses };
 }
 
 /** Let pending microtasks and the fake's zero-delay timers run. */
@@ -134,84 +109,35 @@ describe('UpdateService', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
-    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
   });
 
   it('reports unsupported in development and never touches the updater', async () => {
-    const h = tmp(harness({ isPackaged: false, appImagePath: undefined }));
+    const h = harness({ isPackaged: false, appImagePath: undefined });
     const status = await h.service.status();
-    expect(status).toMatchObject({ state: 'unsupported', packaging: 'dev', canInstallInPlace: false, tokenPresent: false, tokenStorage: 'none', currentVersion: '0.1.7' });
+    expect(status).toMatchObject({ state: 'unsupported', packaging: 'dev', canInstallInPlace: false, currentVersion: '0.1.7' });
     expect(status.reason).toMatch(/packaged builds/);
     expect(h.updater.listenerCount('error')).toBe(0);
+    await expect(h.service.check()).rejects.toBeInstanceOf(RpError);
     await expect(h.service.check()).rejects.toMatchObject({ code: 'CAPABILITY_FAILED' });
-    await expect(h.service.setToken('ghp_x')).rejects.toBeInstanceOf(RpError);
     h.service.start();
     await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_DELAY_MS * 2);
     expect(h.updater.checks).toBe(0);
     expect(h.updater.feeds).toEqual([]);
   });
 
-  it('without a token reports no-token, refuses manual checks and never schedules one', async () => {
-    const h = tmp(harness());
-    expect(await h.service.status()).toMatchObject({ state: 'no-token', packaging: 'appimage', canInstallInPlace: true, tokenPresent: false });
-    await expect(h.service.check()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
-    h.service.start();
-    await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_DELAY_MS + 7 * 3_600_000);
-    expect(h.updater.checks).toBe(0);
-    expect(h.updater.feeds).toEqual([]);
-    h.service.stop();
-  });
-
-  it('stores the token encrypted through the keyring, configures the feed and reloads it in a new instance', async () => {
-    const h = tmp(harness());
-    const status = await h.service.setToken('  github_pat_ABC123  ');
-    expect(status).toMatchObject({ state: 'idle', tokenPresent: true, tokenStorage: 'keyring' });
-    const file = path.join(h.dir, TOKEN_FILENAME);
-    const raw = fs.readFileSync(file);
-    expect(raw.subarray(0, 6).toString()).toBe('RPTK1\n');
-    expect(raw.toString('utf8')).not.toContain('github_pat_ABC123');
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-    expect(h.updater.feeds).toEqual([{ provider: 'github', owner: '0xbeef1eaf', repo: 'llm-rp-code', private: true, token: 'github_pat_ABC123', releaseType: 'release' }]);
-    expect(h.logs.join('\n')).not.toContain('github_pat_ABC123');
-    // A fresh service (next launch) reads the file back and configures the feed before checking.
-    const again = tmp(harness({ userDataDir: h.dir }));
-    dirs.pop();
-    expect(await again.service.status()).toMatchObject({ state: 'idle', tokenPresent: true, tokenStorage: 'keyring' });
-    await again.service.check();
-    expect(again.updater.feeds).toHaveLength(1);
-    expect((again.updater.feeds[0] as { token: string }).token).toBe('github_pat_ABC123');
-    expect(again.updater.checks).toBe(1);
-  });
-
-  it('falls back to a 0600 plaintext file without a keyring and warns once', async () => {
-    const h = tmp(harness({ encryption: false }));
-    await h.service.setToken('tok-one');
-    await h.service.setToken('tok-two');
-    const file = path.join(h.dir, TOKEN_FILENAME);
-    expect(fs.readFileSync(file, 'utf8')).toBe('RPTK0\ntok-two');
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-    expect(h.logs.filter((l) => /no OS keyring/.test(l))).toHaveLength(1);
-    expect(await h.service.status()).toMatchObject({ tokenPresent: true, tokenStorage: 'file' });
-    // Encrypted file but no keyring on this launch → treated as absent, with a hint.
-    fs.writeFileSync(file, Buffer.concat([Buffer.from('RPTK1\n'), Buffer.from('ENC(xyz)')]));
-    const later = tmp(harness({ userDataDir: h.dir, encryption: false }));
-    dirs.pop();
-    expect(await later.service.status()).toMatchObject({ state: 'no-token', tokenPresent: false });
-    expect(later.logs.join('\n')).toMatch(/keyring is unavailable/);
-  });
-
-  it('rejects empty, whitespace-only and oversized tokens', async () => {
-    const h = tmp(harness());
-    await expect(h.service.setToken('')).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
-    await expect(h.service.setToken('   ')).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
-    await expect(h.service.setToken('a'.repeat(401))).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
-    await expect(h.service.setToken('with space')).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
-    expect(fs.existsSync(path.join(h.dir, TOKEN_FILENAME))).toBe(false);
+  it('reads the public release feed with no credentials of any kind', async () => {
+    const h = harness();
+    expect(await h.service.status()).toMatchObject({ state: 'idle', packaging: 'appimage', canInstallInPlace: true });
+    await h.service.check();
+    expect(h.updater.feeds).toEqual([{ provider: 'github', owner: '0xbeef1eaf', repo: 'RPChat', releaseType: 'release' }]);
+    expect(h.updater.checks).toBe(1);
+    // The feed is configured once and reused by later checks.
+    await h.service.check();
+    expect(h.updater.feeds).toHaveLength(1);
   });
 
   it('checks ~30 s after start and then every checkIntervalHours while automatic is on', async () => {
-    const h = tmp(harness({ settings: { automatic: true, checkIntervalHours: 2 } }));
-    await h.service.setToken('tok');
+    const h = harness({ settings: { automatic: true, checkIntervalHours: 2 } });
     h.service.start();
     await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_DELAY_MS - 1000);
     expect(h.updater.checks).toBe(0);
@@ -226,7 +152,7 @@ describe('UpdateService', () => {
     h.settings.updates.automatic = false;
     await vi.advanceTimersByTimeAsync(4 * 3_600_000);
     expect(h.updater.checks).toBe(2);
-    // Manual checks are always allowed with a token.
+    // Manual checks are always allowed unless policy disables updates.
     await h.service.check();
     expect(h.updater.checks).toBe(3);
     h.service.stop();
@@ -235,8 +161,7 @@ describe('UpdateService', () => {
   });
 
   it('does not schedule when automatic is off, and honours refreshSchedule after the toggle', async () => {
-    const h = tmp(harness({ settings: { automatic: false } }));
-    await h.service.setToken('tok');
+    const h = harness({ settings: { automatic: false } });
     h.service.start();
     await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_DELAY_MS + 60_000);
     expect(h.updater.checks).toBe(0);
@@ -248,8 +173,7 @@ describe('UpdateService', () => {
   });
 
   it('walks available → downloading → ready with progress and installs with quitAndInstall(false, true)', async () => {
-    const h = tmp(harness({ settings: { automatic: false } }));
-    await h.service.setToken('tok');
+    const h = harness({ settings: { automatic: false } });
     h.updater.outcome = { available: true };
     h.statuses.length = 0;
     const afterCheck = await h.service.check();
@@ -274,8 +198,7 @@ describe('UpdateService', () => {
   });
 
   it('downloads automatically when automatic checks are on and the AppImage is writable', async () => {
-    const h = tmp(harness({ settings: { automatic: true } }));
-    await h.service.setToken('tok');
+    const h = harness({ settings: { automatic: true } });
     h.updater.outcome = { available: true };
     const result = await h.service.check();
     expect(h.updater.autoDownload).toBe(true);
@@ -286,8 +209,7 @@ describe('UpdateService', () => {
   });
 
   it('never downloads on a package install or a read-only AppImage; explains and points at the release page', async () => {
-    const deb = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/rp-code', settings: { automatic: true } }));
-    await deb.service.setToken('tok');
+    const deb = harness({ appImagePath: undefined, execPath: '/opt/rpchat/rpchat', settings: { automatic: true } });
     deb.updater.outcome = { available: true };
     const status = await deb.service.check();
     expect(deb.updater.autoDownload).toBe(false);
@@ -297,8 +219,7 @@ describe('UpdateService', () => {
     await settle();
     expect(deb.updater.downloads).toBe(0);
 
-    const readOnly = tmp(harness({ isWritable: async (p) => !p.endsWith('.AppImage'), settings: { automatic: true } }));
-    await readOnly.service.setToken('tok');
+    const readOnly = harness({ isWritable: async (p) => !p.endsWith('.AppImage'), settings: { automatic: true } });
     readOnly.updater.outcome = { available: true };
     const ro = await readOnly.service.check();
     expect(readOnly.updater.autoDownload).toBe(false);
@@ -309,9 +230,8 @@ describe('UpdateService', () => {
 
   it('is disabled by policy: state disabled, managed, and check() refused', async () => {
     const policy: PolicyFile = { version: 1, settings: { updates: { enabled: false } } };
-    const h = tmp(harness({ policy: { policy }, settings: { automatic: true } }));
-    await h.service.setToken('tok');
-    expect(await h.service.status()).toMatchObject({ state: 'disabled', managed: true, tokenPresent: true });
+    const h = harness({ policy: { policy }, settings: { automatic: true } });
+    expect(await h.service.status()).toMatchObject({ state: 'disabled', managed: true });
     await expect(h.service.check()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
     h.service.start();
     await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_DELAY_MS + 3_600_000);
@@ -326,17 +246,16 @@ describe('UpdateService', () => {
     h.service.stop();
   });
 
-  it('maps 401/403 to the token-rejected message and other failures to error', async () => {
-    const h = tmp(harness({ settings: { automatic: false } }));
-    await h.service.setToken('tok');
+  it('maps 401/403 to the refused-feed message and other failures to error', async () => {
+    const h = harness({ settings: { automatic: false } });
     const unauthorized = Object.assign(new Error('401 Unauthorized'), { statusCode: 401 });
     h.updater.outcome = { error: unauthorized };
     const status = await h.service.check();
-    expect(status).toMatchObject({ state: 'error', error: TOKEN_REJECTED_MESSAGE });
+    expect(status).toMatchObject({ state: 'error', error: FEED_FORBIDDEN_MESSAGE });
     expect(status.checkedAt).toBeDefined();
     h.updater.outcome = { error: new Error('getaddrinfo ENOTFOUND github.com') };
     expect((await h.service.check()).error).toMatch(/Cannot reach GitHub/);
-    expect(describeUpdateError(Object.assign(new Error('HttpError'), { statusCode: 403 }))).toBe(TOKEN_REJECTED_MESSAGE);
+    expect(describeUpdateError(Object.assign(new Error('HttpError'), { statusCode: 403 }))).toBe(FEED_FORBIDDEN_MESSAGE);
     expect(describeUpdateError(new Error('HttpError: 404 Not Found'))).toMatch(/404/);
     // Recovering: a good check clears the error.
     h.updater.outcome = { available: false };
@@ -346,33 +265,21 @@ describe('UpdateService', () => {
   });
 
   it('runs one check at a time', async () => {
-    const h = tmp(harness({ settings: { automatic: false } }));
-    await h.service.setToken('tok');
+    const h = harness({ settings: { automatic: false } });
     const [a, b] = await Promise.all([h.service.check(), h.service.check()]);
     expect(h.updater.checks).toBe(1);
     expect(a.state).toBe('up-to-date');
     expect(b.state).toBe('up-to-date');
   });
 
-  it('setToken(null) removes the file and returns to no-token', async () => {
-    const h = tmp(harness());
-    await h.service.setToken('tok');
-    const file = path.join(h.dir, TOKEN_FILENAME);
-    expect(fs.existsSync(file)).toBe(true);
-    expect(await h.service.setToken(null)).toMatchObject({ state: 'no-token', tokenPresent: false, tokenStorage: 'none' });
-    expect(fs.existsSync(file)).toBe(false);
-    await expect(h.service.check()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
-    expect(await h.service.setToken(null)).toMatchObject({ state: 'no-token' });
-  });
-
   it('detects packaging and normalises release notes', () => {
     expect(detectPackaging({ isPackaged: false, execPath: '/x' })).toBe('dev');
-    expect(detectPackaging({ isPackaged: true, execPath: '/opt/rp-code/current/rp-code', systemInstall: fakeSystemInstall().deps })).toBe('system');
-    expect(detectPackaging({ isPackaged: false, execPath: '/opt/rp-code/current/rp-code', systemInstall: fakeSystemInstall().deps })).toBe('dev');
-    expect(detectPackaging({ isPackaged: true, appImagePath: '/a/b.AppImage', execPath: '/tmp/.mount_x/rp-code' })).toBe('appimage');
-    expect(detectPackaging({ isPackaged: true, execPath: '/opt/rp-code/rp-code' })).toBe('deb');
-    expect(detectPackaging({ isPackaged: true, execPath: '/usr/lib/rp-code/rp-code' })).toBe('deb');
-    expect(detectPackaging({ isPackaged: true, execPath: '/home/alice/linux-unpacked/rp-code' })).toBe('other');
+    expect(detectPackaging({ isPackaged: true, execPath: '/opt/rpchat/current/rpchat', systemInstall: fakeSystemInstall().deps })).toBe('system');
+    expect(detectPackaging({ isPackaged: false, execPath: '/opt/rpchat/current/rpchat', systemInstall: fakeSystemInstall().deps })).toBe('dev');
+    expect(detectPackaging({ isPackaged: true, appImagePath: '/a/b.AppImage', execPath: '/tmp/.mount_x/rpchat' })).toBe('appimage');
+    expect(detectPackaging({ isPackaged: true, execPath: '/opt/rpchat/rpchat' })).toBe('deb');
+    expect(detectPackaging({ isPackaged: true, execPath: '/usr/lib/rpchat/rpchat' })).toBe('deb');
+    expect(detectPackaging({ isPackaged: true, execPath: '/home/alice/linux-unpacked/rpchat' })).toBe('other');
     expect(plainReleaseNotes(null)).toBeUndefined();
     expect(plainReleaseNotes('')).toBeUndefined();
     expect(plainReleaseNotes([{ version: '1.2.0', note: 'a<br>b' }, { version: '1.1.0', note: null }])).toBe('1.2.0: a\nb\n1.1.0:');
@@ -386,7 +293,7 @@ function fakeSystemInstall(script: { availability?: SystemInstallAvailability; a
   const applied: DownloadedUpdate[] = [];
   const events: string[] = [];
   const deps: SystemInstallDeps = {
-    dir: '/opt/rp-code/current',
+    dir: '/opt/rpchat/current',
     available: async () => script.availability ?? { daemonConnected: true, daemonSupportsUpdates: true, current: '0.1.7', previous: '0.1.6' },
     applyUpdate: async (input) => {
       events.push('apply');
@@ -411,7 +318,6 @@ describe('UpdateService (system install)', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
-    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
   });
 
   it('extracts the AppImage checksum and the downloaded record from the updater events', () => {
@@ -428,12 +334,11 @@ describe('UpdateService (system install)', () => {
   it('reports the system install, downloads, hands the file to the daemon, waits for its restart and relaunches', async () => {
     const system = fakeSystemInstall({ restartDaemon: true });
     const beforeRestart: string[] = [];
-    const h = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: system.deps, settings: { automatic: false }, beforeRestart: async () => void beforeRestart.push('before') }));
+    const h = harness({ appImagePath: undefined, execPath: '/opt/rpchat/current/rpchat', systemInstall: system.deps, settings: { automatic: false }, beforeRestart: async () => void beforeRestart.push('before') });
     expect(h.service.packaging).toBe('system');
-    await h.service.setToken('tok');
     const idle = await h.service.status();
-    expect(idle).toMatchObject({ packaging: 'system', canInstallInPlace: true, systemInstall: { dir: '/opt/rp-code/current', daemonConnected: true, daemonSupportsUpdates: true, current: '0.1.7', previous: '0.1.6' } });
-    expect(idle.reason).toMatch(/applied by the rp-code system service/);
+    expect(idle).toMatchObject({ packaging: 'system', canInstallInPlace: true, systemInstall: { dir: '/opt/rpchat/current', daemonConnected: true, daemonSupportsUpdates: true, current: '0.1.7', previous: '0.1.6' } });
+    expect(idle.reason).toMatch(/applied by the rpchat system service/);
     h.updater.outcome = { available: true };
     expect((await h.service.check()).state).toBe('available');
     await expect(h.service.install()).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
@@ -442,14 +347,14 @@ describe('UpdateService (system install)', () => {
     expect((await h.service.status()).state).toBe('ready');
     h.statuses.length = 0;
     await h.service.install();
-    expect(system.applied).toEqual([{ file: '/home/alice/.cache/rp-code-updater/pending/rp-code-0.1.42-linux-x86_64.AppImage', version: '0.1.42', sha512: SHA }]);
+    expect(system.applied).toEqual([{ file: '/home/alice/.cache/rpchat-updater/pending/rpchat-0.1.42-linux-x86_64.AppImage', version: '0.1.42', sha512: SHA }]);
     expect(system.events).toEqual(['apply', `wait:${DAEMON_RESTART_WAIT_MS}`, 'relaunch']);
     expect(beforeRestart).toEqual(['before']);
     expect(h.updater.installs).toEqual([]);
     await settle();
     expect(h.statuses.map((s) => s.state)).toEqual(['installing']);
-    expect(h.logs.some((l) => /rp-coded installed 0.1.42; the daemon restarts itself/.test(l))).toBe(true);
-    expect(h.logs.some((l) => /rp-coded is back/.test(l))).toBe(true);
+    expect(h.logs.some((l) => /rpchatd installed 0.1.42; the daemon restarts itself/.test(l))).toBe(true);
+    expect(h.logs.some((l) => /rpchatd is back/.test(l))).toBe(true);
     // A second install while installing is a no-op.
     await h.service.install();
     expect(system.applied).toHaveLength(1);
@@ -457,8 +362,7 @@ describe('UpdateService (system install)', () => {
 
   it('does not wait for the daemon when it did not restart, and relaunches even when it does not come back', async () => {
     const quick = fakeSystemInstall({ restartDaemon: false });
-    const h1 = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: quick.deps, settings: { automatic: true } }));
-    await h1.service.setToken('tok');
+    const h1 = harness({ appImagePath: undefined, execPath: '/opt/rpchat/current/rpchat', systemInstall: quick.deps, settings: { automatic: true } });
     h1.updater.outcome = { available: true };
     await h1.service.check();
     await settle();
@@ -467,8 +371,7 @@ describe('UpdateService (system install)', () => {
     expect(quick.events).toEqual(['apply', 'relaunch']);
 
     const slow = fakeSystemInstall({ restartDaemon: true, daemonBack: false });
-    const h2 = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: slow.deps, settings: { automatic: true } }));
-    await h2.service.setToken('tok');
+    const h2 = harness({ appImagePath: undefined, execPath: '/opt/rpchat/current/rpchat', systemInstall: slow.deps, settings: { automatic: true } });
     h2.updater.outcome = { available: true };
     await h2.service.check();
     await settle();
@@ -478,16 +381,15 @@ describe('UpdateService (system install)', () => {
   });
 
   it('surfaces a daemon failure, keeps the download ready for a retry and never relaunches', async () => {
-    const system = fakeSystemInstall({ applyError: new RpError('INVALID_ARGUMENT', 'rp-coded refused apply-update: sha512 mismatch') });
-    const h = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: system.deps, settings: { automatic: true } }));
-    await h.service.setToken('tok');
+    const system = fakeSystemInstall({ applyError: new RpError('INVALID_ARGUMENT', 'rpchatd refused apply-update: sha512 mismatch') });
+    const h = harness({ appImagePath: undefined, execPath: '/opt/rpchat/current/rpchat', systemInstall: system.deps, settings: { automatic: true } });
     h.updater.outcome = { available: true };
     await h.service.check();
     await settle();
     await expect(h.service.install()).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', message: /sha512 mismatch/ });
     expect(system.events).toEqual(['apply']);
     const after = await h.service.status();
-    expect(after).toMatchObject({ state: 'ready', error: 'Applying the update failed: rp-coded refused apply-update: sha512 mismatch' });
+    expect(after).toMatchObject({ state: 'ready', error: 'Applying the update failed: rpchatd refused apply-update: sha512 mismatch' });
     // Retry works once the daemon accepts.
     system.deps.applyUpdate = async (input) => {
       system.events.push('apply-ok');
@@ -500,8 +402,7 @@ describe('UpdateService (system install)', () => {
 
   it('cannot download or install while the daemon is missing or too old, and says why', async () => {
     const offline = fakeSystemInstall({ availability: { daemonConnected: false, daemonSupportsUpdates: false } });
-    const h = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: offline.deps, settings: { automatic: true } }));
-    await h.service.setToken('tok');
+    const h = harness({ appImagePath: undefined, execPath: '/opt/rpchat/current/rpchat', systemInstall: offline.deps, settings: { automatic: true } });
     h.updater.outcome = { available: true };
     const status = await h.service.check();
     expect(h.updater.autoDownload).toBe(false);
@@ -509,8 +410,7 @@ describe('UpdateService (system install)', () => {
     expect(status.reason).toMatch(/not connected/);
     await expect(h.service.download()).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: /system service/ });
     const old = fakeSystemInstall({ availability: { daemonConnected: true, daemonSupportsUpdates: false } });
-    const h2 = tmp(harness({ appImagePath: undefined, execPath: '/opt/rp-code/current/rp-code', systemInstall: old.deps }));
-    await h2.service.setToken('tok');
+    const h2 = harness({ appImagePath: undefined, execPath: '/opt/rpchat/current/rpchat', systemInstall: old.deps });
     const s2 = await h2.service.status();
     expect(s2.canInstallInPlace).toBe(false);
     expect(s2.reason).toMatch(/too old/);

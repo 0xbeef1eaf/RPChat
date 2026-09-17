@@ -52,7 +52,7 @@ export interface CommandTemplate {
 
 /**
  * External commands the app runs on the character's behalf. Input locking and injection
- * (`sdk.input`) are not here: they go through the rp-coded system daemon only.
+ * (`sdk.input`) are not here: they go through the rpchatd system daemon only.
  */
 export interface CommandTemplates {
   /** Set the desktop wallpaper. Placeholders: {file} (absolute path), {monitor} (name or empty). */
@@ -213,7 +213,7 @@ export interface AppSettings {
     allowHistory: boolean;
     /** Home page the extension's new-tab override opens (http(s); empty = the plain new-tab page). Also written into the browser policy. */
     homePage: string;
-    /** Extra managed-policy directories the installer writes `rp-code.json` into (Chromium forks not in the built-in list). */
+    /** Extra managed-policy directories the installer writes `rpchat.json` into (Chromium forks not in the built-in list). */
     extraPolicyDirs: string[];
   };
   messaging: {

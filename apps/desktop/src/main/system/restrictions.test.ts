@@ -165,7 +165,7 @@ describe('allowStopGeneration', () => {
 });
 
 describe('the shipped policy templates', () => {
-  const dist = path.resolve(url.fileURLToPath(import.meta.url), '../../../../../../native/rp-coded/dist');
+  const dist = path.resolve(url.fileURLToPath(import.meta.url), '../../../../../../native/rpchatd/dist');
 
   it('parse, and say what they claim to say', () => {
     const example = parsePolicy(JSON.parse(fs.readFileSync(path.join(dist, 'policy.example.json'), 'utf8')));

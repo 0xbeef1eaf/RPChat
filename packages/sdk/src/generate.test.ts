@@ -62,7 +62,7 @@ describe('generateSdkTypings', () => {
 
   it('emits the documented layout', () => {
     const out = generateSdkTypings(registry);
-    expect(out.startsWith('// ---- rp-code character SDK (generated) ----\n')).toBe(true);
+    expect(out.startsWith('// ---- rpchat character SDK (generated) ----\n')).toBe(true);
     expect(out).toContain(SDK_PREAMBLE_TYPINGS.trimEnd());
     expect(out).toContain('/** The SDK available to character code as the global `sdk`. */\ndeclare const sdk: Sdk;\ninterface Sdk {');
     expect(out).toContain('  /** Show images and play video/audio from the pack in an overlay window on the user\'s screen. (permission: pack) */\n  media: MediaApi;');

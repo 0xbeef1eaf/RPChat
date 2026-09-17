@@ -32,13 +32,13 @@ describe('quit guard (pure)', () => {
 
   it('launchSpec repeats this launch, or the AppImage itself with no arguments', () => {
     const env = { HOME: '/home/alice', NODE_OPTIONS: '--inspect' };
-    expect(launchSpec({ execPath: '/opt/rp-code/rp-code', argv: ['/opt/rp-code/rp-code', '--hidden'], cwd: '/home/alice', env })).toEqual({ exec: '/opt/rp-code/rp-code', args: ['--hidden'], cwd: '/home/alice', env: { HOME: '/home/alice' } });
+    expect(launchSpec({ execPath: '/opt/rpchat/rpchat', argv: ['/opt/rpchat/rpchat', '--hidden'], cwd: '/home/alice', env })).toEqual({ exec: '/opt/rpchat/rpchat', args: ['--hidden'], cwd: '/home/alice', env: { HOME: '/home/alice' } });
     expect(launchSpec({ execPath: '/x/node_modules/electron/dist/electron', argv: ['electron', 'out/main/index.js', '--no-sandbox'], cwd: '/x', env: {} })).toEqual({ exec: '/x/node_modules/electron/dist/electron', args: ['out/main/index.js', '--no-sandbox'], cwd: '/x', env: {} });
-    expect(launchSpec({ execPath: '/tmp/.mount_rpXYZ/rp-code', argv: ['/tmp/.mount_rpXYZ/rp-code', '--hidden'], appImage: '/home/alice/Applications/rp-code.AppImage', cwd: '/home/alice', env: { APPIMAGE: '/home/alice/Applications/rp-code.AppImage' } })).toEqual({
-      exec: '/home/alice/Applications/rp-code.AppImage',
+    expect(launchSpec({ execPath: '/tmp/.mount_rpXYZ/rpchat', argv: ['/tmp/.mount_rpXYZ/rpchat', '--hidden'], appImage: '/home/alice/Applications/rpchat.AppImage', cwd: '/home/alice', env: { APPIMAGE: '/home/alice/Applications/rpchat.AppImage' } })).toEqual({
+      exec: '/home/alice/Applications/rpchat.AppImage',
       args: [],
       cwd: '/home/alice',
-      env: { APPIMAGE: '/home/alice/Applications/rp-code.AppImage' },
+      env: { APPIMAGE: '/home/alice/Applications/rpchat.AppImage' },
     });
   });
 });

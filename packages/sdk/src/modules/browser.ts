@@ -5,7 +5,7 @@ export const browserModule: CapabilityModuleSpec = {
   version: '2.1.0',
   title: 'Web browser',
   summary:
-    "Open web pages, and — with the rp-code browser extension connected — list, read, click, type into and screenshot the user's browser tabs, block pages for a while, style or swap images, set the home page, use bookmarks and history, and run JavaScript in a page.",
+    "Open web pages, and — with the rpchat browser extension connected — list, read, click, type into and screenshot the user's browser tabs, block pages for a while, style or swap images, set the home page, use bookmarks and history, and run JavaScript in a page.",
   permission: 'pack',
   apiTypeName: 'BrowserApi',
   typings: `/** A browser tab as the extension reports it. Internal pages (chrome://…) are listed with an empty url and title. */
@@ -51,7 +51,7 @@ interface BrowserHistoryItem {
 type BrowserImageEffect = "blur" | "grayscale" | "sepia" | "invert" | "hue" | "pixelate" | "none" | { css: string };
 /**
  * The user's web browser. \`open()\` always works (it runs the browser command from Settings). Everything
- * else drives tabs through the rp-code browser extension, so it needs the extension installed and
+ * else drives tabs through the rpchat browser extension, so it needs the extension installed and
  * connected (check \`status()\`); without it those methods fail with CAPABILITY_FAILED. Only http(s)
  * URLs, and only hosts on the user's web allowlist when they set one. Requires the 'browser' capability.
  */
@@ -174,7 +174,7 @@ interface BrowserApi {
 }`,
   docs: `Open pages and, when the user has installed the browser extension, work inside their browser. Requires the \`browser\` capability.
 
-- \`open(url)\` always works (browser command or extension). Everything else needs the extension: check \`status()\` first, and if it is not connected tell the user (Settings → Browser in rp-code) instead of retrying.
+- \`open(url)\` always works (browser command or extension). Everything else needs the extension: check \`status()\` first, and if it is not connected tell the user (Settings → Browser in rpchat) instead of retrying.
 - Only http/https URLs, only hosts on the user's web allowlist when they set one (PERMISSION_DENIED otherwise). Never open pages the user did not ask for or would not expect; say what you opened.
 - Read before you act: \`read()\` for the text, \`query()\` for the links/buttons/fields you need, then \`click()\` / \`type()\`. Keep to one page and a couple of interactions per action; return what you learned, not whole pages.
 - Clicks and typing land in the user's real browser session (logged in accounts, forms). Do not submit forms or buy, post or send anything without the user asking for it in this conversation.

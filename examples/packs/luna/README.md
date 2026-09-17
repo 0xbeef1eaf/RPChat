@@ -1,6 +1,6 @@
 # Luna
 
-An example companion pack for rp-code. Luna is a warm, curious character who
+An example companion pack for rpchat. Luna is a warm, curious character who
 occasionally shows one of her pictures, plays a soft chime and schedules a
 reminder to check in on you later.
 

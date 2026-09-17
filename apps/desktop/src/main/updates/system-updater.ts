@@ -1,13 +1,13 @@
 /**
  * `electron-updater` for the system install (docs/system-integration.md "System install"): the
- * app runs unpacked from `/opt/rp-code/current`, so there is no `APPIMAGE` environment variable
+ * app runs unpacked from `/opt/rpchat/current`, so there is no `APPIMAGE` environment variable
  * (`AppImageUpdater` would refuse to check and to download) and no old AppImage to download a
  * delta against (so it is always a full download). Installing is not electron-updater's job
- * here either: `UpdateService.install` hands the downloaded file to the `rp-coded` daemon,
+ * here either: `UpdateService.install` hands the downloaded file to the `rpchatd` daemon,
  * which verifies and swaps it in; `quitAndInstall`/`autoInstallOnAppQuit` are never used.
  *
  * Only the download step is overridden (`doDownloadUpdate` is a protected extension point);
- * checking, the private GitHub provider, caching under `~/.cache/rp-code-updater/pending` and
+ * checking, the private GitHub provider, caching under `~/.cache/rpchat-updater/pending` and
  * the `update-downloaded` event (with `downloadedFile` and the manifest's `sha512`) are the
  * library's own.
  */
@@ -51,7 +51,7 @@ export class SystemInstallUpdater extends AppImageUpdater {
 
   /** Never used: the daemon installs. Guards against a stray `quitAndInstall`. */
   protected override doInstall(): boolean {
-    this.dispatchError(new Error('A system install is updated by the rp-code daemon (Settings → Updates), not by replacing a file'));
+    this.dispatchError(new Error('A system install is updated by the rpchat daemon (Settings → Updates), not by replacing a file'));
     return false;
   }
 }

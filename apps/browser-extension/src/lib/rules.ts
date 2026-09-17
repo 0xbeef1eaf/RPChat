@@ -13,7 +13,7 @@
  */
 
 export const RULES_STORAGE_KEY = 'blockRules';
-export const RULES_ALARM = 'rp-code-rules-expiry';
+export const RULES_ALARM = 'rpchat-rules-expiry';
 /** Longest regex the DNR API accepts (Chromium checks 2 KB after its own compilation; keep a margin). */
 const MAX_REGEX_LENGTH = 1500;
 export const MAX_PATTERNS_PER_RULE = 50;

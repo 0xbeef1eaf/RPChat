@@ -184,7 +184,7 @@ export async function scaffoldPack(dir: string, options: ScaffoldOptions): Promi
     id: options.packId,
     name: options.name,
     version: '0.1.0',
-    description: options.description ?? `${options.name}: a character pack for rp-code.`,
+    description: options.description ?? `${options.name}: a character pack for rpchat.`,
     characters: [charDir],
     mediaRoot: DEFAULT_MEDIA_ROOT,
   };

@@ -236,7 +236,7 @@ export class WindowManager {
       show: false,
       frame: true,
       autoHideMenuBar: true,
-      title: 'rp-code',
+      title: 'rpchat',
       backgroundColor: '#1b1b1f',
       webPreferences: this.webPreferences(),
     });

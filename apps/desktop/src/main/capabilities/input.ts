@@ -1,4 +1,4 @@
-/** `sdk.input`: bounded keyboard/mouse lock and input injection through the rp-coded system daemon. */
+/** `sdk.input`: bounded keyboard/mouse lock and input injection through the rpchatd system daemon. */
 import type { ActionContext, CapabilityHandler, DaemonRequest, DaemonResponse, Json, LockDevices } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import type { Logger } from '@rp/core';
@@ -7,7 +7,7 @@ import type { DaemonClient } from '../system/daemon-client.js';
 
 export const INPUT_LOCK_MIN_MS = 1000;
 export const INPUT_TEXT_MAX = 2000;
-export const INPUT_DAEMON_REQUIRED_MESSAGE = 'Input control needs the rp-code system integration (Settings → System → Install); the daemon is not connected';
+export const INPUT_DAEMON_REQUIRED_MESSAGE = 'Input control needs the rpchat system integration (Settings → System → Install); the daemon is not connected';
 type LockResponse = Extract<DaemonResponse, { op: 'lock' }>;
 type StatusResponse = Extract<DaemonResponse, { op: 'status' }>;
 type MouseButton = 'left' | 'right' | 'middle';
@@ -39,7 +39,7 @@ export interface InputHandlerDeps {
   maxLockMs(): Promise<number>;
   logger: Logger;
   now?: () => number;
-  /** rp-coded client (Linux). Every method fails with CAPABILITY_FAILED while it is missing or unreachable. */
+  /** rpchatd client (Linux). Every method fails with CAPABILITY_FAILED while it is missing or unreachable. */
   daemon?: DaemonClient;
 }
 
@@ -129,7 +129,7 @@ export class InputHandler implements CapabilityHandler {
     const res = await this.viaDaemon<LockResponse>(daemon, { op: 'lock', durationMs, devices, ...(reason ? { reason } : {}) });
     this.until = new Date(res.until).getTime();
     this.lockedDevices = res.devices ?? devices;
-    this.deps.logger.info(`[input] locked ${this.lockedDevices} via rp-coded for ${res.durationMs} ms${reason ? ` (${reason})` : ''}`);
+    this.deps.logger.info(`[input] locked ${this.lockedDevices} via rpchatd for ${res.durationMs} ms${reason ? ` (${reason})` : ''}`);
     return { until: res.until, durationMs: res.durationMs, devices: this.lockedDevices };
   }
 

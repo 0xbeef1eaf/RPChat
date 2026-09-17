@@ -121,7 +121,7 @@ From 0.5x a Hyprland whose config is Lua (`hyprland.lua`) refuses the legacy com
 
 | purpose | legacy | Lua |
 | --- | --- | --- |
-| rules | `keyword windowrule float,title:…` | `hl.window_rule({ name = "rp-code-overlays", match = { title = "^(rp-overlay:.*)$" }, float = true, … })`, `hl.layer_rule({ match = { namespace = … }, no_anim = true })` |
+| rules | `keyword windowrule float,title:…` | `hl.window_rule({ name = "rpchat-overlays", match = { title = "^(rp-overlay:.*)$" }, float = true, … })`, `hl.layer_rule({ match = { namespace = … }, no_anim = true })` |
 | float / pin | `dispatch setfloating`, `dispatch pin` (set) | `hl.dsp.window.float/pin` are **toggles**: guard with `if not w.floating`, `if w.pinned ~= <wanted>` |
 | geometry | `resizewindowpixel exact`, `movewindowpixel exact`, `movewindow mon:` | `hl.dsp.window.resize({ x, y, window })` then `move({ x, y, monitor, window })` — absolute layout coordinates |
 | chrome | `setprop noborder/norounding/nodim 1` | rule fields `border_size = 0`, `rounding = 0`, `decorate = false`, `no_anim`, `no_blur`, `no_dim`, `no_shadow`, `no_max_size`, `no_initial_focus`, `suppress_event = "maximize"` |
@@ -163,7 +163,7 @@ Platform defaults (used when a template's `command` is empty):
 Handlers (`apps/desktop/src/main/capabilities/{wallpaper,browser,input}.ts`):
 - `wallpaper.set(asset, { monitor? })`: arg 0 is a pack-root-relative asset path already validated by core; resolve to an absolute file via `resolveAssetPath(packRoot, path)`; `{file}` = absolute path, `{monitor}` = resolved monitor name or ''. Remember `current` in memory. `restore()` runs the template with `settings.wallpaperRestoreFile` (must exist) → true; empty → false.
 - `browser.open(url, { newWindow? })`: validate `^https?://` via `new URL`; `{url}` substitution; when `newWindow` and the template contains `{newWindow}` substitute `--new-window` else ''. Never fall back to `shell.openExternal` silently — if no template, use `shell.openExternal` only when the platform default is empty (it never is).
-- `input.lock(durationMs, { reason, devices })`: clamp to `[1000, settings.maxInputLockMs]` and forward to the `rp-coded` daemon, which clamps again against the root-owned policy and unlocks by itself; `unlock()` and `status()` likewise. No command templates are involved (superseded by `docs/spec/system.md`): without a connected daemon every `sdk.input` method throws `CAPABILITY_FAILED`. Core audits the capability call; the handler adds a `logger.info`.
+- `input.lock(durationMs, { reason, devices })`: clamp to `[1000, settings.maxInputLockMs]` and forward to the `rpchatd` daemon, which clamps again against the root-owned policy and unlocks by itself; `unlock()` and `status()` likewise. No command templates are involved (superseded by `docs/spec/system.md`): without a connected daemon every `sdk.input` method throws `CAPABILITY_FAILED`. Core audits the capability call; the handler adds a `logger.info`.
 
 All three templates are editable in **Settings → Commands** (renderer): command, `shell` toggle, timeout, a "Test" button that runs the template with sample values (`{file}` = the app's bundled sample image, `{url}` = `https://example.com`, `{seconds}` = 3), showing exit code/stdout/stderr. Add to `IpcApi.settings`: `testCommand(name: keyof CommandTemplates, tpl: CommandTemplate): Promise<{ code: number; stdout: string; stderr: string }>`.
 

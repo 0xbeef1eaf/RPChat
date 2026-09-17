@@ -30,7 +30,7 @@
 //! month catches up by walking the tail, checking each signature as it goes. Links before its head
 //! are not re-verified — the head hash already commits to all of them.
 //!
-//! Signing is Ed25519 over `rp-code-chain/v1\n` followed by the link's canonical bytes (compact
+//! Signing is Ed25519 over `rpchat-chain/v1\n` followed by the link's canonical bytes (compact
 //! JSON, object keys sorted, `signature` removed), which is exactly what `serde_json` writes for a
 //! `Value` and what `JSON.stringify` writes over recursively sorted entries — so both ends agree
 //! without either implementing a canonicalisation spec. `scripts/rp-policy-chain.mjs` is the
@@ -43,7 +43,7 @@ use serde_json::Value;
 use crate::seal::{base64_decode, base64_encode, sha256_hex};
 
 /// Prefixed to the canonical bytes before signing; bumping it invalidates every old signature.
-pub const SIGNING_PREFIX: &str = "rp-code-chain/v1";
+pub const SIGNING_PREFIX: &str = "rpchat-chain/v1";
 /// The only signature algorithm, named in the document so a second one could be added later.
 pub const SIGNATURE_ALG: &str = "ed25519";
 /// Refuse absurd chain files before parsing them.
@@ -935,7 +935,7 @@ pub mod tests {
         // The signature the app produced for it, verified by the daemon's own code path.
         let signature = Signed {
             alg: SIGNATURE_ALG.into(),
-            value: "PRw8uOCY/W7y2F5lEaIjQgY2o3zrZ9NN32pM4hIeGocTPlmbDuHnbukaAqIgPlMvUXx7qaVQfzzE4FK+P7vtDw==".into(),
+            value: "9WbRZ75BlBq3uuVzxGROCsK6UuB95mTnoepPKnQ+BwGV+Myw1yS80VJuiE7iX7Yl9LxhhvGQym50Xlexg+8iAw==".into(),
             key_id: None,
         };
         let mut signed = link.clone();

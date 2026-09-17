@@ -189,7 +189,7 @@ describe('policyDraftProblems', () => {
 
 describe('guardPathProblem', () => {
   it('accepts absolute paths, and home-rooted ones only where they are allowed', () => {
-    expect(guardPathProblem('/etc/rp-code', false)).toBeNull();
+    expect(guardPathProblem('/etc/rpchat', false)).toBeNull();
     expect(guardPathProblem('~/.config/hypr/*', true)).toBeNull();
     expect(guardPathProblem('@{HOME}/.cache/x', true)).toBeNull();
     expect(guardPathProblem('~/.config/hypr', false)).toBe('The path must be absolute.');

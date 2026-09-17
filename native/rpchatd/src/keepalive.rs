@@ -616,7 +616,7 @@ mod tests {
     fn reg() -> Registration {
         validate_registration(
             RegisterRequest {
-                exec: "/usr/bin/rp-code",
+                exec: "/usr/bin/rpchat",
                 args: &["--hidden".to_string()],
                 cwd: "/home/alice",
                 env: &env(&[("HOME", "/home/alice"), ("DISPLAY", ":0")]),
@@ -642,7 +642,7 @@ mod tests {
         assert_eq!(r.user, "alice");
         assert_eq!(r.uid, 1000);
         assert_eq!(r.proc_start, Some(777));
-        assert_eq!(r.command_line(), "/usr/bin/rp-code --hidden");
+        assert_eq!(r.command_line(), "/usr/bin/rpchat --hidden");
         let ok = |exec: &str, args: Vec<&str>, cwd: &str, e: &[(&str, &str)]| {
             validate_registration(
                 RegisterRequest {
@@ -657,8 +657,8 @@ mod tests {
                 &|p| p.to_str() != Some("/missing"),
             )
         };
-        assert!(ok("/usr/bin/rp-code", vec![], "/", &[]).is_ok());
-        assert!(ok("rp-code", vec![], "/", &[])
+        assert!(ok("/usr/bin/rpchat", vec![], "/", &[]).is_ok());
+        assert!(ok("rpchat", vec![], "/", &[])
             .unwrap_err()
             .contains("absolute"));
         assert!(ok("/missing", vec![], "/", &[])
@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn proc_stat_starttime() {
-        let stat = "4242 (rp-code (x) y) S 1 4242 4242 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 30 0 123456 1000000 2000 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 3 0 0 0 0 0";
+        let stat = "4242 (rpchat (x) y) S 1 4242 4242 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 30 0 123456 1000000 2000 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 3 0 0 0 0 0";
         assert_eq!(parse_proc_stat_starttime(stat), Some(123_456));
         assert_eq!(parse_proc_stat_starttime("garbage"), None);
         assert_eq!(parse_proc_stat_starttime("1 (a) S 1"), None);
@@ -959,7 +959,7 @@ mod tests {
     fn command_spec_uses_registered_cwd_or_home_and_exactly_the_registered_env() {
         let r = reg();
         let spec = command_spec(&r, true);
-        assert_eq!(spec.program, "/usr/bin/rp-code");
+        assert_eq!(spec.program, "/usr/bin/rpchat");
         assert_eq!(spec.args, vec!["--hidden"]);
         assert_eq!(spec.cwd, "/home/alice");
         assert_eq!(spec.env, r.env);
@@ -973,7 +973,7 @@ mod tests {
         assert_eq!(command_spec(&no_home, false).cwd, "/");
         // build_command does not run anything; it carries the spec verbatim.
         let cmd = build_command(&spec);
-        assert_eq!(cmd.get_program(), "/usr/bin/rp-code");
+        assert_eq!(cmd.get_program(), "/usr/bin/rpchat");
         assert_eq!(cmd.get_args().collect::<Vec<_>>(), vec!["--hidden"]);
         assert_eq!(
             cmd.get_current_dir().map(|p| p.to_str()),

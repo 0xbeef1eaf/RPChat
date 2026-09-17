@@ -1,7 +1,7 @@
 /**
  * The app's own copy of a sealed policy, and why it exists.
  *
- * The daemon defends `/etc/rp-code` well while it is running (docs/system-integration.md "Sealing
+ * The daemon defends `/etc/rpchat` well while it is running (docs/system-integration.md "Sealing
  * the policy"), but the one move it cannot answer from inside is being stopped *and* having its
  * files removed in the same breath — from a rescue shell, from another boot, from a root shell the
  * session guard does not confine. Without this cache the app would then come up with no policy at
@@ -12,7 +12,7 @@
  * policy and its hash. While that memory exists and the machine offers nothing better, the app
  * keeps enforcing it — a missing policy file is read as tampering, not as freedom. The memory is
  * dropped in exactly one case: a **connected** daemon says the machine is not sealed, which only
- * happens after a code has been accepted (or after `rp-coded --unseal`, which also needs one).
+ * happens after a code has been accepted (or after `rpchatd --unseal`, which also needs one).
  *
  * This is not a security boundary of its own — the user owns their user data and can delete the
  * cache too. It is the difference between "unlocking this needs the code" and "unlocking this

@@ -60,8 +60,8 @@ export class GuardAttemptLog {
   }
 }
 
-export const UDEV_RULE_PATH = '/etc/udev/rules.d/70-rp-code.rules';
-export const AUTOSTART_FILENAME = 'rp-code.desktop';
+export const UDEV_RULE_PATH = '/etc/udev/rules.d/70-rpchat.rules';
+export const AUTOSTART_FILENAME = 'rpchat.desktop';
 export const INSTALLER_FILENAME = 'install.sh';
 
 export interface ProcessRunner {
@@ -81,11 +81,11 @@ export interface SystemIntegrationDeps {
   appImage?: boolean;
   /** `realpath(process.execPath)`: decides whether this launch runs from the system install. */
   execPath?: string;
-  /** The unpacked app directory of the system install. Default `/opt/rp-code/current`. */
+  /** The unpacked app directory of the system install. Default `/opt/rpchat/current`. */
   systemInstallDir?: string;
   /**
    * Where the installer and daemon are copied before running them as root. Defaults to
-   * `~/.cache/rp-code/system-install`. Needed because an AppImage is a FUSE mount under
+   * `~/.cache/rpchat/system-install`. Needed because an AppImage is a FUSE mount under
    * `/tmp/.mount_*` that only the mounting user can traverse: root (sudo/pkexec) cannot even
    * read `install.sh` from there.
    */
@@ -124,10 +124,10 @@ export function autostartDesktopEntry(appBin: string): string {
   return [
     '[Desktop Entry]',
     'Type=Application',
-    'Name=rp-code',
-    'Comment=Start rp-code minimized to the tray',
+    'Name=rpchat',
+    'Comment=Start rpchat minimized to the tray',
     `Exec=${exec} --hidden`,
-    'Icon=rp-code',
+    'Icon=rpchat',
     'Terminal=false',
     'X-GNOME-Autostart-enabled=true',
     'StartupNotify=false',
@@ -255,7 +255,7 @@ export class SystemIntegration {
     this.author =
       deps.author ??
       new ChainAuthor({
-        dir: path.join(this.homeDir, '.config', 'rp-code', 'policy-chain'),
+        dir: path.join(this.homeDir, '.config', 'rpchat', 'policy-chain'),
         safeStorage: { isEncryptionAvailable: () => false, encryptString: () => Buffer.alloc(0), decryptString: () => '' },
         logger: deps.logger,
       });
@@ -275,13 +275,13 @@ export class SystemIntegration {
   }
 
   get stageDir(): string {
-    return this.deps.stageDir ?? path.join(this.homeDir, '.cache', 'rp-code', 'system-install');
+    return this.deps.stageDir ?? path.join(this.homeDir, '.cache', 'rpchat', 'system-install');
   }
 
   /**
    * Copy the bundled installer, its support files and the daemon binary into `stageDir` (a
    * plain directory root can read) and return the staged `install.sh`. The stage is rebuilt on
-   * every call so it always matches this build. `install.sh` finds `rp-coded` next to itself.
+   * every call so it always matches this build. `install.sh` finds `rpchatd` next to itself.
    */
   async stageInstaller(): Promise<string> {
     const installer = await this.installerPath();
@@ -292,12 +292,12 @@ export class SystemIntegration {
     await fs.mkdir(stage, { recursive: true, mode: 0o755 });
     const sources: string[] = [];
     for (const name of await fs.readdir(systemDir)) sources.push(path.join(systemDir, name));
-    const daemon = path.join(path.dirname(systemDir), 'bin', 'rp-coded');
+    const daemon = path.join(path.dirname(systemDir), 'bin', 'rpchatd');
     if (await exists(daemon)) sources.push(daemon);
     for (const src of sources) {
       const dst = path.join(stage, path.basename(src));
       await fs.copyFile(src, dst);
-      await fs.chmod(dst, dst.endsWith('.sh') || path.basename(dst) === 'rp-coded' ? 0o755 : 0o644);
+      await fs.chmod(dst, dst.endsWith('.sh') || path.basename(dst) === 'rpchatd' ? 0o755 : 0o644);
     }
     this.deps.logger.debug(`[system] staged ${sources.length} installer file(s) in ${stage}`);
     return path.join(stage, INSTALLER_FILENAME);
@@ -325,9 +325,9 @@ export class SystemIntegration {
   async autostartStatus(): Promise<SystemIntegrationStatus['autostart']> {
     const xdg = this.autostartPath;
     if (await exists(xdg)) return { enabled: true, method: 'xdg', path: xdg };
-    const unit = path.join(this.homeDir, '.config', 'systemd', 'user', 'rp-code.service');
+    const unit = path.join(this.homeDir, '.config', 'systemd', 'user', 'rpchat.service');
     if (await exists(unit)) {
-      const wants = path.join(this.homeDir, '.config', 'systemd', 'user', 'graphical-session.target.wants', 'rp-code.service');
+      const wants = path.join(this.homeDir, '.config', 'systemd', 'user', 'graphical-session.target.wants', 'rpchat.service');
       return { enabled: await exists(wants), method: 'systemd-user', path: unit };
     }
     return { enabled: false, method: 'none' };
@@ -632,7 +632,7 @@ export class SystemIntegration {
     return this.status();
   }
 
-  /** Write or remove `~/.config/autostart/rp-code.desktop` (no privileges needed). */
+  /** Write or remove `~/.config/autostart/rpchat.desktop` (no privileges needed). */
   async setAutostart(enabled: boolean): Promise<SystemIntegrationStatus> {
     const file = this.autostartPath;
     if (enabled) {

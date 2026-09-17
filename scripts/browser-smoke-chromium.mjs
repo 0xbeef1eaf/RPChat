@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Launches Chromium with the unpacked rp-code browser extension for the browser smoke test
+ * Launches Chromium with the unpacked rpchat browser extension for the browser smoke test
  * (scripts/browser-smoke.sh), points the extension at the app's bridge port and keeps the browser
  * open until SIGTERM/SIGINT. Uses playwright-core (a devDependency of @rp/desktop; run from
  * apps/desktop) with an explicit executable: RP_CHROMIUM_BIN, Playwright's registry, or a

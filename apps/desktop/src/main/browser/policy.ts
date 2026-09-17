@@ -7,7 +7,7 @@
 import type { BrowserPolicyJson } from '@rp/shared';
 
 /** File name the installer writes into each managed-policy directory. */
-export const BROWSER_POLICY_FILENAME = 'rp-code.json';
+export const BROWSER_POLICY_FILENAME = 'rpchat.json';
 
 /**
  * Managed-policy directories of the Chromium-based browsers on Linux. Each browser only reads its
@@ -28,7 +28,7 @@ export function updateUrlFor(port: number): string {
 }
 
 export function crxUrlFor(port: number): string {
-  return `http://127.0.0.1:${port}/extension/rp-code.crx`;
+  return `http://127.0.0.1:${port}/extension/rpchat.crx`;
 }
 
 /**

@@ -213,7 +213,7 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
       <div className="row">
         <p className="muted small grow">
           Characters with the <code>browser</code> capability can open, read and drive tabs in your Chromium-based browser (Chrome, Chromium, Brave,
-          Edge, Vivaldi, Opera…) through the <strong>rp-code browser bridge</strong> extension. The extension only ever talks to this app on{' '}
+          Edge, Vivaldi, Opera…) through the <strong>rpchat browser bridge</strong> extension. The extension only ever talks to this app on{' '}
           <code>127.0.0.1</code>, and every extension has to be allowed here once before it can connect.
         </p>
         <button type="button" className="btn btn-sm" onClick={load} disabled={running !== null}>
@@ -267,7 +267,7 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
           {portMismatch ? (
             <div className="callout callout-warning small" style={{ marginTop: 8 }}>
               The extension looks for the app on port {status.requestedPort}. Choose a free port here (then re-install the policy, or set it in the
-              extension&apos;s popup), or stop whatever is using {status.requestedPort} and restart rp-code.
+              extension&apos;s popup), or stop whatever is using {status.requestedPort} and restart rpchat.
             </div>
           ) : null}
         </div>
@@ -278,7 +278,7 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
             <span className="badge">{status.trusted.length}</span>
           </div>
           {status.trusted.length === 0 ? (
-            <p className="muted small">None yet. The first time an extension connects, rp-code asks you whether to allow it.</p>
+            <p className="muted small">None yet. The first time an extension connects, rpchat asks you whether to allow it.</p>
           ) : (
             <ul className="plain-list" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
               {status.trusted.map((id) => (
@@ -462,7 +462,7 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
           />
           <span className="field-hint">
             One per line (or comma separated): managed-policy directories of Chromium forks the installer does not know (Helium, ungoogled-chromium
-            derivatives…). They get the same <code>rp-code.json</code>, and <em>Remove policy</em> cleans them too. Find a browser&apos;s directory
+            derivatives…). They get the same <code>rpchat.json</code>, and <em>Remove policy</em> cleans them too. Find a browser&apos;s directory
             with <code>chrome://policy</code> or <code>strace -f -e trace=openat &lt;browser&gt; 2&gt;&amp;1 | grep policies/managed</code>.
           </span>
         </div>
@@ -490,7 +490,7 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
         <h3 style={{ margin: 0 }}>Developers: load the extension unpacked</h3>
         <p className="muted small" style={{ margin: '4px 0 0' }}>
           Open <code>chrome://extensions</code>, switch on <em>Developer mode</em>, choose <em>Load unpacked</em> and pick this folder. An unpacked copy
-          gets its own id; rp-code asks you to allow it when it first connects.
+          gets its own id; rpchat asks you to allow it when it first connects.
         </p>
         {status.extensionDir ? (
           <div className="row" style={{ marginTop: 8 }}>
@@ -511,7 +511,7 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
           <p>The installer runs with administrator rights and writes one policy file per browser:</p>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             <li>
-              <code>rp-code.json</code> in <code>/etc/chromium/policies/managed</code> and <code>/etc/opt/chrome/policies/managed</code>, plus the same for
+              <code>rpchat.json</code> in <code>/etc/chromium/policies/managed</code> and <code>/etc/opt/chrome/policies/managed</code>, plus the same for
               Brave, Edge, Vivaldi and Opera when they are installed
               {browser.extraPolicyDirs.length > 0 ? (
                 <>
@@ -530,7 +530,7 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
             </li>
           </ul>
           <p className="muted small">
-            The browser installs the extension within a few minutes or at its next start; the extension then connects to rp-code on its own. Remove the
+            The browser installs the extension within a few minutes or at its next start; the extension then connects to rpchat on its own. Remove the
             policy with the button next to this one.
           </p>
           <div className="form-actions">
@@ -547,7 +547,7 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
       {removeDialog ? (
         <Modal title="Remove the browser policy?" onClose={() => setRemoveDialog(false)}>
           <p>
-            Deletes every <code>rp-code.json</code> policy file the installer wrote (administrator rights, pkexec). Browsers uninstall the
+            Deletes every <code>rpchat.json</code> policy file the installer wrote (administrator rights, pkexec). Browsers uninstall the
             force-installed extension on their next policy refresh.
           </p>
           <div className="form-actions">

@@ -1,6 +1,6 @@
 # Architecture
 
-**rp-code** is a desktop LLM roleplay chat application. Characters are not just
+**rpchat** is a desktop LLM roleplay chat application. Characters are not just
 personas: each turn, the character's LLM may *write TypeScript* against a
 documented SDK, and the app executes that code in a sandbox to act on the host
 PC (show a picture, play a video or sound, schedule a follow-up, remember
@@ -185,7 +185,7 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `ui`     | pack       | `notify(title, body?, opts?)` (urgency low/normal/critical), `confirm(question)`, `choose(question, options[])`, `ask(question, opts?)` (free text), `pickFile(opts?)`, `pickFolder(opts?)` (native pickers) |
 | `wallpaper` | pack    | `set(asset, { monitor? })`, `restore()`, `current()` — via the user's wallpaper command template |
 | `browser`| pack       | `open(url, { newWindow? })` via the user's browser command; with the browser extension connected also `status`, `tabs`, `openTab`, `activate`, `close`, `navigate`, `back/forward/reload`, `read`, `query`, `click`, `type`, `scroll`, `screenshot`, `find` (docs/browser-extension.md) |
-| `input`  | pack       | `lock(durationMs, { reason?, devices? })`, `unlock()`, `status()`, `type`, `key`, `click`, `moveMouse` — daemon-only (`rp-coded`, Linux), duration capped; `CAPABILITY_FAILED` without the daemon |
+| `input`  | pack       | `lock(durationMs, { reason?, devices? })`, `unlock()`, `status()`, `type`, `key`, `click`, `moveMouse` — daemon-only (`rpchatd`, Linux), duration capped; `CAPABILITY_FAILED` without the daemon |
 | `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — via the user's camera command templates; the capture is saved under `webcam/` in the character home and returned as a `source: 'home'` AssetRef |
 | `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)`, `clipboardRead()` |
 
@@ -440,7 +440,7 @@ backends (KDE, GNOME, Windows, macOS) implement the same interface. The app
 shell stays Electron: a native layer-shell client is required either way, and
 this keeps the TypeScript engine in-process. Wallpaper and browser run
 user-editable **command templates** (argv-tokenised, placeholder substituted,
-no shell by default); input locking and injection go through the `rp-coded`
+no shell by default); input locking and injection go through the `rpchatd`
 system daemon only (`docs/system-integration.md`). See `docs/spec/overlay.md`.
 
 ## 11. Extending the system

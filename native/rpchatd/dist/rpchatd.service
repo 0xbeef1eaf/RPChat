@@ -1,14 +1,14 @@
-# rp-coded — input lock / injection daemon for the rp desktop app.
-# Installed to /etc/systemd/system/rp-coded.service by native/rp-coded/install.sh.
+# rpchatd — input lock / injection daemon for the rp desktop app.
+# Installed to /etc/systemd/system/rpchatd.service by native/rpchatd/install.sh.
 [Unit]
-Description=rp-code input lock and injection daemon
-Documentation=file:///usr/local/libexec/rp-code/README.md
+Description=rpchat input lock and injection daemon
+Documentation=file:///usr/local/libexec/rpchat/README.md
 After=systemd-udevd.service systemd-modules-load.service
 Wants=systemd-modules-load.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/libexec/rp-code/rp-coded
+ExecStart=/usr/local/libexec/rpchat/rpchatd
 Restart=on-failure
 RestartSec=2
 KillSignal=SIGTERM
@@ -21,7 +21,7 @@ TimeoutStopSec=10
 # ProtectHome / PrivateTmp (the app needs $HOME, /tmp/.X11-unix and the AppImage FUSE mount),
 # ProtectSystem=strict (the app writes under ~/.config), MemoryDenyWriteExecute (V8 JIT),
 # RestrictNamespaces (Chromium's sandbox), SystemCallFilter and DevicePolicy=closed (GPU, audio).
-# What stays: no-new-privileges, read-only /usr and /etc (except /etc/rp-code), kernel/cgroup
+# What stays: no-new-privileges, read-only /usr and /etc (except /etc/rpchat), kernel/cgroup
 # protection, a capability bounding set of just chown + setuid/setgid, and only the address
 # families the app needs. Relaunched apps keep running when the daemon stops (KillMode=process).
 User=root
@@ -37,11 +37,11 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
-# CAP_CHOWN/CAP_FOWNER/CAP_DAC_OVERRIDE: hand the socket to the rp-code group. CAP_SETUID/
+# CAP_CHOWN/CAP_FOWNER/CAP_DAC_OVERRIDE: hand the socket to the rpchat group. CAP_SETUID/
 # CAP_SETGID: drop to the user (setgid, initgroups, setuid) before exec'ing a relaunched app.
 # CAP_MAC_ADMIN: load/unload the session-guard AppArmor profiles (apparmor_parser writes
 # /sys/kernel/security/apparmor/.replace, which the kernel gates on this capability).
-# CAP_SYS_ADMIN: mount and remount the runtime policy filesystem (/run/rp-code/policy) — the
+# CAP_SYS_ADMIN: mount and remount the runtime policy filesystem (/run/rpchat/policy) — the
 # one thing here that needs it, and the reason the seal can publish a policy root cannot edit
 # in place. CAP_LINUX_IMMUTABLE: set FS_IMMUTABLE_FL on the policy, the seal and its mirrors
 # (`lock.immutable`), which the kernel gates on that capability alone.
@@ -60,18 +60,18 @@ AmbientCapabilities=CAP_SETUID CAP_SETGID CAP_SYS_ADMIN CAP_LINUX_IMMUTABLE
 # AF_UNIX for the daemon; the rest for the relaunched app (Chromium needs netlink too).
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 KillMode=process
-# Socket directory: created 0750 and chowned root:rp-code by the daemon. /etc/rp-code is the
+# Socket directory: created 0750 and chowned root:rpchat by the daemon. /etc/rpchat is the
 # only writable path under /etc: the daemon creates policy.json there once (`set-policy`,
 # write-once) and never modifies or removes it. The directory is created by install.sh before
 # the service starts ("-": ignored when missing, so the unit still starts without it).
-RuntimeDirectory=rp-code
+RuntimeDirectory=rpchat
 RuntimeDirectoryMode=0750
-ReadWritePaths=/run/rp-code
-ReadWritePaths=-/etc/rp-code
+ReadWritePaths=/run/rpchat
+ReadWritePaths=-/etc/rpchat
 # The policy seal (README "Sealing the policy"): its mirror copies live outside /etc so that
 # removing one place does not unseal the machine. Both "-": created on the first seal.
-ReadWritePaths=-/var/lib/rp-code
-# The runtime policy filesystem (/run/rp-code/policy) is a tmpfs the daemon mounts itself and
+ReadWritePaths=-/var/lib/rpchat
+# The runtime policy filesystem (/run/rpchat/policy) is a tmpfs the daemon mounts itself and
 # remounts read-only after each publish. A unit with sandboxing options runs in its own mount
 # namespace whose propagation systemd sets to `slave` by default, which would keep that mount
 # invisible to the rest of the machine — including the app that has to read it. `shared` lets
@@ -79,13 +79,13 @@ ReadWritePaths=-/var/lib/rp-code
 # The sandbox mounts systemd sets up are made before the propagation mode is applied, so they
 # stay inside the namespace; only the daemon's own later mounts travel.
 MountFlags=shared
-# System install (`apply-update`): the unpacked app under /opt/rp-code (current/, previous/,
+# System install (`apply-update`): the unpacked app under /opt/rpchat (current/, previous/,
 # versions.json, per-user staging), and — when the new bundle ships a newer daemon — the
 # daemon's own files: the binary directory, this unit, the udev rule, the module list and the
 # menu entry/icon, refreshed through the bundle's install.sh --refresh-daemon-files. All "-":
 # ignored when missing, so the unit starts on machines without a system install.
-ReadWritePaths=-/opt/rp-code
-ReadWritePaths=-/usr/local/libexec/rp-code
+ReadWritePaths=-/opt/rpchat
+ReadWritePaths=-/usr/local/libexec/rpchat
 ReadWritePaths=-/usr/local/bin
 ReadWritePaths=-/etc/systemd/system
 ReadWritePaths=-/etc/udev/rules.d
@@ -93,7 +93,7 @@ ReadWritePaths=-/etc/modules-load.d
 ReadWritePaths=-/usr/local/share/applications
 ReadWritePaths=-/usr/local/share/icons
 # Session guard (`policy.guard`, README "Session guard"): the generated profiles under
-# /etc/apparmor.d/rp-code-*, the state file in /etc/rp-code (already writable) and AppArmor's
+# /etc/apparmor.d/rpchat-*, the state file in /etc/rpchat (already writable) and AppArmor's
 # securityfs interface, which ProtectKernelTunables would otherwise leave read-only. Both "-":
 # absent on machines without AppArmor. The audit tail reads the journal files (allowed under
 # ProtectKernelLogs); the /dev/kmsg fallback is only reachable when that option is removed.

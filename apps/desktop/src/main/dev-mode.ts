@@ -114,12 +114,12 @@ out.cleared = await sdk.browser.clearImageEffects(tab.id);
 out.restored = (await sdk.browser.eval(tab.id, probe)).value;
 out.home = await sdk.browser.setHomePage(${JSON.stringify(homeUrl)});
 out.homeGet = await sdk.browser.homePage();
-const bm = await sdk.browser.addBookmark(${JSON.stringify(smokeUrl)}, "rp-code smoke page", { folder: "rp-code smoke/Pages" });
+const bm = await sdk.browser.addBookmark(${JSON.stringify(smokeUrl)}, "rpchat smoke page", { folder: "rpchat smoke/Pages" });
 out.bookmark = bm;
-out.bookmarkFound = (await sdk.browser.searchBookmarks("rp-code smoke page")).map((b) => b.url);
-out.bookmarkListed = (await sdk.browser.bookmarks({ folder: "rp-code smoke/Pages" })).map((b) => b.url);
+out.bookmarkFound = (await sdk.browser.searchBookmarks("rpchat smoke page")).map((b) => b.url);
+out.bookmarkListed = (await sdk.browser.bookmarks({ folder: "rpchat smoke/Pages" })).map((b) => b.url);
 out.bookmarkRemoved = await sdk.browser.removeBookmark(bm.id);
-out.bookmarkLeft = (await sdk.browser.searchBookmarks("rp-code smoke page")).filter((b) => b.url).length;
+out.bookmarkLeft = (await sdk.browser.searchBookmarks("rpchat smoke page")).filter((b) => b.url).length;
 out.evalIsolated = await sdk.browser.eval(tab.id, "return document.title");
 out.evalMain = await sdk.browser.eval(tab.id, "return window.location.href", { world: "main" });
 out.evalHasNewFunction = (await sdk.browser.eval(tab.id, "return typeof Function === 'function' && new Function('return 6 * 7')()")).value;
@@ -233,7 +233,7 @@ export async function smokeLoadPlugin(plugins: { install(dir?: string): Promise<
     return;
   }
   try {
-    const info = plugins.list().find((p) => p.id === 'dev.rp-code.clock') ?? (await plugins.install(source));
+    const info = plugins.list().find((p) => p.id === 'dev.rpchat.clock') ?? (await plugins.install(source));
     if (!info) logger.warn('[smoke] plugin clock: install returned nothing');
     else logger[info.state === 'active' ? 'info' : 'error'](`[smoke] plugin clock: ${info.state}${info.error ? ` (${info.error})` : ''}`);
   } catch (err) {
@@ -262,7 +262,7 @@ export const SMOKE_PAGE_PATH = '/smoke/page.html';
 export const SMOKE_PAGE2_PATH = '/smoke/page2.html';
 export const SMOKE_HOME_PATH = '/smoke/home.html';
 export const SMOKE_IMAGE_PATH = '/smoke/dot.png';
-export const SMOKE_PAGE_TEXT = 'Hello from the rp-code smoke page';
+export const SMOKE_PAGE_TEXT = 'Hello from the rpchat smoke page';
 
 /** A 1×1 red PNG: the smoke page's picture and the pack asset `imageEffect` swaps in. */
 export const SMOKE_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64');
@@ -270,12 +270,12 @@ export const SMOKE_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFc
 /** The tiny pages the browser smoke opens (served by the loopback server, any origin). */
 export function smokePage(which: 1 | 2 | 3): string {
   if (which === 2) {
-    return `<!doctype html><html><head><meta charset="utf-8"><title>rp-code smoke page 2</title></head><body><h1>Second smoke page</h1><p>You followed the link.</p></body></html>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>rpchat smoke page 2</title></head><body><h1>Second smoke page</h1><p>You followed the link.</p></body></html>`;
   }
   if (which === 3) {
-    return `<!doctype html><html><head><meta charset="utf-8"><title>rp-code smoke home</title></head><body><h1>Smoke home page</h1><p>Opened by the new-tab override.</p></body></html>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>rpchat smoke home</title></head><body><h1>Smoke home page</h1><p>Opened by the new-tab override.</p></body></html>`;
   }
-  return `<!doctype html><html><head><meta charset="utf-8"><title>rp-code smoke page</title></head><body style="font:16px sans-serif">
+  return `<!doctype html><html><head><meta charset="utf-8"><title>rpchat smoke page</title></head><body style="font:16px sans-serif">
 <h1>${SMOKE_PAGE_TEXT}</h1>
 <p>This page exists so the browser extension can be exercised end to end.</p>
 <p><img id="pic" src="${SMOKE_IMAGE_PATH}" width="48" height="48" alt="smoke dot"></p>
@@ -304,7 +304,7 @@ export function registerSmokePages(loopback: LoopbackServer): void {
 
 /** A minimal pack whose character has the `browser` capability, written under `dir`. */
 export async function writeBrowserSmokePack(dir: string): Promise<{ packId: string; characterRef: string }> {
-  const packId = 'dev.rp-code.browser-smoke';
+  const packId = 'dev.rpchat.browser-smoke';
   const characterDir = path.join(dir, 'characters', 'smokey');
   await fs.promises.mkdir(characterDir, { recursive: true });
   await fs.promises.writeFile(
@@ -378,7 +378,7 @@ export async function runBrowserSmoke(services: BrowserSmokeServices, logger: Lo
     if (!result) problems.push(`no browser action result (errors: ${errors.join('; ') || 'none'})`);
     else {
       if (typeof result['text'] !== 'string' || !result['text'].includes(SMOKE_PAGE_TEXT)) problems.push(`read text: ${JSON.stringify(result['text'])}`);
-      if (result['title'] !== 'rp-code smoke page') problems.push(`title: ${JSON.stringify(result['title'])}`);
+      if (result['title'] !== 'rpchat smoke page') problems.push(`title: ${JSON.stringify(result['title'])}`);
       if (!Array.isArray(result['links']) || !result['links'].some((l) => typeof l === 'string' && l.endsWith(SMOKE_PAGE2_PATH))) problems.push(`query links: ${JSON.stringify(result['links'])}`);
       if (result['found'] !== 1) problems.push(`find count: ${JSON.stringify(result['found'])}`);
       if (!(result['typed'] && typeof result['typed'] === 'object' && (result['typed'] as { typed?: unknown }).typed === true)) problems.push(`type: ${JSON.stringify(result['typed'])}`);
@@ -434,7 +434,7 @@ export async function runBrowserSmoke(services: BrowserSmokeServices, logger: Lo
       const bm = obj(ex['bookmark']);
       check(
         'bookmarks',
-        bm['url'] === url && bm['path'] === 'Other bookmarks/rp-code smoke/Pages' && Array.isArray(ex['bookmarkFound']) && ex['bookmarkFound'].includes(url) && Array.isArray(ex['bookmarkListed']) && ex['bookmarkListed'].includes(url) && obj(ex['bookmarkRemoved'])['removed'] === 1 && ex['bookmarkLeft'] === 0,
+        bm['url'] === url && bm['path'] === 'Other bookmarks/rpchat smoke/Pages' && Array.isArray(ex['bookmarkFound']) && ex['bookmarkFound'].includes(url) && Array.isArray(ex['bookmarkListed']) && ex['bookmarkListed'].includes(url) && obj(ex['bookmarkRemoved'])['removed'] === 1 && ex['bookmarkLeft'] === 0,
         `added in ${String(bm['path'])}, found ${String((ex['bookmarkFound'] as unknown[] | undefined)?.length)}, listed ${String((ex['bookmarkListed'] as unknown[] | undefined)?.length)}, removed ${String(obj(ex['bookmarkRemoved'])['removed'])}, left ${String(ex['bookmarkLeft'])}`,
       );
       const iso = obj(ex['evalIsolated']);
@@ -442,7 +442,7 @@ export async function runBrowserSmoke(services: BrowserSmokeServices, logger: Lo
       // The isolated world refuses `new Function` (extension CSP); the extension falls back to the main world and says so.
       check(
         'eval',
-        iso['value'] === 'rp-code smoke page' && (iso['world'] === 'isolated' || (iso['world'] === 'main' && typeof iso['fallback'] === 'string')) && main['value'] === url && main['world'] === 'main' && ex['evalHasNewFunction'] === 42,
+        iso['value'] === 'rpchat smoke page' && (iso['world'] === 'isolated' || (iso['world'] === 'main' && typeof iso['fallback'] === 'string')) && main['value'] === url && main['world'] === 'main' && ex['evalHasNewFunction'] === 42,
         `isolated request → ${JSON.stringify(iso['value'])} in the ${String(iso['world'])} world${iso['fallback'] ? ' (fallback: isolated world refuses eval, extension CSP)' : ''}, main → ${JSON.stringify(main['value'])}, new Function → ${String(ex['evalHasNewFunction'])}`,
       );
       check(
@@ -599,7 +599,7 @@ export async function captureWindows(logger: Logger, mediaList: () => unknown[] 
   await fs.promises.mkdir(dir, { recursive: true });
   await new Promise((r) => setTimeout(r, 800));
   let n = 0;
-  const main = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.getTitle() === 'rp-code');
+  const main = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.getTitle() === 'rpchat');
   logger.debug(`[smoke] capture: windows=${BrowserWindow.getAllWindows().map((w) => w.getTitle()).join(', ')} main=${Boolean(main)}`);
   // Tour the main UI: open the smoke session (chat with the action card), then Packs and Settings.
   const tour: Array<[string, string]> = [

@@ -1,9 +1,9 @@
 {
-  "id": "dev.rp-code.clock",
+  "id": "dev.rpchat.clock",
   "name": "Clock",
   "version": "1.0.0",
   "description": "Tells characters the exact time and lets them set a countdown that fires a custom event.",
-  "author": { "name": "rp-code examples", "url": "https://github.com/rp-code" },
+  "author": { "name": "rpchat examples", "url": "https://github.com/rpchat" },
   "main": "main.js",
   "minAppVersion": "0.1.0",
   "modules": [

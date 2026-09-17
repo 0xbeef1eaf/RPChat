@@ -1,7 +1,7 @@
 /**
  * The app's half of the TOTP-locked policy, remote configuration and remote packs: where the
  * policy is read from, what the app remembers about a seal it has seen, and how the pinned packs
- * are brought into line. The daemon's half is tested in `native/rp-coded`.
+ * are brought into line. The daemon's half is tested in `native/rpchatd`.
  */
 import * as fs from 'node:fs/promises';
 import * as net from 'node:net';
@@ -116,7 +116,7 @@ describe('loadPolicy sources', () => {
     expect(fromSeal.sealed).toBe(true);
     expect(fromSeal.managedBy).toBe('Acme IT');
 
-    // And /etc/rp-code is wiped entirely: the app's own memory keeps it managed.
+    // And /etc/rpchat is wiped entirely: the app's own memory keeps it managed.
     await cache.remember(POLICY, { managedBy: 'Acme IT' });
     await fs.rm(marker);
     const fromCache = await loadPolicy(file, { runtime, marker, cache });
@@ -174,7 +174,7 @@ describe('SealCache', () => {
   });
 });
 
-/** A fake rp-coded that speaks only the seal and remote ops this suite needs. */
+/** A fake rpchatd that speaks only the seal and remote ops this suite needs. */
 function sealDaemon(socketPath: string, state: { seal: SealInfo; applied?: string[] }) {
   const seen: DaemonRequest[] = [];
   const conns = new Set<net.Socket>();
@@ -203,24 +203,24 @@ function sealDaemon(socketPath: string, state: { seal: SealInfo; applied?: strin
               ok: true,
               op: 'seal-status',
               seal: state.seal,
-              runtime: { dir: '/run/rp-code/policy', mounted: true, readOnly: true, present: true, degraded: [] },
+              runtime: { dir: '/run/rpchat/policy', mounted: true, readOnly: true, present: true, degraded: [] },
               remote: { configured: true, url: 'https://example.com/chain.json', enabled: true, intervalMinutes: 60, seq: 4, rotations: [], packs: [], removeUnlisted: false, packRefreshMinutes: 360 },
             };
             break;
           case 'seal-policy':
             state.seal = { ...state.seal, sealed: true };
-            res = { ok: true, op: 'seal-policy', path: '/etc/rp-code/policy.json', secret: 'JBSWY3DPEHPK3PXP', otpauth: 'otpauth://totp/rp-code:policy?secret=JBSWY3DPEHPK3PXP', seal: state.seal, runtime: { dir: '/run/rp-code/policy', mounted: true, readOnly: true, present: true, degraded: [] } };
+            res = { ok: true, op: 'seal-policy', path: '/etc/rpchat/policy.json', secret: 'JBSWY3DPEHPK3PXP', otpauth: 'otpauth://totp/rpchat:policy?secret=JBSWY3DPEHPK3PXP', seal: state.seal, runtime: { dir: '/run/rpchat/policy', mounted: true, readOnly: true, present: true, degraded: [] } };
             break;
           case 'unseal-policy':
             if (req.code !== '123456') res = { ok: false, error: 'that code is not valid', code: 'CODE' };
             else {
               state.seal = { ...DEFAULT_SEAL_INFO };
-              res = { ok: true, op: 'unseal-policy', path: '/etc/rp-code/policy.json', removed: req.removePolicy === true };
+              res = { ok: true, op: 'unseal-policy', path: '/etc/rpchat/policy.json', removed: req.removePolicy === true };
             }
             break;
           case 'set-policy':
             if (state.seal.sealed && req.code !== '123456') res = { ok: false, error: 'that code is not valid', code: 'CODE' };
-            else res = { ok: true, op: 'set-policy', path: '/etc/rp-code/policy.json', replaced: state.seal.sealed };
+            else res = { ok: true, op: 'set-policy', path: '/etc/rpchat/policy.json', replaced: state.seal.sealed };
             break;
           case 'remote-apply':
             state.applied?.push(req.document);
@@ -232,7 +232,7 @@ function sealDaemon(socketPath: string, state: { seal: SealInfo; applied?: strin
               seq: 5,
               unsealed: false,
               policyHash: 'deadbeef',
-              runtime: { dir: '/run/rp-code/policy', mounted: true, readOnly: true, present: true, degraded: [] },
+              runtime: { dir: '/run/rpchat/policy', mounted: true, readOnly: true, present: true, degraded: [] },
               remote: { configured: true, url: 'https://example.com/chain.json', enabled: true, intervalMinutes: 60, seq: 5, rotations: [], packs: [], removeUnlisted: false, packRefreshMinutes: 360 },
             };
             break;
@@ -275,7 +275,7 @@ describe('SystemIntegration: sealing', () => {
       policy,
       sealCache: cache,
       resourcesDirs: [dir],
-      appBin: '/tmp/rp-code',
+      appBin: '/tmp/rpchat',
       homeDir: dir,
       logger: { info: () => {}, warn: () => {}, debug: () => {} },
       run: async () => ({ code: 0, stdout: '', stderr: '' }),
@@ -375,7 +375,7 @@ describe('remote packs', () => {
         // than checking anything itself.
         verifyPack: async (id: string, sha256: string) => {
           verified.push({ id, sha256 });
-          if (verify && !verify(id, sha256)) throw new RpError('PERMISSION_DENIED', 'rp-coded refused verify-pack: the pack is not signed by this machine\'s key');
+          if (verify && !verify(id, sha256)) throw new RpError('PERMISSION_DENIED', 'rpchatd refused verify-pack: the pack is not signed by this machine\'s key');
           return true;
         },
       } as never,
@@ -472,9 +472,9 @@ describe('what Settings → System says about the lock', () => {
 
   it('says how the runtime policy filesystem is protected, or that it is not', () => {
     expect(runtimeLine(undefined)).toBeNull();
-    expect(runtimeLine({ dir: '/run/rp-code/policy', mounted: true, readOnly: true, present: true, degraded: [] })).toMatch(/read-only filesystem the daemon mounts/);
-    expect(runtimeLine({ dir: '/run/rp-code/policy', mounted: false, readOnly: false, present: true, degraded: [] })).toMatch(/a plain directory/);
-    expect(runtimeLine({ dir: '/run/rp-code/policy', mounted: true, readOnly: true, present: false, degraded: [] })).toMatch(/No policy is published/);
+    expect(runtimeLine({ dir: '/run/rpchat/policy', mounted: true, readOnly: true, present: true, degraded: [] })).toMatch(/read-only filesystem the daemon mounts/);
+    expect(runtimeLine({ dir: '/run/rpchat/policy', mounted: false, readOnly: false, present: true, degraded: [] })).toMatch(/a plain directory/);
+    expect(runtimeLine({ dir: '/run/rpchat/policy', mounted: true, readOnly: true, present: false, degraded: [] })).toMatch(/No policy is published/);
   });
 
   it('describes where the policy comes from', () => {
@@ -512,9 +512,9 @@ describe('the rp-policy-chain command-line tool', () => {
     };
     const link = { seq: 1, prev: '', policy: { version: 1, managedBy: 'Acme IT' } };
     expect(tool.canonicalJson(link)).toBe(canonicalJson(link));
-    expect(tool.linkMessage(link).toString('utf8')).toBe('rp-code-chain/v1\n{"policy":{"managedBy":"Acme IT","version":1},"prev":"","seq":1}');
+    expect(tool.linkMessage(link).toString('utf8')).toBe('rpchat-chain/v1\n{"policy":{"managedBy":"Acme IT","version":1},"prev":"","seq":1}');
     expect(tool.linkHash(link)).toBe('c0b2270f827b16d302b19afec2713a349c4d4ec02814e6fbbc6fcb3cbd7795e6');
-    expect(tool.packMessage('luna', '1.2.0', 'AABB')).toBe('rp-code-pack/v1\nluna\n1.2.0\naabb');
+    expect(tool.packMessage('luna', '1.2.0', 'AABB')).toBe('rpchat-pack/v1\nluna\n1.2.0\naabb');
     // The `signature` member is excluded on this side too.
     expect(tool.linkMessage({ ...link, signature: { alg: 'ed25519', value: 'x' } })).toEqual(tool.linkMessage(link));
   });

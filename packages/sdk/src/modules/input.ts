@@ -9,7 +9,7 @@ export const inputModule: CapabilityModuleSpec = {
   apiTypeName: 'InputApi',
   typings: `/**
  * Control the user's input devices: lock keyboard/mouse for a bounded time, or synthesise typing,
- * key presses, clicks and pointer moves. Everything goes through the rp-code system integration
+ * key presses, clicks and pointer moves. Everything goes through the rpchat system integration
  * daemon (Linux); when it is not installed or not connected every call fails with
  * CAPABILITY_FAILED. Unless the user switched 'input' off in the app you may use it freely; lock
  * durations are capped by their settings and by the machine's policy, and every call is logged.
@@ -62,7 +62,7 @@ interface InputApi {
 
 - Keep lock durations short; say what you are doing before locking; \`unlock()\` early if the user seems distressed.
 - Synthesised input hits whatever window is focused: \`sdk.desktop.focusWindow\` first, then a few \`type\`/\`key\`/\`click\` calls at most. Never type into password fields or run destructive shortcuts.
-- Needs the rp-code system integration daemon (Settings → System → Install). Without it every call fails with CAPABILITY_FAILED ("Input control needs the rp-code system integration…"); tell the user rather than retrying.
+- Needs the rpchat system integration daemon (Settings → System → Install). Without it every call fails with CAPABILITY_FAILED ("Input control needs the rpchat system integration…"); tell the user rather than retrying.
 
 \`\`\`ts
 await sdk.chat.emote("reaches over and covers their hands");

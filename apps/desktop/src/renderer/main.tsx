@@ -7,7 +7,7 @@ const root = document.getElementById('root');
 if (!root) throw new Error('#root missing');
 
 if (!hasApi()) {
-  root.innerHTML = '<div class="boot">This page must be opened inside the rp-code desktop app.</div>';
+  root.innerHTML = '<div class="boot">This page must be opened inside the rpchat desktop app.</div>';
 } else {
   createRoot(root).render(
     <StrictMode>

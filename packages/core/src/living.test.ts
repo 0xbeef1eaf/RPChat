@@ -392,19 +392,19 @@ describe('event matching', () => {
     expect((await invoke(ctx, 'events', 'on', 'guard-attempt', 'return "kill";', { filter: { kind: 'signal', blocked: true } })).ok).toBe(true);
     expect((await invoke(ctx, 'events', 'on', 'guard-attempt', 'return "any";', { filter: { command: 'HYPRCTL' } })).ok).toBe(true);
     expect(senses.interests.at(-1)?.sort()).toEqual(['guard-attempt', 'time']);
-    const attempt = (data: Record<string, Json>) => senses.push('guard-attempt', { kind: 'ipc', target: '/run/user/1000/noctalia-wayland-1.sock', command: 'noctalia', pid: 1, blocked: false, profile: 'rp-code-session', operation: 'connect', ...data });
+    const attempt = (data: Record<string, Json>) => senses.push('guard-attempt', { kind: 'ipc', target: '/run/user/1000/noctalia-wayland-1.sock', command: 'noctalia', pid: 1, blocked: false, profile: 'rpchat-session', operation: 'connect', ...data });
     attempt({});
     t.clock.advance(3000);
     attempt({ target: '/run/user/1000/hypr/x/.socket.sock', command: 'hyprctl', pid: 2 });
     t.clock.advance(3000);
-    attempt({ kind: 'signal', target: 'rp-code-app', command: 'kill', pid: 3, blocked: false, operation: 'signal' });
+    attempt({ kind: 'signal', target: 'rpchat-app', command: 'kill', pid: 3, blocked: false, operation: 'signal' });
     t.clock.advance(3000);
-    attempt({ kind: 'signal', target: 'rp-code-app', command: 'kill', pid: 4, blocked: true, operation: 'signal' });
+    attempt({ kind: 'signal', target: 'rpchat-app', command: 'kill', pid: 4, blocked: true, operation: 'signal' });
     await t.engine.eventService.idle();
     expect(runs).toEqual([
-      'const input = {"event":"guard-attempt","data":{"kind":"ipc","target":"/run/user/1000/noctalia-wayland-1.sock","command":"noctalia","pid":1,"blocked":false,"profile":"rp-code-session","operation":"connect"}}',
-      'const input = {"event":"guard-attempt","data":{"kind":"ipc","target":"/run/user/1000/hypr/x/.socket.sock","command":"hyprctl","pid":2,"blocked":false,"profile":"rp-code-session","operation":"connect"}}',
-      'const input = {"event":"guard-attempt","data":{"kind":"signal","target":"rp-code-app","command":"kill","pid":4,"blocked":true,"profile":"rp-code-session","operation":"signal"}}',
+      'const input = {"event":"guard-attempt","data":{"kind":"ipc","target":"/run/user/1000/noctalia-wayland-1.sock","command":"noctalia","pid":1,"blocked":false,"profile":"rpchat-session","operation":"connect"}}',
+      'const input = {"event":"guard-attempt","data":{"kind":"ipc","target":"/run/user/1000/hypr/x/.socket.sock","command":"hyprctl","pid":2,"blocked":false,"profile":"rpchat-session","operation":"connect"}}',
+      'const input = {"event":"guard-attempt","data":{"kind":"signal","target":"rpchat-app","command":"kill","pid":4,"blocked":true,"profile":"rpchat-session","operation":"signal"}}',
     ]);
     expect(matchesFilter('guard-attempt', { kind: 'config', target: '/home/w/.config/noctalia/settings.toml', command: 'vim' }, { target: 'NOCTALIA' })).toBe(true);
     expect(matchesFilter('guard-attempt', { kind: 'config', target: '/x', command: 'vim' }, { kind: 'ipc' })).toBe(false);

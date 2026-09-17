@@ -266,7 +266,7 @@ interface CalendarEvent {
  * went away: reason 'click' | 'timeout' | 'ended' | 'api' | 'error'; filter { mediaId?, asset?, reason? });
  * 'guard-attempt' { kind: 'ipc' | 'config' | 'signal' | 'ptrace' | 'exec', target, command, pid, blocked } (the
  * session guard on Linux saw the user's own terminal, keybind or picker try to reach the compositor/shell IPC,
- * edit the wallpaper config or kill/trace rp-code; blocked only in enforce mode; filter { kind?, target?, command?, blocked? }).
+ * edit the wallpaper config or kill/trace rpchat; blocked only in enforce mode; filter { kind?, target?, command?, blocked? }).
  */
 type HostEventName =
   | 'user-idle'

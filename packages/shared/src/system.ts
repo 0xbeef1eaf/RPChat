@@ -1,7 +1,7 @@
 import type { AppSettings } from './settings.js';
 
 /**
- * Root-owned policy file (`/etc/rp-code/policy.json` on Linux). Values here override the user's
+ * Root-owned policy file (`/etc/rpchat/policy.json` on Linux). Values here override the user's
  * settings and cannot be changed from the app; the UI shows the affected controls as managed.
  * The system daemon enforces the input-lock limits independently of the app.
  */
@@ -53,7 +53,7 @@ export interface PolicyFile {
    * The session guard (docs/system-integration.md "Session guard"): AppArmor confinement of the
    * `app.users` login sessions so their own terminals, keybind scripts and pickers cannot reach
    * the compositor's and shell's IPC sockets, write the wallpaper/shell config and state, or
-   * signal/trace rp-code — while rp-code itself may. `mode` other than `off` needs `app.users`.
+   * signal/trace rpchat — while rpchat itself may. `mode` other than `off` needs `app.users`.
    */
   guard?: GuardPolicy;
   /**
@@ -142,7 +142,7 @@ export type GuardShell = 'auto' | 'noctalia' | 'quickshell' | 'hyprpaper' | 'sww
 export interface GuardPolicy {
   /** `off` (default) unloads, `audit` logs every attempt without blocking, `enforce` blocks. */
   mode?: GuardMode;
-  /** Signals and ptrace from the session to rp-code are guarded. Default true. */
+  /** Signals and ptrace from the session to rpchat are guarded. Default true. */
   protectApp?: boolean;
   /** The shell's IPC socket and its config/state files are guarded. Default true. */
   wallpaper?: boolean;
@@ -172,7 +172,7 @@ export interface GuardInfo {
   available: boolean;
   /** The policy's mode (what is or will be engaged). */
   mode: GuardMode;
-  /** Profiles currently loaded (`rp-code-session`, `rp-code-app`, …); empty when off or failed. */
+  /** Profiles currently loaded (`rpchat-session`, `rpchat-app`, …); empty when off or failed. */
   loaded: string[];
   users: string[];
   /** Documented gaps for this configuration, one sentence each. */
@@ -193,7 +193,7 @@ export interface GuardInfo {
 /** What kind of guarded resource a `guard-attempt` touched. */
 export type GuardAttemptKind = 'ipc' | 'config' | 'signal' | 'ptrace' | 'exec';
 
-/** One AppArmor audit record about an `rp-code-*` profile (the `guard-attempt` host event's data). */
+/** One AppArmor audit record about an `rpchat-*` profile (the `guard-attempt` host event's data). */
 export interface GuardAttempt {
   kind: GuardAttemptKind;
   /** The socket/file path, the peer profile (signal/ptrace) or the executable. */
@@ -317,11 +317,11 @@ export interface KeepaliveInfo {
 }
 
 /**
- * `status.install`: the system install (`/opt/rp-code`) as the daemon sees it. Absent in the
+ * `status.install`: the system install (`/opt/rpchat`) as the daemon sees it. Absent in the
  * answer of a daemon that predates `apply-update`.
  */
 export interface InstallInfo {
-  /** `<root>/current/rp-code` exists and `versions.json` describes it. */
+  /** `<root>/current/rpchat` exists and `versions.json` describes it. */
   systemInstall: boolean;
   current?: string;
   previous?: string;
@@ -330,7 +330,7 @@ export interface InstallInfo {
 }
 
 /** Default system install root and the unpacked app inside it (`install.sh --system-install`). */
-export const SYSTEM_INSTALL_ROOT = '/opt/rp-code';
+export const SYSTEM_INSTALL_ROOT = '/opt/rpchat';
 export const SYSTEM_INSTALL_DIR = `${SYSTEM_INSTALL_ROOT}/current`;
 
 /** Dotted settings paths the policy currently forces (e.g. `autonomy.maxSelfWakesPerHour`). */
@@ -365,7 +365,7 @@ export interface GuardStatus extends GuardInfo {
 export interface SystemInstallStatus {
   /** Running from `dir` (realpath of the executable) *and* the daemon is connected. */
   systemInstall: boolean;
-  /** `/opt/rp-code/current`. */
+  /** `/opt/rpchat/current`. */
   dir: string;
   /** The executable runs from `dir` (whether or not the daemon is connected). */
   execInDir: boolean;
@@ -412,7 +412,7 @@ export interface SystemIntegrationStatus {
     runtime?: RuntimeInfo;
     /**
      * The app is enforcing a sealed policy it cached itself, because the machine's policy file
-     * and the daemon are both gone. Wiping `/etc/rp-code` does not leave the app unmanaged.
+     * and the daemon are both gone. Wiping `/etc/rpchat` does not leave the app unmanaged.
      */
     fromCache?: boolean;
     error?: string;
@@ -431,7 +431,7 @@ export interface SystemIntegrationStatus {
 /** Which input devices a lock covers. */
 export type LockDevices = 'keyboard' | 'mouse' | 'both';
 
-/** JSON-lines protocol between the app and `rp-coded` over the unix socket. */
+/** JSON-lines protocol between the app and `rpchatd` over the unix socket. */
 export type DaemonRequest =
   | { op: 'hello'; version: 1 }
   | { op: 'status' }
@@ -485,7 +485,7 @@ export type DaemonRequest =
   /**
    * System install: verify `file` (an AppImage under the requesting user's home, owned by them)
    * against `sha512` (base64, as `latest-linux.yml` gives it), extract it as that user, swap it
-   * into `/opt/rp-code/current` and update the daemon itself when the bundle ships a newer one.
+   * into `/opt/rpchat/current` and update the daemon itself when the bundle ships a newer one.
    * `version` must be semver and not older than the installed one unless the policy says
    * `updates.allowDowngrade`. May take minutes; the client uses a long timeout.
    */
@@ -518,7 +518,7 @@ export type DaemonResponse =
   | { ok: true; op: 'subscribe'; events: DaemonEventName[] }
   | { ok: false; error: string; code: 'REFUSED' | 'POLICY' | 'NO_DEVICES' | 'BUSY' | 'INVALID' | 'INTERNAL' | 'EXISTS' | 'CODE' };
 
-export const DAEMON_SOCKET_PATH = '/run/rp-code/daemon.sock';
+export const DAEMON_SOCKET_PATH = '/run/rpchat/daemon.sock';
 /**
  * Environment variables a keepalive registration may carry (the daemon rejects any other key):
  * what a relaunched app needs to find the user's display, session bus and home. The daemon adds
@@ -553,8 +553,8 @@ export const KEEPALIVE_ENV_KEYS = [
 export const KEEPALIVE_ENV_VALUE_MAX = 4096;
 /** Most `args` a registration may carry. */
 export const KEEPALIVE_ARGS_MAX = 32;
-export const POLICY_FILE_PATH = '/etc/rp-code/policy.json';
-export const SYSTEM_GROUP = 'rp-code';
+export const POLICY_FILE_PATH = '/etc/rpchat/policy.json';
+export const SYSTEM_GROUP = 'rpchat';
 
 // ---------------------------------------------------------------------------
 // Remote configuration, remote packs and the TOTP-locked (sealed) policy
@@ -563,7 +563,7 @@ export const SYSTEM_GROUP = 'rp-code';
 /**
  * `PolicyFile.remote`: where this machine's policy comes from. The app fetches `url` on the
  * interval and hands the bytes to the daemon, which decides whether to believe them
- * (`native/rp-coded/src/remote.rs`) — so a patched app cannot loosen a sealed machine, and the
+ * (`native/rpchatd/src/remote.rs`) — so a patched app cannot loosen a sealed machine, and the
  * daemon needs no TLS stack of its own.
  */
 export interface RemotePolicy {
@@ -582,7 +582,7 @@ export interface PackSource {
   url: string;
   /**
    * The administrator's Ed25519 signature over this pack, base64. It covers the id, the version
-   * and the SHA-256 of the file together (`rp-code-pack/v1\n<id>\n<version>\n<sha256>`), so a
+   * and the SHA-256 of the file together (`rpchat-pack/v1\n<id>\n<version>\n<sha256>`), so a
    * signed pack cannot be re-labelled as a different one. **Required on a machine with a Remote
    * Link**: there, the policy itself arrived over the network, so a checksum in it proves only
    * that the policy and the pack agree — not that either came from the administrator.
@@ -675,9 +675,9 @@ export interface TotpConfig {
 /**
  * `PolicyFile.lock`: how hard the policy holds once the machine is **sealed**. The TOTP secret is
  * never here — this file is world-readable; it lives in the root-only seal
- * (`/etc/rp-code/policy.seal`) the daemon writes when it seals the machine.
+ * (`/etc/rpchat/policy.seal`) the daemon writes when it seals the machine.
  *
- * A policy that carries a `lock` block also tells the session guard to take `/etc/rp-code` and the
+ * A policy that carries a `lock` block also tells the session guard to take `/etc/rpchat` and the
  * profile-escaping binaries away from the guarded sessions; sealing adds an empty one when the
  * policy has none, so what is in force is always readable in the file.
  */
@@ -690,7 +690,7 @@ export interface PolicyLock {
   selfHeal?: boolean;
   /** Set the immutable attribute on the policy, the seal and its mirrors. Default true. */
   immutable?: boolean;
-  /** Write the `RefuseManualStop=yes` drop-in for `rp-coded.service`. Default true. */
+  /** Write the `RefuseManualStop=yes` drop-in for `rpchatd.service`. Default true. */
   refuseManualStop?: boolean;
   /** Deny guarded sessions `run0`, `systemd-run`, `machinectl`, `pkexec`, `chattr`, `apparmor_parser`. Default true. */
   denyEscapes?: boolean;
@@ -842,8 +842,8 @@ export interface ChainAuthorStatus {
   dir: string;
 }
 
-/** The runtime policy filesystem (`native/rp-coded/src/runtime.rs`). */
-export const RUNTIME_POLICY_DIR = '/run/rp-code/policy';
+/** The runtime policy filesystem (`native/rpchatd/src/runtime.rs`). */
+export const RUNTIME_POLICY_DIR = '/run/rpchat/policy';
 export const RUNTIME_POLICY_FILE = `${RUNTIME_POLICY_DIR}/policy.json`;
 export const RUNTIME_POLICY_STATE_FILE = `${RUNTIME_POLICY_DIR}/state.json`;
 /**
@@ -851,4 +851,4 @@ export const RUNTIME_POLICY_STATE_FILE = `${RUNTIME_POLICY_DIR}/state.json`;
  * so the app can tell a managed machine from an unmanaged one — and can keep enforcing the policy
  * — without being able to change anything.
  */
-export const SEAL_MARKER_PATH = '/etc/rp-code/policy.sealed';
+export const SEAL_MARKER_PATH = '/etc/rpchat/policy.sealed';

@@ -8,7 +8,7 @@
 //! - `pam_apparmor` calls `change_hat()` into a hat named after the user, the primary group
 //!   or `DEFAULT` (`order=`), inside the profile that confines the *login helper*. So the
 //!   helper (`sddm-helper`, `login`, `sshd`) carries a profile whose `^<user>` hats send every
-//!   exec into `rp-code-session` and whose `^DEFAULT` hat lets everyone else run unconfined.
+//!   exec into `rpchat-session` and whose `^DEFAULT` hat lets everyone else run unconfined.
 //!   That profile must be in *enforce* mode: a hat that does not exist makes a complain-mode
 //!   `change_hat()` build a learning profile, which deadlocks the kernel (see `render`).
 //! - Filesystem-path unix sockets are mediated as files (`security/apparmor/af_unix.c`):
@@ -17,8 +17,8 @@
 //!   grants `w` but not `r` on a socket can serve it but not connect to it.
 //! - Explicit `deny` rules are enforced even in complain mode, so audit mode uses
 //!   `audit <rule>` (allowed, logged as `apparmor="AUDIT"`) and enforce mode `audit deny`.
-//! - Named exec transitions take globs (`/{,**} px -> rp-code-session`), and a more specific
-//!   rule (`/opt/rp-code/current/rp-code px -> rp-code-app`) coexists with `/{,**} ix`
+//! - Named exec transitions take globs (`/{,**} px -> rpchat-session`), and a more specific
+//!   rule (`/opt/rpchat/current/rpchat px -> rpchat-app`) coexists with `/{,**} ix`
 //!   (checked with `apparmor_parser -Q`, see the test at the bottom).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,20 +37,20 @@ pub const DEFAULT_PROFILE_DIR: &str = "/etc/apparmor.d";
 /// Where `user@<uid>.service.d` drop-ins go.
 pub const DEFAULT_UNIT_DIR: &str = "/etc/systemd/system";
 /// The drop-in file name, inside `user@<uid>.service.d/`.
-pub const DROPIN_NAME: &str = "rp-code-guard.conf";
-/// Cached engage state (`/etc/rp-code/guard-state.json`).
-pub const DEFAULT_STATE_FILE: &str = "/etc/rp-code/guard-state.json";
-/// The app the `rp-code-app` profile attaches to (the system install).
-pub const DEFAULT_APP_EXEC: &str = "/opt/rp-code/current/rp-code";
+pub const DROPIN_NAME: &str = "rpchat-guard.conf";
+/// Cached engage state (`/etc/rpchat/guard-state.json`).
+pub const DEFAULT_STATE_FILE: &str = "/etc/rpchat/guard-state.json";
+/// The app the `rpchat-app` profile attaches to (the system install).
+pub const DEFAULT_APP_EXEC: &str = "/opt/rpchat/current/rpchat";
 /// AppArmor's securityfs mount: present iff the LSM is active.
 pub const APPARMOR_FS: &str = "/sys/kernel/security/apparmor";
 /// Profile names, in load order.
 pub const PROFILE_NAMES: [&str; 5] = [
-    "rp-code-session",
-    "rp-code-app",
-    "rp-code-shell",
-    "rp-code-compositor",
-    "rp-code-login",
+    "rpchat-session",
+    "rpchat-app",
+    "rpchat-shell",
+    "rpchat-compositor",
+    "rpchat-login",
 ];
 /// Login helpers the guard attaches its hats to when `guard.loginHelpers` is absent (those
 /// that exist on the box). Arch first, then Debian/Ubuntu spellings.
@@ -110,7 +110,7 @@ pub const NOCTALIA: TableEntry = TableEntry {
     // holds the wallpaper options and `hooks.wallpaperChange`, a command run on every change.
     // Everything else under those directories — community-palettes/, community-templates/,
     // colorschemes/, colors.json, the caches and the history files — is data the shell fetches
-    // through a child process, and that child lands in `rp-code-session` (the shell sends its
+    // through a child process, and that child lands in `rpchat-session` (the shell sends its
     // children back). Denying the whole tree therefore broke the shell's own palette and
     // template updates for no gain, so it is scoped to the files that matter.
     //
@@ -250,7 +250,7 @@ pub struct DiscoveredSocket {
 pub struct GuardContext {
     /// `app.users`.
     pub users: Vec<String>,
-    /// The app binary (`rp-code-app` attaches to it).
+    /// The app binary (`rpchat-app` attaches to it).
     pub app_exec: String,
     /// Login helpers present on the box (or from the policy), absolute paths.
     pub login_helpers: Vec<String>,
@@ -269,7 +269,7 @@ pub struct GuardContext {
 }
 
 /// A `user@<uid>.service` drop-in that puts the user's whole systemd session into
-/// `rp-code-session`.
+/// `rpchat-session`.
 ///
 /// Without it the guard reaches only what the login helper exec'd. `systemd --user` is started
 /// by PID 1, so on a systemd-managed desktop (uwsm, GNOME, KDE) the compositor and every
@@ -277,7 +277,7 @@ pub struct GuardContext {
 /// do the transition instead, and everything the user manager starts inherits it.
 ///
 /// The value is written with a **leading `-`**. Without it, a `user@<uid>.service` whose profile
-/// is not loaded fails to start — which is every boot before `rp-coded` has engaged, and every
+/// is not loaded fails to start — which is every boot before `rpchatd` has engaged, and every
 /// boot after someone unloads the profiles by hand. That failure mode is "this user cannot log
 /// in at all", so the profile is optional by construction: `-` means apply it when it exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,7 +288,7 @@ pub struct SessionDropin {
 }
 
 impl SessionDropin {
-    /// `<unit_dir>/user@<uid>.service.d/rp-code-guard.conf`.
+    /// `<unit_dir>/user@<uid>.service.d/rpchat-guard.conf`.
     pub fn path(&self, unit_dir: &Path) -> PathBuf {
         unit_dir
             .join(format!("user@{}.service.d", self.uid))
@@ -314,7 +314,7 @@ impl ProfileFile {
 pub struct GuardPlan {
     pub hash: String,
     pub files: Vec<ProfileFile>,
-    /// `user@<uid>.service.d/rp-code-guard.conf`, one per listed user.
+    /// `user@<uid>.service.d/rpchat-guard.conf`, one per listed user.
     pub dropins: Vec<SessionDropin>,
     pub residual: Vec<String>,
     pub shells: Vec<&'static str>,
@@ -349,7 +349,7 @@ const HAT_CLASSES: &str = "    capability,\n    network,\n    unix,\n    dbus,\n
 
 fn header(hash: &str, version: &str, name: &str, abi: Option<&str>) -> String {
     let mut s = format!(
-        "# {name} — generated by rp-coded {version} for the rp-code session guard; do not edit\n# rp-code-guard {hash}\n# Reloaded by rp-coded whenever /etc/rp-code/policy.json changes; `apparmor_parser -R` removes it.\n"
+        "# {name} — generated by rpchatd {version} for the rpchat session guard; do not edit\n# rpchat-guard {hash}\n# Reloaded by rpchatd whenever /etc/rpchat/policy.json changes; `apparmor_parser -R` removes it.\n"
     );
     if let Some(abi) = abi {
         s.push_str(&format!("abi <{abi}>,\n"));
@@ -361,12 +361,12 @@ fn header(hash: &str, version: &str, name: &str, abi: Option<&str>) -> String {
 /// Everything the policy seal lives in. A guarded session may not go near any of it: the TOTP
 /// secret is in `policy.seal`, and reading it is as good as owning the lock.
 pub const SEALED_PATHS: [&str; 6] = [
-    "/etc/rp-code/**",
-    "/var/lib/rp-code/**",
-    "/usr/local/libexec/rp-code/**",
-    "/run/rp-code/**",
-    "/etc/systemd/system/rp-coded.service",
-    "/etc/systemd/system/rp-coded.service.d/**",
+    "/etc/rpchat/**",
+    "/var/lib/rpchat/**",
+    "/usr/local/libexec/rpchat/**",
+    "/run/rpchat/**",
+    "/etc/systemd/system/rpchatd.service",
+    "/etc/systemd/system/rpchatd.service.d/**",
 ];
 
 /// The binaries that would put a shell outside this profile, or undo the lock from inside it.
@@ -497,16 +497,16 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
 
     // --- exec transitions shared by session, shell and compositor -------------------
     let mut exits = String::new();
-    exits.push_str(&format!("  {} px -> rp-code-app,\n", ctx.app_exec));
+    exits.push_str(&format!("  {} px -> rpchat-app,\n", ctx.app_exec));
     if shell_profile {
         for b in ctx.shells.iter().flat_map(|s| s.binaries.iter()) {
-            exits.push_str(&format!("  {b} px -> rp-code-shell,\n"));
+            exits.push_str(&format!("  {b} px -> rpchat-shell,\n"));
         }
     }
     if compositor_profile {
         for c in &ctx.compositors {
             for b in c.binaries {
-                exits.push_str(&format!("  {b} px -> rp-code-compositor,\n"));
+                exits.push_str(&format!("  {b} px -> rpchat-compositor,\n"));
             }
         }
     }
@@ -529,38 +529,38 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         guard_rules.push_str(&guarded(mode, &format!("{f} wl")));
     }
     if rules.protect_app {
-        guard_rules.push_str(&guarded(mode, "signal (send) peer=rp-code-app"));
-        guard_rules.push_str(&guarded(mode, "ptrace (trace) peer=rp-code-app"));
+        guard_rules.push_str(&guarded(mode, "signal (send) peer=rpchat-app"));
+        guard_rules.push_str(&guarded(mode, "ptrace (trace) peer=rpchat-app"));
     }
 
     let mut files = Vec::new();
 
-    // rp-code-session: everything the user could do before, minus the guarded parts.
+    // rpchat-session: everything the user could do before, minus the guarded parts.
     let mut session = String::new();
     session.push_str(&format!(
-        "profile rp-code-session {session_flags} {{\n{ALLOW_CLASSES}  /{{,**}} mrwlk,\n  /{{,**}} ix,\n"
+        "profile rpchat-session {session_flags} {{\n{ALLOW_CLASSES}  /{{,**}} mrwlk,\n  /{{,**}} ix,\n"
     ));
     session.push_str(&exits);
     session.push_str(&guard_rules);
     session.push_str("}\n");
     files.push(ProfileFile {
-        name: "rp-code-session",
+        name: "rpchat-session",
         text: session,
     });
 
-    // rp-code-app: everything; children inherit; the session cannot signal or trace it.
+    // rpchat-app: everything; children inherit; the session cannot signal or trace it.
     let mut app = String::new();
     app.push_str(&format!(
-        "profile rp-code-app {} {} {{\n{ALLOW_CLASSES}  file,\n",
+        "profile rpchat-app {} {} {{\n{ALLOW_CLASSES}  file,\n",
         ctx.app_exec,
         flags(&[])
     ));
     if rules.protect_app {
-        for peer in ["rp-code-session", "rp-code-shell", "rp-code-compositor"] {
-            if peer == "rp-code-shell" && !shell_profile {
+        for peer in ["rpchat-session", "rpchat-shell", "rpchat-compositor"] {
+            if peer == "rpchat-shell" && !shell_profile {
                 continue;
             }
-            if peer == "rp-code-compositor" && !compositor_profile {
+            if peer == "rpchat-compositor" && !compositor_profile {
                 continue;
             }
             app.push_str(&guarded(mode, &format!("signal (receive) peer={peer}")));
@@ -569,16 +569,16 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     }
     app.push_str("}\n");
     files.push(ProfileFile {
-        name: "rp-code-app",
+        name: "rpchat-app",
         text: app,
     });
 
-    // rp-code-shell: serves its socket (w = bind) but cannot connect to it (needs r); keeps
+    // rpchat-shell: serves its socket (w = bind) but cannot connect to it (needs r); keeps
     // its config/state writable; children go back to the session.
     if shell_profile {
         let mut shell = String::new();
         shell.push_str(&format!(
-            "profile rp-code-shell {session_flags} {{\n{ALLOW_CLASSES}  /{{,**}} mrwlk,\n  /{{,**}} px -> rp-code-session,\n"
+            "profile rpchat-shell {session_flags} {{\n{ALLOW_CLASSES}  /{{,**}} mrwlk,\n  /{{,**}} px -> rpchat-session,\n"
         ));
         shell.push_str(&exits);
         for s in &shell_sockets {
@@ -593,22 +593,22 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
             shell.push_str(&guarded(mode, &format!("{} rw", normalise_glob(s))));
         }
         if rules.protect_app {
-            shell.push_str(&guarded(mode, "signal (send) peer=rp-code-app"));
-            shell.push_str(&guarded(mode, "ptrace (trace) peer=rp-code-app"));
+            shell.push_str(&guarded(mode, "signal (send) peer=rpchat-app"));
+            shell.push_str(&guarded(mode, "ptrace (trace) peer=rpchat-app"));
         }
         shell.push_str("}\n");
         files.push(ProfileFile {
-            name: "rp-code-shell",
+            name: "rpchat-shell",
             text: shell,
         });
     }
 
-    // rp-code-compositor: owns its sockets; every child (keybind exec, exec-once) returns to
+    // rpchat-compositor: owns its sockets; every child (keybind exec, exec-once) returns to
     // the session confinement.
     if compositor_profile {
         let mut comp = String::new();
         comp.push_str(&format!(
-            "profile rp-code-compositor {session_flags} {{\n{ALLOW_CLASSES}  /{{,**}} mrwlk,\n  /{{,**}} px -> rp-code-session,\n"
+            "profile rpchat-compositor {session_flags} {{\n{ALLOW_CLASSES}  /{{,**}} mrwlk,\n  /{{,**}} px -> rpchat-session,\n"
         ));
         comp.push_str(&exits);
         for s in &shell_sockets {
@@ -618,17 +618,17 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
             comp.push_str(&guarded(mode, &format!("{f} wl")));
         }
         if rules.protect_app {
-            comp.push_str(&guarded(mode, "signal (send) peer=rp-code-app"));
-            comp.push_str(&guarded(mode, "ptrace (trace) peer=rp-code-app"));
+            comp.push_str(&guarded(mode, "signal (send) peer=rpchat-app"));
+            comp.push_str(&guarded(mode, "ptrace (trace) peer=rpchat-app"));
         }
         comp.push_str("}\n");
         files.push(ProfileFile {
-            name: "rp-code-compositor",
+            name: "rpchat-compositor",
             text: comp,
         });
     }
 
-    // rp-code-login: the vehicle for pam_apparmor's hats. Always ENFORCE, in both modes, and
+    // rpchat-login: the vehicle for pam_apparmor's hats. Always ENFORCE, in both modes, and
     // never complain — the one place in this file where complain is the dangerous choice.
     // `order=user,group,default` makes pam_apparmor look for a hat named after the user first,
     // so every login by someone who is not in `app.users` is a miss. On a miss the kernel
@@ -654,12 +654,12 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     };
     let mut login = String::new();
     login.push_str(&format!(
-        "profile rp-code-login{attach} {} {{\n{ALLOW_CLASSES}  file,\n",
+        "profile rpchat-login{attach} {} {{\n{ALLOW_CLASSES}  file,\n",
         flags(&[])
     ));
     for user in &ctx.users {
         login.push_str(&format!(
-            "  ^{} {} {{\n{HAT_CLASSES}    /{{,**}} mrwlk,\n    /{{,**}} px -> rp-code-session,\n  }}\n",
+            "  ^{} {} {{\n{HAT_CLASSES}    /{{,**}} mrwlk,\n    /{{,**}} px -> rpchat-session,\n  }}\n",
             quote_hat(user),
             flags(&["complain"])
         ));
@@ -669,7 +669,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         flags(&["complain"])
     ));
     files.push(ProfileFile {
-        name: "rp-code-login",
+        name: "rpchat-login",
         text: login,
     });
 
@@ -681,7 +681,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
             user: user.clone(),
             uid: *uid,
             text: format!(
-                "# rp-code session guard — generated by rp-coded {version} for {user}; do not edit\n                 # rp-code-guard drop-in. Removed by `rp-coded --guard-off` / `install.sh --no-guard`.\n                 # AppArmor confinement follows execve, and PID 1 starts this unit, not the login\n                 # helper the pam_apparmor hats hang off — without this the compositor and every\n                 # terminal under `systemd --user` run unconfined and the guard watches nothing.\n                 # The leading `-` keeps a missing profile from blocking the login entirely.\n                 [Service]\n                 AppArmorProfile=-rp-code-session\n",
+                "# rpchat session guard — generated by rpchatd {version} for {user}; do not edit\n                 # rpchat-guard drop-in. Removed by `rpchatd --guard-off` / `install.sh --no-guard`.\n                 # AppArmor confinement follows execve, and PID 1 starts this unit, not the login\n                 # helper the pam_apparmor hats hang off — without this the compositor and every\n                 # terminal under `systemd --user` run unconfined and the guard watches nothing.\n                 # The leading `-` keeps a missing profile from blocking the login entirely.\n                 [Service]\n                 AppArmorProfile=-rpchat-session\n",
                 version = ctx.daemon_version,
                 user = user,
             ),
@@ -731,7 +731,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     }
     if shell_profile && ctx.shells.len() > 1 {
         residual.push(format!(
-            "{} share one rp-code-shell profile: each may serve its own socket but none may connect to any of them, so they cannot drive each other (a bar cannot set the wallpaper through a wallpaper daemon)",
+            "{} share one rpchat-shell profile: each may serve its own socket but none may connect to any of them, so they cannot drive each other (a bar cannot set the wallpaper through a wallpaper daemon)",
             ctx.shells.iter().map(|s| s.id).collect::<Vec<_>>().join(" and ")
         ));
     }
@@ -748,7 +748,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         "the display sockets (Wayland, X11), the session bus and the audio sockets are never guarded: the session could not run without them".to_string(),
     );
     residual.push(
-        "processes the character launches through rp-code run with the app's rights".to_string(),
+        "processes the character launches through rpchat run with the app's rights".to_string(),
     );
     residual.push(
         "sessions that were already open when the guard engaged are confined at their next login"
@@ -756,7 +756,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     );
     if shell_profile {
         residual.push("if the audit log shows the shell denied getattr on its own socket, the shell needs r too and `<shell> msg` from a terminal becomes the residual gap".to_string());
-        residual.push("the shell's own helpers return to rp-code-session like any other child, so under enforce they may not write what the session may not: palettes, templates and colour schemes are left writable and keep updating, but plugin self-update does not, because a plugin is code the shell executes and could set the wallpaper from inside it".to_string());
+        residual.push("the shell's own helpers return to rpchat-session like any other child, so under enforce they may not write what the session may not: palettes, templates and colour schemes are left writable and keep updating, but plugin self-update does not, because a plugin is code the shell executes and could set the wallpaper from inside it".to_string());
     }
     residual.push(
         "a link whose source is an unnamed inode (O_TMPFILE) is logged as a denied `l`: AppArmor cannot resolve the name, so no rule can match it. The kernel refuses that link for unprivileged callers anyway, so it is audit noise, not a blocked operation.".to_string(),
@@ -799,7 +799,7 @@ impl AttemptKind {
     }
 }
 
-/// One parsed AppArmor audit record about an `rp-code-*` profile.
+/// One parsed AppArmor audit record about an `rpchat-*` profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuardAttempt {
@@ -860,7 +860,7 @@ pub fn audit_fields(message: &str) -> BTreeMap<String, String> {
 
 /// Parse one kernel/audit message (`audit: type=1400 audit(…): apparmor="DENIED" …` or the
 /// `AVC apparmor="DENIED" …` form journald stores from auditd). Only records about
-/// `rp-code-*` profiles are attempts; everything else → `None`.
+/// `rpchat-*` profiles are attempts; everything else → `None`.
 pub fn parse_audit_message(message: &str) -> Option<GuardAttempt> {
     let idx = message.find("apparmor=")?;
     let fields = audit_fields(&message[idx..]);
@@ -871,7 +871,7 @@ pub fn parse_audit_message(message: &str) -> Option<GuardAttempt> {
         _ => return None,
     };
     let profile = fields.get("profile")?.clone();
-    if !profile.starts_with("rp-code-") {
+    if !profile.starts_with("rpchat-") {
         return None;
     }
     let operation = fields.get("operation").cloned().unwrap_or_default();
@@ -1139,7 +1139,7 @@ pub fn never_guard(glob: &str) -> bool {
 // State file and status
 // ---------------------------------------------------------------------------
 
-/// `/etc/rp-code/guard-state.json`: what was engaged last, so a restart knows what to unload
+/// `/etc/rpchat/guard-state.json`: what was engaged last, so a restart knows what to unload
 /// and discovery results survive reboots (the shell is not running when the daemon starts).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1521,7 +1521,7 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
             (hooks.parser)(ParserOp::Replace, &written)
                 .map_err(|e| format!("profile load failed: {e}"))
         });
-    // The drop-ins go in whether or not the parser succeeded: they carry `-rp-code-session`,
+    // The drop-ins go in whether or not the parser succeeded: they carry `-rpchat-session`,
     // so a drop-in without a loaded profile is a no-op rather than a login that fails.
     let mut dropin_touched = false;
     for d in &plan.dropins {
@@ -1589,7 +1589,7 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
 /// started. A systemd-managed desktop session does not qualify: `systemd --user` is started by
 /// PID 1 through `user@<uid>.service`, never through the login helper, so `pam_apparmor`'s hat
 /// never applies to it and everything it launches — the compositor, the shell, every terminal —
-/// runs unconfined. The hats and the `rp-code-session` profile still load and still look right;
+/// runs unconfined. The hats and the `rpchat-session` profile still load and still look right;
 /// what breaks is that nothing meaningful ever enters them, and an empty audit log reads as
 /// "nothing happened" instead of "nothing was watched". That is the case this reports, because
 /// it is the one failure of the guard that is otherwise invisible.
@@ -1807,10 +1807,10 @@ pub mod tests {
         assert!(!open.protect_policy && !open.deny_escapes);
         let session = text_of(
             &render(&open, &noctalia_hyprland_ctx(&["work"])),
-            "rp-code-session",
+            "rpchat-session",
         )
         .to_string();
-        assert!(!session.contains("/etc/rp-code/**"));
+        assert!(!session.contains("/etc/rpchat/**"));
         assert!(!session.contains("run0"));
 
         let sealed = rules(
@@ -1818,7 +1818,7 @@ pub mod tests {
         );
         assert!(sealed.protect_policy && sealed.deny_escapes);
         let plan = render(&sealed, &noctalia_hyprland_ctx(&["work"]));
-        let session = text_of(&plan, "rp-code-session");
+        let session = text_of(&plan, "rpchat-session");
         // Everywhere the seal lives, read as well as write: the secret is in there.
         for path in SEALED_PATHS {
             assert!(
@@ -1844,8 +1844,8 @@ pub mod tests {
         // nobody anything, and taking it away would break the machine for its administrator.
         assert!(!session.contains("audit deny /usr/bin/sudo"));
         // The same denials reach the shell and compositor profiles' parent, the session, not the
-        // app: rp-code itself must still read its own policy.
-        assert!(!text_of(&plan, "rp-code-app").contains("/etc/rp-code/**"));
+        // app: rpchat itself must still read its own policy.
+        assert!(!text_of(&plan, "rpchat-app").contains("/etc/rpchat/**"));
 
         // `lock.denyEscapes: false` keeps the paths guarded but leaves the binaries alone.
         let softer = rules(
@@ -1853,10 +1853,10 @@ pub mod tests {
         );
         let session = text_of(
             &render(&softer, &noctalia_hyprland_ctx(&["work"])),
-            "rp-code-session",
+            "rpchat-session",
         )
         .to_string();
-        assert!(session.contains("audit deny /etc/rp-code/** rwklx,"));
+        assert!(session.contains("audit deny /etc/rpchat/** rwklx,"));
         assert!(!session.contains("run0"));
     }
 
@@ -1869,20 +1869,20 @@ pub mod tests {
         assert_eq!(
             plan.files.iter().map(|f| f.name).collect::<Vec<_>>(),
             vec![
-                "rp-code-session",
-                "rp-code-app",
-                "rp-code-shell",
-                "rp-code-compositor",
-                "rp-code-login"
+                "rpchat-session",
+                "rpchat-app",
+                "rpchat-shell",
+                "rpchat-compositor",
+                "rpchat-login"
             ]
         );
-        let session = text_of(&plan, "rp-code-session");
+        let session = text_of(&plan, "rpchat-session");
         assert!(session.contains("abi <abi/4.0>,"));
-        assert!(session.contains("profile rp-code-session flags=(attach_disconnected,complain) {"));
+        assert!(session.contains("profile rpchat-session flags=(attach_disconnected,complain) {"));
         assert!(session.contains("  /{,**} ix,\n"));
-        assert!(session.contains("  /opt/rp-code/current/rp-code px -> rp-code-app,\n"));
-        assert!(session.contains("  /usr/bin/noctalia px -> rp-code-shell,\n"));
-        assert!(session.contains("  /usr/bin/Hyprland px -> rp-code-compositor,\n"));
+        assert!(session.contains("  /opt/rpchat/current/rpchat px -> rpchat-app,\n"));
+        assert!(session.contains("  /usr/bin/noctalia px -> rpchat-shell,\n"));
+        assert!(session.contains("  /usr/bin/Hyprland px -> rpchat-compositor,\n"));
         assert!(session.contains("  /usr/bin/hyprctl-safe ux,\n"));
         // Audit mode: `audit` allow rules, never `deny` (deny is enforced even in complain mode).
         assert!(session.contains("  audit @{run}/user/[0-9]*/hypr/*/.socket.sock rw,\n"));
@@ -1893,7 +1893,7 @@ pub mod tests {
             "discovered socket"
         );
         // Scoped to the files that carry the wallpaper, so the shell's own palette and
-        // template updates (fetched by a child, which lands in rp-code-session) keep working.
+        // template updates (fetched by a child, which lands in rpchat-session) keep working.
         assert!(session.contains("  audit @{HOME}/.config/noctalia/settings.json wl,\n"));
         assert!(session.contains("  audit @{HOME}/.local/state/noctalia/settings.toml wl,\n"));
         assert!(session.contains("  audit @{HOME}/.config/noctalia/plugins/** wl,\n"));
@@ -1902,18 +1902,18 @@ pub mod tests {
             "palettes and templates must stay writable: {session}"
         );
         assert!(session.contains("  audit @{HOME}/.config/hypr/hyprpaper.conf wl,\n"));
-        assert!(session.contains("  audit signal (send) peer=rp-code-app,\n"));
-        assert!(session.contains("  audit ptrace (trace) peer=rp-code-app,\n"));
+        assert!(session.contains("  audit signal (send) peer=rpchat-app,\n"));
+        assert!(session.contains("  audit ptrace (trace) peer=rpchat-app,\n"));
         assert!(!session.contains("deny"));
-        let app = text_of(&plan, "rp-code-app");
+        let app = text_of(&plan, "rpchat-app");
         assert!(app.contains(
-            "profile rp-code-app /opt/rp-code/current/rp-code flags=(attach_disconnected) {"
+            "profile rpchat-app /opt/rpchat/current/rpchat flags=(attach_disconnected) {"
         ));
         assert!(app.contains("  file,\n"));
-        assert!(app.contains("  audit signal (receive) peer=rp-code-session,\n"));
-        assert!(app.contains("  audit ptrace (tracedby) peer=rp-code-compositor,\n"));
-        let shell = text_of(&plan, "rp-code-shell");
-        assert!(shell.contains("  /{,**} px -> rp-code-session,\n"));
+        assert!(app.contains("  audit signal (receive) peer=rpchat-session,\n"));
+        assert!(app.contains("  audit ptrace (tracedby) peer=rpchat-compositor,\n"));
+        let shell = text_of(&plan, "rpchat-shell");
+        assert!(shell.contains("  /{,**} px -> rpchat-session,\n"));
         assert!(
             shell.contains("  audit @{run}/user/[0-9]*/noctalia-*.sock r,\n"),
             "bind (w) allowed, connect (needs r) audited"
@@ -1922,17 +1922,17 @@ pub mod tests {
             !shell.contains("hypr/*/.socket.sock rw"),
             "shell-only: the shell may talk to the compositor"
         );
-        let comp = text_of(&plan, "rp-code-compositor");
-        assert!(comp.contains("  /{,**} px -> rp-code-session,\n"));
+        let comp = text_of(&plan, "rpchat-compositor");
+        assert!(comp.contains("  /{,**} px -> rpchat-session,\n"));
         assert!(comp.contains("  audit @{run}/user/[0-9]*/noctalia-*.sock rw,\n"));
-        let login = text_of(&plan, "rp-code-login");
-        assert!(login.contains("profile rp-code-login /{usr/lib/sddm/sddm-helper,usr/bin/login} flags=(attach_disconnected) {"));
+        let login = text_of(&plan, "rpchat-login");
+        assert!(login.contains("profile rpchat-login /{usr/lib/sddm/sddm-helper,usr/bin/login} flags=(attach_disconnected) {"));
         assert!(login.contains("  ^work flags=(attach_disconnected,complain) {\n"));
-        assert!(login.contains("    /{,**} px -> rp-code-session,\n"));
+        assert!(login.contains("    /{,**} px -> rpchat-session,\n"));
         assert!(login.contains("  ^DEFAULT flags=(attach_disconnected,complain) {\n"));
         assert!(login.contains("    /{,**} ux,\n"));
         for f in &plan.files {
-            assert!(f.text.contains(&format!("# rp-code-guard {}", plan.hash)));
+            assert!(f.text.contains(&format!("# rpchat-guard {}", plan.hash)));
             assert!(f
                 .text
                 .contains("@{run}=/run /var/run\n@{HOME}=/home/*/ /root/\n"));
@@ -1959,18 +1959,18 @@ pub mod tests {
             serde_json::json!({"version":1,"app":{"users":["work","o'neil"]},"guard":{"mode":"enforce","compositorIpc":"deny"}}),
         );
         let plan = render(&r, &noctalia_hyprland_ctx(&["work", "o'neil"]));
-        let session = text_of(&plan, "rp-code-session");
-        assert!(session.contains("profile rp-code-session flags=(attach_disconnected) {"));
+        let session = text_of(&plan, "rpchat-session");
+        assert!(session.contains("profile rpchat-session flags=(attach_disconnected) {"));
         assert!(!session.contains("complain"));
         assert!(session.contains("  audit deny @{run}/user/[0-9]*/hypr/*/.socket.sock rw,\n"));
-        assert!(session.contains("  audit deny signal (send) peer=rp-code-app,\n"));
-        let shell = text_of(&plan, "rp-code-shell");
+        assert!(session.contains("  audit deny signal (send) peer=rpchat-app,\n"));
+        let shell = text_of(&plan, "rpchat-shell");
         assert!(
             shell.contains("  audit deny @{run}/user/[0-9]*/hypr/*/.socket.sock rw,\n"),
             "compositorIpc deny reaches the shell"
         );
         assert!(shell.contains("  audit deny @{run}/user/[0-9]*/noctalia-*.sock r,\n"));
-        let login = text_of(&plan, "rp-code-login");
+        let login = text_of(&plan, "rpchat-login");
         assert!(login.contains("  ^work flags=(attach_disconnected,complain) {\n"));
         assert!(
             login.contains("  ^\"o'neil\" flags=(attach_disconnected,complain) {\n"),
@@ -2002,17 +2002,17 @@ pub mod tests {
         let plan = render(&r, &ctx);
         assert_eq!(
             plan.files.iter().map(|f| f.name).collect::<Vec<_>>(),
-            vec!["rp-code-session", "rp-code-app", "rp-code-login"]
+            vec!["rpchat-session", "rpchat-app", "rpchat-login"]
         );
-        let session = text_of(&plan, "rp-code-session");
+        let session = text_of(&plan, "rpchat-session");
         assert!(!session.contains("abi <"));
         assert!(!session.contains("noctalia"));
         assert!(!session.contains("hypr"));
         assert!(!session.contains("signal (send)"));
         assert!(
-            session.contains("profile rp-code-login /usr/lib/sddm/sddm-helper")
-                || text_of(&plan, "rp-code-login")
-                    .contains("profile rp-code-login /usr/lib/sddm/sddm-helper flags=")
+            session.contains("profile rpchat-login /usr/lib/sddm/sddm-helper")
+                || text_of(&plan, "rpchat-login")
+                    .contains("profile rpchat-login /usr/lib/sddm/sddm-helper flags=")
         );
         // Nothing found on the box: residuals say so, the login profile has no attachment.
         let bare = GuardContext {
@@ -2024,8 +2024,8 @@ pub mod tests {
             serde_json::json!({"version":1,"app":{"users":["a"]},"guard":{"mode":"enforce"}}),
         );
         let plan2 = render(&r2, &bare);
-        assert!(text_of(&plan2, "rp-code-login")
-            .contains("profile rp-code-login flags=(attach_disconnected) {"));
+        assert!(text_of(&plan2, "rpchat-login")
+            .contains("profile rpchat-login flags=(attach_disconnected) {"));
         assert!(plan2
             .residual
             .iter()
@@ -2042,7 +2042,7 @@ pub mod tests {
 
     #[test]
     fn parses_audit_lines_from_kernel_and_journal() {
-        let denied = r#"audit: type=1400 audit(1757851200.123:456): apparmor="DENIED" operation="connect" class="file" profile="rp-code-session" name="/run/user/1000/hypr/0c9c_1757_42/.socket.sock" pid=4242 comm="hyprctl" requested_mask="wr" denied_mask="wr" fsuid=1000 ouid=1000"#;
+        let denied = r#"audit: type=1400 audit(1757851200.123:456): apparmor="DENIED" operation="connect" class="file" profile="rpchat-session" name="/run/user/1000/hypr/0c9c_1757_42/.socket.sock" pid=4242 comm="hyprctl" requested_mask="wr" denied_mask="wr" fsuid=1000 ouid=1000"#;
         let a = parse_audit_message(denied).unwrap();
         assert_eq!(
             a,
@@ -2052,12 +2052,12 @@ pub mod tests {
                 command: "hyprctl".into(),
                 pid: 4242,
                 blocked: true,
-                profile: "rp-code-session".into(),
+                profile: "rpchat-session".into(),
                 operation: "connect".into(),
                 requested: Some("wr".into())
             }
         );
-        let audited = r#"AVC apparmor="AUDIT" operation="open" class="file" profile="rp-code-session" name="/home/work/.local/state/noctalia/settings.toml" pid=77 comm="vim" requested_mask="w" fsuid=1000 ouid=1000"#;
+        let audited = r#"AVC apparmor="AUDIT" operation="open" class="file" profile="rpchat-session" name="/home/work/.local/state/noctalia/settings.toml" pid=77 comm="vim" requested_mask="w" fsuid=1000 ouid=1000"#;
         let b = parse_audit_message(audited).unwrap();
         assert_eq!(
             (b.kind, b.blocked, b.command.as_str(), b.target.as_str()),
@@ -2068,25 +2068,25 @@ pub mod tests {
                 "/home/work/.local/state/noctalia/settings.toml"
             )
         );
-        let sig = r#"audit: type=1400 audit(1.2:3): apparmor="ALLOWED" operation="signal" class="signal" profile="rp-code-session" pid=9 comm="kill" requested_mask="send" denied_mask="send" signal=term peer="rp-code-app""#;
+        let sig = r#"audit: type=1400 audit(1.2:3): apparmor="ALLOWED" operation="signal" class="signal" profile="rpchat-session" pid=9 comm="kill" requested_mask="send" denied_mask="send" signal=term peer="rpchat-app""#;
         let c = parse_audit_message(sig).unwrap();
         assert_eq!(
             (c.kind, c.target.as_str(), c.blocked),
-            (AttemptKind::Signal, "rp-code-app", false)
+            (AttemptKind::Signal, "rpchat-app", false)
         );
-        let pt = r#"apparmor="DENIED" operation="ptrace" class="ptrace" profile="rp-code-session//null-x" pid=9 comm="gdb" requested_mask="trace" denied_mask="trace" peer="rp-code-app""#;
+        let pt = r#"apparmor="DENIED" operation="ptrace" class="ptrace" profile="rpchat-session//null-x" pid=9 comm="gdb" requested_mask="trace" denied_mask="trace" peer="rpchat-app""#;
         assert_eq!(parse_audit_message(pt).unwrap().kind, AttemptKind::Ptrace);
-        let ex = r#"apparmor="DENIED" operation="exec" class="file" profile="rp-code-shell" name="/usr/bin/x" pid=1 comm="sh" requested_mask="x" denied_mask="x" target="rp-code-session""#;
+        let ex = r#"apparmor="DENIED" operation="exec" class="file" profile="rpchat-shell" name="/usr/bin/x" pid=1 comm="sh" requested_mask="x" denied_mask="x" target="rpchat-session""#;
         assert_eq!(parse_audit_message(ex).unwrap().kind, AttemptKind::Exec);
         // Sockets reached through a non-connect operation still count as IPC.
-        let st = r#"apparmor="DENIED" operation="getattr" class="file" profile="rp-code-shell" name="/run/user/1000/noctalia-wayland-1.sock" pid=1 comm="noctalia" requested_mask="r" denied_mask="r""#;
+        let st = r#"apparmor="DENIED" operation="getattr" class="file" profile="rpchat-shell" name="/run/user/1000/noctalia-wayland-1.sock" pid=1 comm="noctalia" requested_mask="r" denied_mask="r""#;
         assert_eq!(parse_audit_message(st).unwrap().kind, AttemptKind::Ipc);
         // Other profiles, other statuses and non-apparmor lines are ignored.
         assert!(parse_audit_message(
             r#"apparmor="DENIED" operation="open" profile="firefox" name="/x" pid=1 comm="a""#
         )
         .is_none());
-        assert!(parse_audit_message(r#"apparmor="STATUS" operation="profile_load" profile="unconfined" name="rp-code-session" pid=1 comm="apparmor_parser""#).is_none());
+        assert!(parse_audit_message(r#"apparmor="STATUS" operation="profile_load" profile="unconfined" name="rpchat-session" pid=1 comm="apparmor_parser""#).is_none());
         assert!(parse_audit_message("usb 1-1: new device").is_none());
         // Journal JSON and kmsg framing.
         let j = format!(
@@ -2165,7 +2165,7 @@ pub mod tests {
     fn a_second_pam_apparmor_line_is_reported_as_a_warning() {
         let os = Arc::new(FakeOs::default());
         let hooks = os.hooks();
-        let one = "session    optional   pam_apparmor.so      order=user,group,default # rp-code session guard\n";
+        let one = "session    optional   pam_apparmor.so      order=user,group,default # rpchat session guard\n";
         assert_eq!(pam_lines(&hooks), None, "no PAM file");
         assert_eq!(pam_configured(&hooks), None);
         assert!(pam_duplicate_warning(&hooks).is_none());
@@ -2229,8 +2229,8 @@ pub mod tests {
         .unwrap();
         let info = apply(Some(&policy), &os.hooks(), &paths(&dir));
         assert!(
-            info.loaded.contains(&"rp-code-login".to_string())
-                && info.loaded.contains(&"rp-code-session".to_string()),
+            info.loaded.contains(&"rpchat-login".to_string())
+                && info.loaded.contains(&"rpchat-session".to_string()),
             "{info:?}"
         );
         assert!(info.last_error.is_none(), "{info:?}");
@@ -2254,7 +2254,7 @@ pub mod tests {
         let dropin = |uid: u32| {
             paths
                 .unit_dir
-                .join(format!("user@{uid}.service.d/rp-code-guard.conf"))
+                .join(format!("user@{uid}.service.d/rpchat-guard.conf"))
         };
 
         let engage = |users: &str| {
@@ -2275,8 +2275,8 @@ pub mod tests {
             .cloned()
             .expect("drop-in written");
         // The `-` is what keeps a missing profile from blocking the login entirely.
-        assert!(text.contains("AppArmorProfile=-rp-code-session"), "{text}");
-        assert!(!text.contains("AppArmorProfile=rp-code-session"), "{text}");
+        assert!(text.contains("AppArmorProfile=-rpchat-session"), "{text}");
+        assert!(!text.contains("AppArmorProfile=rpchat-session"), "{text}");
         assert_eq!(*os.reloads.lock().unwrap(), 1);
 
         // Idempotent: same policy, no rewrite, no extra daemon-reload.
@@ -2323,7 +2323,7 @@ pub mod tests {
         assert_eq!(plan.shells, vec!["noctalia", "hyprpaper"]);
 
         // The session may not reach either socket, nor either set of files.
-        let session = text_of(&plan, "rp-code-session");
+        let session = text_of(&plan, "rpchat-session");
         assert!(
             session.contains("audit deny @{run}/user/[0-9]*/noctalia-*.sock rw,"),
             "{session}"
@@ -2343,18 +2343,18 @@ pub mod tests {
 
         // Both binaries enter the one shell profile.
         assert!(
-            session.contains("/usr/bin/noctalia px -> rp-code-shell,"),
+            session.contains("/usr/bin/noctalia px -> rpchat-shell,"),
             "{session}"
         );
         assert!(
-            session.contains("/usr/bin/hyprpaper px -> rp-code-shell,"),
+            session.contains("/usr/bin/hyprpaper px -> rpchat-shell,"),
             "{session}"
         );
 
         // Inside it: `r` denied on every shell socket, never `rw`. Denying `r` blocks connect
         // (which needs rw) while leaving `w` — the mknod that *binding* is — allowed, so each
         // daemon still serves its own socket. That is what stops noctalia driving hyprpaper.
-        let shell = text_of(&plan, "rp-code-shell");
+        let shell = text_of(&plan, "rpchat-shell");
         for sock in [
             "@{run}/user/[0-9]*/noctalia-*.sock",
             "@{run}/user/[0-9]*/hypr/*/.hyprpaper.sock",
@@ -2389,7 +2389,7 @@ pub mod tests {
         ] {
             assert!(
                 SWWW.binaries.contains(&exe),
-                "{exe} must enter rp-code-shell"
+                "{exe} must enter rpchat-shell"
             );
         }
         for comm in ["swww-daemon", "awww-daemon", "awww"] {
@@ -2426,10 +2426,10 @@ pub mod tests {
                 serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":mode}}),
             );
             let plan = render(&r, &noctalia_hyprland_ctx(&["work"]));
-            let login = text_of(&plan, "rp-code-login");
+            let login = text_of(&plan, "rpchat-login");
             let header = login
                 .lines()
-                .find(|l| l.starts_with("profile rp-code-login"))
+                .find(|l| l.starts_with("profile rpchat-login"))
                 .unwrap_or_default();
             assert!(!header.contains("complain"), "{mode}: {header}");
             // Permissive by construction, so enforce takes nothing away.
@@ -2502,7 +2502,7 @@ pub mod tests {
             serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":"enforce"}}),
         );
         let plan = render(&r, &ctx);
-        let session = text_of(&plan, "rp-code-session");
+        let session = text_of(&plan, "rpchat-session");
         assert!(!session.contains("wayland-*"), "{session}");
         assert!(!session.contains("-unix"), "{session}");
         assert!(session.contains("audit deny @{run}/user/[0-9]*/hypr/*/.socket*.sock rw"));
@@ -2554,7 +2554,7 @@ garbage line\n";
         let s = GuardState {
             mode: GuardMode::Audit,
             hash: "abc".into(),
-            loaded: vec!["rp-code-session".into()],
+            loaded: vec!["rpchat-session".into()],
             users: vec!["work".into()],
             sockets: vec![DiscoveredSocket {
                 glob: "@{run}/user/[0-9]*/noctalia-wayland-*.sock".into(),
@@ -2621,11 +2621,11 @@ garbage line\n";
         assert_eq!(
             info.loaded,
             vec![
-                "rp-code-session",
-                "rp-code-app",
-                "rp-code-shell",
-                "rp-code-compositor",
-                "rp-code-login"
+                "rpchat-session",
+                "rpchat-app",
+                "rpchat-shell",
+                "rpchat-compositor",
+                "rpchat-login"
             ]
         );
         assert_eq!(info.users, vec!["work"]);
@@ -2638,11 +2638,11 @@ garbage line\n";
         assert_eq!(calls[0].0, ParserOp::Check);
         assert_eq!(calls[1].0, ParserOp::Replace);
         assert_eq!(calls[1].1.len(), 5);
-        assert!(calls[1].1[0].ends_with("apparmor.d/rp-code-session"));
+        assert!(calls[1].1[0].ends_with("apparmor.d/rpchat-session"));
         let state = GuardState::parse(&os.files.lock().unwrap()[&p.state_file]).unwrap();
         assert_eq!(state.mode, GuardMode::Audit);
         assert_eq!(state.sockets.len(), 1);
-        let session_text = os.files.lock().unwrap()[&p.profile_dir.join("rp-code-session")].clone();
+        let session_text = os.files.lock().unwrap()[&p.profile_dir.join("rpchat-session")].clone();
         assert!(session_text.contains("noctalia-wayland-*.sock rw,"));
 
         // Discovery finds nothing next time (shell not running): the cache keeps the socket,
@@ -2651,7 +2651,7 @@ garbage line\n";
         let again = apply(Some(&policy), &hooks, &p);
         assert_eq!(again.last_error, None);
         assert_eq!(
-            os.files.lock().unwrap()[&p.profile_dir.join("rp-code-session")],
+            os.files.lock().unwrap()[&p.profile_dir.join("rpchat-session")],
             session_text
         );
         assert_eq!(os.parser_calls.lock().unwrap().len(), 4);
@@ -2674,7 +2674,7 @@ garbage line\n";
         let e = apply(Some(&enforce), &hooks, &p);
         assert_eq!(e.mode, GuardMode::Enforce);
         assert!(
-            os.files.lock().unwrap()[&p.profile_dir.join("rp-code-session")].contains("audit deny")
+            os.files.lock().unwrap()[&p.profile_dir.join("rpchat-session")].contains("audit deny")
         );
 
         // A parser failure is reported and recorded, nothing else breaks.
@@ -2708,7 +2708,7 @@ garbage line\n";
             .files
             .lock()
             .unwrap()
-            .contains_key(&p.profile_dir.join("rp-code-session")));
+            .contains_key(&p.profile_dir.join("rpchat-session")));
         assert_eq!(
             GuardState::parse(&os.files.lock().unwrap()[&p.state_file])
                 .unwrap()
@@ -2774,7 +2774,7 @@ garbage line\n";
                 std::fs::write(&path, &f.text).unwrap();
                 files.push(path);
             }
-            if std::env::var_os("RP_CODED_DUMP_PROFILES").is_some() && mode == "audit" {
+            if std::env::var_os("RPCHATD_DUMP_PROFILES").is_some() && mode == "audit" {
                 for f in &plan.files {
                     println!("===== /etc/apparmor.d/{} =====\n{}", f.name, f.text);
                 }
