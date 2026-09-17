@@ -25,7 +25,7 @@
     "electron-updater": "^6.8.9",
     "esbuild": "^0.28.2",
     "fflate": "^0.8.3",
-    "marked": "^15.0.0",
+    "marked": "^18.0.13",
     "qrcode-generator": "2.0.4",
     "quickjs-emscripten": "^0.32.0",
     "react": "^19.2.8",
