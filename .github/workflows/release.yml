@@ -1,15 +1,21 @@
 name: Release
 
-# Every push to main becomes a tagged release: v<major>.<minor>.<N> where major.minor come from the
-# root package.json and N is the number of commits on main, so versions are monotonic and need no
-# version-bump commits. Linux installers (AppImage and deb, with the native layer-shell helper)
+# Every push to main whose CI passed becomes a tagged release: v<major>.<minor>.<N> where
+# major.minor come from the root package.json and N is the number of commits on main, so versions
+# are monotonic and need no version-bump commits. Linux installers (AppImage and deb, with the native layer-shell helper)
 # are attached with generated release notes straight from the build job (no Actions artifacts, so
 # the artifact storage quota cannot block a release). Windows and macOS builds are intentionally
 # not produced for now; re-add matrix entries here when they are wanted.
 
+# Gated on CI rather than on the push itself: a red main must not ship. `workflow_run` fires when
+# the CI run for a commit finishes, and runs the copy of this file on the default branch, so the
+# gate cannot be edited away from a pull request. The commit to release is
+# `workflow_run.head_sha` — the one CI actually tested — because a `workflow_run` checkout
+# otherwise defaults to whatever the default branch points at now, which may have moved on.
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -23,19 +29,29 @@ jobs:
   version:
     name: Compute version
     runs-on: ubuntu-24.04
+    # A manual dispatch releases the default branch as it stands; a CI run only ever releases a
+    # successful push to main (pull-request runs and red runs are ignored).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.conclusion == 'success')
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
       exists: ${{ steps.v.outputs.exists }}
+      sha: ${{ steps.v.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - id: v
         run: |
           base="$(node -p "require('./package.json').version")"
           mm="${base%.*}"
           n="$(git rev-list --count HEAD)"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           version="${mm}.${n}"
           tag="v${version}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -54,6 +70,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.sha }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -100,12 +118,12 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          target_commitish: ${{ github.sha }}
-          name: rpchat ${{ needs.version.outputs.version }}
+          target_commitish: ${{ needs.version.outputs.sha }}
+          name: RPChat ${{ needs.version.outputs.version }}
           generate_release_notes: true
           files: dist-out/*
           body: |
-            Automated release of `${{ github.sha }}` from `main`.
+            Automated release of `${{ needs.version.outputs.sha }}` from `main`.
 
             - **Linux**: AppImage or `.deb` (the wlr-layer-shell overlay helper for Hyprland/Sway is bundled; it needs `gtk3`, `gtk-layer-shell` and `webkit2gtk-4.1` runtime libraries).
             - `latest-linux.yml` is the update manifest read by the app's in-place updater (Settings → Updates); leave it attached.
