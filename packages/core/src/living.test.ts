@@ -189,6 +189,61 @@ describe('event matching', () => {
     expect((await t.engine.subscriptions.list(session.id)).find((s) => s.id === widget.value.id)?.fired).toBe(2);
   });
 
+  it('lets a handler raise a custom event of its own without waiting for a run queued behind itself', async () => {
+    // A game's widget handler reports the move and reacts to it through an event. While handlers ran
+    // in the session's turn queue, that second run was queued behind the first — which was waiting
+    // for it — and the pair only came unstuck when the run limit aborted the handler.
+    const runs: string[] = [];
+    t = await createTestEngine({
+      runnerHandler: async (request, runner) => {
+        runs.push(request.code);
+        if (request.code.includes('RAISE')) await runner.call(request, 'events', 'emit', 'mistake', { n: 1 });
+        return null;
+      },
+    });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    const ctx = ctxOf(MINIMAL_ID, 'echo', session.id);
+    await invoke(ctx, 'events', 'on', 'custom:mistake', 'return "punished";', { label: 'react' });
+    await invoke(ctx, 'events', 'on', 'widget-message', '/* RAISE */ return 1;', { label: 'game:test' });
+
+    t.engine.hostEvents.emit({ name: 'widget-message', data: { widgetId: 'game' }, at: t.clock.now().toISOString() });
+    const settled = await Promise.race([
+      t.engine.eventService.idle().then(() => 'settled'),
+      new Promise((r) => setTimeout(() => r('deadlocked'), 3000)),
+    ]);
+    expect(settled).toBe('settled');
+    expect(runs).toHaveLength(2); // the handler, and the one its own event raised
+  }, 15_000);
+
+  it('does not queue the character behind a running event handler', async () => {
+    // A handler that takes its time used to hold the session's turn queue, so the character could not
+    // answer until it finished. It runs on its own now.
+    let releaseHandler = (): void => {};
+    const handlerRunning = new Promise<void>((resolve) => {
+      releaseHandler = () => resolve();
+    });
+    t = await createTestEngine({
+      respond: () => ({ text: 'still here' }),
+      runnerHandler: async (request) => {
+        if (request.context.trigger.kind === 'event') await handlerRunning;
+        return null;
+      },
+    });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    const ctx = ctxOf(MINIMAL_ID, 'echo', session.id);
+    await invoke(ctx, 'events', 'on', 'custom:slow', 'return 1;', { label: 'slow' });
+    await invoke(ctx, 'events', 'emit', 'slow', {});
+
+    // the handler is still going; the character answers anyway
+    await t.engine.chat.send(session.id, 'are you there?');
+    expect((await t.engine.sessions.messages(session.id)).at(-1)).toMatchObject({ role: 'assistant', content: 'still here' });
+
+    releaseHandler();
+    await t.engine.eventService.idle();
+  }, 15_000);
+
   it('fires a subscription with no idle filter as soon as the host reports the user idle', async () => {
     const senses = new FakeSenses();
     const runs: Array<{ trigger: ActionContext['trigger'] }> = [];

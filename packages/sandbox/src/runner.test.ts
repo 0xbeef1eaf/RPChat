@@ -316,6 +316,36 @@ describe('QuickJsRunner', () => {
     expect(result.error?.stack).toBeUndefined();
   });
 
+  describe('re-entrancy', () => {
+    /**
+     * Runs on a runner are serialised (one runtime, one context per run), so a host call that
+     * *awaits* another run on the same runner waits for something queued behind the run it is
+     * serving, and both hang until the outer one is aborted by its run limit. That is why core's
+     * EventService starts a handler without awaiting it (`EventService.fire`) — a handler may raise
+     * a custom event of its own, and the subscriber's run is queued behind the handler's own.
+     *
+     * Only the working shape is asserted here: a deliberately deadlocked run would hold the
+     * runner's lock for the rest of the file, disposal included.
+     */
+    it('serves a host call that starts another run without awaiting it', async () => {
+      const own = new QuickJsRunner();
+      try {
+        let inner: Promise<CodeRunResult> | undefined;
+        const invoker: CapabilityInvoker = {
+          async invoke() {
+            inner = own.run({ code: 'return "inner";', language: 'ts', context, surface, invoker: makeInvoker() });
+            return { ok: true, value: null };
+          },
+        };
+        const outer = await own.run({ code: 'await sdk.media.showImage("x"); return "outer";', language: 'ts', context, surface, invoker });
+        expect(outer.returnValue).toBe('outer');
+        expect((await inner!).returnValue).toBe('inner');
+      } finally {
+        await own.dispose();
+      }
+    }, 30_000);
+  });
+
   describe('prelude (the character\'s function library)', () => {
     const prelude = ['const lib = __rp_lib({', '  "double": (async (n: number) => n * 2),', '});'].join('\n');
     /** The surface with the library module on it, so `lib` carries its two methods. */

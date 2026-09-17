@@ -117,8 +117,15 @@ manifest, characters, README and asset summary (no permission information).
   wakes they trigger do. Emit `event-fired` chat event. Debounce identical event+subscription within 2 s —
   except the interaction events (`widget-message`, `avatar-clicked`, `media-clicked`, `media-closed`,
   `INTERACTION_EVENTS`): each of those is a distinct user action (the next card, the next click) and
-  always fires. One that arrives while the same subscription's handler is still running is dropped
-  (no queue), which the SDK docs tell the character to plan for.
+  always fires. One that arrives while the same subscription's handler is still running is queued
+  behind it, so a subscription handles its own events in order, one at a time.
+- Handlers run **outside** the session's turn queue (`EventService.fire` starts the run and does not
+  await it; `idle()` waits for the per-subscription chains). A slow handler therefore no longer keeps
+  the character from replying, handlers for different subscriptions overlap, and a handler that raises
+  a custom event of its own does not wait for a run queued behind itself — which used to deadlock the
+  session until the run limit aborted the handler. `code` timers and Sandbox runs still take
+  `ChatService.runExclusive`. What this gives up is ordering between a handler and a turn: two runs may
+  now interleave their state writes, so a read-modify-write spread across both can lose an update.
 - `setInterest` is called whenever the subscription set changes (union of event names + always `time`
   handled in core).
 

@@ -289,7 +289,6 @@ export class Engine {
       emitter: this.events,
       now,
       logger,
-      runExclusive: (sessionId, task) => this.chat.runExclusive(sessionId, task),
     };
     if (opts.senses?.setInterest) eventOptions.setInterest = (names) => opts.senses?.setInterest?.(names);
     eventService = new EventService(eventOptions);

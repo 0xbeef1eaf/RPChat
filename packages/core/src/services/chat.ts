@@ -149,7 +149,7 @@ export class ChatService {
     });
   }
 
-  /** Run `task` serialised with the session's turns (used for event code and code timers). */
+  /** Run `task` serialised with the session's turns (used for `code` timers and Sandbox runs; event handlers run on their own, see EventService.fire). */
   runExclusive<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
     const result = this.enqueue(sessionId, task);
     void result.then(() => this.flushImmediateWake(sessionId), () => this.flushImmediateWake(sessionId));

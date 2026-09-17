@@ -45,8 +45,6 @@ export interface EventServiceOptions {
   emitter: EngineEmitter;
   now: Clock;
   logger: Logger;
-  /** Serialise a run with the session's turns (the chat queue). */
-  runExclusive: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>;
   /** Called with the union of event names live subscriptions need (plus `time`). */
   setInterest?: (events: HostEventName[]) => void;
 }
@@ -138,7 +136,12 @@ export class EventService {
   /** Repeating events an `onEvent` behaviour has already been run for (cleared when they end). */
   private readonly behaviourRanFor = new Set<string>();
   private readonly lastFired = new Map<string, number>();
-  private readonly firing = new Set<string>();
+  /**
+   * One queue per subscription: its events are handled in order and never overlap, while a different
+   * subscription — and the character's own turns — run alongside. The map holds each queue's tail, so
+   * awaiting the tails (`idle()`) awaits everything still in flight.
+   */
+  private readonly chains = new Map<string, Promise<unknown>>();
   private lastTimeTick: string | undefined;
   private inFlight: Promise<unknown> = Promise.resolve();
 
@@ -256,9 +259,14 @@ export class EventService {
     return task;
   }
 
-  /** Wait for in-flight dispatches. */
+  /** Wait for in-flight dispatches and for every handler they queued. */
   async idle(): Promise<void> {
-    await this.inFlight.catch(() => undefined);
+    // A handler may emit a custom event of its own, which dispatches and queues more handlers.
+    for (let i = 0; i < 100; i++) {
+      await this.inFlight.catch(() => undefined);
+      if (this.chains.size === 0) return;
+      await Promise.all([...this.chains.values()]).catch(() => undefined);
+    }
   }
 
   /** Per-minute tick: emits a `time` event once per calendar minute. Returns `true` when it fired. */
@@ -298,7 +306,7 @@ export class EventService {
         if (!this.matches(sub, event)) continue;
         if (this.debounced(sub, event)) continue;
         handledSessions.add(sessionId);
-        await this.fire(session, sub, event);
+        this.fire(session, sub, event);
       }
     }
 
@@ -370,23 +378,42 @@ export class EventService {
     return false;
   }
 
-  private async fire(session: Session, sub: EventSubscription, event: HostEvent): Promise<void> {
-    if (this.firing.has(sub.id)) return;
-    this.firing.add(sub.id);
+  /**
+   * Queue the handler on its subscription's own chain and return. It is deliberately **not** awaited
+   * by the dispatch: a handler runs on its own, not in the session's turn queue, so a long one no
+   * longer holds up the character's replies, and a handler that raises a custom event of its own does
+   * not end up waiting for a run queued behind itself. Two events for the same subscription still run
+   * one after the other, in arrival order — a second click is queued, never dropped. `idle()` waits
+   * for every chain.
+   */
+  private fire(session: Session, sub: EventSubscription, event: HostEvent): void {
+    const prev = this.chains.get(sub.id) ?? Promise.resolve();
+    const next = prev.then(() =>
+      this.runHandler(session, sub, event).catch((err) => {
+        this.o.logger.warn(`[events] subscription ${sub.id} (${event.name}) failed`, err);
+      }),
+    );
+    this.chains.set(sub.id, next);
+    void next.finally(() => {
+      if (this.chains.get(sub.id) === next) this.chains.delete(sub.id);
+    });
+  }
+
+  private async runHandler(session: Session, sub: EventSubscription, event: HostEvent): Promise<void> {
     const { packId, characterId } = parseCharacterRef(session.characterRef);
     const started = this.o.now().getTime();
     const baseInput = sub.input && typeof sub.input === 'object' && !Array.isArray(sub.input) ? (sub.input as Record<string, Json>) : {};
     const input: Json = { ...baseInput, event: event.name, data: event.data };
     let error: import('@rp/shared').SerializedError | undefined;
     try {
-      const result = await this.o.runExclusive(session.id, () =>
-        this.o.behaviours.runScript(packId, characterId, session.id, sub.code, input, { kind: 'event', subscriptionId: sub.id, event: event.name }),
-      );
+      const result = await this.o.behaviours.runScript(packId, characterId, session.id, sub.code, input, {
+        kind: 'event',
+        subscriptionId: sub.id,
+        event: event.name,
+      });
       if (!result.ok) error = result.error;
     } catch (err) {
       error = serializeError(err);
-    } finally {
-      this.firing.delete(sub.id);
     }
     if (error) this.o.logger.warn(`[events] subscription ${sub.id} (${event.name}) failed: ${error.message}`);
     const entry: Parameters<AuditService['record']>[0] = {
@@ -418,7 +445,7 @@ export class EventService {
 
   private async runOnEvent(session: Session, event: HostEvent): Promise<void> {
     try {
-      await this.o.runExclusive(session.id, () => this.o.behaviours.run(session, 'onEvent', { event: event.name, data: event.data }));
+      await this.o.behaviours.run(session, 'onEvent', { event: event.name, data: event.data });
     } catch (err) {
       this.o.logger.warn(`[events] onEvent behaviour failed in session ${session.id}`, err);
     }
