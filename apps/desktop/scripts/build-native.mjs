@@ -69,8 +69,14 @@ function buildDaemon() {
   const distDir = resolve(daemonDir, 'dist');
   const files = readdirSync(distDir).map((f) => join(distDir, f));
   files.push(resolve(daemonDir, 'install.sh'), resolve(daemonDir, 'README.md'));
+  // install.sh installs one icon per hicolor size directory, so ship every size it looks for; the
+  // names it expects are rpchat.png (512) and rpchat-<size>.png.
   const icon = resolve(appDir, 'build/icon.png');
   if (existsSync(icon)) copyFileSync(icon, join(systemDir, 'rpchat.png'));
+  for (const size of [128, 64, 48, 32]) {
+    const sized = resolve(appDir, `build/icon-${size}.png`);
+    if (existsSync(sized)) copyFileSync(sized, join(systemDir, `rpchat-${size}.png`));
+  }
   for (const src of files) {
     const dst = join(systemDir, src.split('/').pop());
     copyFileSync(src, dst);
