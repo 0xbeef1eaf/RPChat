@@ -13,8 +13,9 @@ Contents:
 - `media.json` — tags and one-line descriptions for the media, plus a tag vocabulary
 
 Modules used: `media` (show images, play the chime) and `ui` (desktop
-notifications) — on unless you switch them off under Settings → Permissions;
-packs declare no permissions. Everything else Luna uses (`chat`, `state`,
-`timers`, `pack`) is trusted and always available.
+notifications) — on unless you switch them off under Settings → Permissions,
+whole or one function at a time; packs declare no permissions. Everything else
+Luna uses (`chat`, `state`, `timers`, `pack`) is trusted: it stays inside the
+app's own data, and it is on by default like the rest.
 
 The media files are produced by `../scripts/generate-media.mjs`.

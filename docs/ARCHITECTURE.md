@@ -187,6 +187,7 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `browser`| pack       | `open(url, { newWindow? })` via the user's browser command; with the browser extension connected also `status`, `tabs`, `openTab`, `activate`, `close`, `navigate`, `back/forward/reload`, `read`, `query`, `click`, `type`, `scroll`, `screenshot`, `find` (docs/browser-extension.md) |
 | `input`  | pack       | `lock(durationMs, { reason?, devices? })`, `unlock()`, `status()`, `type`, `key`, `click`, `moveMouse` — daemon-only (`rpchatd`, Linux), duration capped; `CAPABILITY_FAILED` without the daemon |
 | `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — via the user's camera command templates; the capture is saved under `webcam/` in the character home and returned as a `source: 'home'` AssetRef |
+| `crypto` | pack       | `encrypt(path)`, `decrypt(path)` — one of the user's own files, in place, under an app-managed AES-256-GCM key; refuses anything outside the home directory or that looks like a system/session file, and logs every encryption so it stays recoverable (docs/spec/system.md) |
 | `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)`, `clipboardRead()` |
 
 Adding a module = write a spec (typings+docs+methods) and a host handler,
