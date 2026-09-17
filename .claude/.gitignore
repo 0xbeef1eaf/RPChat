@@ -1,0 +1,5 @@
+# Claude Code scratch worktrees: full checkouts of this repo, recreated on demand.
+worktrees/
+
+# Per-machine permission grants and overrides, not shared.
+settings.local.json
