@@ -45,7 +45,7 @@
     "electron-vite": "^5.0.0",
     "jsqr": "1.4.0",
     "playwright-core": "1.56.1",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vite": "^7.0.0",
     "vitest": "^4.1.11"
   },
