@@ -174,6 +174,17 @@ describe('characterDefinitionSchema', () => {
     expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), avatar: 'img/avatar.WEBP' }).success).toBe(true);
   });
 
+  it('accepts promptFunctions as module ids and single functions, and keeps it', () => {
+    const ok = characterDefinitionSchema.safeParse({ ...goodCharacter(), promptFunctions: ['avatar', 'media.showImage', 'plugin.deep.member'] });
+    expect(ok.success).toBe(true);
+    expect(validateCharacter({ ...goodCharacter(), promptFunctions: ['avatar'] }).promptFunctions).toEqual(['avatar']);
+    // An empty list is a deliberate "nothing but sdk.lib", not a mistake.
+    expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), promptFunctions: [] }).success).toBe(true);
+    for (const bad of [['Avatar'], ['avatar.'], ['.show'], ['avatar show'], ['avatar', 'avatar']]) {
+      expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), promptFunctions: bad }).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it('throws RpError(PACK_INVALID) from validateCharacter', () => {
     expect(() => validateCharacter({ id: 'x' })).toThrowError(RpError);
     try {

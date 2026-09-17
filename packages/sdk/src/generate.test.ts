@@ -278,11 +278,41 @@ describe('describeSurface', () => {
     expect(surface.modules.map((m) => m.id)).toEqual(['chat', 'ui']);
   });
 
+  it('respects the per-module method filter and drops a module filtered down to nothing', () => {
+    const surface = describeSurface(registry, { methods: { media: ['showImage'], ui: [] } });
+    expect(surface.modules.find((m) => m.id === 'media')!.methods).toEqual(['showImage']);
+    expect(surface.modules.some((m) => m.id === 'ui')).toBe(false);
+    // A module the map does not mention keeps all of its methods.
+    expect(surface.modules.find((m) => m.id === 'chat')!.methods).toEqual(Object.keys(registry.get('chat')!.methods));
+  });
+
   it('agrees with the generated typings and method specs', () => {
     for (const mod of describeSurface(registry).modules) {
       expect(mod.methods).toEqual(Object.keys(registry.get(mod.id)!.methods));
       for (const method of mod.methods) expect(() => registry.methodSpec(mod.id, method)).not.toThrow();
     }
+  });
+});
+
+describe('per-function filtering of the prompt reference', () => {
+  const registry = createStandardRegistry();
+
+  it('indexes only the selected methods and leaves the rest unmentioned', () => {
+    const index = generateSdkIndex(registry, { modules: ['media', 'chat'], methods: { media: ['showImage'] } });
+    expect(index).toContain('## sdk.media —');
+    expect(index).toContain('showImage');
+    expect(index).not.toContain('playVideo');
+    // Not "unavailable", simply absent: only what is listed exists for the character.
+    expect(index).not.toContain('Not available');
+    expect(index).toMatch(/^Available modules: sdk\.chat, sdk\.media\.$/m);
+  });
+
+  it('names the switched-off methods in the docs and the typings, which cannot drop them', () => {
+    const docs = generateSdkDocs(registry, { modules: ['media'], methods: { media: ['showImage'] } });
+    expect(docs).toContain('`media.playVideo`');
+    const typings = generateSdkTypings(registry, { modules: ['media'], methods: { media: ['showImage'] } });
+    expect(typings).toContain('// Not available: media.playVideo');
+    expect(typings).not.toContain('// Not available: media.showImage');
   });
 });
 

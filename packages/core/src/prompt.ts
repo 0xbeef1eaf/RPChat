@@ -31,8 +31,13 @@ export interface PromptInput {
   pack: LoadedPack;
   character: LoadedCharacter;
   registry: CapabilityRegistry;
-  /** Module ids the character may use (trusted + every non-trusted module the user has not switched off under Settings → Permissions). */
-  allowedModules: string[];
+  /**
+   * What the SDK reference in the prompt describes: every function the user allows, narrowed by
+   * the character's own `promptFunctions` when it has one. Module ids in `modules`, and per module
+   * the method names to list in `methods` (see `promptSelection`/`selectionOptions`). It is not
+   * what the code may call — that is the sandbox surface, which the pack's narrowing never touches.
+   */
+  sdkSelection: { modules: string[]; methods?: Record<string, string[]> };
   session: Session;
   transcript: ChatMessage[];
   /**
@@ -328,7 +333,7 @@ function hasToolUse(msg: LlmMessage): boolean {
 /** Builds the system prompt (ARCHITECTURE §6) and the windowed transcript. */
 export class PromptBuilder {
   build(input: PromptInput): BuiltPrompt {
-    const reference = generateSdkIndex(input.registry, { modules: input.allowedModules });
+    const reference = generateSdkIndex(input.registry, { modules: input.sdkSelection.modules, methods: input.sdkSelection.methods });
     const stable = [
       section('engine_rules', engineRules(input.character.definition.name, input.useTools, input.minDelayMs)),
       section('persona', persona(input.character)),

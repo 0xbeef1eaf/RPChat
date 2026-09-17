@@ -8,6 +8,7 @@ import { PromptBuilder, SELF_WAKE_PREFIX } from '../prompt.js';
 import type { AuditService } from './audit.js';
 import type { HistoryService } from './history.js';
 import type { PackService } from './packs.js';
+import { promptSelection, selectionOptions } from './permissions.js';
 import type { PermissionService } from './permissions.js';
 import type { SessionService } from './sessions.js';
 import type { ProviderFactory, SettingsService } from './settings.js';
@@ -420,7 +421,12 @@ export class ChatService {
     const model = session.model ?? character.definition.modelHints?.model ?? config.model;
     const useTools = settings.useToolCalling && config.supportsTools !== false;
 
-    const allowedModules = await this.o.permissions.allowedModules(pack.manifest.id);
+    // What the code may call, and — narrowed by the pack author's `promptFunctions` — what the
+    // character is told about. The two differ on purpose: an author may keep a module out of the
+    // reference while their own `lib` functions still use it.
+    const allowedFunctions = await this.o.permissions.allowedFunctions(pack.manifest.id);
+    const sdkSelection = selectionOptions(promptSelection(allowedFunctions, character.definition.promptFunctions));
+    const allowedModules = allowedFunctions.map((m) => m.id);
     const surface = await this.o.behaviours.surfaceFor(pack.manifest.id);
     const target = { packId: pack.manifest.id, characterId: character.definition.id };
     const state = await this.o.storage.state.all(characterScope(target));
@@ -442,7 +448,7 @@ export class ChatService {
       pack,
       character,
       registry: this.o.registry,
-      allowedModules,
+      sdkSelection,
       session,
       transcript,
       state,

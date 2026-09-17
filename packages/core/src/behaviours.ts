@@ -15,6 +15,7 @@ import type {
 } from '@rp/shared';
 import { RpError, parseCharacterRef } from '@rp/shared';
 import type { PackService } from './services/packs.js';
+import { selectionOptions } from './services/permissions.js';
 import type { PermissionService } from './services/permissions.js';
 import type { SettingsService } from './services/settings.js';
 import type { BehaviourHooks, BehaviourInput, Logger } from './types.js';
@@ -113,10 +114,13 @@ export class BehaviourRunner implements BehaviourHooks {
     return this.o.runner.run(request);
   }
 
-  /** The SDK surface currently allowed (trusted + every module the app-wide policy allows; the same for every pack). */
+  /**
+   * The SDK surface currently allowed: every function the app-wide policy leaves on, the same for
+   * every pack. A pack's `promptFunctions` narrows what the character is *told* about, never this —
+   * so a `lib` function may call something the character's own reference never mentions.
+   */
   async surfaceFor(packId: string): Promise<SdkSurface> {
-    const modules = await this.o.permissions.allowedModules(packId);
-    return describeSurface(this.o.registry, { modules });
+    return describeSurface(this.o.registry, selectionOptions(await this.o.permissions.allowedFunctions(packId)));
   }
 
   async limits(): Promise<RunLimits> {

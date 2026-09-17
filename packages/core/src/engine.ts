@@ -183,7 +183,7 @@ export class Engine {
 
     const coreHandlers: CapabilityHandler[] = [
       new ChatHandler(this.sessions, opts.storage.messages, this.events),
-      new HelpHandler(opts.registry, this.permissions),
+      new HelpHandler(opts.registry, this.permissions, (packId, characterId) => this.packs.tryGetLoaded(packId)?.characters.find((c) => c.definition.id === characterId)?.definition.promptFunctions),
       new LibHandler(this.library),
       new StateHandler(opts.storage.state),
       new PackHandler(this.packs),

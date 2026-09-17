@@ -12,6 +12,12 @@ import { extractInterfaceBody, stripComments } from './validate.js';
 
 export interface GenerateIndexOptions {
   modules?: string[];
+  /**
+   * Per module id, the only method names to index. A module absent from the map keeps all of its
+   * methods; one mapped to an empty list is left out entirely. This is how a function the user
+   * switched off, or one the pack keeps out of the prompt, stops being mentioned at all.
+   */
+  methods?: Readonly<Record<string, readonly string[]>>;
   /** Include the compressed preamble helper types (default true). */
   helperTypes?: boolean;
 }
@@ -188,13 +194,19 @@ function firstExample(docs: string): string | undefined {
   return code.split('\n').length <= 6 ? code : code.split('\n').slice(0, 6).join('\n') + '\n// …';
 }
 
-/** Index one module: heading, summary, methods, helper types, example. */
-export function indexModule(spec: CapabilityModuleSpec): string {
+/**
+ * Index one module: heading, summary, methods, helper types, example. `methods`, when given,
+ * limits the lines to those method names — the rest of the module does not exist as far as the
+ * prompt is concerned, so they are dropped silently rather than listed as unavailable.
+ */
+export function indexModule(spec: CapabilityModuleSpec, methods?: readonly string[]): string {
   const lines: string[] = [`## sdk.${spec.id} — ${spec.title} (${spec.permission})`, spec.summary.trim()];
   const clean = stripComments(spec.typings);
   const body = extractInterfaceBody(clean, spec.apiTypeName) ?? '';
+  const keep = methods ? new Set(methods) : undefined;
   for (const sig of indexMethods(body)) {
     const name = sig.slice(0, sig.search(/[(<]/));
+    if (keep && !keep.has(name)) continue;
     const doc = docFor(spec.typings, name);
     const desc = doc.summary ?? spec.methods[name]?.description;
     lines.push(`- ${sig}${desc ? ` — ${desc}` : ''}`);
@@ -239,14 +251,16 @@ function referencedTypes(lines: string[], text: string): string[] {
 export function generateSdkIndex(registry: CapabilityRegistry, options: GenerateIndexOptions = {}): string {
   const all = registry.list();
   const allowed = options.modules ? new Set(options.modules) : undefined;
-  const specs = allowed ? all.filter((m) => allowed.has(m.id)) : all;
+  const methodsOf = (spec: CapabilityModuleSpec): readonly string[] | undefined => options.methods?.[spec.id];
+  const specs = all.filter((m) => (!allowed || allowed.has(m.id)) && (methodsOf(m)?.length ?? 1) > 0);
   const sections: string[] = [GENERAL_DOCS, INDEX_INTRO];
   sections.push(`Available modules: ${specs.map((s) => `sdk.${s.id}`).join(', ')}.`);
-  for (const spec of specs) sections.push(indexModule(spec));
+  for (const spec of specs) sections.push(indexModule(spec, methodsOf(spec)));
   if (options.helperTypes !== false) {
     const shared = referencedTypes(indexTypes(SDK_PREAMBLE_TYPINGS), sections.join('\n'));
     if (shared.length > 0) sections.push(`## Shared types\n${shared.join('\n')}`);
   }
-  // Modules the user switched off (Settings → Permissions) are not mentioned at all: only available modules exist for the character.
+  // Functions the user switched off (Settings → Permissions), and the ones the pack keeps out of
+  // the prompt, are not mentioned at all: only what is listed here exists for the character.
   return sections.join('\n\n') + '\n';
 }

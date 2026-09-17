@@ -7,6 +7,7 @@ export * from './pack.js';
 export * from './chat.js';
 export * from './llm.js';
 export * from './settings.js';
+export * from './permissions.js';
 export * from './voice.js';
 export * from './media.js';
 export * from './storage.js';

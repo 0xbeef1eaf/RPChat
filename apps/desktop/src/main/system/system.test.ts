@@ -470,8 +470,14 @@ describe('policy', () => {
   });
 
   it('parses and validates the policy file', () => {
-    const policy = parsePolicy({ version: 1, managedBy: 'IT', settings: { autonomy: { maxSelfWakesPerHour: 5 }, maxInputLockMs: 20_000, permissions: { moduleAllow: { system: false } }, web: { allowlist: ['a.example'] } }, inputLock: { maxDurationMs: 10_000, enabled: true } });
-    expect(managedPaths(policy)).toEqual(['autonomy.maxSelfWakesPerHour', 'maxInputLockMs', 'permissions.moduleAllow.system', 'web.allowlist']);
+    const policy = parsePolicy({ version: 1, managedBy: 'IT', settings: { autonomy: { maxSelfWakesPerHour: 5 }, maxInputLockMs: 20_000, permissions: { functionAllow: { system: false, 'media.playVideo': false } }, web: { allowlist: ['a.example'] } }, inputLock: { maxDurationMs: 10_000, enabled: true } });
+    expect(managedPaths(policy)).toEqual(['autonomy.maxSelfWakesPerHour', 'maxInputLockMs', 'permissions.functionAllow.media.playVideo', 'permissions.functionAllow.system', 'web.allowlist']);
+    expect(() => parsePolicy({ version: 1, settings: { permissions: { functionAllow: { system: 'off' } } } })).toThrow(/permissions.functionAllow/);
+    // `moduleAllow` is what the map was called before permissions went per function; its module
+    // keys still mean the same thing, so an older policy file keeps working.
+    const legacy = parsePolicy({ version: 1, settings: { permissions: { moduleAllow: { system: false } } } });
+    expect(legacy.settings?.permissions?.functionAllow).toEqual({ system: false });
+    expect(managedPaths(legacy)).toEqual(['permissions.functionAllow.system']);
     expect(() => parsePolicy({ version: 2 })).toThrow(/version must be 1/);
     expect(() => parsePolicy({ version: 1, settings: { maxInputLockMs: 'x' } })).toThrow(/maxInputLockMs/);
     expect(() => parsePolicy({ version: 1, settings: { displayBackend: 'kde' } })).toThrow(/displayBackend/);
@@ -517,16 +523,22 @@ describe('policy', () => {
   });
 
   it('applyPolicy forces keys and caps the lock; stripManagedPatch drops managed paths', () => {
-    const policy = parsePolicy({ version: 1, settings: { autonomy: { maxSelfWakesPerHour: 5 }, maxInputLockMs: 20_000, permissions: { moduleAllow: { system: false } }, memory: { enabled: false } }, inputLock: { maxDurationMs: 10_000 } });
-    const { settings, managed } = applyPolicy({ ...base, permissions: { moduleAllow: { web: true } } }, policy);
+    const policy = parsePolicy({ version: 1, settings: { autonomy: { maxSelfWakesPerHour: 5 }, maxInputLockMs: 20_000, permissions: { functionAllow: { system: false, 'ui.notify': false } }, memory: { enabled: false } }, inputLock: { maxDurationMs: 10_000 } });
+    const { settings, managed } = applyPolicy({ ...base, permissions: { functionAllow: { web: true } } }, policy);
     expect(settings.autonomy).toEqual({ ...base.autonomy, maxSelfWakesPerHour: 5 });
     expect(settings.maxInputLockMs).toBe(10_000); // policy 20 000 capped by the daemon hard max
-    expect(settings.permissions.moduleAllow).toEqual({ web: true, system: false });
+    expect(settings.permissions.functionAllow).toEqual({ web: true, system: false, 'ui.notify': false });
+    // A function entry beats its module's, so a pinned module has to drop the stored ones under it.
+    const pinnedModule = applyPolicy({ ...base, permissions: { functionAllow: { 'system.openUrl': true, 'ui.notify': true } } }, policy);
+    expect(pinnedModule.settings.permissions.functionAllow).toEqual({ system: false, 'ui.notify': false });
     expect(settings.memory.enabled).toBe(false);
-    expect(managed).toEqual(['autonomy.maxSelfWakesPerHour', 'maxInputLockMs', 'memory.enabled', 'permissions.moduleAllow.system']);
+    expect(managed).toEqual(['autonomy.maxSelfWakesPerHour', 'maxInputLockMs', 'memory.enabled', 'permissions.functionAllow.system', 'permissions.functionAllow.ui.notify']);
     expect(applyPolicy(base, null)).toEqual({ settings: base, managed: [] });
-    const patch = stripManagedPatch({ maxInputLockMs: 1, theme: 'dark', autonomy: { maxSelfWakesPerHour: 99, maxTimersPerSession: 3 } as AppSettings['autonomy'], permissions: { moduleAllow: { system: true, web: false } } }, managed);
-    expect(patch).toEqual({ theme: 'dark', autonomy: { maxTimersPerSession: 3 }, permissions: { moduleAllow: { web: false } } });
+    const patch = stripManagedPatch(
+      { maxInputLockMs: 1, theme: 'dark', autonomy: { maxSelfWakesPerHour: 99, maxTimersPerSession: 3 } as AppSettings['autonomy'], permissions: { functionAllow: { system: true, 'ui.notify': true, web: false } } },
+      managed,
+    );
+    expect(patch).toEqual({ theme: 'dark', autonomy: { maxTimersPerSession: 3 }, permissions: { functionAllow: { web: false } } });
   });
 
   it('loads from disk and re-reads when the mtime changes', async () => {
@@ -648,7 +660,7 @@ describe('SystemIntegration.createPolicy', () => {
   const base: AppSettings = defaultSettings();
 
   it('policyTemplate seeds a valid policy from the current settings', () => {
-    const settings: AppSettings = { ...base, maxInputLockMs: 42_000, displayBackend: 'electron', web: { ...base.web, allowlist: ['a.example'] }, permissions: { moduleAllow: { desktop: false } }, updates: { automatic: false, checkIntervalHours: 6 } };
+    const settings: AppSettings = { ...base, maxInputLockMs: 42_000, displayBackend: 'electron', web: { ...base.web, allowlist: ['a.example'] }, permissions: { functionAllow: { desktop: false } }, updates: { automatic: false, checkIntervalHours: 6 } };
     const text = policyTemplate(settings, 'alice');
     expect(text.endsWith('}\n')).toBe(true);
     const json = JSON.parse(text) as Record<string, unknown>;
@@ -658,11 +670,11 @@ describe('SystemIntegration.createPolicy', () => {
     expect(json.guard).toMatchObject({ mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', shell: 'auto' });
     // Every restriction is present at its permissive default, so a new policy changes nothing until edited.
     expect(JSON.parse(policyTemplate(settings)).app).toEqual({ allowQuit: true, ...DEFAULT_APP_RESTRICTIONS });
-    expect(json.settings).toMatchObject({ maxInputLockMs: 42_000, autonomy: base.autonomy, permissions: { moduleAllow: { desktop: false } }, web: { allowlist: ['a.example'] }, desktop: { launchAllowlist: [] }, memory: base.memory, displayBackend: 'electron', updates: { enabled: true, automatic: false } });
+    expect(json.settings).toMatchObject({ maxInputLockMs: 42_000, autonomy: base.autonomy, permissions: { functionAllow: { desktop: false } }, web: { allowlist: ['a.example'] }, desktop: { launchAllowlist: [] }, memory: base.memory, displayBackend: 'electron', updates: { enabled: true, automatic: false } });
     expect((json.settings as { senses: object }).senses).toEqual({ includeInPrompt: base.senses.includeInPrompt, watchDirs: base.senses.watchDirs, calendarSources: base.senses.calendarSources });
     // Round-trips through the app's parser without problems, with every key managed.
     const parsed = parsePolicy(json);
-    expect(managedPaths(parsed)).toEqual(expect.arrayContaining(['maxInputLockMs', 'autonomy.maxSelfWakesPerHour', 'permissions.moduleAllow.desktop', 'web.allowlist', 'desktop.launchAllowlist', 'memory.enabled', 'senses.watchDirs', 'displayBackend', 'updates.automatic', 'updates.enabled']));
+    expect(managedPaths(parsed)).toEqual(expect.arrayContaining(['maxInputLockMs', 'autonomy.maxSelfWakesPerHour', 'permissions.functionAllow.desktop', 'web.allowlist', 'desktop.launchAllowlist', 'memory.enabled', 'senses.watchDirs', 'displayBackend', 'updates.automatic', 'updates.enabled']));
   });
 
   it('parses, calls the daemon, refreshes the watcher and maps daemon errors', async () => {

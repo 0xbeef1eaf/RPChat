@@ -436,7 +436,7 @@ describe('PromptBuilder <library>', () => {
       pack,
       character: pack.characters[0]!,
       registry: createStandardRegistry(),
-      allowedModules: ['chat', 'lib', 'state', 'pack', 'timers'],
+      sdkSelection: { modules: ['chat', 'lib', 'state', 'pack', 'timers'] },
       session: { id: 's1', characterRef: LUNA_REF, title: 'x', createdAt: 't', updatedAt: 't' } as PromptInput['session'],
       transcript: [],
       state: {},

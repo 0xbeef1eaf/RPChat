@@ -259,9 +259,12 @@ System prompt sections, in order (each a stable `<section>` block):
    rules, then per available module one entry per method (signature, TSDoc summary,
    every @param, @returns and the first @example, generated from the typings),
    its helper types on one line each and one example, then only the shared
-   types those modules reference. Modules the user switched off under
-   Settings → Permissions are not mentioned. The full `sdk.d.ts` + docs of one module are available on
-   demand through `sdk.help.module(id)`. With every module on the section is
+   types those modules reference. Functions the user switched off under
+   Settings → Permissions are not mentioned, and neither are the ones the pack
+   author left out of `character.json`'s `promptFunctions` — that key trims the
+   reference without trimming what the code may call (§8). The full `sdk.d.ts` +
+   docs of one module are available on demand through `sdk.help.module(id)`,
+   which lists the same selection. With every module on the section is
    about 8k tokens (the full reference is about 23k, which used to crowd the
    transcript out of the default budget).
 4. **Memory** – current character `state` (JSON, truncated), active timers.
@@ -287,16 +290,22 @@ Threat model: pack authors and the LLM are **untrusted**. The user is trusted.
 - **Limits** (`RunLimits`): wall-clock timeout (default 10 s), interrupt-based
   CPU budget, memory limit (default 64 MB), max host calls per run (default
   50), max log bytes, max result bytes.
-- **Permission levels** — permissions are **app-wide**. The single control is
-  Settings → Permissions (`settings.permissions.moduleAllow`): every installed
-  character can use every non-trusted module the user has not switched off
-  there. Packs neither request nor are granted anything; a `capabilities` key in
-  an old `pack.json` / `character.json` is accepted, ignored and reported as a
-  loader warning.
-  - `trusted` – always available (no side effects outside the app's own data);
-    the policy cannot switch these off.
-  - `pack` – on for every character unless switched off under Settings →
-    Permissions.
+- **Permissions** — app-wide and **per function**. The single control is
+  Settings → Permissions (`settings.permissions.functionAllow`): a map whose keys
+  are a module id (`avatar`) or one function of it (`avatar.show`), and whose
+  values say whether every installed character may call it. A function entry wins
+  over its module's; anything the map does not mention is allowed, so a function
+  added by a later version or by a plugin arrives switched on. A switched-off
+  function is not on the sandbox `sdk` at all and is not mentioned in the prompt.
+  `sdk.lib` — the character's own saved functions — is the one module outside all
+  of this: always available, never listed (`@rp/shared/permissions.ts`). Packs
+  neither request nor are granted anything; a `capabilities` key in an old
+  `pack.json` / `character.json` is accepted, ignored and reported as a loader
+  warning.
+- **Permission levels** — how much ceremony a call needs, not whether it is
+  allowed:
+  - `trusted` – effects stay inside the app's own data; never confirmed.
+  - `pack` – reaches outside the app; used without asking.
   - `prompt` – as `pack`, and additionally requires a per-call confirmation
     dialog. Supported by the engine for third-party modules, but **no built-in
     module uses it**: the product decision is that a character acts without
@@ -375,6 +384,15 @@ Neither file declares permissions: what a character may do on the PC is set
 app-wide under Settings → Permissions (§7). A `capabilities` key from older
 packs is ignored with the warning `pack.json: "capabilities" is ignored;
 permissions are set in the app under Settings → Permissions`.
+
+`character.json` may carry `promptFunctions`: the module ids and `module.function`
+names the character's **prompt** describes (Pack editor → Character → "SDK in the
+prompt"). It is an editorial choice about prompt size and focus, never a
+permission — the code keeps every function the user allows, so a pack can leave
+`sdk.wallpaper` out of the character's reference and still set the wallpaper from
+one of its own `lib` functions. The prompt shows this selection intersected with
+the user's permissions, and `sdk.lib` is always in it. Omit the key for
+"everything the user allows"; an empty array means "nothing but `sdk.lib`".
 
 Installed packs live in `<userData>/packs/<packId>/<version>/`. The pack store
 (`InstalledPackRecord`) keeps id, version, root path and install time. The app owns that folder: `lib.register` writes the character's own

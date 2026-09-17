@@ -14,7 +14,7 @@ export type PolicyValue = number | boolean | string | string[] | Record<string, 
 export type PolicyEmergencyKey = NonNullable<NonNullable<PolicyFile['inputLock']>['emergencyKey']>;
 
 /** Which control the Forced settings tab renders for a key. */
-export type PolicySettingKind = 'number' | 'duration' | 'boolean' | 'url' | 'list' | 'modules' | 'choice';
+export type PolicySettingKind = 'number' | 'duration' | 'boolean' | 'url' | 'list' | 'functions' | 'choice';
 
 export interface PolicySettingSpec {
   /** Dotted path under `settings` in the policy file, e.g. `autonomy.minDelayMs`. */
@@ -50,7 +50,7 @@ export const POLICY_GROUPS: ReadonlyArray<{ id: PolicyGroupId; title: string; hi
  * `parsePolicy`'s accepted keys exactly: anything missing here cannot be forced at all.
  */
 export const POLICY_SETTINGS: readonly PolicySettingSpec[] = [
-  { path: 'permissions.moduleAllow', group: 'access', kind: 'modules', label: 'Capability modules', hint: 'Pin which SDK modules every character may use. A module left off the list stays the user’s choice.', fallback: {} },
+  { path: 'permissions.functionAllow', group: 'access', kind: 'functions', label: 'SDK functions', hint: 'Pin which SDK functions every character may call, whole modules or one function at a time. Anything left off the list stays the user’s choice.', fallback: {} },
   { path: 'web.allowlist', group: 'access', kind: 'list', label: 'Web allowlist', hint: 'Hosts sdk.web may fetch. An empty list allows nothing.', fallback: [], placeholder: 'example.com' },
   { path: 'desktop.launchAllowlist', group: 'access', kind: 'list', label: 'Launchable apps', hint: 'Programs sdk.desktop.launch may start. An empty list allows nothing.', fallback: [], placeholder: 'firefox' },
   { path: 'maxInputLockMs', group: 'access', kind: 'duration', label: 'Longest input lock', hint: 'The cap the app offers for sdk.input.lock. The daemon’s own limit applies on top.', fallback: 300_000, min: 1000 },

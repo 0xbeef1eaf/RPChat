@@ -1,6 +1,6 @@
 /**
- * Permission matrix. Permissions are app-wide: the only control is the user's policy under
- * Settings → Permissions (`settings.permissions.moduleAllow`). For every non-trusted module and
+ * Permission matrix. Permissions are app-wide and per function: the only control is the user's
+ * policy under Settings → Permissions (`settings.permissions.functionAllow`). For every module and
  * every policy state (unset / allowed / denied) the answer must agree across:
  * `permissions.effective`, the dispatcher verdict, the sandbox surface, the pack view and the
  * system prompt the character reads — for every installed pack alike, since packs neither
@@ -39,6 +39,16 @@ function nonTrustedModules(): string[] {
     .map((s) => s.id);
 }
 
+/** Every module of the test registry, in registry order (what `effective` reports untouched). */
+function allModules(): string[] {
+  return createTestRegistryWithProbe().list().map((s) => s.id);
+}
+
+/** Module ids of an `effective` result, in order. */
+function idsOf(effective: Array<{ id: string }>): string[] {
+  return effective.map((m) => m.id);
+}
+
 function cases(): Array<{ module: string; policy: Policy }> {
   const out: Array<{ module: string; policy: Policy }> = [];
   for (const module of Object.keys(PROBE_CALL)) for (const policy of POLICIES) out.push({ module, policy });
@@ -58,20 +68,20 @@ describe('permission matrix (app-wide policy only)', () => {
     const handler = new RecordingHandler(module, null);
     t = await createTestEngine({ hostHandlers: [handler], respond: () => ({ text: 'ok' }) });
     const { engine, packsDir } = t;
-    if (policy !== 'unset') await engine.settings.update({ permissions: { moduleAllow: { [module]: policy === 'allow' } } });
+    if (policy !== 'unset') await engine.settings.update({ permissions: { functionAllow: { [module]: policy === 'allow' } } });
     await installLunaWith(engine, packsDir);
     const allowed = policy !== 'deny';
+    const { method, args } = PROBE_CALL[module]!;
 
     // 1. effective set + reason (packId is irrelevant: the answer is the same for any pack)
     const eff = await engine.permissions.effective(LUNA_ID);
-    expect(eff.effective.includes(module), 'effective').toBe(allowed);
-    expect(eff.denied[module], 'denial reason').toBe(allowed ? undefined : 'policy');
+    expect(idsOf(eff.effective).includes(module), 'effective').toBe(allowed);
+    expect(eff.denied[`${module}.${method}`], 'denial reason').toBe(allowed ? undefined : 'policy');
     expect(await engine.permissions.effective('com.example.other')).toEqual(eff);
 
     // 2. dispatcher verdict (what the sandbox call actually gets)
     const session = await engine.sessions.create({ characterRef: LUNA_REF });
     const context = contextFor(engine, LUNA_ID, 'luna', session.id);
-    const { method, args } = PROBE_CALL[module]!;
     const result = await engine.dispatcher.invoke({ callId: 'c', module, method, args, context });
     expect(result.ok, `dispatcher ok (${JSON.stringify(result)})`).toBe(allowed);
     if (!allowed) expect(result.error).toMatchObject({ code: 'PERMISSION_DENIED', details: { reason: 'switched off under Settings → Permissions' } });
@@ -106,16 +116,18 @@ describe('permission matrix (app-wide policy only)', () => {
 
     for (const packId of [LUNA_ID, MINIMAL_ID]) {
       const eff = await engine.permissions.effective(packId);
-      expect(eff.effective).toEqual(expected);
+      expect(idsOf(eff.effective)).toEqual(allModules());
       expect(eff.denied).toEqual({});
-      expect(await engine.permissions.allowedModules(packId)).toEqual(createTestRegistryWithProbe().list().map((s) => s.id));
+      expect(await engine.permissions.allowedModules(packId)).toEqual(allModules());
+      expect(expected.every((id) => idsOf(eff.effective).includes(id))).toBe(true);
     }
 
-    await engine.settings.update({ permissions: { moduleAllow: { wallpaper: false } } });
+    const wallpaperMethods = Object.keys(createTestRegistryWithProbe().get('wallpaper')!.methods);
+    await engine.settings.update({ permissions: { functionAllow: { wallpaper: false } } });
     for (const packId of [LUNA_ID, MINIMAL_ID]) {
       const eff = await engine.permissions.effective(packId);
-      expect(eff.effective).toEqual(expected.filter((id) => id !== 'wallpaper'));
-      expect(eff.denied).toEqual({ wallpaper: 'policy' });
+      expect(idsOf(eff.effective)).toEqual(allModules().filter((id) => id !== 'wallpaper'));
+      expect(eff.denied).toEqual(Object.fromEntries(wallpaperMethods.map((m) => [`wallpaper.${m}`, 'policy'])));
       expect(await engine.permissions.deniedModules(packId)).toEqual(['wallpaper']);
     }
 
@@ -129,16 +141,78 @@ describe('permission matrix (app-wide policy only)', () => {
     }
   });
 
-  it('trusted modules are always usable, even when the policy names them', async () => {
+  it('switches trusted modules off too — every module but sdk.lib is the user\'s to turn off', async () => {
     t = await createTestEngine();
     const { engine, packsDir } = t;
-    await engine.settings.update({ permissions: { moduleAllow: { state: false, chat: false } } });
+    // `lib` is named as well, and ignored: it is the character's own saved functions.
+    await engine.settings.update({ permissions: { functionAllow: { state: false, lib: false } } });
     await installLunaWith(engine, packsDir);
     const session = await engine.sessions.create({ characterRef: LUNA_REF });
     const context = contextFor(engine, LUNA_ID, 'luna', session.id);
+    expect(await engine.dispatcher.invoke({ callId: 's', module: 'state', method: 'keys', args: [], context })).toMatchObject({
+      ok: false,
+      error: { code: 'PERMISSION_DENIED' },
+    });
+    expect(await engine.permissions.allowedModules(LUNA_ID)).not.toContain('state');
+    expect(await engine.permissions.allowedModules(LUNA_ID)).toContain('lib');
+    expect((await engine.behaviours.surfaceFor(LUNA_ID)).modules.some((m) => m.id === 'lib')).toBe(true);
+  });
+
+  it('switches off one function without touching its siblings, in the surface and in the prompt', async () => {
+    t = await createTestEngine({ hostHandlers: [new RecordingHandler('media', null)], respond: () => ({ text: 'ok' }) });
+    const { engine, packsDir } = t;
+    await engine.settings.update({ permissions: { functionAllow: { 'media.playVideo': false } } });
+    await installLunaWith(engine, packsDir);
+    const session = await engine.sessions.create({ characterRef: LUNA_REF });
+    const context = contextFor(engine, LUNA_ID, 'luna', session.id);
+
+    const eff = await engine.permissions.effective(LUNA_ID);
+    expect(eff.denied).toEqual({ 'media.playVideo': 'policy' });
+    const media = eff.effective.find((m) => m.id === 'media')!;
+    expect(media.methods).not.toContain('playVideo');
+    expect(media.methods).toContain('showImage');
+    expect(await engine.permissions.deniedModules(LUNA_ID)).toEqual([]);
+
+    const surface = (await engine.behaviours.surfaceFor(LUNA_ID)).modules.find((m) => m.id === 'media')!;
+    expect(surface.methods).not.toContain('playVideo');
+    expect(surface.methods).toContain('showImage');
+
+    expect(await engine.dispatcher.invoke({ callId: 'v', module: 'media', method: 'playVideo', args: ['x.webm'], context })).toMatchObject({
+      ok: false,
+      error: { code: 'PERMISSION_DENIED' },
+    });
+
+    await engine.chat.send(session.id, 'hello');
+    const system = t.provider.requests.at(-1)!.system;
+    expect(system).toContain('## sdk.media —');
+    expect(system).not.toContain('playVideo');
+    expect(system).toContain('showImage');
+  });
+
+  it("narrows the prompt to the character's promptFunctions while the code keeps every function", async () => {
+    t = await createTestEngine({ respond: () => ({ text: 'ok' }) });
+    const { engine, packsDir } = t;
+    await installLunaWith(engine, packsDir, {
+      patchCharacter: (c) => {
+        c.promptFunctions = ['chat', 'media.showImage'];
+      },
+    });
+    const session = await engine.sessions.create({ characterRef: LUNA_REF });
+    const context = contextFor(engine, LUNA_ID, 'luna', session.id);
+
+    await engine.chat.send(session.id, 'hello');
+    const system = t.provider.requests.at(-1)!.system;
+    expect(system).toContain('## sdk.chat —');
+    expect(system).toContain('## sdk.media —');
+    expect(system).toContain('showImage');
+    expect(system).not.toContain('playVideo');
+    expect(system).not.toContain('## sdk.state —');
+    // `lib` is never narrowed away: it is the character's own library.
+    expect(system).toContain('## sdk.lib —');
+
+    // …and none of that took anything away from the code.
+    expect((await engine.behaviours.surfaceFor(LUNA_ID)).modules.some((m) => m.id === 'state')).toBe(true);
     expect(await engine.dispatcher.invoke({ callId: 's', module: 'state', method: 'keys', args: [], context })).toMatchObject({ ok: true });
-    expect(await engine.permissions.allowedModules(LUNA_ID)).toEqual(expect.arrayContaining(['state', 'chat']));
-    expect((await engine.permissions.effective(LUNA_ID)).denied).toEqual({});
   });
 
   it('prompt-level methods still ask on each call, unless the policy switches the module off', async () => {
@@ -158,7 +232,7 @@ describe('permission matrix (app-wide policy only)', () => {
     expect(probe.calls).toHaveLength(1);
 
     // Switched off: denied outright, no prompt.
-    await engine.settings.update({ permissions: { moduleAllow: { probe: false } } });
+    await engine.settings.update({ permissions: { functionAllow: { probe: false } } });
     expect(await call(3)).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
     expect(t.prompts).toHaveLength(2);
     expect((await engine.behaviours.surfaceFor(LUNA_ID)).modules.some((m) => m.id === 'probe')).toBe(false);

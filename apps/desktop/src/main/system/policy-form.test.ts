@@ -13,7 +13,7 @@ import { managedPaths, parsePolicy } from './policy';
 
 /** The very template the dialog is seeded with, from the same generator the daemon path uses. */
 const base: AppSettings = defaultSettings();
-const settings: AppSettings = { ...base, maxInputLockMs: 42_000, displayBackend: 'electron', web: { ...base.web, allowlist: ['a.example'] }, permissions: { moduleAllow: { desktop: false, web: true } } };
+const settings: AppSettings = { ...base, maxInputLockMs: 42_000, displayBackend: 'electron', web: { ...base.web, allowlist: ['a.example'] }, permissions: { functionAllow: { desktop: false, 'web.fetch': true } } };
 const POLICY_TEMPLATE = JSON.parse(policyTemplate(settings, 'alice')) as PolicyFile;
 
 /** Drafts spanning what the form can produce: untouched, empty, maximally strict, partly forced. */
@@ -85,14 +85,14 @@ describe('the policy form', () => {
     const managed = managedPaths(parsePolicy(policyDraftToFile(draft)));
 
     for (const spec of POLICY_SETTINGS) {
-      // `moduleAllow` is reported one module at a time, and `allowDowngrade` is a daemon rule
+      // `functionAllow` is reported one key at a time, and `allowDowngrade` is a daemon rule
       // rather than a setting the UI pins, so neither appears under its own path.
-      if (spec.path === 'permissions.moduleAllow' || spec.path === 'updates.allowDowngrade') continue;
+      if (spec.path === 'permissions.functionAllow' || spec.path === 'updates.allowDowngrade') continue;
       expect(managed.includes(spec.path)).toBe(draft.forced[spec.path] === true);
     }
-    const modules = Object.keys(POLICY_TEMPLATE.settings?.permissions?.moduleAllow ?? {});
-    expect(modules.length).toBeGreaterThan(0);
-    for (const id of modules) expect(managed.includes(`permissions.moduleAllow.${id}`)).toBe(draft.forced['permissions.moduleAllow'] === true);
+    const keys = Object.keys(POLICY_TEMPLATE.settings?.permissions?.functionAllow ?? {});
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) expect(managed.includes(`permissions.functionAllow.${key}`)).toBe(draft.forced['permissions.functionAllow'] === true);
   });
 
   it('refuses in the form exactly what the daemon refuses: a remote source that is not https', () => {
@@ -172,8 +172,8 @@ describe('the policy form', () => {
     const managed = managedPaths(parsePolicy(policyDraftToFile(everything)));
     const expected = new Set<string>();
     for (const spec of POLICY_SETTINGS) {
-      if (spec.path === 'permissions.moduleAllow') {
-        for (const id of Object.keys(POLICY_TEMPLATE.settings?.permissions?.moduleAllow ?? {})) expected.add(`permissions.moduleAllow.${id}`);
+      if (spec.path === 'permissions.functionAllow') {
+        for (const key of Object.keys(POLICY_TEMPLATE.settings?.permissions?.functionAllow ?? {})) expected.add(`permissions.functionAllow.${key}`);
       } else if (spec.path !== 'updates.allowDowngrade') expected.add(spec.path);
     }
     expect([...managed].sort()).toEqual([...expected].sort());

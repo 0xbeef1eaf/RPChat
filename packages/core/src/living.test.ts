@@ -41,14 +41,15 @@ describe('permission policy (app-wide, Settings → Permissions)', () => {
     expect((await invoke(ctx, 'media', 'showImage', 'images/luna-smile.png')).ok).toBe(true);
     expect((await invoke(ctx, 'ui', 'notify', 't')).ok).toBe(true);
     // policy off → denied, reason names the settings page
-    await t.engine.settings.update({ permissions: { moduleAllow: { media: false } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { media: false } } });
     expect(await invoke(ctx, 'media', 'showImage', 'images/luna-smile.png')).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED', details: { reason: 'switched off under Settings → Permissions' } } });
     const eff = await t.engine.permissions.effective(LUNA_ID);
-    expect(eff.effective).not.toContain('media');
-    expect(eff.effective).toContain('ui');
-    expect(eff.denied).toEqual({ media: 'policy' });
+    expect(eff.effective.map((m) => m.id)).not.toContain('media');
+    expect(eff.effective.map((m) => m.id)).toContain('ui');
+    expect(eff.denied['media.showImage']).toBe('policy');
+    expect(Object.keys(eff.denied).every((k) => k.startsWith('media.'))).toBe(true);
     // policy back on → allowed again, no other state involved
-    await t.engine.settings.update({ permissions: { moduleAllow: { media: true } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { media: true } } });
     expect((await invoke(ctx, 'media', 'showImage', 'images/luna-smile.png')).ok).toBe(true);
     expect((await t.engine.permissions.effective(LUNA_ID)).denied).toEqual({});
     // trusted modules never need anything
@@ -59,7 +60,7 @@ describe('permission policy (app-wide, Settings → Permissions)', () => {
 
   it('filters the prompt by the policy and inspects sources', async () => {
     t = await createTestEngine({ respond: () => ({ text: 'ok' }) });
-    await t.engine.settings.update({ permissions: { moduleAllow: { ui: false } } });
+    await t.engine.settings.update({ permissions: { functionAllow: { ui: false } } });
     await t.engine.packs.install(LUNA_DIR);
     const session = await t.engine.sessions.create({ characterRef: LUNA_REF });
     await t.engine.chat.send(session.id, 'hi');
@@ -651,7 +652,7 @@ describe('senses', () => {
     expect(system).not.toContain('Right now:');
     expect(senses.snapshots).toBe(1);
 
-    await t.engine.settings.update({ senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [] }, permissions: { moduleAllow: { presence: false } } });
+    await t.engine.settings.update({ senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [] }, permissions: { functionAllow: { presence: false } } });
     await t.engine.chat.send(session.id, 'once more');
     expect(t.provider.requests.at(-1)!.system).not.toContain('Right now:');
     expect(senses.snapshots).toBe(1);

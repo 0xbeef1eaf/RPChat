@@ -576,7 +576,7 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
 |---|---|---|
 | `autonomy` | `autonomy.maxSelfWakesPerHour`, `autonomy.maxConsecutiveSelfWakes`, `autonomy.maxTimersPerSession`, `autonomy.minRepeatIntervalMs`, `autonomy.minDelayMs` | non-negative numbers |
 | `maxInputLockMs` | `maxInputLockMs` | ≥ 1000; also capped by `inputLock.maxDurationMs` |
-| `permissions` | `permissions.moduleAllow.<module>` | booleans per module |
+| `permissions` | `permissions.functionAllow.<module>`, `permissions.functionAllow.<module>.<function>` | booleans per module or per function; a function entry wins over its module's, an unlisted key stays the user's choice. `moduleAllow` is the pre-function name of the same map and is still read (module keys only), folded into `functionAllow` by `parsePolicy`. Pinning a module takes its functions with it: `applyPolicy` drops the user's `<module>.<function>` entries under a pinned module, which a function entry would otherwise outrank. |
 | `web` | `web.allowlist` | string[] |
 | `desktop` | `desktop.launchAllowlist` | string[] |
 | `memory` | `memory.enabled`, `memory.consolidateEveryTurns`, `memory.maxEntriesPerCharacter`, `memory.promptBudgetTokens` | |
@@ -599,8 +599,9 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
   seeded from `system.policyTemplate()` — **The app** (`allowQuit`, the `users` list, a switch per
   `AppRestrictions` key), **Forced settings** (a switch per forcible settings key beside its value,
   grouped by `POLICY_GROUPS`, with *Force all* / *Force none* and a count on the tab; an off key is
-  omitted from the file, which is what leaves it to the user; `permissions.moduleAllow` is a
-  three-way per capability module), **Session guard** (mode, protection switches, `compositorIpc`,
+  omitted from the file, which is what leaves it to the user; `permissions.functionAllow` is a
+  three-way per capability module, with the module's functions behind an expander for a
+  three-way each), **Session guard** (mode, protection switches, `compositorIpc`,
   the exclusive-`auto`/`none` shell picker, the path lists under *Extra rules*), **Input lock**
   (the daemon's `inputLock` limits) and **Review** (the exact JSON with Copy, plus *Load a policy
   from JSON* → `policyDraftFrom`). A footer shows `policyEffects()` as badges and

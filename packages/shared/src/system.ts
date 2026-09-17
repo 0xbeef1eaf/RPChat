@@ -11,7 +11,13 @@ export interface PolicyFile {
   settings?: {
     autonomy?: Partial<AppSettings['autonomy']>;
     maxInputLockMs?: number;
-    permissions?: { moduleAllow?: Record<string, boolean> };
+    /**
+     * `functionAllow` pins SDK functions for everyone: keys are a module id (`avatar`) or one
+     * function (`avatar.show`), exactly as in `AppSettings.permissions`. A key left out of the
+     * file stays the user's own choice. `moduleAllow` is the pre-function name of the same map
+     * (module keys only), still read so policy files written before the change keep working.
+     */
+    permissions?: { functionAllow?: Record<string, boolean>; moduleAllow?: Record<string, boolean> };
     web?: { allowlist?: string[] };
     desktop?: { launchAllowlist?: string[] };
     memory?: Partial<AppSettings['memory']>;

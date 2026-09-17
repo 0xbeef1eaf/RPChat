@@ -57,15 +57,30 @@ describe('HelpHandler', () => {
     const { HelpHandler } = await import('./help.js');
     const { createStandardRegistry } = await import('@rp/sdk');
     const registry = createStandardRegistry();
-    const handler = new HelpHandler(registry, { allowedModules: async () => ['chat', 'help', 'media'] });
+    const allowedFunctions = async () => ['chat', 'help', 'media'].map((id) => ({ id, methods: Object.keys(registry.get(id)!.methods) }));
+    const handler = new HelpHandler(registry, { allowedFunctions });
     const context = { packId: 'p', characterId: 'c', sessionId: 's', packRoot: '/x', trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
     const modules = (await handler.invoke('modules', [], context)) as Array<{ id: string }>;
     expect(modules.map((m) => m.id)).toEqual(['chat', 'help', 'media']);
-    const media = (await handler.invoke('module', ['sdk.media'], context)) as { id: string; typings: string; docs: string };
+    const media = (await handler.invoke('module', ['sdk.media'], context)) as { id: string; typings: string; docs: string; unavailable?: string[] };
     expect(media.id).toBe('media');
     expect(media.typings).toContain('interface MediaApi');
     expect(media.docs).toContain('overlay');
+    expect(media.unavailable).toBeUndefined();
     await expect(handler.invoke('module', ['system'], context)).rejects.toMatchObject({ code: 'NOT_FOUND' });
     await expect(handler.invoke('module', [''], context)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+  });
+
+  it("follows the character's promptFunctions and names the functions it leaves out", async () => {
+    const { HelpHandler } = await import('./help.js');
+    const { createStandardRegistry } = await import('@rp/sdk');
+    const registry = createStandardRegistry();
+    const allowedFunctions = async () => ['chat', 'help', 'media'].map((id) => ({ id, methods: Object.keys(registry.get(id)!.methods) }));
+    // The pack describes only `media.showImage`; `media.playVideo` stays callable, just unlisted.
+    const handler = new HelpHandler(registry, { allowedFunctions }, () => ['chat', 'help', 'media.showImage']);
+    const context = { packId: 'p', characterId: 'c', sessionId: 's', packRoot: '/x', trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } } as const;
+    const media = (await handler.invoke('module', ['media'], context)) as { unavailable?: string[] };
+    expect(media.unavailable).toContain('media.playVideo');
+    expect(media.unavailable).not.toContain('media.showImage');
   });
 });

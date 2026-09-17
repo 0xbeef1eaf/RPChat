@@ -4,8 +4,8 @@ import { api, errorMessage } from '../api';
 import { useAppState } from '../store/store';
 
 const PERMISSION_LABEL: Record<CapabilityInfo['permission'], { text: string; cls: string; hint: string }> = {
-  trusted: { text: 'always on', cls: 'badge badge-success', hint: 'Effects stay inside the app; cannot be switched off.' },
-  pack: { text: 'on unless switched off', cls: 'badge badge-accent', hint: 'On for every character unless switched off under Settings → Permissions.' },
+  trusted: { text: 'inside the app', cls: 'badge badge-success', hint: 'Effects stay inside the app. On unless switched off under Settings → Permissions.' },
+  pack: { text: 'on unless switched off', cls: 'badge badge-accent', hint: 'Reaches outside the app. On for every character unless switched off under Settings → Permissions.' },
   prompt: { text: 'asks each call', cls: 'badge badge-warning', hint: 'On unless switched off under Settings → Permissions, and asks on every call.' },
 };
 

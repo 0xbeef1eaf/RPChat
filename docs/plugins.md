@@ -66,14 +66,16 @@ plugin loads and shows the problems in Settings → Plugins.
 
 ## Permission levels
 
-Permissions are app-wide: packs do not declare or request modules (a `capabilities` key in an old
-`pack.json` is ignored with a warning). The user switches modules on or off for every character
-under Settings → Permissions.
+Permissions are app-wide and per function: packs do not declare or request modules (a `capabilities`
+key in an old `pack.json` is ignored with a warning). The user switches your module — or any single
+function of it — on or off for every character under Settings → Permissions. Your module's level
+says how much ceremony a call needs, not whether it is allowed; every function of it is on until the
+user says otherwise, including new ones you add in a later version.
 
-- `trusted` — always available to every character, no dialog, cannot be switched off. Use only for
-  modules with no effect outside the app (reading the time, formatting, …).
-- `pack` — on for every character unless the user switches the module off under Settings →
-  Permissions.
+- `trusted` — no dialog. Use only for modules with no effect outside the app (reading the time,
+  formatting, …).
+- `pack` — used without asking, unless the user switches the module or the function off under
+  Settings → Permissions.
 - `prompt` — like `pack`, plus a confirmation dialog for every call (the user may allow it for the
   session). Use for anything that touches the system or the network. A handler can skip the dialog
   for pre-approved calls by implementing `preauthorize(method, args, ctx)`.

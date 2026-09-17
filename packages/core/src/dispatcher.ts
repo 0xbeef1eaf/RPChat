@@ -162,9 +162,9 @@ export class CapabilityDispatcher implements CapabilityInvoker {
     try {
       const verdict = await this.permissions.isAllowed(context, module, method);
       if (verdict === 'deny') {
-        const reason = this.permissions.denialReason ? await this.permissions.denialReason(context.packId, module) : 'switched off under Settings → Permissions';
+        const reason = this.permissions.denialReason ? await this.permissions.denialReason(context.packId, module, method) : 'switched off under Settings → Permissions';
         return fail(
-          new RpError('PERMISSION_DENIED', `sdk.${module}.${method} is not available to pack ${context.packId}: ${reason}`, { module, method, reason }),
+          new RpError('PERMISSION_DENIED', `sdk.${module}.${method} is not available: ${reason}`, { module, method, reason }),
           'denied',
         );
       }

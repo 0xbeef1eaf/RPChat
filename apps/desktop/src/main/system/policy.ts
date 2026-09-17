@@ -4,7 +4,7 @@
  */
 import * as fs from 'node:fs/promises';
 import type { AppPolicy, AppRestrictions, AppSettings, GuardPolicy, ManagedSettingsPaths, PackSource, PacksPolicy, PolicyFile, PolicyLock, RemotePolicy } from '@rp/shared';
-import { APP_ALLOW_KEYS, APP_REQUIRE_KEYS, DEFAULT_APP_RESTRICTIONS, GUARD_COMPOSITOR_IPC, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RUNTIME_POLICY_FILE, RpError, SEAL_MARKER_PATH } from '@rp/shared';
+import { APP_ALLOW_KEYS, APP_REQUIRE_KEYS, DEFAULT_APP_RESTRICTIONS, GUARD_COMPOSITOR_IPC, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RUNTIME_POLICY_FILE, RpError, SEAL_MARKER_PATH, parseFunctionKey } from '@rp/shared';
 import type { GuardShell } from '@rp/shared';
 import { activeRestrictions } from './restrictions.js';
 import type { SealCache } from './seal-cache.js';
@@ -58,11 +58,20 @@ export function parsePolicy(json: unknown): PolicyFile {
       else problems.push('settings.maxInputLockMs must be a number ≥ 1000');
     }
     if (s.permissions && typeof s.permissions === 'object') {
-      const allow = (s.permissions as { moduleAllow?: unknown }).moduleAllow;
-      if (allow !== undefined) {
-        if (allow && typeof allow === 'object' && Object.values(allow as object).every((v) => typeof v === 'boolean')) settings.permissions = { moduleAllow: allow as Record<string, boolean> };
-        else problems.push('settings.permissions.moduleAllow must map module ids to booleans');
+      // `moduleAllow` is what `functionAllow` was called while permissions were per module; its
+      // keys are module-level entries now, so a policy file written back then still applies.
+      const raw = s.permissions as { functionAllow?: unknown; moduleAllow?: unknown };
+      const maps: Record<string, boolean> = {};
+      let any = false;
+      for (const key of ['moduleAllow', 'functionAllow'] as const) {
+        const allow = raw[key];
+        if (allow === undefined) continue;
+        if (allow && typeof allow === 'object' && !Array.isArray(allow) && Object.values(allow as object).every((v) => typeof v === 'boolean')) {
+          Object.assign(maps, allow as Record<string, boolean>);
+          any = true;
+        } else problems.push(`settings.permissions.${key} must map "module" or "module.function" keys to booleans`);
       }
+      if (any) settings.permissions = { functionAllow: maps };
     }
     if (s.web && typeof s.web === 'object') {
       const list = stringList((s.web as { allowlist?: unknown }).allowlist, 'settings.web.allowlist', problems);
@@ -429,7 +438,7 @@ export function managedPaths(policy: PolicyFile | null | undefined): ManagedSett
   if (!s) return [];
   for (const k of AUTONOMY_KEYS) if (s.autonomy?.[k] !== undefined) out.add(`autonomy.${k}`);
   if (s.maxInputLockMs !== undefined) out.add('maxInputLockMs');
-  for (const m of Object.keys(s.permissions?.moduleAllow ?? {})) out.add(`permissions.moduleAllow.${m}`);
+  for (const m of Object.keys(s.permissions?.functionAllow ?? {})) out.add(`permissions.functionAllow.${m}`);
   if (s.web?.allowlist !== undefined) out.add('web.allowlist');
   if (s.desktop?.launchAllowlist !== undefined) out.add('desktop.launchAllowlist');
   for (const k of MEMORY_KEYS) if (s.memory?.[k] !== undefined) out.add(`memory.${k}`);
@@ -447,7 +456,18 @@ export function applyPolicy(settings: AppSettings, policy: PolicyFile | null | u
   const next: AppSettings = { ...settings };
   if (s.autonomy) next.autonomy = { ...settings.autonomy, ...definedOnly(s.autonomy) };
   if (s.maxInputLockMs !== undefined) next.maxInputLockMs = s.maxInputLockMs;
-  if (s.permissions?.moduleAllow) next.permissions = { ...settings.permissions, moduleAllow: { ...settings.permissions.moduleAllow, ...s.permissions.moduleAllow } };
+  if (s.permissions?.functionAllow) {
+    // A function entry beats its module's, so a module the policy pins would otherwise be undone by
+    // a stored `<module>.<function>` key. Pinning a module takes its functions with it.
+    const pinned = s.permissions.functionAllow;
+    const kept: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(settings.permissions.functionAllow)) {
+      const { module, method } = parseFunctionKey(key);
+      if (method !== undefined && pinned[module] !== undefined) continue;
+      kept[key] = value;
+    }
+    next.permissions = { ...settings.permissions, functionAllow: { ...kept, ...pinned } };
+  }
   if (s.web?.allowlist !== undefined) next.web = { ...settings.web, allowlist: [...s.web.allowlist] };
   if (s.desktop?.launchAllowlist !== undefined) next.desktop = { ...settings.desktop, launchAllowlist: [...s.desktop.launchAllowlist] };
   if (s.memory) next.memory = { ...settings.memory, ...definedOnly(s.memory) };

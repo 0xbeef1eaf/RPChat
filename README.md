@@ -5,8 +5,8 @@ code**. Each character is driven by an LLM that, besides talking, may write
 short TypeScript snippets against a documented SDK. The app runs those snippets
 in a WebAssembly sandbox and executes the requested actions on the host:
 show a picture, play a video or sound, remember something, set a reminder,
-notify you, and touch the system, all within the capabilities you leave switched on
-under Settings → Permissions (one switch per capability, for every character).
+notify you, and touch the system, all within the functions you leave switched on
+under Settings → Permissions (one switch per SDK function, for every character).
 
 Characters, their behaviours and their media are distributed as shareable
 **packs** (`.rppack` files or plain directories).
@@ -105,12 +105,15 @@ Characters, their behaviours and their media are distributed as shareable
   input and clicks unless you switch them off; outbound messages via webhooks.
 - **Inner life**: a mood model that decays and reacts, a daily routine with
   wake-ups on transitions, and long-term memory.
-- **Permissions are an intersection**: what a pack asks for ∩ what your global
-  policy allows ∩ the per-pack toggle. Inspect any pack before installing it.
+- **Permissions are yours alone, one SDK function at a time**: Settings →
+  Permissions switches any function of any module off for every character, now
+  and in the future. Packs neither request nor are granted anything; a pack may
+  describe *fewer* functions in its character's prompt, never more. Inspect any
+  pack before installing it.
 - **SDK plugins**: drop a folder with `plugin.json`, a `.d.ts` with TSDoc, a
   markdown guide and a `main.js` into the plugins directory and the app adds
-  the module to the SDK: it shows up in the reference, the prompt, the
-  permission policy and pack capability requests like any built-in. See
+  the module to the SDK: it shows up in the reference, the prompt and the
+  permission policy like any built-in, function by function. See
   [docs/plugins.md](docs/plugins.md) and `examples/plugins/clock`.
 - **Built-in pack editor**: create or import a pack, edit the manifest, the
   character (persona, greeting, behaviours, avatar and expressions), its function
@@ -351,10 +354,12 @@ with a code frame, the console output and every SDK call it made.
 
 Packs and model output are untrusted. Read the security model in
 [docs/ARCHITECTURE.md §7](docs/ARCHITECTURE.md#7-security-model) before
-installing packs from people you do not know. Permissions are app-wide: every installed
-character can use every capability you have not switched off under Settings → Permissions
-(packs neither request nor are granted anything; a `capabilities` key in an old pack is
-ignored with a warning). Nothing prompts per call: a character uses what is switched on
+installing packs from people you do not know. Permissions are app-wide and per function: every
+installed character can call every SDK function you have not switched off under Settings →
+Permissions (packs neither request nor are granted anything; a `capabilities` key in an old pack
+is ignored with a warning). The one exception is `sdk.lib`, the character's own saved functions,
+which is always available. A pack can narrow what its character's prompt describes, which changes
+nothing about what you allow. Nothing prompts per call: a character uses what is switched on
 freely, and every call is written to the audit log.
 
 ## License

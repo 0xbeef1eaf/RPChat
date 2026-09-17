@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { PolicyFile, SystemIntegrationStatus } from '@rp/shared';
-import { GUARD_SHELLS } from '@rp/shared';
+import { GUARD_SHELLS, functionKey, isAlwaysAvailableModule, parseFunctionKey } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { prettyJson } from '../../lib/format';
 import type { PackSource } from '@rp/shared';
@@ -109,45 +109,77 @@ function DurationInput({ ms, onChange, disabled, label, min }: { ms: number; onC
   );
 }
 
+type PinState = 'free' | 'allow' | 'deny';
+
+function pinOf(value: Record<string, boolean>, key: string): PinState {
+  return value[key] === undefined ? 'free' : value[key] ? 'allow' : 'deny';
+}
+
+const PIN_OPTIONS = [
+  { value: 'free' as const, label: 'user’s choice' },
+  { value: 'allow' as const, label: 'allow' },
+  { value: 'deny' as const, label: 'deny' },
+];
+
 /**
- * `permissions.moduleAllow`: a module named here is pinned allowed or denied for everyone, and one
- * left out stays the user's own choice — so each row is a three-way, not a checkbox.
+ * `permissions.functionAllow`: a key named here is pinned allowed or denied for everyone, and one
+ * left out stays the user's own choice — so each row is a three-way, not a checkbox. A module row
+ * pins the module as a whole; expanding it pins single functions, which win over the module's own
+ * pin. `sdk.lib` is the character's own library and is never pinnable.
  */
-function ModuleAllowEditor({ value, onChange, disabled }: { value: Record<string, boolean>; onChange: (v: Record<string, boolean>) => void; disabled?: boolean }) {
+function FunctionAllowEditor({ value, onChange, disabled }: { value: Record<string, boolean>; onChange: (v: Record<string, boolean>) => void; disabled?: boolean }) {
   const caps = useAppState((s) => s.capabilities);
-  const known = caps.filter((c) => c.permission !== 'trusted');
-  const extra = Object.keys(value).filter((id) => !known.some((c) => c.id === id));
-  const rows = [...known.map((c) => ({ id: c.id, title: c.title, summary: c.summary })), ...extra.map((id) => ({ id, title: id, summary: 'Not reported by this build.' }))];
-  const set = (id: string, state: 'free' | 'allow' | 'deny') => {
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const known = caps.filter((c) => !isAlwaysAvailableModule(c.id));
+  const extra = [...new Set(Object.keys(value).map((k) => parseFunctionKey(k).module))].filter((id) => !known.some((c) => c.id === id));
+  const rows = [
+    ...known.map((c) => ({ id: c.id, title: c.title, summary: c.summary, methods: c.methods.map((m) => m.name) })),
+    ...extra.map((id) => ({ id, title: id, summary: 'Not reported by this build.', methods: [] as string[] })),
+  ];
+  const set = (key: string, state: PinState) => {
     const next = { ...value };
-    if (state === 'free') delete next[id];
-    else next[id] = state === 'allow';
+    if (state === 'free') delete next[key];
+    else next[key] = state === 'allow';
     onChange(next);
   };
   if (rows.length === 0) return <span className="muted small">No capability modules reported.</span>;
   return (
     <div className="stack" style={{ gap: 4 }}>
       {rows.map((r) => {
-        const state = value[r.id] === undefined ? 'free' : value[r.id] ? 'allow' : 'deny';
+        const pinnedFunctions = r.methods.filter((m) => value[functionKey(r.id, m)] !== undefined).length;
         return (
-          <div key={r.id} className="row list-row">
-            <span className="grow item-text">
-              <span className="item-title">
-                {r.title} <span className="muted mono small">sdk.{r.id}</span>
+          <div key={r.id} className="stack" style={{ gap: 2 }}>
+            <div className="row list-row">
+              <span className="grow item-text">
+                <span className="item-title">
+                  {r.title} <span className="muted mono small">sdk.{r.id}</span>
+                  {pinnedFunctions > 0 ? (
+                    <span className="badge" style={{ marginLeft: 6 }}>
+                      {pinnedFunctions} function{pinnedFunctions === 1 ? '' : 's'} pinned
+                    </span>
+                  ) : null}
+                </span>
+                <span className="item-sub">{r.summary}</span>
               </span>
-              <span className="item-sub">{r.summary}</span>
-            </span>
-            <Segmented
-              label={`${r.title} policy`}
-              value={state}
-              disabled={disabled}
-              options={[
-                { value: 'free' as const, label: 'user’s choice' },
-                { value: 'allow' as const, label: 'allow' },
-                { value: 'deny' as const, label: 'deny' },
-              ]}
-              onChange={(v) => set(r.id, v)}
-            />
+              {r.methods.length > 0 ? (
+                <button type="button" className="ghost small" aria-expanded={open[r.id] === true} onClick={() => setOpen((o) => ({ ...o, [r.id]: !o[r.id] }))}>
+                  {open[r.id] ? 'Hide functions' : `${r.methods.length} functions`}
+                </button>
+              ) : null}
+              <Segmented label={`${r.title} policy`} value={pinOf(value, r.id)} disabled={disabled} options={PIN_OPTIONS} onChange={(v) => set(r.id, v)} />
+            </div>
+            {open[r.id]
+              ? r.methods.map((m) => (
+                  <div key={m} className="row list-row" style={{ paddingLeft: 24 }}>
+                    <span className="grow item-text">
+                      <span className="item-title mono small">
+                        sdk.{r.id}.{m}
+                      </span>
+                    </span>
+                    <Segmented label={`sdk.${r.id}.${m} policy`} value={pinOf(value, functionKey(r.id, m))} disabled={disabled} options={PIN_OPTIONS} onChange={(v) => set(functionKey(r.id, m), v)} />
+                  </div>
+                ))
+              : null}
           </div>
         );
       })}
@@ -161,7 +193,7 @@ function SettingRow({ spec, draft, onDraft, disabled }: { spec: PolicySettingSpe
   const value = draft.values[spec.path];
   const setForced = (forced: boolean) => onDraft({ ...draft, forced: { ...draft.forced, [spec.path]: forced } });
   const setValue = (next: PolicyValue) => onDraft({ ...draft, values: { ...draft.values, [spec.path]: next } });
-  const wide = spec.kind === 'list' || spec.kind === 'modules';
+  const wide = spec.kind === 'list' || spec.kind === 'functions';
 
   let control: ReactNode = null;
   if (spec.kind === 'boolean') control = <Toggle checked={value === true} disabled={!on || disabled} onChange={setValue} aria-label={spec.label} />;
@@ -192,7 +224,7 @@ function SettingRow({ spec, draft, onDraft, disabled }: { spec: PolicySettingSpe
         onChange={setValue}
       />
     );
-  } else if (spec.kind === 'modules') control = <ModuleAllowEditor value={(value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, boolean>} disabled={!on || disabled} onChange={setValue} />;
+  } else if (spec.kind === 'functions') control = <FunctionAllowEditor value={(value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, boolean>} disabled={!on || disabled} onChange={setValue} />;
 
   return (
     <div className={`policy-row${wide ? ' wide' : ''}${on ? '' : ' off'}`}>
