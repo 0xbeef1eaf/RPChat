@@ -87,6 +87,33 @@ describe('ElectronBackend', () => {
     await handle.close();
   });
 
+  it('opens a full-screen overlay at the monitor size, click-through, without waiting for a content size', async () => {
+    const { backend, windows } = make();
+    const monitors = await backend.monitors();
+    const monitor = monitors[0]!;
+    const handle = await backend.createOverlay({
+      id: 'f',
+      kind: 'fullscreen',
+      file: '/p/a.png',
+      assetUrl: 'rp-asset://com.x.p/media/a.png',
+      packId: 'com.x.p',
+      asset: 'media/a.png',
+      options: { monitor, layer: 'overlay', opacity: 0.25, clickThrough: true, anchor: 'top-left', marginPx: 0, x: 0, y: 0, width: monitor.width, height: monitor.height },
+      page: {},
+      fullscreen: { media: 'video', opacity: 0.25, volume: 0.5, loop: true, muted: false },
+    });
+    const win = windows[0]!;
+    expect(win.bounds).toEqual({ x: monitor.x, y: monitor.y, width: monitor.width, height: monitor.height });
+    expect(win.ignoreMouse).toBe(true);
+    expect(win.sent[0]).toEqual({
+      type: 'show-fullscreen',
+      id: 'f',
+      url: 'rp-asset://com.x.p/media/a.png',
+      options: { media: 'video', opacity: 0.25, volume: 0.5, loop: true, muted: false },
+    });
+    await handle.close();
+  });
+
   it('uses macOS levels, real opacity, and emits ended/closed from page reports', async () => {
     const { backend, windows } = make('darwin', 'native');
     const monitors = await backend.monitors();

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MediaCommand, MediaWindowEvent } from '@rp/shared';
 import { AvatarView } from './AvatarView';
 import { DrawView } from './DrawView';
+import { FullscreenView } from './FullscreenView';
 import { MediaItemView } from './MediaItemView';
 import { WidgetView } from './WidgetView';
 import { applyMediaCommand, applyMediaLocalEvent, INITIAL_MEDIA_STATE, type MediaLocalEvent, type MediaState } from './mediaState';
@@ -37,6 +38,7 @@ export function MediaApp({ transport }: MediaAppProps) {
       if (e.key !== 'Escape') return;
       for (const item of stateRef.current.items) onEvent({ type: 'dismiss', id: item.id });
       for (const w of stateRef.current.widgets) onEvent({ type: 'dismiss', id: w.id });
+      for (const f of stateRef.current.fullscreens) onEvent({ type: 'dismiss', id: f.id });
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -46,6 +48,10 @@ export function MediaApp({ transport }: MediaAppProps) {
   // otherwise items/avatar/widgets share the centred stage.
   const draw = state.draws[0];
   if (draw) return <DrawView surface={draw} />;
+
+  // A full-screen overlay owns its window just as a draw surface does.
+  const fullscreen = state.fullscreens[0];
+  if (fullscreen) return <FullscreenView entry={fullscreen} onEvent={onEvent} />;
 
   return (
     <div className="media-stage">

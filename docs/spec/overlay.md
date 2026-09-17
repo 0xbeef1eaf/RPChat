@@ -14,7 +14,7 @@ templates. Contracts: `@rp/shared/media.ts` (`OverlayOptions`, `OverlayUpdate`,
 // apps/desktop/src/main/display/backend.ts
 export interface OverlaySpec {
   id: string;
-  kind: 'image' | 'video';
+  kind: 'image' | 'video' | 'fullscreen';   // 'fullscreen': sdk.media.overlay's screen-filling, click-through surface
   /** Absolute file path of the asset (for backends that read files themselves). */
   file: string;
   /** rp-asset:// URL (Electron windows) — backends that need http get one from LoopbackServer. */
@@ -23,6 +23,7 @@ export interface OverlaySpec {
   options: ResolvedOverlayOptions;
   /** Page-level options forwarded to media.html (caption, durationMs, volume, loop, muted, closeOnEnd). */
   page: ShowImageOptions | PlayVideoOptions;
+  fullscreen?: FullscreenOverlayOptions;   // 'fullscreen' overlays: { media: 'image' | 'video'; opacity; volume?; loop?; muted? } for the page
 }
 export interface ResolvedOverlayOptions {
   monitor: MonitorInfo; layer: OverlayLayer; opacity: number; clickThrough: boolean;
@@ -179,6 +180,7 @@ All three templates are editable in **Settings → Commands** (renderer): comman
 - Clicks and closes are reported with their cause: every click on an image/video item (not click-through, not audio) is a `MediaWindowEvent` `{ type: 'clicked'; id }` whether or not it also closes the item, and `{ type: 'closed'; id; reason }` carries a `MediaCloseReason` — `click` (the user dismissed it: click, Escape, the audio stop button), `timeout` (`durationMs`), `ended` (playback finished and `closeOnEnd`), `api` (a `close`/`close-all` command), `error`. Backends forward both as `OverlayHandle` events (`clicked`, and `closed` with detail `{ reason }`; a backend's own close is `api`), and the media capability turns them into the host events `media-clicked` / `media-closed` (`docs/spec/living.md` §3.3).
 - After rendering an item the media window reports its content size: `MediaWindowEvent` gains `{ type: 'content-size'; id; width; height }` (added to `@rp/shared/media.ts`); main uses it to size the window when no explicit `width`/`height` was given, then re-applies placement.
 - `update` command: `{ type: 'update'; id; options: OverlayUpdate }` — the renderer applies only `opacity`/`width`/`height`/`clickThrough` visually; everything else is handled by the backend.
+- Full-screen overlays (`sdk.media.overlay`, §1 `kind: 'fullscreen'`): the media capability resolves the target screens itself (`overlayScreens`: every monitor for `monitor: 'all'`, the default, else the selected one; the screen under the cursor, else the primary, leads so it is the one that plays a video's sound) and opens one overlay per screen with `layer: 'overlay'`, `clickThrough: true`, `anchor: 'top-left'`, `x`/`y` 0 and the monitor's `width`/`height` — so backends need no new placement path, and the window is never waiting on a content size. The first screen's overlay carries the item's id, the others `<id>#<n>`; all of them are one `MediaItem`, so `close()` takes the overlay off every screen and reports `media-closed` once, and one screen's overlay closing takes the rest with it. Page side: `MediaCommand` gains `{ type: 'show-fullscreen'; id; url; options: FullscreenOverlayOptions }`, which `FullscreenView` renders full-bleed — the media is fitted into the screen keeping its aspect ratio and copies repeat outwards from the centred one (`tileLayout`/`tilePositions`, `media/tile.ts`; CSS `background-repeat` for images, one `<video>` painted into every tile of a canvas for video, so the copies cannot drift apart). `update` on such an item is narrowed to `opacity` (`fullscreenUpdate`): it stays on its screens, at their size, click-through.
 
 ## 5. Widgets and pack images (`{{asset:…}}` placeholders)
 

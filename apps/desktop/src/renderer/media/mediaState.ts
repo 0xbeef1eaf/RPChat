@@ -5,6 +5,7 @@
  */
 import type {
   DrawShape,
+  FullscreenOverlayOptions,
   Json,
   MediaCloseReason,
   MediaCommand,
@@ -24,6 +25,13 @@ export type MediaEntry =
   | { id: MediaItemId; kind: 'video'; url: string; options: PlayVideoOptions }
   | { id: MediaItemId; kind: 'audio'; url: string; options: PlayAudioOptions };
 
+/** A screen-filling, click-through image/video surface (`sdk.media.overlay`). */
+export interface FullscreenEntry {
+  id: MediaItemId;
+  url: string;
+  options: FullscreenOverlayOptions;
+}
+
 export interface DrawSurface {
   id: MediaItemId;
   shapes: Array<DrawShape & { shapeId: string }>;
@@ -37,6 +45,8 @@ export interface MediaState {
   widgets: WidgetEntry[];
   /** `draw` page: one surface per monitor id. */
   draws: DrawSurface[];
+  /** `fullscreen` page: the one surface covering this window's screen. */
+  fullscreens: FullscreenEntry[];
 }
 
 export type MediaLocalEvent =
@@ -64,7 +74,7 @@ export interface MediaTransition {
   reports: MediaWindowEvent[];
 }
 
-export const INITIAL_MEDIA_STATE: MediaState = { items: [], avatar: null, widgets: [], draws: [] };
+export const INITIAL_MEDIA_STATE: MediaState = { items: [], avatar: null, widgets: [], draws: [], fullscreens: [] };
 
 function without(state: MediaState, id: MediaItemId): MediaState {
   return { ...state, items: state.items.filter((i) => i.id !== id) };
@@ -76,7 +86,13 @@ function has(state: MediaState, id: MediaItemId): boolean {
 
 /** Every open overlay id in this window, regardless of page kind. */
 export function openIds(state: MediaState): MediaItemId[] {
-  return [...state.items.map((i) => i.id), ...(state.avatar ? [state.avatar.id] : []), ...state.widgets.map((w) => w.id), ...state.draws.map((d) => d.id)];
+  return [
+    ...state.items.map((i) => i.id),
+    ...(state.avatar ? [state.avatar.id] : []),
+    ...state.widgets.map((w) => w.id),
+    ...state.draws.map((d) => d.id),
+    ...state.fullscreens.map((f) => f.id),
+  ];
 }
 
 function closeAny(state: MediaState, id: MediaItemId, reason: MediaCloseReason): MediaTransition {
@@ -86,6 +102,7 @@ function closeAny(state: MediaState, id: MediaItemId, reason: MediaCloseReason):
     avatar: state.avatar && state.avatar.id === id ? null : state.avatar,
     widgets: state.widgets.filter((w) => w.id !== id),
     draws: state.draws.filter((d) => d.id !== id),
+    fullscreens: state.fullscreens.filter((f) => f.id !== id),
   };
   return { state: next, reports: [{ type: 'closed', id, reason }] };
 }
@@ -174,6 +191,14 @@ export function applyMediaCommand(state: MediaState, command: MediaCommand): Med
         const widgets = state.widgets.map((w) => (w.id === command.id ? { ...w, options: { ...w.options, ...visualSubset(command.options) } } : w));
         return { state: { ...state, widgets }, reports: [] };
       }
+      const fullscreen = state.fullscreens.find((f) => f.id === command.id);
+      if (fullscreen) {
+        // Everything else about it is fixed: it covers its screen and lets clicks through.
+        const { opacity } = visualSubset(command.options);
+        if (opacity === undefined) return { state, reports: [] };
+        const fullscreens = state.fullscreens.map((f) => (f.id === command.id ? { ...f, options: { ...f.options, opacity: effectiveOpacity(opacity) } } : f));
+        return { state: { ...state, fullscreens }, reports: [] };
+      }
       if (state.avatar && state.avatar.id === command.id) {
         const v = visualSubset(command.options);
         const avatar = { ...state.avatar, opacity: v.opacity ?? state.avatar.opacity, clickThrough: v.clickThrough ?? state.avatar.clickThrough };
@@ -182,6 +207,15 @@ export function applyMediaCommand(state: MediaState, command: MediaCommand): Med
       if (!has(state, command.id)) return { state, reports: [] };
       const items = state.items.map((i) => (i.id === command.id ? applyUpdate(i, command.options) : i));
       return { state: { ...state, items }, reports: [] };
+    }
+    case 'show-fullscreen': {
+      if (!isAllowedMediaUrl(command.url)) {
+        return { state, reports: [{ type: 'error', id: command.id, message: `Refused non-asset URL: ${command.url}` }] };
+      }
+      const entry: FullscreenEntry = { id: command.id, url: command.url, options: command.options };
+      const idx = state.fullscreens.findIndex((f) => f.id === command.id);
+      const fullscreens = idx === -1 ? [...state.fullscreens, entry] : state.fullscreens.map((f, i) => (i === idx ? entry : f));
+      return { state: { ...state, fullscreens }, reports: [] };
     }
     case 'draw-set': {
       const shapes = command.shapes.filter((sh) => typeof sh.shapeId === 'string' && sh.shapeId.length > 0);
@@ -242,6 +276,27 @@ export function applyMediaLocalEvent(state: MediaState, event: MediaLocalEvent):
     default:
       break;
   }
+  const fullscreen = state.fullscreens.find((f) => f.id === event.id);
+  if (fullscreen) {
+    // A full-screen overlay takes no clicks; it ends, fails, or the host closes it.
+    switch (event.type) {
+      case 'ended': {
+        const ended: MediaWindowEvent = { type: 'ended', id: event.id };
+        if (fullscreen.options.loop) return { state, reports: [ended] };
+        const closed = closeAny(state, event.id, 'ended');
+        return { state: closed.state, reports: [ended, ...closed.reports] };
+      }
+      case 'error': {
+        const closed = closeAny(state, event.id, 'error');
+        return { state: closed.state, reports: [{ type: 'error', id: event.id, message: event.message }, ...closed.reports] };
+      }
+      case 'dismiss':
+        return closeAny(state, event.id, event.reason ?? 'click');
+      default:
+        return { state, reports: [] };
+    }
+  }
+
   const entry = state.items.find((i) => i.id === event.id);
   if (!entry) {
     // Avatars and widgets can be dismissed locally too (Escape / close button).

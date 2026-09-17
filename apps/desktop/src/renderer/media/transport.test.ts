@@ -77,6 +77,9 @@ describe('base64url + hash parsing', () => {
     expect(parseCommandJson(JSON.stringify({ type: 'draw-set', id: 'd', shapes: [] }))?.type).toBe('draw-set');
     expect(parseCommandJson(JSON.stringify({ type: 'draw-set', id: 'd', shapes: 'no' }))).toBeNull();
     expect(parseCommandJson(JSON.stringify({ type: 'draw-clear', id: 'd' }))?.type).toBe('draw-clear');
+    expect(parseCommandJson(JSON.stringify({ type: 'show-fullscreen', id: 'f', url: 'u', options: { media: 'video', opacity: 0.25 } }))?.type).toBe('show-fullscreen');
+    expect(parseCommandJson(JSON.stringify({ type: 'show-fullscreen', id: 'f', url: 'u', options: { media: 'audio' } }))).toBeNull();
+    expect(parseCommandJson(JSON.stringify({ type: 'show-fullscreen', id: 'f', options: { media: 'image' } }))).toBeNull();
     expect(parseCommandJson('null')).toBeNull();
     expect(parseCommandJson('[]')).toBeNull();
   });

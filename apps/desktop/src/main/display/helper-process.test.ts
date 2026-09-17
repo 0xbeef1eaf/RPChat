@@ -278,6 +278,9 @@ describe('HelperBackend', () => {
     const animate = { type: 'avatar-set', id: 'a', patch: { animation: 'nod' } } as const;
     expect(pageCommand(animate, rewrite)).toBe(animate);
     expect(pageCommand({ type: 'show-image', id: 'm', url: 'rp-asset://com.x.p/media/i.png', options: {} }, rewrite)).toMatchObject({ url: 'http://127.0.0.1:1234/t/tok/asset/com.x.p/media/i.png' });
+    expect(pageCommand({ type: 'show-fullscreen', id: 'f', url: 'rp-asset://com.x.p/media/i.png', options: { media: 'image', opacity: 0.25 } }, rewrite)).toMatchObject({
+      url: 'http://127.0.0.1:1234/t/tok/asset/com.x.p/media/i.png',
+    });
     const merged = mergeMonitorNames(
       [{ id: '0', name: '0', index: 0, primary: true, x: 0, y: 0, width: 100, height: 100, scale: 1, hasCursor: false }],
       [{ id: '9', name: 'DP-3', index: 0, primary: true, x: 0, y: 0, width: 100, height: 100, scale: 1, hasCursor: false }],

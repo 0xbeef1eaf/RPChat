@@ -104,7 +104,8 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .media-item,
-  .media-item.leaving {
+  .media-item.leaving,
+  .media-fullscreen-fade {
     animation: none;
   }
 }
@@ -293,4 +294,38 @@ body {
 @keyframes draw-fade {
   0%, 80% { opacity: 1; }
   100% { opacity: 0; }
+}
+
+/* ---------- full-screen overlay page (sdk.media.overlay) ---------- */
+.media-fullscreen {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  /* Always click-through: the user keeps working under it. */
+  pointer-events: none;
+}
+/* The fade lives here, not on the surface above: its animation ends opaque and would otherwise
+   overrule the overlay's own opacity. */
+.media-fullscreen-fade {
+  position: absolute;
+  inset: 0;
+  animation: fullscreen-in 260ms ease-out both;
+}
+@keyframes fullscreen-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.media-fullscreen-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* The decoding <video> and the sizing <img> are never seen; the surface around them is what is painted. */
+.media-fullscreen-probe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
 }
