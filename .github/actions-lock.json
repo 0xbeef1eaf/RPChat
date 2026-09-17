@@ -14,8 +14,8 @@
     },
     {
       "action": "actions/github-script",
-      "ref": "v8",
-      "sha": "ed597411d8f924073f98dfc5c65a23a2325f34cd",
+      "ref": "v9",
+      "sha": "3a2844b7e9c422d3c10d287c895573f7108da1b3",
       "refType": "tag",
       "usedBy": [
         "cleanup-artifacts.yml"
