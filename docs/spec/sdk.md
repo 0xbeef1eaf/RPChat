@@ -62,7 +62,7 @@ declare const lib: LibApi;  // the character's function library (LIB_TYPINGS); d
 /** Reference to a file inside the current pack, obtained from `sdk.pack.asset()`. */
 interface AssetRef { readonly path: string; readonly kind: 'image'|'video'|'audio'|'text'|'other'; readonly mime: string; readonly bytes: number }
 type MediaPosition = 'center'|'top-left'|'top-right'|'bottom-left'|'bottom-right';
-interface ShowImageOptions {...}  interface PlayVideoOptions {...}  interface PlayAudioOptions {...}   // mirror @rp/shared/media exactly
+interface ShowImageOptions {...}  interface PlayVideoOptions {...}  interface PlayAudioOptions {...}  interface MediaOverlayOptions {...}   // mirror @rp/shared/media exactly
 interface MediaHandle { readonly id: string; readonly kind: 'image'|'video'|'audio'; readonly asset: string }
 interface HistoryMessage { role: 'user'|'assistant'; text: string; at: string }
 interface TimerInfo { id: string; fireAt: string; payload: unknown; label?: string }
@@ -108,6 +108,7 @@ media (pack)
 - `showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>` — `ShowImageOptions` adds `closeOnClick?: boolean` (default true; false keeps the image up after a click; a timed image only closes on click when it is set to true). Clicks raise the `media-clicked` host event and every close `media-closed` `{ mediaId, asset, packId, kind, reason }` (`docs/spec/living.md` §3.3), so a character can build clickable things with `sdk.events.on`.
 - `playVideo(asset: AssetRef | string, options?: PlayVideoOptions): Promise<MediaHandle>`
 - `playAudio(asset: AssetRef | string, options?: PlayAudioOptions): Promise<MediaHandle>`
+- `overlay(asset: AssetRef | string, options?: MediaOverlayOptions): Promise<MediaHandle>` — one image or video washed over whole screens. `MediaOverlayOptions { monitor?: MonitorSelector | 'all'; opacity?; durationMs?; volume?; loop?; muted? }` (mirrors `@rp/shared/media`): `monitor` defaults to `'all'` (one backend overlay per monitor, a single `MediaItem` and handle behind them), `opacity` to 0.25 — the docs tell the character to stay under 0.5 — and a video's `volume` to 0.5, played on one screen only (the others are muted copies). Placement, size, layer and click-through are not options: it always covers the screen on the `overlay` layer, click-through. The page keeps the aspect ratio: the media is fitted into the screen and copies repeat out from the centred one (`tileLayout`, `media/tile.ts`). `durationMs` closes it (and makes a video loop by default); `update()` on it only takes `opacity`.
 - `close(handle: MediaHandle | string): Promise<void>`
 - `closeAll(): Promise<void>`
 - `list(): Promise<MediaHandle[]>`
@@ -124,7 +125,7 @@ browser (pack, v2.1.0; docs/browser-extension.md) — `open`, `openTab`, `close`
 - `read(tabId?, { maxChars? }): Promise<{ url; title; text }>` (default cap 20 000 chars; tabId defaults to the active tab), `query(tabId, selector, { limit? }): Promise<BrowserElement[]>` (`{ index, tag, text, href?, value? }`), `click(tabId, selector, { index? })`, `type(tabId, selector, text, { submit? })`, `scroll(tabId, { y? | selector? })`, `screenshot(tabId?): Promise<{ dataUrl; url; title }>` (PNG data URL), `find(tabId, text): Promise<{ count; first? }>`.
 - `block(patterns, { durationMs?, redirect?, reason? }): Promise<{ id; expiresAt; patterns }>` (no duration = until lifted; 127.0.0.1/localhost/browser pages refused), `unblock(id)`, `blocks(): Promise<BrowserBlock[]>`, `clearBlocks()`.
 - `imageEffect(tabId, effect, { selector?, replaceWith?: AssetRef | string, durationMs? }): Promise<{ applied; replaced; total }>` (`effect`: `blur | grayscale | sepia | invert | hue | pixelate | none | { css }`; pack assets are served through the loopback asset route), `clearImageEffects(tabId)`.
-- `setHomePage(url | null)`, `homePage()` — the extension's new-tab override and the policy's `HomepageLocation`.
+- `setHomePage(url | null)`, `homePage()` — the extension's new-tab override. Only a character sets it: no user setting, no policy key.
 - `bookmarks({ folder? })`, `searchBookmarks(query)`, `addBookmark(url, title, { folder? })`, `removeBookmark(idOrUrl)` — `BrowserBookmark` = `{ id, title, url?, parentId, path }`.
 - `eval(tabId, code, { world?: "isolated" | "main", timeoutMs? }): Promise<{ value; world; fallback? }>` — the code is an async function body; result JSON, 64 KiB cap. The isolated world refuses eval under the MV3 extension CSP, so the extension falls back to the main world and reports it (`fallback`); the main world is subject to the page's CSP.
 - `history({ text?, since?, until?, limit? })`, `historyVisits(url)`, `recentHistory(limit?)` — `BrowserHistoryItem` = `{ url, title, lastVisitTime, visitCount }`.

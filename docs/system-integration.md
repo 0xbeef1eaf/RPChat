@@ -82,10 +82,14 @@ relocates every system path under `<dir>` and skips groups, services and udev �
 
 Browser extension flags (see [docs/browser-extension.md](browser-extension.md)):
 `--browser-extension <id>` with `--browser-update-url <url>` (and optionally `--browser-port <n>`,
-defaulting to the port in the URL) adds step 7, which writes the Chromium managed policy
-`rpchat.json` that force-installs the rpchat browser extension from the app's loopback update
-URL; `--browser-only` does just that step (what Settings → Browser → *Install browser policy…*
-runs, since it needs no daemon); `--remove-browser-policy` deletes those files and exits.
+defaulting to the port in the URL) adds step 8, which writes the Chromium managed policy
+`rpchat-<user>.json` that force-installs the rpchat browser extension from the app's loopback
+update URL. It is written **for `--user` alone**: owned by `root:root` so the user cannot edit
+their own policy, and readable only by them (a POSIX ACL, or the group bit where ACLs are
+unavailable) so another user's browser skips it and keeps its own. `--browser-only` does just
+that step (what Settings → Browser → *Install browser policy…* runs, since it needs no daemon);
+`--remove-browser-policy` deletes that user's files (plus the machine-wide `rpchat.json` older
+versions wrote) and exits, and `--browser-all-users` widens it to every user's.
 The `.deb` never passes these: the extension id is derived from a per-user key.
 
 ### What the installer changes
@@ -102,7 +106,7 @@ re-running is safe.
 | 5 | **System install** (AppImage only, unless `--no-system-install`): unpacks the AppImage into `/opt/rpchat/current` (root-owned), keeps the old tree as `/opt/rpchat/previous`, writes `/opt/rpchat/versions.json` and links `/usr/local/bin/rpchat`. Every launcher below then points at `/opt/rpchat/current/rpchat`. See [System install](#system-install). |
 | 6 | Application menu entry `/usr/local/share/applications/rpchat.desktop` (`Exec=<app> %U`) and icon `/usr/local/share/icons/hicolor/512x512/apps/rpchat.png`, refreshed with `update-desktop-database`/`gtk-update-icon-cache` when present. Skipped with `--menu-entry no` (the `.deb` does this, it ships its own entry). |
 | 7 | Autostart for your user: `~/.config/autostart/rpchat.desktop` (`Exec=<app> --hidden`, XDG) or `~/.config/systemd/user/rpchat.service` (enabled with `systemctl --user` when a session bus is reachable, otherwise it prints the command). Switching methods removes the other entry. It also prints the Hyprland `exec-once = <app> --hidden` line for people who prefer that. |
-| 8 | Browser policy, only with `--browser-extension`: `rpchat.json` in `/etc/chromium/policies/managed` and `/etc/opt/chrome/policies/managed` (always) and in the Brave, Edge, Vivaldi and Opera policy directories when that browser looks installed (binary on `PATH` or its `/etc` config directory present). `--dry-run` lists every file it would write. |
+| 8 | Browser policy, only with `--browser-extension`: `rpchat-<user>.json` (`0600 root:root` plus a read ACL for that user) in `/etc/chromium/policies/managed` and `/etc/opt/chrome/policies/managed` (always) and in the Brave, Edge, Vivaldi and Opera policy directories when that browser looks installed (binary on `PATH` or its `/etc` config directory present). A machine-wide `rpchat.json` left by an older version is removed; other users' files are left alone. `--dry-run` lists every file it would write. |
 | 9 | Session guard (with `--guard`, or when the policy has `guard.mode` other than `off`): the `pam_apparmor.so` session line in `/etc/pam.d/system-login` (Arch) or `common-session` (Debian/Ubuntu), then `rpchatd --guard-apply`. `--no-guard` reverses both. |
 | 10 | Runs `rpchatd --check-devices` and prints what the daemon can see. |
 
@@ -812,8 +816,8 @@ sudo native/rpchatd/install.sh --uninstall --user "$USER"
 the service, removes the unit, the binary
 directory, the udev rule, the modules-load entry, the [system install](#system-install)
 (`/opt/rpchat/{current,previous,versions.json}` and `/usr/local/bin/rpchat`), your autostart
-entry, your group membership, the `rpchat` group and any browser policy files (`rpchat.json`)
-the installer wrote. It **keeps `/etc/rpchat/policy.json`** and prints how to remove it
+entry, your group membership, the `rpchat` group and every user's browser policy files
+(`rpchat-<user>.json`, and `rpchat.json` from older versions) the installer wrote. It **keeps `/etc/rpchat/policy.json`** and prints how to remove it
 (`sudo rm -r /etc/rpchat`). Stopping the daemon also ends the relaunch guard of
 `app.allowQuit: false`; the running app keeps hiding its Quit item until the policy file is
 removed or changed (it re-reads the file within a minute). The packaged app ships the script at

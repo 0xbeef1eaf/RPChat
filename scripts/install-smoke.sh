@@ -210,7 +210,39 @@ rm "$PREFIX/etc/rpchat/policy.json"
 check "without guard.mode the line is left alone" test "$(grep -c '# rpchat session guard' "$PAMD/system-login")" = 1
 check "and the step is skipped" grep -q "session guard (policy guard.mode is off" "$WORK/install-10.log"
 
-echo "--- 10. remove, then uninstall"
+echo "--- 10. browser policy: one file per user, root-owned, readable by that user alone"
+BP="$PREFIX/etc/chromium/policies/managed"
+# With sudo this is the human who ran the smoke, so the ACL path gets exercised; run directly as
+# root it is root, and the file simply stays 0600 root:root (root reads it whatever the mode says).
+POLICY_USER="${SUDO_USER:-$USER_NAME}"
+POLICY_FILE="$BP/rpchat-$POLICY_USER.json"
+EXT_ID=abcdefghijklmnopabcdefghijklmnop
+EXT_URL=http://127.0.0.1:47821/extension/update.xml
+mkdir -p "$BP"
+echo '{"machine-wide": true}' > "$BP/rpchat.json"          # what older versions wrote for everybody
+echo '{"someone else": true}' > "$BP/rpchat-nobody.json"   # another user's policy, not ours to touch
+"$INSTALL" --prefix "$PREFIX" --browser-only --browser-extension "$EXT_ID" --browser-update-url "$EXT_URL" --user "$POLICY_USER" > "$WORK/browser-1.log" 2>&1 || { cat "$WORK/browser-1.log"; fail "browser policy install"; }
+check "wrote $POLICY_FILE" test -f "$POLICY_FILE"
+check "under the prefix, not the real /etc" grep -q "$POLICY_FILE" "$WORK/browser-1.log"
+check "Chrome got one too" test -f "$PREFIX/etc/opt/chrome/policies/managed/rpchat-$POLICY_USER.json"
+check "the machine-wide file is gone" test ! -e "$BP/rpchat.json"
+check "another user's policy is left alone" test -f "$BP/rpchat-nobody.json"
+check "root owns it" test "$(stat -c %U "$POLICY_FILE")" = root
+check "no access for anyone else" test "$(stat -c %a "$POLICY_FILE" | sed 's/.*\(.\)$/\1/')" = 0
+check "it force-installs the extension from the app" grep -q "$EXT_ID;$EXT_URL" "$POLICY_FILE"
+check "it carries no home page (a character's to set)" bash -c "! grep -q Homepage '$POLICY_FILE'"
+if [ "$POLICY_USER" != root ] && command -v runuser >/dev/null 2>&1; then
+  check "$POLICY_USER can read their own policy" runuser -u "$POLICY_USER" -- test -r "$POLICY_FILE"
+fi
+"$INSTALL" --prefix "$PREFIX" --browser-only --browser-extension "$EXT_ID" --browser-update-url "$EXT_URL" --user "$POLICY_USER" > "$WORK/browser-2.log" 2>&1 || { cat "$WORK/browser-2.log"; fail "browser policy re-install"; }
+check "a second run changes nothing" grep -q "$POLICY_FILE is up to date" "$WORK/browser-2.log"
+"$INSTALL" --prefix "$PREFIX" --remove-browser-policy --user "$POLICY_USER" > "$WORK/browser-3.log" 2>&1 || { cat "$WORK/browser-3.log"; fail "browser policy remove"; }
+check "this user's policy removed" test ! -e "$POLICY_FILE"
+check "the other user's still there" test -f "$BP/rpchat-nobody.json"
+"$INSTALL" --prefix "$PREFIX" --remove-browser-policy --browser-all-users > "$WORK/browser-4.log" 2>&1 || { cat "$WORK/browser-4.log"; fail "browser policy remove --browser-all-users" ; }
+check "--browser-all-users removes every user's" test ! -e "$BP/rpchat-nobody.json"
+
+echo "--- 11. remove, then uninstall"
 "$INSTALL" --prefix "$PREFIX" --remove > "$WORK/remove.log" 2>&1 || { cat "$WORK/remove.log"; fail "remove"; }
 check "trees gone" test ! -e "$OPT/current" -a ! -e "$OPT/previous" -a ! -e "$OPT/versions.json"
 check "bin link gone" test ! -e "$PREFIX/usr/local/bin/rpchat" -a ! -L "$PREFIX/usr/local/bin/rpchat"

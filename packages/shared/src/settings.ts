@@ -211,9 +211,13 @@ export interface AppSettings {
     allowEval: boolean;
     /** Let characters read the browser history (`sdk.browser.history` and friends). Default true. */
     allowHistory: boolean;
-    /** Home page the extension's new-tab override opens (http(s); empty = the plain new-tab page). Also written into the browser policy. */
+    /**
+     * Home page the extension's new-tab override opens (http(s); empty = the plain new-tab page).
+     * Only `sdk.browser.setHomePage` writes it: there is no field for it in Settings and no policy
+     * key, and it is not part of the browser policy either.
+     */
     homePage: string;
-    /** Extra managed-policy directories the installer writes `rpchat.json` into (Chromium forks not in the built-in list). */
+    /** Extra managed-policy directories the installer writes the per-user `rpchat-<user>.json` into (Chromium forks not in the built-in list). */
     extraPolicyDirs: string[];
   };
   messaging: {

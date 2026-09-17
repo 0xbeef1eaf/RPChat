@@ -495,15 +495,15 @@ describe('policy', () => {
   });
 
   it('parses and applies the browser block', () => {
-    const policy = parsePolicy({ version: 1, settings: { browser: { allowBlocking: false, allowEval: false, allowHistory: true, homePage: 'https://home.test/' } } });
-    expect(policy.settings?.browser).toEqual({ allowBlocking: false, allowEval: false, allowHistory: true, homePage: 'https://home.test/' });
-    expect(managedPaths(policy)).toEqual(['browser.allowBlocking', 'browser.allowEval', 'browser.allowHistory', 'browser.homePage']);
+    const policy = parsePolicy({ version: 1, settings: { browser: { allowBlocking: false, allowEval: false, allowHistory: true } } });
+    expect(policy.settings?.browser).toEqual({ allowBlocking: false, allowEval: false, allowHistory: true });
+    expect(managedPaths(policy)).toEqual(['browser.allowBlocking', 'browser.allowEval', 'browser.allowHistory']);
     expect(managedPaths(parsePolicy({ version: 1, settings: { browser: {} } }))).toEqual([]);
     expect(() => parsePolicy({ version: 1, settings: { browser: { allowEval: 'no' } } })).toThrow(/browser.allowEval must be a boolean/);
     expect(() => parsePolicy({ version: 1, settings: { browser: { allowEval: 'yes' } } })).toThrow(/browser.allowEval/);
-    expect(() => parsePolicy({ version: 1, settings: { browser: { homePage: 'ftp://x' } } })).toThrow(/browser.homePage/);
     // Unknown keys inside the block are ignored (the daemon rejects them; the app applies what it knows).
-    expect(parsePolicy({ version: 1, settings: { browser: { bridgePort: 1 } } }).settings?.browser).toEqual({});
+    // The home page is one of them since it became a character's to set: sdk.browser.setHomePage.
+    expect(parsePolicy({ version: 1, settings: { browser: { bridgePort: 1, homePage: 'https://home.test/' } } }).settings?.browser).toEqual({});
     const applied = applyPolicy(base, parsePolicy({ version: 1, settings: { browser: { allowEval: false } } }));
     expect(applied.settings.browser).toEqual({ ...base.browser, allowEval: false });
     expect(applied.managed).toEqual(['browser.allowEval']);
@@ -790,9 +790,6 @@ describe('SystemIntegration', () => {
       'pkexec', path.join(stage, 'install.sh'), '--browser-only', '--browser-extension', 'abcdefghijklmnopabcdefghijklmnop',
       '--browser-update-url', 'http://127.0.0.1:47821/extension/update.xml', '--browser-port', '47821', '--user', 'alice',
     ]);
-    await integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821, homePage: 'https://home.test/start' });
-    expect(commands.at(-1)!.slice(-4)).toEqual(['--browser-home', 'https://home.test/start', '--user', 'alice']);
-    await expect(integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821, homePage: 'javascript:1' })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
     await integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821, extraPolicyDirs: ['/etc/helium/policies/managed/', ' ', '/etc/helium/policies/managed'] });
     expect(commands.at(-1)!.slice(-4)).toEqual(['--browser-policy-dir', '/etc/helium/policies/managed', '--user', 'alice']);
     await expect(integration.installBrowserPolicy({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', updateUrl: 'http://127.0.0.1:47821/extension/update.xml', port: 47821, extraPolicyDirs: ['/etc/helium'] })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });

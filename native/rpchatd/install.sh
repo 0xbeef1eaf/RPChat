@@ -5,7 +5,7 @@
 # the udev rule / uinput module for fallback tools, the policy directory, an application menu
 # entry + icon for the app (AppImage users get one this way), an autostart entry for one user,
 # and optionally the Chromium browser policy that force-installs the rpchat browser extension
-# (docs/browser-extension.md). With an AppImage as --app-bin it also does a "system install":
+# for one user (docs/browser-extension.md). With an AppImage as --app-bin it also does a "system install":
 # the AppImage is unpacked to /opt/rpchat/current (root-owned; /opt/rpchat/previous keeps the
 # last version, versions.json describes both, /usr/local/bin/rpchat points at it) so that later
 # updates are applied by the daemon without a password prompt. Idempotent: every step prints
@@ -16,12 +16,12 @@
 #   install.sh [--app-bin <path>] [--user <name>] [--autostart xdg|systemd|none]
 #              [--menu-entry yes|no] [--policy-template] [--daemon-bin <path>] [--dry-run]
 #              [--system-install | --no-system-install] [--guard | --no-guard]
-#              [--browser-extension <id> --browser-update-url <url> [--browser-port <n>] [--browser-home <url>]
+#              [--browser-extension <id> --browser-update-url <url> [--browser-port <n>]
 #               [--browser-policy-dir <dir>]... [--browser-only]]
 #   install.sh --rollback [--dry-run]            swap /opt/rpchat/previous back to current
 #   install.sh --remove [--dry-run]              remove the system install (daemon stays)
 #   install.sh --refresh-daemon-files [--dry-run] reinstall the daemon binary/unit/udev files (no restart)
-#   install.sh --remove-browser-policy [--dry-run]
+#   install.sh --remove-browser-policy [--browser-all-users] [--dry-run]
 #   install.sh --guard | --no-guard [--dry-run]   session guard: pam_apparmor line + profiles (docs/system-integration.md)
 #   install.sh --uninstall [--user <name>] [--dry-run]
 # Tests: --prefix <dir> relocates every system path under <dir> and skips groups/services.
@@ -51,9 +51,13 @@ ICON_DST=/usr/local/share/icons/hicolor/512x512/apps/rpchat.png
 # System install: the unpacked app (docs/system-integration.md "System install").
 INSTALL_ROOT=/opt/rpchat
 BIN_LINK=/usr/local/bin/rpchat
+# The policy is written for one user: "rpchat-<user>.json" (or "rpchat-uid-<n>.json" when the name
+# is not filesystem-friendly), root-owned and readable by that user alone — the extension id and
+# the bridge port in it are that user's. "rpchat.json" is the machine-wide file older versions
+# wrote; it is deleted wherever a per-user one is installed.
+BROWSER_POLICY_LEGACY=rpchat.json
 # Chromium-based browsers on Linux read managed policies from these directories (each browser its
 # own). Format: "<policy dir>|<config dir whose presence means the browser is installed>|<binaries on PATH>".
-BROWSER_POLICY_FILE=rpchat.json
 BROWSER_POLICY_DIRS="/etc/chromium/policies/managed|/etc/chromium|chromium chromium-browser
 /etc/opt/chrome/policies/managed|/etc/opt/chrome|google-chrome google-chrome-stable
 /etc/brave/policies/managed|/etc/brave|brave-browser brave
@@ -76,12 +80,13 @@ NEED_RELOGIN=false
 BROWSER_EXT=""
 BROWSER_UPDATE_URL=""
 BROWSER_PORT=""
-BROWSER_HOME=""
 # Extra managed-policy directories (--browser-policy-dir, repeatable): Chromium forks whose policy
 # path is not in BROWSER_POLICY_DIRS. Written and removed like the built-in ones. Newline separated.
 BROWSER_EXTRA_DIRS=""
 BROWSER_ONLY=false
 REMOVE_BROWSER_POLICY=false
+# --browser-all-users: remove every user's policy file, not just this user's (what --uninstall does).
+BROWSER_ALL_USERS=false
 # auto: yes when --app-bin is an AppImage and the daemon is being installed.
 SYSTEM_INSTALL=auto
 # auto: engage when the daemon binary is installed and the policy file has guard.mode != off
@@ -112,7 +117,6 @@ while [ $# -gt 0 ]; do
     --browser-extension) BROWSER_EXT="${2:?--browser-extension needs an id}"; shift 2 ;;
     --browser-update-url) BROWSER_UPDATE_URL="${2:?--browser-update-url needs a URL}"; shift 2 ;;
     --browser-port) BROWSER_PORT="${2:?--browser-port needs a number}"; shift 2 ;;
-    --browser-home) BROWSER_HOME="${2:?--browser-home needs a URL}"; shift 2 ;;
     --browser-policy-dir)
       case "${2:?--browser-policy-dir needs an absolute directory}" in
         /*/policies/managed) ;;
@@ -123,6 +127,7 @@ while [ $# -gt 0 ]; do
 $2"; shift 2 ;;
     --browser-only) BROWSER_ONLY=true; shift ;;
     --remove-browser-policy) REMOVE_BROWSER_POLICY=true; shift ;;
+    --browser-all-users) BROWSER_ALL_USERS=true; shift ;;
     --system-install) SYSTEM_INSTALL=yes; shift ;;
     --no-system-install) SYSTEM_INSTALL=no; shift ;;
     --guard) GUARD=yes; GUARD_ARG=yes; GUARD_ONLY=true; shift ;;
@@ -148,6 +153,10 @@ if [ -n "$PREFIX" ]; then
   RUN_DIR="$PREFIX$RUN_DIR"; MENU_DST="$PREFIX$MENU_DST"
   ICON_DST="$PREFIX$ICON_DST"; INSTALL_ROOT="$PREFIX$INSTALL_ROOT"; BIN_LINK="$PREFIX$BIN_LINK"
   PAM_FILES="$PREFIX/etc/pam.d/system-login $PREFIX/etc/pam.d/common-session"
+  # The browser policy directories too: a test run must not write to (or delete from) the real /etc.
+  BROWSER_POLICY_DIRS="$(printf '%s\n' "$BROWSER_POLICY_DIRS" | awk -v p="$PREFIX" -F'|' 'NF { print p $1 "|" p $2 "|" $3 }')"
+  BROWSER_ALWAYS="$(for d in $BROWSER_ALWAYS; do printf '%s ' "$PREFIX$d"; done)"
+  BROWSER_EXTRA_DIRS="$(printf '%s\n' "$BROWSER_EXTRA_DIRS" | awk -v p="$PREFIX" 'NF { print p $0 }')"
   SYSTEM_CMDS=false
 fi
 # --guard/--no-guard together with the normal install flags run the whole install with the guard
@@ -168,11 +177,6 @@ if [ -n "$BROWSER_EXT" ] || $BROWSER_ONLY; then
     ''|*[!0-9]*) echo "install.sh: --browser-port must be a number" >&2; exit 64 ;;
   esac
   if [ "$BROWSER_PORT" -lt 1 ] || [ "$BROWSER_PORT" -gt 65535 ]; then echo "install.sh: --browser-port must be 1..65535" >&2; exit 64; fi
-  case "$BROWSER_HOME" in
-    ''|http://*|https://*) ;;
-    *) echo "install.sh: --browser-home must be an http(s) URL" >&2; exit 64 ;;
-  esac
-  case "$BROWSER_HOME" in *['"\\']*|*[[:space:]]*) echo "install.sh: --browser-home must not contain quotes, backslashes or spaces" >&2; exit 64 ;; esac
 fi
 
 ok()   { printf '[ok]   %s\n' "$*"; }
@@ -574,55 +578,113 @@ browser_policy_targets() {
   } | awk '!seen[$0]++'
 }
 
-browser_policy_json() { # browser_policy_json <id> <update-url> <port> [home-url]
-  # With a home page (Settings → Browser), HomepageLocation covers the Home button and browsers where
-  # the user switched the extension's new-tab override off; the same JSON as apps/desktop/src/main/browser/policy.ts.
-  if [ -n "${4:-}" ]; then
-    printf '{\n  "ExtensionInstallForcelist": ["%s;%s"],\n  "ExtensionInstallSources": ["http://127.0.0.1:%s/*"],\n  "3rdparty": { "extensions": { "%s": { "policy": { "port": %s } } } },\n  "HomepageLocation": "%s",\n  "HomepageIsNewTabPage": false\n}\n' "$1" "$2" "$3" "$1" "$3" "$4"
-  else
-    printf '{\n  "ExtensionInstallForcelist": ["%s;%s"],\n  "ExtensionInstallSources": ["http://127.0.0.1:%s/*"],\n  "3rdparty": { "extensions": { "%s": { "policy": { "port": %s } } } }\n}\n' "$1" "$2" "$3" "$1" "$3"
+browser_policy_json() { # browser_policy_json <id> <update-url> <port>
+  # The same JSON as apps/desktop/src/main/browser/policy.ts. The home page is not in here: only a
+  # character sets one, through sdk.browser.setHomePage and the extension's new-tab override.
+  printf '{\n  "ExtensionInstallForcelist": ["%s;%s"],\n  "ExtensionInstallSources": ["http://127.0.0.1:%s/*"],\n  "3rdparty": { "extensions": { "%s": { "policy": { "port": %s } } } }\n}\n' "$1" "$2" "$3" "$1" "$3"
+}
+
+# The user the policy is for: --user, else whoever called sudo/pkexec, else root (who is running it).
+browser_policy_user() { if [ -n "$TARGET_USER" ]; then printf '%s' "$TARGET_USER"; else printf 'root'; fi; }
+browser_policy_uid()  { if [ -n "$USER_UID" ]; then printf '%s' "$USER_UID"; else printf '0'; fi; }
+# One file per user. A name with anything but [A-Za-z0-9._-] in it (rare, but "DOMAIN\\user" happens
+# with winbind/sssd) would be awkward in a policy directory, so those get the uid instead.
+browser_policy_file() { # browser_policy_file <user> <uid>
+  case "$1" in
+    *[!A-Za-z0-9._-]*) printf 'rpchat-uid-%s.json' "$2" ;;
+    *) printf 'rpchat-%s.json' "$1" ;;
+  esac
+}
+
+# Only the one user may read the file, and nobody but root may write it: Chromium skips a policy
+# file it cannot read, which is what keeps one user's extension id and bridge port out of another
+# user's browser, while root ownership keeps the user from editing their own policy.
+BROWSER_ACL_NOTE=""
+browser_policy_restrict() { # browser_policy_restrict <path> <user> <uid>
+  local path="$1" user="$2" uid="$3" gid
+  if $DRY_RUN; then
+    note "+ chown root:root $path && chmod 0600 $path"
+    if [ "$uid" != 0 ]; then note "+ setfacl -m u:$user:r $path"; fi
+    return 0
   fi
+  chown root:root "$path"
+  chmod 0600 "$path"
+  # root reads it whatever the mode says; no ACL needed (and none possible for a file it owns anyway).
+  if [ "$uid" = 0 ]; then return 0; fi
+  if have setfacl && setfacl -m "u:$user:r" "$path" 2>/dev/null; then return 0; fi
+  # No ACLs (no setfacl, or a filesystem without them): the group bit is the next best thing.
+  gid="$(getent passwd "$user" | cut -d: -f4)"
+  if [ -n "$gid" ] && chgrp "$gid" "$path" 2>/dev/null; then
+    chmod 0640 "$path"
+    BROWSER_ACL_NOTE="no POSIX ACLs here (setfacl missing or unsupported): the file is group-readable (gid $gid) instead, so everyone in that group gets this policy"
+    return 0
+  fi
+  chmod 0644 "$path"
+  BROWSER_ACL_NOTE="neither ACLs nor the user's group could be used: the file is world-readable, so other users' browsers get this policy too"
 }
 
 install_browser_policy() {
-  local content dir dst
-  content="$(browser_policy_json "$BROWSER_EXT" "$BROWSER_UPDATE_URL" "$BROWSER_PORT" "$BROWSER_HOME")"
-  note "browser extension $BROWSER_EXT from $BROWSER_UPDATE_URL (port $BROWSER_PORT)${BROWSER_HOME:+, home page $BROWSER_HOME}"
+  local content dir dst legacy user uid file
+  user="$(browser_policy_user)"; uid="$(browser_policy_uid)"; file="$(browser_policy_file "$user" "$uid")"
+  content="$(browser_policy_json "$BROWSER_EXT" "$BROWSER_UPDATE_URL" "$BROWSER_PORT")"
+  note "browser extension $BROWSER_EXT from $BROWSER_UPDATE_URL (port $BROWSER_PORT)"
+  note "for $user alone: $file, owned by root and readable only by $user (the id and the port are that user's)"
   for dir in $(browser_policy_targets); do
-    dst="$dir/$BROWSER_POLICY_FILE"
-    if [ -f "$dst" ] && [ "$(cat "$dst")" = "$content" ]; then
+    dst="$dir/$file"
+    # The machine-wide file older versions wrote applied to whoever used that browser: drop it.
+    legacy="$dir/$BROWSER_POLICY_LEGACY"
+    if [ -e "$legacy" ]; then run rm -f "$legacy"; ok "removed the machine-wide $legacy"; fi
+    if ! $DRY_RUN && [ -f "$dst" ] && [ "$(cat "$dst")" = "$content" ]; then
+      browser_policy_restrict "$dst" "$user" "$uid"   # the content is right; make sure the access still is
       skip "$dst is up to date"
       continue
     fi
     if $DRY_RUN; then
       note "+ install -d -m 0755 $dir"
       note "+ write $dst"
+      browser_policy_restrict "$dst" "$user" "$uid"
     else
       install -d -m 0755 -o root -g root "$dir"
-      printf '%s' "$content" > "$dst.tmp" && chmod 0644 "$dst.tmp" && mv -f "$dst.tmp" "$dst"
+      # 0600 from the start (umask), restricted while still private, then renamed into place:
+      # no moment in which another user could read it.
+      ( umask 077; printf '%s' "$content" > "$dst.tmp" )
+      browser_policy_restrict "$dst.tmp" "$user" "$uid"
+      mv -f "$dst.tmp" "$dst"
     fi
     ok "wrote $dst"
   done
+  if [ -n "$BROWSER_ACL_NOTE" ]; then warn "$BROWSER_ACL_NOTE"; fi
   note "Chromium-based browsers pick the policy up within minutes or at their next start (chrome://policy → Reload policies)."
   note "Google Chrome on Windows/macOS only force-installs Web Store extensions; this policy works with Linux Chrome and every Chromium build."
 }
 
+# remove_browser_policy [all]: this user's policy file (and the old machine-wide one), or with
+# "all" every user's — what --uninstall does, since it tears the machine down for everybody.
 remove_browser_policy() {
-  local line dir cfg bins dst removed=false
+  local dir cfg bins dst user uid file
+  user="$(browser_policy_user)"; uid="$(browser_policy_uid)"; file="$(browser_policy_file "$user" "$uid")"
   {
     # (`if`, not `&&`: with an empty list the last `[ -n ]` would make the loop, the group and —
     # with pipefail — the whole pipeline exit 1, which `set -e` turned into a silent early exit)
     echo "$BROWSER_POLICY_DIRS" | while IFS='|' read -r dir cfg bins; do if [ -n "$dir" ]; then echo "$dir"; fi; done
     echo "$BROWSER_EXTRA_DIRS" | while read -r dir; do if [ -n "$dir" ]; then echo "$dir"; fi; done
   } | awk '!seen[$0]++' | while read -r dir; do
-    dst="$dir/$BROWSER_POLICY_FILE"
-    if [ -e "$dst" ]; then run rm -f "$dst"; ok "removed $dst"; else skip "$dst absent"; fi
+    if [ "${1:-}" = all ]; then
+      # An unmatched glob stays literal, so every candidate is checked before it is removed.
+      for dst in "$dir/$BROWSER_POLICY_LEGACY" "$dir"/rpchat-*.json; do
+        if [ -e "$dst" ]; then run rm -f "$dst"; ok "removed $dst"; fi
+      done
+    else
+      for dst in "$dir/$file" "$dir/$BROWSER_POLICY_LEGACY"; do
+        if [ -e "$dst" ]; then run rm -f "$dst"; ok "removed $dst"; else skip "$dst absent"; fi
+      done
+    fi
   done
 }
 
 if $REMOVE_BROWSER_POLICY; then
   echo "rpchat browser policy: remove"
-  remove_browser_policy
+  if $BROWSER_ALL_USERS; then remove_browser_policy all; else remove_browser_policy; fi
   ok "browser policy removed"
   exit 0
 fi
@@ -746,7 +808,7 @@ if $UNINSTALL; then
   else
     skip "group $GROUP absent"
   fi
-  remove_browser_policy
+  remove_browser_policy all
   if [ -e "$POLICY_DST" ] || [ -d "$POLICY_DIR" ]; then
     note "kept $POLICY_DIR (the policy file). Remove it with: sudo rm -r $POLICY_DIR"
   fi

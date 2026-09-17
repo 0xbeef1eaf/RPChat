@@ -30,8 +30,11 @@ export interface PolicyFile {
      * rules rather than user settings, so only `automatic` is reported as a managed path.
      */
     updates?: { automatic?: boolean; enabled?: boolean; allowDowngrade?: boolean };
-    /** Browser extension limits: what characters may do in the browser and the block cap. */
-    browser?: Partial<Pick<AppSettings['browser'], 'allowBlocking' | 'allowEval' | 'allowHistory' | 'homePage'>>;
+    /**
+     * Browser extension limits: what characters may do in the browser. The home page is not one of
+     * them — only a character sets it, through `sdk.browser.setHomePage`.
+     */
+    browser?: Partial<Pick<AppSettings['browser'], 'allowBlocking' | 'allowEval' | 'allowHistory'>>;
   };
   /** Input-lock hard limits enforced by the daemon regardless of app settings. */
   inputLock?: {

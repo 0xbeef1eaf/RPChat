@@ -14,7 +14,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   llm: { permission: 'trusted', methods: ['ask', 'wake'] },
   memory: { permission: 'trusted', methods: ['remember', 'recall', 'recent', 'update', 'forget'] },
   display: { permission: 'trusted', methods: ['monitors', 'backend'] },
-  media: { permission: 'pack', methods: ['showImage', 'playVideo', 'playAudio', 'update', 'close', 'closeAll', 'list'] },
+  media: { permission: 'pack', methods: ['showImage', 'playVideo', 'playAudio', 'overlay', 'update', 'close', 'closeAll', 'list'] },
   ui: { permission: 'pack', methods: ['notify', 'confirm', 'choose', 'ask', 'pickFile', 'pickFolder'] },
   wallpaper: { permission: 'pack', methods: ['set', 'restore', 'current'] },
   browser: {

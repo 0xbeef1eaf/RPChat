@@ -103,6 +103,26 @@ interface PlayVideoOptions extends OverlayOptions {
   muted?: boolean;
 }
 
+/**
+ * Options for sdk.media.overlay(): one image or video washed over whole screens. Placement, size,
+ * layer and click-through are fixed — the overlay covers each screen it is given, floats on the
+ * 'overlay' layer and always lets clicks through.
+ */
+interface MediaOverlayOptions {
+  /** Which screen to cover: 'all' (the default) for every connected monitor, or one MonitorSelector. */
+  monitor?: MonitorSelector | 'all';
+  /** 0..1, default 0.25. Over 0.5 the screen is mostly the overlay: keep it low unless the user asked for more. */
+  opacity?: number;
+  /** Auto-close after this many milliseconds. Omit to keep it up until close(). */
+  durationMs?: number;
+  /** Video volume 0..1, default 0.5. With several screens covered only one of them plays sound. */
+  volume?: number;
+  /** Restart the video when it ends. Default: true with durationMs, false without. */
+  loop?: boolean;
+  /** Start the video muted. Default false. */
+  muted?: boolean;
+}
+
 interface PlayAudioOptions {
   /** 0..1, default 1. */
   volume?: number;

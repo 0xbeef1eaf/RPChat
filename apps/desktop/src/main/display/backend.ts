@@ -8,6 +8,7 @@ import type {
   AppSettings,
   AvatarState,
   DisplayBackendInfo,
+  FullscreenOverlayOptions,
   MediaPosition,
   MediaWindowEvent,
   MonitorInfo,
@@ -68,6 +69,8 @@ export interface OverlaySpec {
   options: ResolvedOverlayOptions;
   /** Page-level options forwarded to media.html (caption, durationMs, volume, loop, muted, closeOnEnd). */
   page: ShowImageOptions | PlayVideoOptions;
+  /** `fullscreen` overlays: how the page paints the screen-filling, click-through surface. */
+  fullscreen?: FullscreenOverlayOptions;
   /** `avatar` overlays: the initial avatar state (its `imageUrl` is rewritten for helper backends). */
   avatar?: AvatarState;
   /** `widget` overlays: the widget to render. */

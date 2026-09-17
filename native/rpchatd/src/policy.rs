@@ -444,18 +444,11 @@ impl PolicyFile {
                                 return Err(format!("settings.browser.{key} must be a boolean"));
                             }
                         }
-                        "homePage" => match value.as_str() {
-                            Some(s)
-                                if s.is_empty()
-                                    || s.starts_with("http://")
-                                    || s.starts_with("https://") => {}
-                            _ => {
-                                return Err(
-                                    "settings.browser.homePage must be an http(s) URL or \"\""
-                                        .into(),
-                                )
-                            }
-                        },
+                        // Was managed until the home page became a character's to set: say so,
+                        // rather than leaving an administrator with a policy file that used to load.
+                        "homePage" => {
+                            return Err("settings.browser.homePage is no longer a managed setting: the home page is set by characters through sdk.browser.setHomePage. Remove the key.".into())
+                        }
                         _ => {
                             return Err(format!("settings.browser.{key} is not a managed setting"))
                         }
@@ -948,7 +941,7 @@ mod tests {
                 "senses": {"includeInPrompt": false},
                 "displayBackend": "electron",
                 "updates": {"automatic": false, "enabled": true, "allowDowngrade": true},
-                "browser": {"allowBlocking": false, "allowEval": true, "allowHistory": false, "homePage": "https://example.com/"}
+                "browser": {"allowBlocking": false, "allowEval": true, "allowHistory": false}
             },
             "inputLock": {"maxDurationMs": 60000, "emergencyKey": "f12", "emergencyHoldMs": 2000, "enabled": true}
         }))
@@ -993,7 +986,8 @@ mod tests {
             json!({"version": 1, "settings": {"browser": "x"}}),
             json!({"version": 1, "settings": {"browser": {"allowEval": "no"}}}),
             json!({"version": 1, "settings": {"browser": {"allowEval": "yes"}}}),
-            json!({"version": 1, "settings": {"browser": {"homePage": "ftp://x"}}}),
+            // The home page is a character's to set (sdk.browser.setHomePage), never the policy's.
+            json!({"version": 1, "settings": {"browser": {"homePage": "https://example.com/"}}}),
             json!({"version": 1, "settings": {"browser": {"bridgePort": 1}}}),
             json!({"version": 1, "inputLock": {"emergencyKey": "space"}}),
             json!({"version": 1, "inputLock": {"maxDurationMs": -5}}),

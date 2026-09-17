@@ -114,12 +114,15 @@ filter there, or `clearImageEffects`.
 `sdk.browser.setHomePage(url | null)`, `homePage()`. The extension overrides the browser's
 new-tab page (`chrome_url_overrides.newtab` → `newtab.html`): when a home page is stored in
 `chrome.storage.local.homePage` and it is http(s), the page does `location.replace(url)`;
-otherwise it shows a plain "rpchat" page. The value lives in `settings.browser.homePage` (Settings → Browser "Home page";
-policy key `browser.homePage`) and is pushed to the extension every time one connects, so it
-survives extension re-installs. **Install browser policy…** also writes it as
-`HomepageLocation` + `HomepageIsNewTabPage: false` (`install.sh --browser-home <url>`), which
-covers the browser's Home button and browsers where the user switched the extension's new-tab
-override off (`chrome://extensions` lets them) — the policy value still applies there.
+otherwise it shows a plain "rpchat" page. The value lives in `settings.browser.homePage` and is
+pushed to the extension every time one connects, so it survives extension re-installs.
+
+**Only a character sets it.** There is no field for it in Settings → Browser (which shows the
+current one, read-only), no `browser.homePage` policy key, and the managed policy carries no
+`HomepageLocation`: the home page is something a character does in the conversation and can undo
+there — ask yours to change or clear it — rather than a setting an administrator pins or a user
+fills in. Switching the extension's new-tab override off (`chrome://extensions`) also ends it, and
+so does removing the extension.
 
 ### Bookmarks
 
@@ -169,23 +172,47 @@ access is disabled in Settings → Browser".
 **Settings → Browser → Install browser policy…** runs the bundled installer with `pkexec`:
 
 ```sh
-install.sh --browser-only --browser-extension <id> --browser-update-url http://127.0.0.1:<port>/extension/update.xml --browser-port <port>
+install.sh --browser-only --browser-extension <id> --browser-update-url http://127.0.0.1:<port>/extension/update.xml --browser-port <port> --user <you>
 ```
 
-It writes `rpchat.json` into the managed-policy directory of every Chromium-based browser
+It writes `rpchat-<user>.json` into the managed-policy directory of every Chromium-based browser
 that looks installed (binary on `PATH` or its `/etc` config directory present); Chromium and
 Chrome always get one:
 
 | Browser | Policy file |
 |---|---|
-| Chromium | `/etc/chromium/policies/managed/rpchat.json` |
-| Google Chrome | `/etc/opt/chrome/policies/managed/rpchat.json` |
-| Brave | `/etc/brave/policies/managed/rpchat.json` |
-| Microsoft Edge | `/etc/opt/edge/policies/managed/rpchat.json` |
-| Vivaldi | `/etc/vivaldi/policies/managed/rpchat.json` |
-| Opera | `/etc/opera/policies/managed/rpchat.json` |
+| Chromium | `/etc/chromium/policies/managed/rpchat-<user>.json` |
+| Google Chrome | `/etc/opt/chrome/policies/managed/rpchat-<user>.json` |
+| Brave | `/etc/brave/policies/managed/rpchat-<user>.json` |
+| Microsoft Edge | `/etc/opt/edge/policies/managed/rpchat-<user>.json` |
+| Vivaldi | `/etc/vivaldi/policies/managed/rpchat-<user>.json` |
+| Opera | `/etc/opera/policies/managed/rpchat-<user>.json` |
 
-The file (`apps/desktop/src/main/browser/policy.ts` builds the same JSON):
+### One file per user, still owned by root
+
+The extension id comes from that user's signing key and the port from their settings, so the
+policy is one user's — but Chromium on Linux reads policies only from the root-owned directories
+above, and applies every file it finds there to whoever is running the browser. The installer
+therefore writes **one file per user, restricted to that user**:
+
+- `0600`, owned by `root:root`, plus a POSIX ACL granting the user read access
+  (`setfacl -m u:<user>:r`). Where ACLs are unavailable (no `setfacl`, or a filesystem without
+  them) it falls back to `0640 root:<the user's group>` and says so — everyone in that group then
+  gets the policy.
+- Chromium **skips a policy file it cannot read** and loads the rest, so another user's browser
+  never sees this one and is free to have its own (their own rpchat, their own id and port).
+- Root ownership is what it always was: the user cannot edit or delete their own policy, and
+  neither can anything running as them — characters included. Removing it needs a password again
+  (Settings → Browser → *Remove policy*, or `install.sh --remove-browser-policy`).
+- A machine-wide `rpchat.json` from an older version applied to everyone who used that browser;
+  installing a per-user policy deletes it wherever it is found.
+- A user name that does not fit a policy file name (anything outside `A-Za-z0-9._-`, such as
+  `CORP\\alice`) gives `rpchat-uid-<uid>.json` instead.
+
+This is unrelated to the [system integration](system-integration.md): the policy is written by the
+same installer through `pkexec` either way, and it is root-owned either way.
+
+The file itself (`apps/desktop/src/main/browser/policy.ts` builds the same JSON):
 
 ```json
 {
@@ -209,8 +236,8 @@ and the extension connects. The app must be running for the download to succeed;
 started while rpchat is closed retries later. `chrome://policy` shows the policy and any
 error; `chrome://extensions` shows the extension as "Installed by your administrator".
 
-With a home page set (Settings → Browser), the file also carries `"HomepageLocation": "<url>"`
-and `"HomepageIsNewTabPage": false` (`--browser-home <url>`).
+The file says nothing else — in particular no home page: that is a character's to set through
+`sdk.browser.setHomePage`, which the extension applies as its new-tab override.
 
 **Extra policy directories.** Chromium forks whose managed-policy directory is not in the table
 (Helium, ungoogled-chromium derivatives, distribution builds with their own name) can be added
@@ -221,10 +248,10 @@ in `/policies/managed`. To find a browser's directory, open `chrome://policy` in
 names the platform policy path when a policy is loaded) or watch it look for the directory:
 `strace -f -e trace=openat <browser> 2>&1 | grep policies/managed`.
 
-**Remove policy** (`install.sh --remove-browser-policy [--browser-policy-dir <dir>]…`) deletes
-every `rpchat.json` the installer wrote; browsers uninstall the extension at their next policy
-refresh.
-`install.sh --uninstall` removes them as well. The `.deb` post-install never writes this
+**Remove policy** (`install.sh --remove-browser-policy [--browser-policy-dir <dir>]… [--user <name>]`)
+deletes that user's `rpchat-<user>.json` files and any machine-wide `rpchat.json`, leaving other
+users' policies in place; browsers uninstall the extension at their next policy refresh.
+`--browser-all-users` removes every user's, which is what `install.sh --uninstall` does. The `.deb` post-install never writes this
 policy: the extension id is derived from a per-user key (below), so it has to be done from
 the app for the user in question. `--dry-run` prints every file it would write.
 
@@ -238,7 +265,9 @@ Caveats:
   (`~/.var/app/<app-id>/config/<browser>/policies/managed/` for Flatpak, e.g.
   `~/.var/app/org.chromium.Chromium/config/chromium/policies/managed/`), which the installer
   does not touch. Copy the JSON there yourself (the Settings tab shows the id and update
-  URL), or load the extension unpacked. Sandboxed browsers can reach `127.0.0.1`.
+  URL), or load the extension unpacked. Sandboxed browsers can reach `127.0.0.1`. Those paths are
+  inside one user's home, so they are per user by construction — and writable by that user, so they
+  are not tamper-proof the way the root-owned files are.
 - The **id is per user and per machine**: it comes from `<userData>/extension-key.pem`
   (an RSA-2048 key generated on first use, `0600`, never logged). Deleting that file changes
   the id, so the policy has to be installed again.
@@ -318,7 +347,10 @@ unless you trust the packs you run, and keep the web allowlist tight when in dou
    the extension package and its id, nothing else, and only to processes on this machine.
 5. **Signed package.** The CRX is signed with your key, so the id in the policy can only be
    satisfied by a package this app built; the key never leaves `<userData>`.
-6. **Least privilege in the extension.** Permissions: `tabs`, `scripting`, `activeTab`,
+6. **One user per policy file.** The managed policy is root-owned (no user, and nothing running
+   as them, can change what their browser is told to install) and readable only by the user it was
+   written for, so one user's extension id and bridge port never reach another user's browser.
+7. **Least privilege in the extension.** Permissions: `tabs`, `scripting`, `activeTab`,
    `storage`, `alarms`, `declarativeNetRequest` (page blocks), `bookmarks`, `history`, host
    permission `<all_urls>` (needed to read pages the character is sent to and to capture tabs).
    No persistent content scripts, no cookies/downloads permissions, no remote code; the only

@@ -1,13 +1,28 @@
 /**
  * Chromium enterprise policy for force-installing the bundled extension from the app's loopback
- * update URL (pure; the installer writes it). Chrome on Windows/macOS only force-installs Web Store
+ * update URL (pure; the installer writes it, one file per user). Chrome on Windows/macOS only force-installs Web Store
  * extensions, so the policy is meant for Linux Chrome and every Chromium-based build — see
  * docs/browser-extension.md.
  */
 import type { BrowserPolicyJson } from '@rp/shared';
 
-/** File name the installer writes into each managed-policy directory. */
-export const BROWSER_POLICY_FILENAME = 'rpchat.json';
+/**
+ * The machine-wide file older versions wrote into each managed-policy directory. Installing a
+ * per-user policy deletes it: the id and the port in it are one user's, so it never belonged to
+ * everybody who uses that browser.
+ */
+export const LEGACY_BROWSER_POLICY_FILENAME = 'rpchat.json';
+
+/**
+ * File name the installer writes into each managed-policy directory: one per user, since the
+ * extension id comes from that user's signing key and the port from their settings. The installer
+ * leaves it root-owned and readable by that user alone (a POSIX ACL), so another user's browser
+ * skips it and the user themselves cannot edit it. Mirrors `browser_policy_file` in
+ * `native/rpchatd/install.sh`; a user name that is awkward in a file name falls back to the uid.
+ */
+export function browserPolicyFilename(user: string, uid: number): string {
+  return /^[A-Za-z0-9._-]+$/.test(user) ? `rpchat-${user}.json` : `rpchat-uid-${uid}.json`;
+}
 
 /**
  * Managed-policy directories of the Chromium-based browsers on Linux. Each browser only reads its
@@ -36,21 +51,20 @@ export function crxUrlFor(port: number): string {
  * The `3rdparty` block reaches the extension's `chrome.storage.managed` verbatim (Chromium passes
  * the JSON through, checked against the extension's `schema.json`); the nested `policy` object is
  * the layout Chrome documents for the Windows registry / macOS plist, and the extension accepts
- * a flat `{ "port": n }` as well.
+ * a flat `{ "port": n }` as well. Nothing else belongs in here — the home page in particular is a
+ * character's to set through `sdk.browser.setHomePage`, and lives in the extension's new-tab
+ * override, not in a policy the user cannot undo.
  */
-export function browserPolicy(extensionId: string, port: number, updateUrl: string = updateUrlFor(port), homePage?: string): BrowserPolicyJson {
+export function browserPolicy(extensionId: string, port: number, updateUrl: string = updateUrlFor(port)): BrowserPolicyJson {
   return {
     ExtensionInstallForcelist: [`${extensionId};${updateUrl}`],
     ExtensionInstallSources: [`http://127.0.0.1:${port}/*`],
     '3rdparty': { extensions: { [extensionId]: { policy: { port } } } },
-    // The home page a character set: `HomepageLocation` covers the Home button and browsers where
-    // the user disabled the extension's new-tab override; `HomepageIsNewTabPage: false` keeps it a URL.
-    ...(homePage && /^https?:\/\//i.test(homePage) ? { HomepageLocation: homePage, HomepageIsNewTabPage: false } : {}),
   };
 }
 
-export function browserPolicyText(extensionId: string, port: number, updateUrl?: string, homePage?: string): string {
-  return `${JSON.stringify(browserPolicy(extensionId, port, updateUrl, homePage), null, 2)}\n`;
+export function browserPolicyText(extensionId: string, port: number, updateUrl?: string): string {
+  return `${JSON.stringify(browserPolicy(extensionId, port, updateUrl), null, 2)}\n`;
 }
 
 /** Omaha v2 update manifest Chromium polls for force-installed extensions. */

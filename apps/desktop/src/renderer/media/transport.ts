@@ -16,6 +16,7 @@ const COMMAND_TYPES = new Set<MediaCommand['type']>([
   'show-image',
   'play-video',
   'play-audio',
+  'show-fullscreen',
   'update',
   'close',
   'close-all',
@@ -51,7 +52,8 @@ export function parseCommandJson(json: string): MediaCommand | null {
   const cmd = value as Record<string, unknown>;
   if (typeof cmd.type !== 'string' || !COMMAND_TYPES.has(cmd.type as MediaCommand['type'])) return null;
   if (cmd.type !== 'close-all' && typeof cmd.id !== 'string') return null;
-  if ((cmd.type === 'show-image' || cmd.type === 'play-video' || cmd.type === 'play-audio') && typeof cmd.url !== 'string') return null;
+  if ((cmd.type === 'show-image' || cmd.type === 'play-video' || cmd.type === 'play-audio' || cmd.type === 'show-fullscreen') && typeof cmd.url !== 'string') return null;
+  if (cmd.type === 'show-fullscreen' && !(isObject(cmd.options) && (cmd.options.media === 'image' || cmd.options.media === 'video'))) return null;
   if (cmd.type === 'update' && !isObject(cmd.options)) return null;
   if (cmd.type === 'avatar-show' && !(isObject(cmd.state) && typeof cmd.state.imageUrl === 'string')) return null;
   if (cmd.type === 'avatar-set' && !isObject(cmd.patch)) return null;

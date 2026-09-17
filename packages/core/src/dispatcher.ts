@@ -1,6 +1,7 @@
 import type { CapabilityRegistry } from '@rp/sdk';
 import type {
   ActionContext,
+  AssetKind,
   AuditEntry,
   CapabilityCall,
   CapabilityHandler,
@@ -29,13 +30,20 @@ export interface DispatcherOptions {
   logger?: Logger;
 }
 
-/** `module.method` calls whose first argument is an asset (string or AssetRef) and the kind it must have. */
-const ASSET_ARG_METHODS: Record<string, 'image' | 'video' | 'audio'> = {
-  'media.showImage': 'image',
-  'media.playVideo': 'video',
-  'media.playAudio': 'audio',
-  'wallpaper.set': 'image',
+/** `module.method` calls whose first argument is an asset (string or AssetRef) and the kinds it may have. */
+const ASSET_ARG_METHODS: Record<string, readonly AssetKind[]> = {
+  'media.showImage': ['image'],
+  'media.playVideo': ['video'],
+  'media.playAudio': ['audio'],
+  'media.overlay': ['image', 'video'],
+  'wallpaper.set': ['image'],
 };
+
+/** "an image", "an image or video" — for the message naming what a method accepts. */
+function kindPhrase(kinds: readonly AssetKind[]): string {
+  const list = kinds.join(' or ');
+  return `${/^[aeiou]/.test(list) ? 'an' : 'a'} ${list}`;
+}
 
 /** `module.method` calls whose first argument is a `MediaHandle` (or its id) that host handlers receive as the id string. */
 const HANDLE_ARG_METHODS = new Set(['media.close', 'media.update']);
@@ -221,19 +229,19 @@ export class CapabilityDispatcher implements CapabilityInvoker {
   }
 
   /**
-   * Asset arguments (`media.showImage/playVideo/playAudio`, `wallpaper.set`) become validated
-   * pack-root-relative path strings of the required kind; handle arguments (`media.close/update`)
+   * Asset arguments (`media.showImage/playVideo/playAudio/overlay`, `wallpaper.set`) become validated
+   * pack-root-relative path strings of one of the kinds the method takes; handle arguments (`media.close/update`)
    * become the handle's id string. Everything else passes through unchanged.
    */
   private normaliseArgs(context: ActionContext, module: string, method: string, args: Json[]): Json[] {
     const key = `${module}.${method}`;
-    const wantedKind = ASSET_ARG_METHODS[key];
-    if (wantedKind) {
+    const wantedKinds = ASSET_ARG_METHODS[key];
+    if (wantedKinds) {
       const pack = this.packs?.tryGetLoaded(context.packId);
       if (!pack) throw new RpError('NOT_FOUND', `Pack "${context.packId}" is not installed`, { packId: context.packId });
       const ref = coerceAssetArg(pack, args[0]);
-      if (ref.kind !== wantedKind) {
-        throw new RpError('INVALID_ARGUMENT', `sdk.${key} needs a ${wantedKind} asset; "${ref.path}" is ${ref.kind}`, {
+      if (!wantedKinds.includes(ref.kind)) {
+        throw new RpError('INVALID_ARGUMENT', `sdk.${key} needs ${kindPhrase(wantedKinds)} asset; "${ref.path}" is ${ref.kind}`, {
           path: ref.path,
           kind: ref.kind,
         });

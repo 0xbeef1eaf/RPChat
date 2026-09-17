@@ -5,7 +5,7 @@
  * opacity to `setOpacity` where Electron supports it (Windows/macOS) — the
  * media page always applies CSS opacity as well.
  */
-import type { AvatarState, DisplayBackendInfo, MediaCloseReason, MediaCommand, MediaWindowEvent, MonitorInfo, OverlayLayer, OverlayUpdate, WidgetSpec } from '@rp/shared';
+import type { AvatarState, DisplayBackendInfo, FullscreenOverlayOptions, MediaCloseReason, MediaCommand, MediaWindowEvent, MonitorInfo, OverlayLayer, OverlayUpdate, WidgetSpec } from '@rp/shared';
 import type {
   BackendLogger,
   DisplayBackend,
@@ -156,6 +156,11 @@ export function showCommand(spec: OverlaySpec, url: string): MediaCommand {
     layer: spec.options.layer,
   };
   switch (spec.kind) {
+    case 'fullscreen': {
+      // The surface fills the window the backend sized to the monitor; only the paint options travel.
+      const options: FullscreenOverlayOptions = spec.fullscreen ?? { media: 'image', opacity: spec.options.opacity };
+      return { type: 'show-fullscreen', id: spec.id, url, options };
+    }
     case 'video':
       return { type: 'play-video', id: spec.id, url, options: { ...spec.page, ...overlay } };
     case 'avatar': {

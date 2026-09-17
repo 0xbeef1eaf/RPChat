@@ -14,7 +14,7 @@ export type PolicyValue = number | boolean | string | string[] | Record<string, 
 export type PolicyEmergencyKey = NonNullable<NonNullable<PolicyFile['inputLock']>['emergencyKey']>;
 
 /** Which control the Forced settings tab renders for a key. */
-export type PolicySettingKind = 'number' | 'duration' | 'boolean' | 'url' | 'list' | 'functions' | 'choice';
+export type PolicySettingKind = 'number' | 'duration' | 'boolean' | 'list' | 'functions' | 'choice';
 
 export interface PolicySettingSpec {
   /** Dotted path under `settings` in the policy file, e.g. `autonomy.minDelayMs`. */
@@ -73,7 +73,6 @@ export const POLICY_SETTINGS: readonly PolicySettingSpec[] = [
   { path: 'browser.allowBlocking', group: 'browser', kind: 'boolean', label: 'Block pages', hint: 'sdk.browser.block may keep a page shut for a while.', fallback: true },
   { path: 'browser.allowEval', group: 'browser', kind: 'boolean', label: 'Run JavaScript in pages', hint: 'sdk.browser.eval runs code in the open tab.', fallback: true },
   { path: 'browser.allowHistory', group: 'browser', kind: 'boolean', label: 'Read browsing history', hint: 'sdk.browser.history reads what the user visited.', fallback: true },
-  { path: 'browser.homePage', group: 'browser', kind: 'url', label: 'Home page', hint: 'Forced start page for the bridge. Empty leaves the browser’s own.', fallback: '' },
 
   { path: 'updates.enabled', group: 'updates', kind: 'boolean', label: 'Update checks', hint: 'Off switches updating off entirely — no check, no download, no install.', fallback: true },
   { path: 'updates.automatic', group: 'updates', kind: 'boolean', label: 'Check in the background', hint: 'Pins the background-check switch users see in Settings → Updates.', fallback: true },
@@ -378,9 +377,6 @@ export function policyDraftProblems(draft: PolicyDraft): string[] {
     if (spec.kind === 'number' || spec.kind === 'duration') {
       if (typeof value !== 'number' || !Number.isFinite(value)) problems.push(`${spec.label} needs a number.`);
       else if (spec.min !== undefined && value < spec.min) problems.push(`${spec.label} must be at least ${spec.min >= 1000 ? `${spec.min / 1000} s` : spec.min}.`);
-    }
-    if (spec.kind === 'url' && typeof value === 'string' && value !== '' && !/^https?:\/\//i.test(value)) {
-      problems.push(`${spec.label} must be an http:// or https:// address, or empty.`);
     }
     if (spec.kind === 'choice' && !(spec.choices ?? []).includes(String(value))) problems.push(`${spec.label} must be one of ${(spec.choices ?? []).join(', ')}.`);
   }

@@ -60,7 +60,7 @@ function Segmented<T extends string>({
   label,
 }: {
   value: T;
-  options: readonly T[] | ReadonlyArray<{ value: T; label: string }>;
+  options: ReadonlyArray<T | { value: T; label: string }>;
   onChange: (value: T) => void;
   disabled?: boolean;
   label: string;
@@ -210,9 +210,7 @@ function SettingRow({ spec, draft, onDraft, disabled }: { spec: PolicySettingSpe
       />
     );
   } else if (spec.kind === 'duration') control = <DurationInput ms={typeof value === 'number' ? value : 0} min={spec.min} disabled={!on || disabled} label={spec.label} onChange={setValue} />;
-  else if (spec.kind === 'url') {
-    control = <input type="text" className="mono" style={{ width: 220 }} placeholder="https://…" spellCheck={false} value={typeof value === 'string' ? value : ''} disabled={!on || disabled} aria-label={spec.label} onChange={(e) => setValue(e.target.value)} />;
-  } else if (spec.kind === 'choice') control = <Segmented label={spec.label} value={String(value)} options={spec.choices ?? []} disabled={!on || disabled} onChange={setValue} />;
+  else if (spec.kind === 'choice') control = <Segmented label={spec.label} value={String(value)} options={spec.choices ?? []} disabled={!on || disabled} onChange={setValue} />;
   else if (spec.kind === 'list') {
     control = (
       <StringListEditor
