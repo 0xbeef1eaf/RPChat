@@ -6,7 +6,8 @@ be locked against the user. Solution: a small root daemon **`rpchatd`** that own
 and enforces a root-owned **policy file**; the app talks to it over a unix socket. An installer
 script sets everything up (group, udev rule, daemon service, policy template, autostart).
 Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `SystemIntegrationStatus`,
-`DAEMON_SOCKET_PATH`, `POLICY_FILE_PATH`, `SYSTEM_GROUP`), `IpcApi.system`, `IpcApi.settings.managed`.
+`DAEMON_SOCKET_PATH`, `POLICY_FILE_PATH`, `SYSTEM_GROUP`, `CryptoKeyRecord`), `@rp/shared/crypto.ts`
+(`CryptoStatus`, `CryptoDecryptOutcome`), `IpcApi.system`, `IpcApi.crypto`, `IpcApi.settings.managed`.
 
 ## `native/rpchatd` (Rust, Linux only)
 
@@ -238,12 +239,25 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   (engage, idempotent re-engage with cached sockets, enforce rewrite, parser failure, off, no
   LSM), socket-level `guard-apply`/`guard-status`/policy-change and `subscribe` + pushed events,
   and the generated profiles through `apparmor_parser -Q` when it is installed (CI installs it).
+- **`sdk.crypto` key storage** (`src/crypto_keys.rs`): one JSON file per uid,
+  `/etc/rpchat/crypto-keys/<uid>.json` (dir `0700`, file `0600`, both `root:root` — nobody but
+  root/the daemon can open it directly, unlike everything else under `/etc/rpchat`). `crypto-keys`
+  returns the requesting peer's key history (`CryptoKeyRecord[]`, oldest first) and
+  `activeKeyId`, creating a first 32-byte AES-256 key (`/dev/urandom`, via `totp::random_bytes`)
+  the first time a uid is seen; `crypto-rotate-key` generates and appends a new one and makes it
+  active. Both are scoped by `SO_PEERCRED` (`ctx.peer.uid`) — the request carries no uid, so a
+  user can only ever reach their own history. The app falls back to keeping this history in its
+  own config (weaker: anything that can read the user's files can read that one too) when the
+  daemon is not installed — see `@rp/core`'s `CryptoManager`/`LocalKeyStore`/`DaemonKeyStore` and
+  `packages/sdk/src/modules/crypto.ts`. The encryption log (path, before/after md5, key id) and
+  the actual file encryption/decryption are entirely the app's doing, running as the user; the
+  daemon never sees a file path or touches a file, only key material.
 - Layout: `src/chain.rs` (the policy chain and the Remote Link: canonical bytes, Ed25519
   verification, the walk, rotation — all pure),
   `src/seal.rs` (the seal, its modes, its mirrors, the lockout ladder, the immutable attribute),
   `src/totp.rs` (SHA-1/HMAC/base32/RFC 6238, pure), `src/runtime.rs` (the published policy
   filesystem behind `MountOps`), `src/remote.rs` (the `remote`/`packs` blocks and
-  pack-signature verification — pure),
+  pack-signature verification — pure), `src/crypto_keys.rs` (per-uid key history, pure file I/O),
   `src/main.rs` (socket server, signals, keepalive and update OS glue, self-restart),
   `src/protocol.rs` (serde types + tests), `src/policy.rs` (load/validate/clamp + tests, `app`
   rules, `allow_downgrade`, `guard` rules), `src/guard.rs` (session guard: table, profile

@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { Notification, app, dialog, safeStorage, screen, shell } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import { Engine, FileStorage } from '@rp/core';
+import { CryptoLog, CryptoManager, DaemonKeyStore, Engine, FileStorage, LocalKeyStore } from '@rp/core';
 import type { Logger, ProviderFactory } from '@rp/core';
 import { createStandardRegistry } from '@rp/sdk';
 import { QuickJsRunner } from '@rp/sandbox';
@@ -19,6 +19,7 @@ import { BrowserHandler } from './capabilities/browser.js';
 import { CalendarHandler } from './capabilities/calendar.js';
 import { DesktopHandler } from './capabilities/desktop.js';
 import { FilesHandler } from './capabilities/files.js';
+import { CryptoHandler, CryptoService } from './capabilities/crypto.js';
 import { WebcamHandler } from './capabilities/webcam.js';
 import { MessagingHandler } from './capabilities/messaging.js';
 import { PresenceHandler } from './capabilities/presence.js';
@@ -80,6 +81,8 @@ export interface AppServices {
   editor: EditorService;
   plugins: PluginService;
   system: SystemIntegration;
+  /** Settings → System → Encryption: `sdk.crypto`'s key history, rotation and "decrypt everything". */
+  crypto: CryptoService;
   updates: UpdateService;
   policy: PolicyWatcher;
   daemon: DaemonClient;
@@ -295,6 +298,15 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   });
   const input = new InputHandler({ maxLockMs: async () => (await settingsOf()).maxInputLockMs, logger, ...(process.platform === 'linux' ? { daemon } : {}) });
 
+  // ---- sdk.crypto: the daemon's key history when it is reachable now, the app's own config
+  // otherwise. Decided once at startup, matching how the rest of system integration treats the
+  // daemon connection — installing it takes effect after a restart, not mid-session, so a file
+  // encrypted under one key store is never at risk of a later call resolving it against the other.
+  const cryptoBackend: 'daemon' | 'local' = process.platform === 'linux' && (await daemon.isAvailable()) ? 'daemon' : 'local';
+  const cryptoKeyStore = cryptoBackend === 'daemon' ? new DaemonKeyStore({ socketPath: daemon.socketPath }) : new LocalKeyStore(path.join(opts.userData, 'crypto'));
+  const cryptoManager = new CryptoManager({ keyStore: cryptoKeyStore, log: new CryptoLog(path.join(opts.userData, 'crypto')) });
+  const crypto = new CryptoService(cryptoManager, cryptoBackend);
+
   // ---- phase 2: handlers ---------------------------------------------------
   browser.onEvent((ev) => {
     if (ev.event !== 'tab-updated' || ev.data.status !== 'complete' || typeof ev.data.url !== 'string') return;
@@ -429,6 +441,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       new MediaHandler(media),
       ui,
       new SystemHandler({ home: os.homedir() }),
+      new CryptoHandler(cryptoManager),
       new DisplayHandler(() => backend),
       wallpaper,
       new BrowserHandler({
@@ -652,6 +665,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     editor,
     plugins,
     system,
+    crypto,
     updates,
     policy,
     daemon,

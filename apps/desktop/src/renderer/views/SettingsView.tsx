@@ -8,6 +8,7 @@ import { IntegrationsSection } from '../components/settings/IntegrationsSection'
 import { PermissionsSection } from '../components/settings/PermissionsSection';
 import { PluginsSection } from '../components/settings/PluginsSection';
 import { ManagedBadge, useManaged } from '../components/settings/Managed';
+import { EncryptionSection } from '../components/settings/EncryptionSection';
 import { SystemSection } from '../components/settings/SystemSection';
 import { UpdatesSection } from '../components/settings/UpdatesSection';
 import { SensesSection } from '../components/settings/SensesSection';
@@ -467,6 +468,13 @@ export function SettingsView() {
         <section className="section">
           <h2>System integration</h2>
           <SystemSection />
+        </section>
+      ) : null}
+
+      {tab === 'system' ? (
+        <section className="section">
+          <h2>Encryption</h2>
+          <EncryptionSection />
         </section>
       ) : null}
 

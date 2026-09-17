@@ -77,4 +77,32 @@ export type { SelfWakeSource } from './services/chat.js';
 export { SandboxService } from './services/sandbox.js';
 export type { SandboxServiceOptions } from './services/sandbox.js';
 
+export {
+  ALGORITHM as CRYPTO_ALGORITHM,
+  KEY_BYTES as CRYPTO_KEY_BYTES,
+  CryptoLog,
+  CryptoManager,
+  DaemonKeyStore,
+  LocalKeyStore,
+  MAX_FILE_BYTES as CRYPTO_MAX_FILE_BYTES,
+  decryptContainer,
+  encryptBuffer,
+  isEncryptedContainer,
+  isWithinHome,
+  looksLikeSystemFile,
+  md5Hex,
+  parseContainer,
+} from './crypto/index.js';
+export type {
+  CryptoKey,
+  CryptoKeyStore,
+  CryptoLogEntry,
+  CryptoManagerOptions,
+  DaemonKeyStoreOptions,
+  DecryptAllOutcome,
+  DecryptResult,
+  EncryptedContainer,
+  EncryptResult,
+} from './crypto/index.js';
+
 export { extractFencedActions } from '@rp/llm';

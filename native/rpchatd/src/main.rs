@@ -62,6 +62,7 @@ mod logging {
 }
 
 mod chain;
+mod crypto_keys;
 mod devices;
 mod guard;
 mod inject;
@@ -88,6 +89,7 @@ use std::thread;
 use std::time::Instant;
 
 use chain::ChainError;
+use crypto_keys::CryptoKeyStore;
 use guard::{AttemptLimiter, GuardAttempt, GuardHooks, GuardInfo, GuardPaths, ParserOp};
 use inject::Injector;
 use keepalive::{
@@ -379,6 +381,8 @@ pub struct Daemon {
     remote_state: Mutex<RemoteState>,
     /// Directory of the systemd drop-in written while sealed.
     drop_in_dir: PathBuf,
+    /// Per-uid encryption key histories for `sdk.crypto` (`crypto_keys.rs`).
+    crypto_keys: Mutex<CryptoKeyStore>,
 }
 
 /// A connection receiving pushed `{ "ev": … }` lines.
@@ -426,6 +430,7 @@ impl Daemon {
             ),
             remote_state: Mutex::new(RemoteState::default()),
             drop_in_dir: default_drop_in_dir(&scratch),
+            crypto_keys: Mutex::new(CryptoKeyStore::new(default_crypto_keys_dir(&scratch))),
         }
     }
 
@@ -477,6 +482,10 @@ impl Daemon {
 
     fn policy(&self) -> std::sync::MutexGuard<'_, PolicyStore> {
         self.policy.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn crypto_keys(&self) -> std::sync::MutexGuard<'_, CryptoKeyStore> {
+        self.crypto_keys.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Periodic tick from the timer thread.
@@ -964,6 +973,21 @@ impl Daemon {
                 let events = self.subscribe(ctx, events)?;
                 log_debug!("{peer} subscribed to {}", events.join(", "));
                 Ok(OkPayload::Subscribe { events })
+            }
+            Request::CryptoKeys => {
+                let (keys, active_key_id) = self.crypto_keys().get_or_create(ctx.peer.uid)?;
+                Ok(OkPayload::CryptoKeys {
+                    keys,
+                    active_key_id,
+                })
+            }
+            Request::CryptoRotateKey => {
+                let (keys, active_key_id) = self.crypto_keys().rotate(ctx.peer.uid)?;
+                log_info!("crypto key rotated for {peer}");
+                Ok(OkPayload::CryptoRotateKey {
+                    keys,
+                    active_key_id,
+                })
             }
         }
     }
@@ -2191,6 +2215,14 @@ fn default_drop_in_dir(scratch: &Path) -> PathBuf {
         scratch.join("dropin")
     } else {
         PathBuf::from(DEFAULT_DROP_IN_DIR)
+    }
+}
+
+fn default_crypto_keys_dir(scratch: &Path) -> PathBuf {
+    if cfg!(test) {
+        scratch.join("crypto-keys")
+    } else {
+        PathBuf::from(crypto_keys::DEFAULT_CRYPTO_KEYS_DIR)
     }
 }
 
@@ -5109,6 +5141,90 @@ mod tests {
             server.daemon.handle(Request::Subscribe { events: vec!["guard-attempt".into()] }, &mut ctx),
             Response::Err(e) if e.code == ErrorCode::Invalid
         ));
+    }
+
+    #[test]
+    fn crypto_keys_are_created_on_first_use_and_scoped_to_the_peer_s_uid() {
+        let server = TestServer::start(fake_devices(), FakeInjector::default(), None);
+        let mut alice = ConnCtx::test(1000, 1);
+        let mut bob = ConnCtx::test(1001, 2);
+
+        let first = server.daemon.handle(Request::CryptoKeys, &mut alice);
+        let Response::Ok(protocol::OkResponse {
+            payload:
+                OkPayload::CryptoKeys {
+                    keys,
+                    active_key_id,
+                },
+            ..
+        }) = first
+        else {
+            panic!("expected crypto-keys, got {first:?}");
+        };
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].id, active_key_id);
+
+        // A second request for the same uid sees the same key, not a new one.
+        let again = server.daemon.handle(Request::CryptoKeys, &mut alice);
+        let Response::Ok(protocol::OkResponse {
+            payload: OkPayload::CryptoKeys {
+                keys: again_keys, ..
+            },
+            ..
+        }) = again
+        else {
+            panic!("expected crypto-keys, got {again:?}");
+        };
+        assert_eq!(again_keys, keys);
+
+        // A different uid gets its own, different key.
+        let bobs = server.daemon.handle(Request::CryptoKeys, &mut bob);
+        let Response::Ok(protocol::OkResponse {
+            payload: OkPayload::CryptoKeys { keys: bob_keys, .. },
+            ..
+        }) = bobs
+        else {
+            panic!("expected crypto-keys, got {bobs:?}");
+        };
+        assert_ne!(bob_keys[0].key, keys[0].key);
+    }
+
+    #[test]
+    fn crypto_rotate_key_appends_and_activates_a_new_key() {
+        let server = TestServer::start(fake_devices(), FakeInjector::default(), None);
+        let mut ctx = ConnCtx::test(1000, 1);
+        server.daemon.handle(Request::CryptoKeys, &mut ctx);
+
+        let rotated = server.daemon.handle(Request::CryptoRotateKey, &mut ctx);
+        let Response::Ok(protocol::OkResponse {
+            payload:
+                OkPayload::CryptoRotateKey {
+                    keys,
+                    active_key_id,
+                },
+            ..
+        }) = rotated
+        else {
+            panic!("expected crypto-rotate-key, got {rotated:?}");
+        };
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[1].id, active_key_id);
+
+        // Rotation is visible on a later `crypto-keys` read.
+        let after = server.daemon.handle(Request::CryptoKeys, &mut ctx);
+        let Response::Ok(protocol::OkResponse {
+            payload:
+                OkPayload::CryptoKeys {
+                    keys: read_back,
+                    active_key_id: read_active,
+                },
+            ..
+        }) = after
+        else {
+            panic!("expected crypto-keys, got {after:?}");
+        };
+        assert_eq!(read_back, keys);
+        assert_eq!(read_active, active_key_id);
     }
 
     #[test]

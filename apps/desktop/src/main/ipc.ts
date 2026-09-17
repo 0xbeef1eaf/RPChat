@@ -303,6 +303,11 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       guardApply: () => services.system.guardApply(),
       guardAttempts: () => services.system.guardAttempts(),
     },
+    crypto: {
+      status: () => services.crypto.status(),
+      rotateKey: () => services.crypto.rotateKey(),
+      decryptAll: () => services.crypto.decryptAll(),
+    },
     browser: {
       status: () => services.browser.status(),
       setPort: async (_e, port) => {

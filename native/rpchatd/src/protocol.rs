@@ -194,6 +194,14 @@ pub enum Request {
     Subscribe {
         events: Vec<String>,
     },
+    /// `sdk.crypto`'s key history for the requesting user, created on first use. Scoped to the
+    /// peer's own uid (`SO_PEERCRED`); there is no way to ask for another user's.
+    #[serde(rename = "crypto-keys")]
+    CryptoKeys,
+    /// Generate a new key for the requesting user, append it to their history and make it the
+    /// active one `sdk.crypto.encrypt` uses from now on.
+    #[serde(rename = "crypto-rotate-key")]
+    CryptoRotateKey,
 }
 
 impl Request {
@@ -222,6 +230,8 @@ impl Request {
             Request::GuardApply => "guard-apply",
             Request::GuardStatus => "guard-status",
             Request::Subscribe { .. } => "subscribe",
+            Request::CryptoKeys => "crypto-keys",
+            Request::CryptoRotateKey => "crypto-rotate-key",
         }
     }
 }
@@ -516,6 +526,22 @@ pub enum Ok {
     /// The events this connection now receives.
     Subscribe {
         events: Vec<String>,
+    },
+    /// The requesting user's key history, oldest first, and which one is active. Key material
+    /// (`keys[].key`) only ever appears here and in the daemon's own file — never in a log, an
+    /// event, or anyone else's response.
+    #[serde(rename = "crypto-keys")]
+    CryptoKeys {
+        keys: Vec<crate::crypto_keys::CryptoKeyRecord>,
+        #[serde(rename = "activeKeyId")]
+        active_key_id: String,
+    },
+    /// The history after rotation, including the new active key.
+    #[serde(rename = "crypto-rotate-key")]
+    CryptoRotateKey {
+        keys: Vec<crate::crypto_keys::CryptoKeyRecord>,
+        #[serde(rename = "activeKeyId")]
+        active_key_id: String,
     },
 }
 
@@ -921,6 +947,8 @@ mod tests {
                 json!({"op":"apply-update","file":"/x","version":"1.0.0","sha512":"a"}),
                 "apply-update",
             ),
+            (json!({"op":"crypto-keys"}), "crypto-keys"),
+            (json!({"op":"crypto-rotate-key"}), "crypto-rotate-key"),
         ] {
             let req: Request = serde_json::from_value(v).unwrap();
             assert_eq!(req.op(), name);
@@ -1147,6 +1175,26 @@ mod tests {
                 replaced: false,
             }),
             json!({"ok":true,"op":"set-policy","path":"/etc/rpchat/policy.json","replaced":false}),
+        );
+        let key = crate::crypto_keys::CryptoKeyRecord {
+            id: "abc123".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            key: "AAAA".into(),
+        };
+        let key_json = json!({"id":"abc123","createdAt":"2026-01-01T00:00:00Z","key":"AAAA"});
+        round_trip_response(
+            &Response::ok(Ok::CryptoKeys {
+                keys: vec![key.clone()],
+                active_key_id: "abc123".into(),
+            }),
+            json!({"ok":true,"op":"crypto-keys","keys":[key_json],"activeKeyId":"abc123"}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::CryptoRotateKey {
+                keys: vec![key],
+                active_key_id: "abc123".into(),
+            }),
+            json!({"ok":true,"op":"crypto-rotate-key","keys":[key_json],"activeKeyId":"abc123"}),
         );
     }
 
