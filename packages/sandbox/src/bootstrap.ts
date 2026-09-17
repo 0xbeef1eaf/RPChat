@@ -1,12 +1,14 @@
 /**
  * Source of the bootstrap function evaluated inside a fresh isolate before the
- * user's code. Evaluating it yields a function `(surfaceJson, hostCall, log)`
+ * user's code. Evaluating it yields a function `(surfaceJson, hostCall, log, restrictInternals)`
  * which the runner calls once with:
  *
  * - `surfaceJson`: `JSON.stringify(SdkSurface)`;
  * - `hostCall(module, method, argsJson) => Promise<string>`: host function
  *   returning the JSON text of a `CapabilityResult`;
- * - `log(level, message) => void`: host function capturing log output.
+ * - `log(level, message) => void`: host function capturing log output;
+ * - `restrictInternals`: true for an LLM-authored run, where the action body may
+ *   not call the library's `@internal` helpers (see `__rp_lib` below).
  *
  * It installs the frozen globals `sdk` and `console`, plus `__rp_lib`. Nothing
  * else leaks into the isolate: `hostCall` and `log` are captured by closures
@@ -18,15 +20,16 @@
  * Dotted method names (`session.get`) are exposed one level deep
  * (`sdk.state.session.get`).
  *
- * The `lib` module is not a namespace of its own: `__rp_lib(functions)` builds
- * the character's function library — the `lib` the prelude defines — out of the
+ * The `lib` module is not a namespace of its own: `__rp_lib(functions, internalNames)`
+ * builds the character's function library — the `lib` the prelude defines — out of the
  * saved functions plus the module's `register` / `unregister`, and `sdk.lib`
  * reads back whatever it last built. `sdk.lib.cheer()` is therefore the same
  * call as `lib.cheer()`, which is what characters kept writing anyway.
  */
-export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log) {
+export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log, restrictInternals) {
   'use strict';
   var surface = JSON.parse(surfaceJson);
+  var hideInternals = restrictInternals === true;
 
   function formatArg(a) {
     if (typeof a === 'string') return a;
@@ -114,20 +117,95 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
   }
 
   /**
-   * The character's function library. The prelude the host prepends to the code
-   * calls __rp_lib once with the saved functions ("const lib = __rp_lib({...});");
-   * a library with internal helpers calls it again with the subset the character
-   * may see, and that outer object — the one the code runs against — is the one
-   * sdk.lib ends up with. A later call from the character's own code can only
-   * hand back functions it already holds, so nothing hidden can be reached
-   * through it.
+   * The character's function library. The prelude the host prepends to the code calls
+   * __rp_lib once ("const lib = __rp_lib({...}, ["helper"]);"): the first argument holds
+   * every saved function, the second names the ones marked @internal in the pack.
+   *
+   * There is only ever one lib object, and every function is on it — a second, narrower
+   * one in a nested scope would make the transpiler rename the inner binding (lib -> lib2),
+   * and a handler a library function hands to sdk.events.on is stored as its compiled
+   * source, so the rename travelled into the stored code and broke it when it ran.
+   *
+   * @internal is enforced here instead: in an LLM-authored run the internal functions
+   * refuse a call made from the action body, while a call made from inside another library
+   * function goes through (libDepth > 0). Every other trigger — the pack's behaviour hooks,
+   * event handlers, timers, the Sandbox tab — reaches them normally. It keeps the model out
+   * of the author's plumbing; it is not a security boundary, since every one of these
+   * functions is the character's own code running with the same permissions.
    */
   var libValue = buildLib({});
+  /** Greater than 0 while a library function is on the stack. */
+  var libDepth = 0;
 
-  function buildLib(functions) {
+  function guardInternal(name, fn) {
+    var wrapped = function () {
+      if (libDepth === 0) {
+        throw new Error(
+          'lib.' + name + ' is an internal helper of this character: it is not listed in <library> and ' +
+            'an action cannot call it. Call one of the listed functions instead.',
+        );
+      }
+      return callDeeper(fn, this, arguments);
+    };
+    // Keep String(lib.<name>) the saved source, which is what the isolate reports and what
+    // serialiseArg stores when a library function is handed to sdk.events.on.
+    wrapped.toString = function () {
+      return String(fn);
+    };
+    return wrapped;
+  }
+
+  function trackDepth(fn) {
+    var wrapped = function () {
+      return callDeeper(fn, this, arguments);
+    };
+    wrapped.toString = function () {
+      return String(fn);
+    };
+    return wrapped;
+  }
+
+  /** Run fn with libDepth raised, lowering it again once it settles. */
+  function callDeeper(fn, self, args) {
+    libDepth++;
+    var out;
+    try {
+      out = fn.apply(self, args);
+    } catch (e) {
+      libDepth--;
+      throw e;
+    }
+    if (out !== null && typeof out === 'object' && typeof out.then === 'function') {
+      return out.then(
+        function (v) {
+          libDepth--;
+          return v;
+        },
+        function (e) {
+          libDepth--;
+          throw e;
+        },
+      );
+    }
+    libDepth--;
+    return out;
+  }
+
+  function buildLib(functions, internalNames) {
     var lib = {};
+    var internal = {};
+    var i;
+    if (hideInternals && internalNames && typeof internalNames.length === 'number') {
+      for (i = 0; i < internalNames.length; i++) internal[internalNames[i]] = true;
+    }
     var names = Object.keys(functions);
-    for (var i = 0; i < names.length; i++) lib[names[i]] = functions[names[i]];
+    for (i = 0; i < names.length; i++) {
+      var name = names[i];
+      var fn = functions[name];
+      if (!hideInternals || typeof fn !== 'function') lib[name] = fn;
+      else if (internal[name] === true) lib[name] = guardInternal(name, fn);
+      else lib[name] = trackDepth(fn);
+    }
     if (libStatics !== null) {
       // Not overridable by a saved function: register and unregister are reserved names.
       lib.register = libStatics.register;
@@ -155,8 +233,8 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
   });
 
   Object.defineProperty(globalThis, '__rp_lib', {
-    value: function (functions) {
-      libValue = buildLib(functions === null || typeof functions !== 'object' ? {} : functions);
+    value: function (functions, internalNames) {
+      libValue = buildLib(functions === null || typeof functions !== 'object' ? {} : functions, internalNames);
       return libValue;
     },
     writable: false,

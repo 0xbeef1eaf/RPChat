@@ -29,10 +29,10 @@ export interface BehaviourRunnerOptions {
   logger: Logger;
   /**
    * The character's function library prelude (`LibraryService.preludeFor`), prepended to every run
-   * when given. `internals: true` is asked for code the pack's author shipped (the behaviour hooks),
-   * which may call the library's internal helpers; code the character wrote never sees them.
+   * when given. It is the same for every run: the sandbox decides from the run's trigger whether the
+   * action body may call the library's internal helpers (only an LLM-authored run is refused them).
    */
-  prelude?: (packId: string, characterId: string, opts?: { internals?: boolean }) => Promise<string>;
+  prelude?: (packId: string, characterId: string) => Promise<string>;
 }
 
 export interface BehaviourRunOptions {
@@ -123,13 +123,9 @@ export class BehaviourRunner implements BehaviourHooks {
     return (await this.o.settings.get()).runLimits;
   }
 
-  /**
-   * The `const lib = …` prelude for a character, when a library is wired in. With
-   * `internals: true` the library's internal helpers are part of `lib` — only for scripts the
-   * pack ships, not for code the character wrote (a `code` timer, an action).
-   */
-  async preludeFor(packId: string, characterId: string, opts: { internals?: boolean } = {}): Promise<string | undefined> {
-    return this.o.prelude ? this.o.prelude(packId, characterId, opts) : undefined;
+  /** The `const lib = …` prelude for a character, when a library is wired in. */
+  async preludeFor(packId: string, characterId: string): Promise<string | undefined> {
+    return this.o.prelude ? this.o.prelude(packId, characterId) : undefined;
   }
 
   private async runFor(
@@ -161,8 +157,7 @@ export class BehaviourRunner implements BehaviourHooks {
       invoker: this.o.invoker,
       limits: await this.limits(),
     };
-    // A hook file comes from the pack itself, so it may use the author's internal helpers.
-    const prelude = await this.preludeFor(packId, characterId, { internals: true });
+    const prelude = await this.preludeFor(packId, characterId);
     if (prelude !== undefined) request.prelude = prelude;
     if (options.signal) request.signal = options.signal;
     const result = await this.o.runner.run(request);

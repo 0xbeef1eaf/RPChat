@@ -232,7 +232,7 @@ export class Engine {
       runner: opts.runner,
       invoker: this.dispatcher,
       logger,
-      prelude: (packId, characterId, opts) => this.library.preludeFor(packId, characterId, opts ?? {}),
+      prelude: (packId, characterId) => this.library.preludeFor(packId, characterId),
     });
     this.sessions.setBehaviours(this.behaviours);
     this.packs.setInstallHookRunner((pack) => this.behaviours.runInstallHooks(pack));

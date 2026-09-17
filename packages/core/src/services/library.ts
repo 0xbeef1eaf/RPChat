@@ -72,29 +72,23 @@ export function functionParams(source: string): string {
  * `register` / `unregister` to the object and makes it the value of `sdk.lib`, so
  * `sdk.lib.<name>(...)` reaches the same function as `lib.<name>(...)`.
  *
- * With an internal function in the library the prelude gets two scopes: an inner `lib`
- * holding every function, and the outer `lib` the running code sees, which carries only the
- * functions that are not internal. Inside the IIFE the inner binding shadows the outer one,
- * so a function body calling `lib.<helper>(...)` reaches the full object while `lib.<helper>`
- * is `undefined` in the code the character writes — and because the outer object is built
- * last, it is the one `sdk.lib` reads back. `internals: true` skips the split and exposes
- * everything — the pack's own behaviour hooks run that way.
+ * There is one `lib`, holding every function, in every run: internal helpers are not
+ * hidden by a second scope. A nested `lib` would be renamed by the transpiler (`lib2`),
+ * and a handler a library function hands to `sdk.events.on` / `sdk.timers.runLater` is
+ * stored as its compiled source — so the rename used to travel into the stored code and
+ * fail there with `ReferenceError: 'lib2' is not defined`.
+ *
+ * Instead the internal names are passed to `__rp_lib` as its second argument, and the
+ * sandbox refuses them to the action body of an LLM-authored run (`trigger.kind === 'llm'`)
+ * while the library's own functions keep calling each other. `<library>` in the prompt
+ * lists the rest (`prompt.ts`, `visibleLibrary`).
  */
-export function buildPrelude(functions: LibFunction[], opts: { internals?: boolean } = {}): string {
+export function buildPrelude(functions: LibFunction[]): string {
   if (functions.length === 0) return EMPTY_PRELUDE;
-  const entries = (indent: string) => functions.map((f) => `${indent}${JSON.stringify(f.name)}: (${f.source}),`).join('\n');
-  if (opts.internals === true || !functions.some((f) => f.internal === true)) {
-    return `const lib = __rp_lib({\n${entries('  ')}\n});`;
-  }
-  const exposed = functions.filter((f) => f.internal !== true).map((f) => `    ${JSON.stringify(f.name)}: lib[${JSON.stringify(f.name)}],`);
-  return [
-    'const lib = (() => {',
-    '  const lib = __rp_lib({',
-    entries('    '),
-    '  });',
-    `  return __rp_lib({${exposed.length > 0 ? `\n${exposed.join('\n')}\n  ` : ''}});`,
-    '})();',
-  ].join('\n');
+  const entries = functions.map((f) => `  ${JSON.stringify(f.name)}: (${f.source}),`).join('\n');
+  const internal = functions.filter((f) => f.internal === true).map((f) => f.name);
+  const hidden = internal.length > 0 ? `, ${JSON.stringify(internal)}` : '';
+  return `const lib = __rp_lib({\n${entries}\n}${hidden});`;
 }
 
 function info(f: LibFunction): LibFunctionInfo {
@@ -192,24 +186,22 @@ export class LibraryService {
 
   /**
    * The `const lib = …` prelude for a character's runs; cached until the library changes.
-   * `internals: true` gives the prelude in which the pack's internal helpers are part of `lib`
-   * — for code the author shipped (the behaviour hooks), never for code the character wrote.
+   * The same prelude serves every run: which functions the running code may call is decided
+   * in the sandbox from the run's trigger, not by the shape of the prelude.
    */
-  async preludeFor(packId: string, characterId: string, opts: { internals?: boolean } = {}): Promise<string> {
-    const key = cacheKey({ packId, characterId }, opts.internals === true);
+  async preludeFor(packId: string, characterId: string): Promise<string> {
+    const key = cacheKey({ packId, characterId });
     const cached = this.preludes.get(key);
     if (cached !== undefined) return cached;
-    const prelude = buildPrelude(await this.functions({ packId, characterId }), opts);
+    const prelude = buildPrelude(await this.functions({ packId, characterId }));
     this.preludes.set(key, prelude);
     return prelude;
   }
 
   /** Drop cached preludes (one character's, or all). */
   invalidate(target?: LibraryTarget): void {
-    if (target) {
-      this.preludes.delete(cacheKey(target, false));
-      this.preludes.delete(cacheKey(target, true));
-    } else this.preludes.clear();
+    if (target) this.preludes.delete(cacheKey(target));
+    else this.preludes.clear();
   }
 
   private resolve(target: LibraryTarget): { pack: LoadedPack; character: LoadedCharacter } {
@@ -235,6 +227,6 @@ export class LibraryService {
   }
 }
 
-function cacheKey(target: LibraryTarget, internals: boolean): string {
-  return `${target.packId}/${target.characterId}${internals ? '#internals' : ''}`;
+function cacheKey(target: LibraryTarget): string {
+  return `${target.packId}/${target.characterId}`;
 }
