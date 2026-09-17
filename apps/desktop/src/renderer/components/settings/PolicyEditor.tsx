@@ -60,7 +60,7 @@ function Segmented<T extends string>({
   label,
 }: {
   value: T;
-  options: readonly T[] | ReadonlyArray<{ value: T; label: string }>;
+  options: ReadonlyArray<T | { value: T; label: string }>;
   onChange: (value: T) => void;
   disabled?: boolean;
   label: string;
