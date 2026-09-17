@@ -1,0 +1,22 @@
+{
+  "$comment": "Repository Actions policy. GitHub keeps this in settings, not in the repo, so this file is the reviewable copy; .github/rulesets/README.md has the apply commands.",
+  "permissions": {
+    "enabled": true,
+    "allowed_actions": "selected",
+    "sha_pinning_required": true
+  },
+  "selected_actions": {
+    "github_owned_allowed": true,
+    "verified_allowed": false,
+    "patterns_allowed": [
+      "dtolnay/rust-toolchain@*",
+      "pnpm/action-setup@*",
+      "softprops/action-gh-release@*",
+      "Swatinem/rust-cache@*"
+    ]
+  },
+  "workflow": {
+    "default_workflow_permissions": "read",
+    "can_approve_pull_request_reviews": false
+  }
+}

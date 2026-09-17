@@ -1,0 +1,83 @@
+{
+  "$comment": "Immutable pins for every action used by this repository's workflows. Generated from the workflow files; `scripts/check-actions-lock.mjs` verifies they agree.",
+  "generated": "2026-09-17",
+  "actions": [
+    {
+      "action": "actions/checkout",
+      "ref": "v7",
+      "sha": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "refType": "tag",
+      "usedBy": [
+        "ci.yml",
+        "release.yml"
+      ]
+    },
+    {
+      "action": "actions/github-script",
+      "ref": "v8",
+      "sha": "ed597411d8f924073f98dfc5c65a23a2325f34cd",
+      "refType": "tag",
+      "usedBy": [
+        "cleanup-artifacts.yml"
+      ]
+    },
+    {
+      "action": "actions/setup-node",
+      "ref": "v7",
+      "sha": "820762786026740c76f36085b0efc47a31fe5020",
+      "refType": "tag",
+      "usedBy": [
+        "ci.yml",
+        "release.yml"
+      ]
+    },
+    {
+      "action": "actions/upload-artifact",
+      "ref": "v7",
+      "sha": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "refType": "tag",
+      "usedBy": [
+        "ci.yml"
+      ]
+    },
+    {
+      "action": "dtolnay/rust-toolchain",
+      "ref": "stable",
+      "sha": "6bed0761d98439e5a578e2877258200ad565ba87",
+      "refType": "branch",
+      "usedBy": [
+        "ci.yml",
+        "release.yml"
+      ]
+    },
+    {
+      "action": "pnpm/action-setup",
+      "ref": "v6",
+      "sha": "0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+      "refType": "tag",
+      "usedBy": [
+        "ci.yml",
+        "release.yml"
+      ]
+    },
+    {
+      "action": "softprops/action-gh-release",
+      "ref": "v3",
+      "sha": "efb35369e0ad2afab669f228072c1b0d510eae64",
+      "refType": "tag",
+      "usedBy": [
+        "release.yml"
+      ]
+    },
+    {
+      "action": "Swatinem/rust-cache",
+      "ref": "v2",
+      "sha": "6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+      "refType": "tag",
+      "usedBy": [
+        "ci.yml",
+        "release.yml"
+      ]
+    }
+  ]
+}
