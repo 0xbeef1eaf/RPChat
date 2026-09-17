@@ -37,6 +37,7 @@ all mirroring `@rp/shared` (add them to the structural-identity test where they 
 | `routine` | trusted | `set(entries: RoutineEntry[]): RoutineStatus`; `get(): { entries: RoutineEntry[]; status: RoutineStatus }`; `now(): RoutineStatus`; `override(state: RoutineStateName, opts?: { minutes?: number; label? }): RoutineStatus` |
 | `messaging` | pack | `send(channel: string, text: string): { ok: boolean }` (D); `channels(): Array<{ name; kind }>` |
 | `webcam` | pack | `takeImage(): AssetRef` (D); `takeVideo(seconds: number): AssetRef` (D; 1..60) — both write into the character home under `webcam/` and return a `source: 'home'` ref |
+| `crypto` | pack | `encrypt(path: string): void` (D); `decrypt(path: string): void` (D) — one of the user's own files, in place, under an app-managed AES-256-GCM key (`docs/spec/system.md` "`sdk.crypto` key storage"); paths outside the home directory or that look like a system/session file (`.service`, `.desktop`, `.conf`, ...) are refused before anything is touched |
 | `system` (v1.1) | pack | + `clipboardRead(): string` (D) |
 
 `presence` docs must say: prefer the `<senses>` line already in the prompt; call `status()` only for

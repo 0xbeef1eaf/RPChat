@@ -264,7 +264,7 @@ describe('describeSurface', () => {
     const surface = describeSurface(registry);
     expect(surface.modules.map((m) => m.id)).toEqual([
       'chat', 'help', 'lib', 'state', 'pack', 'timers', 'llm', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input',
-      'presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging', 'webcam',
+      'presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging', 'webcam', 'crypto',
       'system',
     ]);
     const state = surface.modules.find((m) => m.id === 'state')!;

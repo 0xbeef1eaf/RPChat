@@ -28,12 +28,14 @@ import { moodModule } from './mood.js';
 import { routineModule } from './routine.js';
 import { messagingModule } from './messaging.js';
 import { webcamModule } from './webcam.js';
+import { cryptoModule } from './crypto.js';
 
 export {
   chatModule, helpModule, libModule, stateModule, packModule, timersModule, llmModule, memoryModule, displayModule,
   mediaModule, uiModule, wallpaperModule, browserModule, inputModule,
   presenceModule, screenModule, calendarModule, webModule, eventsModule, avatarModule, widgetsModule,
   voiceModule, desktopModule, filesModule, moodModule, routineModule, messagingModule, webcamModule,
+  cryptoModule,
   systemModule,
 };
 
@@ -67,5 +69,6 @@ export const standardModules: readonly CapabilityModuleSpec[] = [
   routineModule,
   messagingModule,
   webcamModule,
+  cryptoModule,
   systemModule,
 ];

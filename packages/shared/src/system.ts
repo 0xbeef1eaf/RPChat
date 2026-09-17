@@ -440,6 +440,19 @@ export interface SystemIntegrationStatus {
 /** Which input devices a lock covers. */
 export type LockDevices = 'keyboard' | 'mouse' | 'both';
 
+/**
+ * One key in a `sdk.crypto` key history (`crypto-keys`/`crypto-rotate-key`). Key material
+ * (`key`) only ever travels over the daemon socket to the user who owns it, and is stored
+ * base64 both on disk (root-owned, `0600`) and on the wire.
+ */
+export interface CryptoKeyRecord {
+  /** Opaque; what the encryption log links an encrypted file back to. */
+  id: string;
+  createdAt: string;
+  /** AES-256 key material, base64 (32 bytes decoded). */
+  key: string;
+}
+
 /** JSON-lines protocol between the app and `rpchatd` over the unix socket. */
 export type DaemonRequest =
   | { op: 'hello'; version: 1 }
@@ -504,7 +517,14 @@ export type DaemonRequest =
   /** Session guard: what is engaged, without touching anything. */
   | { op: 'guard-status' }
   /** Receive pushed `{ ev: … }` lines (`DaemonEvent`) on this connection for these events; `[]` unsubscribes. */
-  | { op: 'subscribe'; events: DaemonEventName[] };
+  | { op: 'subscribe'; events: DaemonEventName[] }
+  /**
+   * The requesting user's `sdk.crypto` key history, created on first use. Scoped to the peer's
+   * own uid (`SO_PEERCRED`) by the daemon; there is no way to ask for another user's.
+   */
+  | { op: 'crypto-keys' }
+  /** Generate a new key for the requesting user, append it to their history and make it active. */
+  | { op: 'crypto-rotate-key' };
 
 export type DaemonResponse =
   | { ok: true; op: 'hello'; version: string; protocol: 1; devices: { keyboards: number; pointers: number; uinput: boolean } }
@@ -525,6 +545,8 @@ export type DaemonResponse =
   | { ok: true; op: 'apply-update'; version: string; restartDaemon: boolean }
   | { ok: true; op: 'guard-apply' | 'guard-status'; guard: GuardInfo }
   | { ok: true; op: 'subscribe'; events: DaemonEventName[] }
+  /** `keys` oldest first; `activeKeyId` is what `sdk.crypto.encrypt` should use from now on. */
+  | { ok: true; op: 'crypto-keys' | 'crypto-rotate-key'; keys: CryptoKeyRecord[]; activeKeyId: string }
   | { ok: false; error: string; code: 'REFUSED' | 'POLICY' | 'NO_DEVICES' | 'BUSY' | 'INVALID' | 'INTERNAL' | 'EXISTS' | 'CODE' };
 
 export const DAEMON_SOCKET_PATH = '/run/rpchat/daemon.sock';

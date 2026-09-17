@@ -43,6 +43,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   routine: { permission: 'trusted', methods: ['set', 'get', 'now', 'override'] },
   messaging: { permission: 'pack', methods: ['send', 'channels'] },
   webcam: { permission: 'pack', methods: ['takeImage', 'takeVideo'] },
+  crypto: { permission: 'pack', methods: ['encrypt', 'decrypt'] },
   system: { permission: 'pack', methods: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead'] },
 };
 
@@ -58,6 +59,7 @@ const OVERRIDES: Record<string, { prompt?: string[]; dangerous?: string[] }> = {
   messaging: { dangerous: ['send'] },
   input: { dangerous: ['lock', 'unlock', 'type', 'key', 'click', 'moveMouse'] },
   webcam: { dangerous: ['takeImage', 'takeVideo'] },
+  crypto: { dangerous: ['encrypt', 'decrypt'] },
   system: { dangerous: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead'] },
 };
 
@@ -83,7 +85,7 @@ describe('standard modules', () => {
     expect(modules.mediaModule.id).toBe('media');
     expect(modules.uiModule.id).toBe('ui');
     expect(modules.systemModule.id).toBe('system');
-    for (const id of ['presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging', 'webcam']) {
+    for (const id of ['presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging', 'webcam', 'crypto']) {
       const exported = (modules as Record<string, unknown>)[`${id}Module`] as { id: string } | undefined;
       expect(exported?.id, id).toBe(id);
     }
@@ -91,7 +93,7 @@ describe('standard modules', () => {
     const ids = r.list().map((m) => m.id);
     expect(ids.at(-1)).toBe('system');
     expect(ids.indexOf('presence')).toBe(ids.indexOf('input') + 1);
-    expect(ids.slice(ids.indexOf('presence'), -1)).toEqual(['presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging', 'webcam']);
+    expect(ids.slice(ids.indexOf('presence'), -1)).toEqual(['presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging', 'webcam', 'crypto']);
   });
 
   it('expose exactly the methods and permissions from the spec', () => {

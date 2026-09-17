@@ -54,6 +54,10 @@ describe('buildApi', () => {
     expect(invokeChannels()).toContain('system:guardAttempts');
     expect(invokeChannels()).toContain('sandbox:run');
     expect(invokeChannels()).toContain('sandbox:cancel');
+    // Encryption: the renderer may look at the key history and rotate it, and that is all —
+    // decrypting in bulk belongs to `rpchat-decrypt-all`, never to a channel a page can call.
+    expect(INVOKE_METHODS.crypto).toEqual(['status', 'rotateKey']);
+    expect(invokeChannels()).not.toContain('crypto:decryptAll');
     expect(await api.system.createPolicy('{"version":1}')).toBe('result of system:createPolicy');
     expect(ipc.invoked.at(-1)).toEqual({ channel: 'system:createPolicy', args: ['{"version":1}'] });
   });

@@ -10,6 +10,7 @@ import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, Rout
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, SaveScriptInput, ScriptKind, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
 import type { AppRestrictions, ChainAuthorStatus, ChainLink, GuardAttemptRecord, ManagedSettingsPaths, PolicyChain, PolicyFile, RemoteLink, SealMode, SystemIntegrationStatus } from './system.js';
+import type { CryptoStatus } from './crypto.js';
 import type { BrowserBlock, BrowserBridgeStatus } from './browser.js';
 import type { UpdateStatus } from './updates.js';
 import type { SandboxRunRequest, SandboxRunResult } from './sandbox.js';
@@ -301,6 +302,16 @@ export interface IpcApi {
     guardApply(): Promise<SystemIntegrationStatus>;
     /** The last 50 `guard-attempt` events the daemon pushed (newest first). */
     guardAttempts(): Promise<GuardAttemptRecord[]>;
+  };
+  /**
+   * `sdk.crypto` (Settings → System → Encryption): the key history and its rotation. Bulk
+   * decryption is deliberately not here — it belongs to the `rpchat-decrypt-all` script, which
+   * runs as the user with no app (and so no renderer) involved.
+   */
+  crypto: {
+    status(): Promise<CryptoStatus>;
+    /** Generate a new key and make it active; files encrypted under an earlier key stay decryptable under it. */
+    rotateKey(): Promise<CryptoStatus>;
   };
   /** Browser extension bridge (Settings → Browser; docs/browser-extension.md). */
   browser: {
