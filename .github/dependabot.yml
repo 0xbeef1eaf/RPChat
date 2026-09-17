@@ -40,6 +40,14 @@ updates:
       # compiler of its own, or the compiler out of process — so it happens on purpose.
       - dependency-name: typescript
         update-types: [version-update:semver-major]
+      # Vite majors are gated on electron-vite, which builds and bundles the app: 5.0.0 peers
+      # `vite: ^5 || ^6 || ^7`, and the first electron-vite that accepts 8 is 6.0.0-beta.1. With
+      # strict peer checks off the build on Vite 8 still succeeds and the app then does not come
+      # up at all — the headful smoke gets no main window, no mock action, no overlay (#18).
+      # electron-vite itself is deliberately not ignored: its next major is the signal that Vite
+      # 8, electron-vite 6 and @vitejs/plugin-react 6 can move, which they have to do together.
+      - dependency-name: vite
+        update-types: [version-update:semver-major]
   - package-ecosystem: cargo
     directory: /native/overlay-wlr
     schedule:
