@@ -265,3 +265,21 @@ export function assetUrl(packId: string, relativePath: string): string {
   const clean = relativePath.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
   return `${ASSET_PROTOCOL}://${packId}/${clean}`;
 }
+
+/**
+ * Marker on a media asset argument for a file in the character's own home directory
+ * (`sdk.files`, `sdk.webcam` captures) rather than a pack asset: `home:webcam/2026-…-ab12cd34.jpg`.
+ * The dispatcher normalises every `source: 'home'` `AssetRef` to this form, so a host handler sees
+ * one string and knows from its prefix which root to resolve it against.
+ */
+export const HOME_ASSET_PREFIX = 'home:';
+
+/** `home:<path>` for a file in the character home; pack assets stay bare pack-relative paths. */
+export function homeAsset(relativePath: string): string {
+  return `${HOME_ASSET_PREFIX}${relativePath}`;
+}
+
+/** Split a media asset argument into the root it belongs to and its path relative to that root. */
+export function parseAssetSource(asset: string): { source: 'pack' | 'home'; path: string } {
+  return asset.startsWith(HOME_ASSET_PREFIX) ? { source: 'home', path: asset.slice(HOME_ASSET_PREFIX.length) } : { source: 'pack', path: asset };
+}

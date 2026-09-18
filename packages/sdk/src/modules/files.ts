@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const filesModule: CapabilityModuleSpec = {
   id: 'files',
-  version: '1.0.0',
+  version: '1.1.0',
   title: 'Character files',
   summary: 'Your own folder on disk: keep notes, diaries, drafts and generated files, and open them for the user.',
   permission: 'pack',
@@ -10,7 +10,8 @@ export const filesModule: CapabilityModuleSpec = {
   typings: `/**
  * A private home directory for this character (the user can browse it). Paths are relative to
  * that folder with forward slashes; ".." and absolute paths are rejected (PATH_ESCAPE).
- * Text only, UTF-8, up to 5 MB per file and 200 files. For the user's own files use sdk.system.
+ * Text only, UTF-8, up to 5 MB per file and 200 files (other files land here too, e.g. sdk.webcam
+ * captures; sdk.media shows one as "home:<path>"). For the user's own files use sdk.system.
  */
 interface FilesApi {
   /**
@@ -52,6 +53,7 @@ interface FilesApi {
 
 - \`sdk.state\`/\`sdk.memory\` are for facts you look up; \`files\` is for documents — things the user might open, read or keep.
 - \`open(path)\` hands a file to the user's default app, so write it first, then open it. Tell the user where it is (\`homePath()\`).
+- Pictures, video and sound in here can go on screen: pass \`"home:" + path\` to \`sdk.media\`, so a webcam capture needs no copy into the pack.
 - Prefer \`append\` for logs/diaries and keep files small; list before writing to avoid clobbering.
 - \`open()\` throws NOT_FOUND for a missing file and CAPABILITY_FAILED when the desktop has no application for it (the message says why).
 

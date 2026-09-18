@@ -13,8 +13,8 @@ type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 /**
  * A file the character can name: a pack asset from sdk.pack.asset() / sdk.pack.listAssets()
  * (source 'pack'), or a file in the character's own home folder, e.g. an sdk.webcam capture
- * (source 'home'). Only pack assets can be passed to sdk.media.* and sdk.wallpaper.set;
- * home files are reached through sdk.files.*.
+ * (source 'home'). sdk.media.* takes either (a home file also as the string "home:<path>");
+ * sdk.wallpaper.set takes pack assets only, and sdk.files.* reads and opens home files.
  */
 interface AssetRef {
   /** Where the path below is relative to. Absent means 'pack'. */

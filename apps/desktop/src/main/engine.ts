@@ -18,7 +18,7 @@ import { AvatarHandler } from './capabilities/avatar.js';
 import { BrowserHandler } from './capabilities/browser.js';
 import { CalendarHandler } from './capabilities/calendar.js';
 import { DesktopHandler } from './capabilities/desktop.js';
-import { FilesHandler } from './capabilities/files.js';
+import { FilesHandler, HomeAssetRoots } from './capabilities/files.js';
 import { CryptoHandler, CryptoService } from './capabilities/crypto.js';
 import { WebcamHandler } from './capabilities/webcam.js';
 import { MessagingHandler } from './capabilities/messaging.js';
@@ -147,10 +147,12 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const voicePreviewDir = path.join(opts.userData, VOICE_PREVIEW_DIRNAME);
   const extraRoots: Record<string, string> = { [TTS_PACK_ID]: ttsDir, [VOICE_PREVIEW_PACK_ID]: voicePreviewDir };
   const registry = new ProjectRegistry(path.join(dataDir, 'editor-projects.json'));
+  /** Character home directories, served like pack roots once `sdk.media` shows a file from one. */
+  const homes = new HomeAssetRoots(opts.userData);
   const packRootFor = (packId: string): string | undefined => {
     const editorKey = keyFromAssetHost(packId);
     if (editorKey) return registry.get(editorKey)?.dir;
-    return extraRoots[packId] ?? engine.packs.tryGetLoaded(packId)?.root;
+    return homes.rootFor(packId) ?? extraRoots[packId] ?? engine.packs.tryGetLoaded(packId)?.root;
   };
 
   // ---- loopback server (overlay media pages + browser extension bridge) ----------------
@@ -218,7 +220,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   // ---- phase 2 senses (created early: media clicks/closes are host events too) ----------
   const senses = createSenses({ settings: settingsOf, commands, env, ...(hypr ? { hypr } : {}), logger });
   const emit = (event: Parameters<typeof senses.provider.push>[0]): void => senses.provider.push(event);
-  const media = new MediaManager({ backend: () => backend, audioWindow: () => windows.audioWindow(), packs, settings: settingsOf, logger, emit });
+  const media = new MediaManager({ backend: () => backend, audioWindow: () => windows.audioWindow(), packs, homes, settings: settingsOf, logger, emit });
   const ui = new UiHandler({
     prompts: uiPrompts,
     deliver: (request: UiPromptRequest) => windows.openPromptWindow({ kind: 'ui', prompt: request }) || windows.sendToMain(IPC_EVENT_CHANNELS.uiPrompt, request),

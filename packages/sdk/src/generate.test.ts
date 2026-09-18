@@ -65,7 +65,7 @@ describe('generateSdkTypings', () => {
     expect(out.startsWith('// ---- rpchat character SDK (generated) ----\n')).toBe(true);
     expect(out).toContain(SDK_PREAMBLE_TYPINGS.trimEnd());
     expect(out).toContain('/** The SDK available to character code as the global `sdk`. */\ndeclare const sdk: Sdk;\ninterface Sdk {');
-    expect(out).toContain('  /** Show images and play video/audio from the pack in an overlay window on the user\'s screen, or wash one over whole screens. (permission: pack) */\n  media: MediaApi;');
+    expect(out).toContain('  /** Show images and play video/audio from the pack or your own home folder in an overlay window on the user\'s screen, or wash one over whole screens. (permission: pack) */\n  media: MediaApi;');
     expect(out).toContain('declare const console: {');
     expect(out).toContain('declare const lib: LibApi;');
     for (const spec of registry.list()) {

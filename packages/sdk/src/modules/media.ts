@@ -2,17 +2,18 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const mediaModule: CapabilityModuleSpec = {
   id: 'media',
-  version: '1.4.0',
+  version: '1.5.0',
   title: 'Media playback',
-  summary: 'Show images and play video/audio from the pack in an overlay window on the user\'s screen, or wash one over whole screens.',
+  summary: 'Show images and play video/audio from the pack or your own home folder in an overlay window on the user\'s screen, or wash one over whole screens.',
   permission: 'pack',
   apiTypeName: 'MediaApi',
   typings: `/**
- * Show pack media on the user's screen. Images and videos open in a frameless overlay
+ * Show your media on the user's screen. Images and videos open in a frameless overlay
  * window whose monitor, placement, stacking layer, opacity and click-through you control
- * through OverlayOptions; audio plays without a window. Only pack assets can be shown
- * (no URLs, no files outside the pack). Every call returns a MediaHandle you can pass
- * to update() or close(). Use sdk.display to discover monitors and backend abilities.
+ * through OverlayOptions; audio plays without a window. What you may show is a pack asset or a
+ * file in your own home folder ("home:<path>", or an AssetRef with source: 'home' such as an
+ * sdk.webcam capture) — no URLs, nothing else on the disk. Every call returns a MediaHandle you can
+ * pass to update() or close(). Use sdk.display to discover monitors and backend abilities.
  *
  * The user can cap how many images, videos and sounds run at once. Over that cap a call still
  * returns straight away, with handle.state === 'queued': the item waits its turn and opens by
@@ -22,7 +23,8 @@ export const mediaModule: CapabilityModuleSpec = {
 interface MediaApi {
   /**
    * Show an image asset in an overlay.
-   * @param asset An AssetRef from sdk.pack, or a pack-relative path such as "media/images/smile.png".
+   * @param asset An AssetRef from sdk.pack or sdk.webcam, a pack-relative path such as
+   *   "media/images/smile.png", or "home:<path>" for a file in your home folder.
    * @param options durationMs (auto-close), caption, closeOnClick (default true; false keeps the image up after a click,
    *   a timed image never closes on click), plus OverlayOptions: monitor, position or x/y,
    *   layer ('top' default; 'background' puts it behind windows like a wallpaper), opacity, clickThrough, width, height.
@@ -36,16 +38,17 @@ interface MediaApi {
   showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>;
   /**
    * Play a video asset in an overlay. Resolves as soon as playback starts, not when it ends.
-   * @param asset An AssetRef or pack-relative path (mp4/webm).
+   * @param asset An AssetRef, a pack-relative path or a "home:<path>" one (mp4/webm).
    * @param options volume (0..1), loop, closeOnEnd (default true), muted, plus OverlayOptions
    *   (monitor, position or x/y, layer, opacity, clickThrough, width, height).
    * @returns Handle of the playing video.
    * @example await sdk.media.playVideo("media/video/wave.mp4", { position: "top-right", width: 360 });
+   * @example const clip = await sdk.webcam.takeVideo(5); await sdk.media.playVideo(clip); // a home file plays like a pack one
    */
   playVideo(asset: AssetRef | string, options?: PlayVideoOptions): Promise<MediaHandle>;
   /**
    * Play an audio asset (no window). Resolves as soon as playback starts.
-   * @param asset An AssetRef or pack-relative path (mp3/ogg/wav).
+   * @param asset An AssetRef, a pack-relative path or a "home:<path>" one (mp3/ogg/wav).
    * @param options volume (0..1), loop.
    * @returns Handle of the playing audio; close() stops it.
    * @example const song = await sdk.media.playAudio("media/audio/lullaby.mp3", { volume: 0.5 });
@@ -56,7 +59,7 @@ interface MediaApi {
    * everything, that the user can keep working through. The picture is fitted into the screen keeping
    * its aspect ratio and copies repeat outwards from that centred one, so a shape that does not match
    * the screen tiles instead of stretching. Resolves once it is up, not when it ends.
-   * @param asset An AssetRef or pack-relative path to an image or a video.
+   * @param asset An AssetRef, a pack-relative path or a "home:<path>" one, image or video.
    * @param options monitor ('all' by default: every screen; or one monitor), opacity (0..1, default 0.25 —
    *   keep it under 0.5 so the user can still see their work, higher only when they asked for it),
    *   durationMs (auto-close), and for video volume (0..1, default 0.5), loop (default: on with durationMs),
@@ -86,9 +89,10 @@ interface MediaApi {
   /** Media items this character has open/playing, then the ones still waiting their turn. */
   list(): Promise<MediaHandle[]>;
 }`,
-  docs: `Show pictures, play video or audio from the pack in a small overlay on the user's screen. Available unless the user switched \`media\` off under Settings → Permissions.
+  docs: `Show pictures, play video or audio from the pack (or your home folder) in a small overlay on the user's screen. Available unless the user switched \`media\` off under Settings → Permissions.
 
 - Pass a pack-relative path (or an \`AssetRef\`); files must exist in the pack — check the asset list in your prompt or use \`sdk.pack.listAssets\`.
+- Your own home folder works the same way: \`"home:<path>"\` (\`sdk.files.list\` names what is in there) or an \`AssetRef\` with \`source: 'home'\`, so an \`sdk.webcam\` capture goes on screen without a detour through the pack. A home file that is not there throws NOT_FOUND. Nothing else on the disk can be shown, and \`sdk.wallpaper.set\` still takes pack assets only.
 - Images stay open until \`durationMs\` elapses or you \`close()\` them; videos close on end by default. Without \`durationMs\` the user can click an overlay away; with one it is theirs for that long, so keep timed overlays short and out of the way. Do not open many overlays at once — \`closeAll()\` before showing something new if the screen is getting busy.
 - Playback calls resolve when playback starts, not when it finishes; do not wait for the end inside an action (schedule a timer instead if you need to react later).
 - The user can limit how many images, videos and sounds may run at once, each kind separately. Asking for more does not fail and does not block: the call returns a handle with \`state: 'queued'\` and that item opens by itself the moment one of its kind goes away, raising \`media-started\` \`{ mediaId, asset, packId, kind }\`. So three videos with a limit of one play one after another, in the order you asked for them. \`close()\` on a queued handle takes it out of the queue (reported as \`media-closed\`), and \`update()\` on one changes how it will open. Only when the queue is full as well is the call refused, with CAPABILITY_FAILED.
@@ -101,6 +105,9 @@ interface MediaApi {
 \`\`\`ts
 const pic = await sdk.pack.asset("media/images/luna-smile.png");
 await sdk.media.showImage(pic, { durationMs: 8000, position: "bottom-right", caption: "me today" });
+
+const shot = await sdk.webcam.takeImage();                 // an AssetRef with source: 'home'
+await sdk.media.showImage(shot, { durationMs: 5000 });     // or showImage("home:" + shot.path)
 \`\`\``,
   methods: {
     showImage: { description: 'Show an image asset in an overlay window.' },

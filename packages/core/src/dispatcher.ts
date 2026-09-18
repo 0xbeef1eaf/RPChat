@@ -11,7 +11,7 @@ import type {
   LoadedPack,
   SerializedError,
 } from '@rp/shared';
-import { RpError, characterRef, serializeError } from '@rp/shared';
+import { HOME_ASSET_PREFIX, RpError, characterRef, homeAsset, serializeError } from '@rp/shared';
 import { coerceAssetArg } from './assets.js';
 import type { AuditService } from './services/audit.js';
 import type { PermissionService } from './services/permissions.js';
@@ -30,13 +30,18 @@ export interface DispatcherOptions {
   logger?: Logger;
 }
 
-/** `module.method` calls whose first argument is an asset (string or AssetRef) and the kinds it may have. */
-const ASSET_ARG_METHODS: Record<string, readonly AssetKind[]> = {
-  'media.showImage': ['image'],
-  'media.playVideo': ['video'],
-  'media.playAudio': ['audio'],
-  'media.overlay': ['image', 'video'],
-  'wallpaper.set': ['image'],
+/**
+ * `module.method` calls whose first argument is an asset (string or AssetRef): the kinds it may
+ * have, and whether it also takes a file from the character's home directory. `sdk.media` serves
+ * the home over the asset protocol like a pack root; `sdk.wallpaper` hands a path to the user's
+ * wallpaper command and takes pack assets only.
+ */
+const ASSET_ARG_METHODS: Record<string, { kinds: readonly AssetKind[]; home: boolean }> = {
+  'media.showImage': { kinds: ['image'], home: true },
+  'media.playVideo': { kinds: ['video'], home: true },
+  'media.playAudio': { kinds: ['audio'], home: true },
+  'media.overlay': { kinds: ['image', 'video'], home: true },
+  'wallpaper.set': { kinds: ['image'], home: false },
 };
 
 /** "an image", "an image or video" — for the message naming what a method accepts. */
@@ -230,24 +235,29 @@ export class CapabilityDispatcher implements CapabilityInvoker {
 
   /**
    * Asset arguments (`media.showImage/playVideo/playAudio/overlay`, `wallpaper.set`) become validated
-   * pack-root-relative path strings of one of the kinds the method takes; handle arguments (`media.close/update`)
+   * path strings of one of the kinds the method takes: pack-root-relative, or `home:<path>` for a file
+   * in the character's home directory where the method takes one. Handle arguments (`media.close/update`)
    * become the handle's id string. Everything else passes through unchanged.
    */
   private normaliseArgs(context: ActionContext, module: string, method: string, args: Json[]): Json[] {
     const key = `${module}.${method}`;
-    const wantedKinds = ASSET_ARG_METHODS[key];
-    if (wantedKinds) {
+    const wanted = ASSET_ARG_METHODS[key];
+    if (wanted) {
       const pack = this.packs?.tryGetLoaded(context.packId);
       if (!pack) throw new RpError('NOT_FOUND', `Pack "${context.packId}" is not installed`, { packId: context.packId });
-      const ref = coerceAssetArg(pack, args[0]);
-      if (!wantedKinds.includes(ref.kind)) {
-        throw new RpError('INVALID_ARGUMENT', `sdk.${key} needs ${kindPhrase(wantedKinds)} asset; "${ref.path}" is ${ref.kind}`, {
+      const ref = coerceAssetArg(pack, args[0], { home: wanted.home, call: `sdk.${key}` });
+      if (!wanted.kinds.includes(ref.kind)) {
+        throw new RpError('INVALID_ARGUMENT', `sdk.${key} needs ${kindPhrase(wanted.kinds)} asset; "${ref.path}" is ${ref.kind}`, {
           path: ref.path,
           kind: ref.kind,
         });
       }
+      // The handler tells the two roots apart by the `home:` prefix, so a pack path may not wear it.
+      if (ref.source !== 'home' && ref.path.startsWith(HOME_ASSET_PREFIX)) {
+        throw new RpError('INVALID_ARGUMENT', `sdk.${key} cannot take "${ref.path}": a pack path may not start with "${HOME_ASSET_PREFIX}", which names a file in the character home`, { path: ref.path });
+      }
       const out = [...args];
-      out[0] = ref.path;
+      out[0] = ref.source === 'home' ? homeAsset(ref.path) : ref.path;
       return out;
     }
     if (HANDLE_ARG_METHODS.has(key)) {
