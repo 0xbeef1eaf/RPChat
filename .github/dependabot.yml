@@ -22,6 +22,15 @@ updates:
       # Lift this together with the move to Vite 8.
       - dependency-name: '@vitejs/plugin-react'
         update-types: [version-update:semver-major]
+      # electron is pinned exactly (no caret) because 44.3.0 does not start. On 44.3.0 the browser
+      # process takes SIGSEGV about two seconds in, before `[engine] started`, on every launch;
+      # 44.2.0 is clean. It is the runtime and not our code: swapping the Electron binary under
+      # identical app code crashes 44.2.0's app on the 44.3.0 binary and boots 44.3.0's app on the
+      # 44.2.0 binary. Independent of --ozone-platform, of --disable-gpu, and of any native addon
+      # (none are loaded by the time it goes). The delta is Chromium 152.0.7977.76 -> .78; it came
+      # in with the npm-minor group (#17) and shipped in 0.1.193. Nothing in CI catches it — the
+      # headful smoke runs the app, so a 44.3.x that starts is the signal this can move again.
+      - dependency-name: electron
       # playwright-core is pinned exactly (no caret) because it chooses the browser the smoke
       # drives, and the browser is half of what that smoke tests. From 1.63 it downloads Chrome
       # for Testing rather than a Chromium build, and Chrome for Testing reads managed policy

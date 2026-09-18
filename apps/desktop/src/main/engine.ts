@@ -363,29 +363,6 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     numThreads: async () => (await settingsOf()).voice.numThreads,
     logger,
   });
-  // Fetch the speech engine and a voice model in the background on start. The engine cannot say
-  // anything without weights, so fetching one without the other leaves the feature just as
-  // unreachable as fetching neither. Never awaited and never fatal: voices are optional, startup is
-  // not. Sequential rather than parallel — together they are ~125 MB, and the model is useless until
-  // the engine can run it anyway.
-  void (async () => {
-    const auto = (await settingsOf()).voice.autoDownload;
-    // The bundled addon speaks in process, so the command-line engine is only worth fetching when
-    // the addon will not load here — otherwise it would be 25 MB nothing ever runs.
-    if (voiceEngine.available()) sherpa.markPresent('bundled (sherpa-onnx-node)');
-    else {
-      const existingEngine = findSherpa();
-      if (existingEngine) sherpa.markPresent(existingEngine);
-      else if (!auto) sherpa.markDisabled();
-      else await sherpa.ensure();
-    }
-
-    // Anything the user unpacked themselves counts, so long as it can clone a voice.
-    const cloning = (await readVoiceModels(voicesDir)).find((m) => m.clones);
-    if (cloning) voiceModel.markPresent(cloning.name);
-    else if (!auto) voiceModel.markDisabled();
-    else await voiceModel.ensure();
-  })().catch((err: unknown) => logger.warn(`[voice] startup install failed: ${(err as Error).message}`));
   const desktop = new DesktopHandler({ commands, ...(hypr ? { hypr } : {}), launchAllowlist: async () => (await settingsOf()).desktop.launchAllowlist, logger });
   const files = new FilesHandler({ userData: opts.userData, openPath: (p) => shell.openPath(p) });
   const webcam = new WebcamHandler({ commands, userData: opts.userData });
@@ -483,6 +460,32 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     await rawUpdate(stripManagedPatch(patch ?? {}, state.managed));
     return engine.settings.get();
   };
+  // Fetch the speech engine and a voice model in the background on start. The engine cannot say
+  // anything without weights, so fetching one without the other leaves the feature just as
+  // unreachable as fetching neither. Never awaited and never fatal: voices are optional, startup is
+  // not. Sequential rather than parallel — together they are ~125 MB, and the model is useless until
+  // the engine can run it anyway. It sits here, below the Engine, and not up with the rest of the
+  // voice wiring: the first thing it does is read the settings, and it does that synchronously, so
+  // from up there it would read `engine` while it is still undefined and report the TypeError as a
+  // failed install.
+  void (async () => {
+    const auto = (await settingsOf()).voice.autoDownload;
+    // The bundled addon speaks in process, so the command-line engine is only worth fetching when
+    // the addon will not load here — otherwise it would be 25 MB nothing ever runs.
+    if (voiceEngine.available()) sherpa.markPresent('bundled (sherpa-onnx-node)');
+    else {
+      const existingEngine = findSherpa();
+      if (existingEngine) sherpa.markPresent(existingEngine);
+      else if (!auto) sherpa.markDisabled();
+      else await sherpa.ensure();
+    }
+
+    // Anything the user unpacked themselves counts, so long as it can clone a voice.
+    const cloning = (await readVoiceModels(voicesDir)).find((m) => m.clones);
+    if (cloning) voiceModel.markPresent(cloning.name);
+    else if (!auto) voiceModel.markDisabled();
+    else await voiceModel.ensure();
+  })().catch((err: unknown) => logger.warn(`[voice] startup install failed: ${(err as Error).message}`));
   // System install (docs/system-integration.md): the executable runs from /opt/rpchat/current
   // (realpath, so a launch through the /usr/local/bin symlink counts) and the daemon applies updates.
   const execPathReal = ((): string => {
