@@ -174,6 +174,18 @@ describe('SealCache', () => {
   });
 });
 
+/**
+ * The daemon writes its replies with serde, which leaves an empty `Vec` out of the object
+ * altogether (`skip_serializing_if = "Vec::is_empty"`). The fake does the same so the app is
+ * tested against the shape a real machine sends: on the ordinary machine that has never been
+ * tampered with, `seal.tampers` is not a `[]` — it is simply not there.
+ */
+const OMITTED_WHEN_EMPTY = new Set(['paths', 'tampers', 'residual', 'rotations', 'packs', 'degraded']);
+
+function daemonJson(res: DaemonResponse): string {
+  return JSON.stringify(res, (key, value: unknown) => (Array.isArray(value) && value.length === 0 && OMITTED_WHEN_EMPTY.has(key) ? undefined : value));
+}
+
 /** A fake rpchatd that speaks only the seal and remote ops this suite needs. */
 function sealDaemon(socketPath: string, state: { seal: SealInfo; applied?: string[] }) {
   const seen: DaemonRequest[] = [];
@@ -239,7 +251,7 @@ function sealDaemon(socketPath: string, state: { seal: SealInfo; applied?: strin
           default:
             res = { ok: false, error: `unexpected ${req.op}`, code: 'INVALID' };
         }
-        conn.write(`${JSON.stringify(res)}\n`);
+        conn.write(`${daemonJson(res)}\n`);
       }
     });
   });
@@ -257,7 +269,8 @@ function sealDaemon(socketPath: string, state: { seal: SealInfo; applied?: strin
 }
 
 describe('SystemIntegration: sealing', () => {
-  async function fixture() {
+  /** `remote` is only opted into by the test that needs `status().remote`; the rest run without it. */
+  async function fixture(opts: { remote?: boolean } = {}) {
     const dir = await tempDir();
     const socket = path.join(dir, 'daemon.sock');
     const state = { seal: { ...DEFAULT_SEAL_INFO }, applied: [] as string[] };
@@ -279,6 +292,7 @@ describe('SystemIntegration: sealing', () => {
       homeDir: dir,
       logger: { info: () => {}, warn: () => {}, debug: () => {} },
       run: async () => ({ code: 0, stdout: '', stderr: '' }),
+      ...(opts.remote ? { remote: { status: async () => ({ active: true, intervalMinutes: 60, seq: 4, packs: [], busy: false }) } as never } : {}),
     });
     return { system, cache, state, seen: daemonFake.seen, file, dir };
   }
@@ -321,6 +335,38 @@ describe('SystemIntegration: sealing', () => {
     await fs.writeFile(file, JSON.stringify(POLICY));
     await system.status();
     expect(await cache.read()).toBeNull();
+  });
+
+  it('puts back the empty lists the daemon leaves out of its JSON', async () => {
+    const { system, state } = await fixture({ remote: true });
+    // An ordinary sealed machine: nothing has ever been tampered with, so serde sends no
+    // `tampers` at all. Settings renders these straight, and a missing array there throws during
+    // render and blanks the window — the tamper log button in particular used to count one
+    // record that was not there, and opening it took the app down.
+    state.seal = { ...DEFAULT_SEAL_INFO, sealed: true, residual: ['a root shell the guard does not confine can read the seal'] };
+    const status = await system.status();
+    expect(status.policy.seal.tampers).toEqual([]);
+    expect(status.policy.seal.paths).toEqual([]);
+    expect(status.policy.runtime?.degraded).toEqual([]);
+    expect(status.remote?.daemon.rotations).toEqual([]);
+    expect(status.remote?.daemon.packs).toEqual([]);
+    // `residual` was sent, so it survives intact.
+    expect(status.policy.seal.residual).toHaveLength(1);
+    // And the lines Settings builds from all this can be built.
+    expect(keyLine(status.remote!.daemon)).toBeNull();
+  });
+
+  it('shows the tampers pushed this session and the seal’s own log once each, oldest first', async () => {
+    const { system, state } = await fixture();
+    const edited = { at: '2026-09-16T09:00:00Z', kind: 'policy-edited', path: '/etc/rpchat/policy.json', healed: true };
+    const removed = { at: '2026-09-16T09:05:00Z', kind: 'policy-removed', path: '/etc/rpchat/policy.json', healed: true };
+    // The daemon both records a tamper in the seal and pushes it to the app, so the two sources
+    // overlap; the one it could not write to the seal is the reason the app keeps its own list.
+    const unrecorded = { at: '2026-09-16T09:10:00Z', kind: 'seal-removed', path: '/var/lib/rpchat/seal.json', healed: false };
+    state.seal = { ...DEFAULT_SEAL_INFO, sealed: true, tampers: [edited, removed] };
+    system.noteTamper(removed);
+    system.noteTamper(unrecorded);
+    expect((await system.status()).policy.seal.tampers).toEqual([edited, removed, unrecorded]);
   });
 
 });
