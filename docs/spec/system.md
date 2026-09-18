@@ -504,6 +504,7 @@ when a reply is genuinely being cut short, and retry/reset/delete keep working o
 | `allowDeleteHistory` | `true` | No *Clear history*, no per-message delete. | `sessions:clearMessages`, `sessions:removeMessage` |
 | `allowDeleteMemories` | `true` | No *Forget* in the memories panel; add/edit still work. | `memories:remove` |
 | `allowRemoveEvents` | `true` | No *Remove* in the events drawer. | `events:remove` |
+| `allowCloseMedia` | `true` | No *Close media* in the chat header. Characters' own `sdk.media.close`/`closeAll` still work — they never cross this channel. | `media:closeAll` |
 | `allowSandbox` | `true` | Sandbox tab closed; nav entry hidden. Characters' own scripts unaffected. | `sandbox:run`, `sandbox:cancel` |
 | `requireCharacterSession` | `false` | `enterRequiredSession()` opens the newest session at boot, or creates one with the first installed character, and pins the route to `chat`. The **last** session cannot be deleted — checked in the `sessions.remove` handler (conditional, so not in the table) and mirrored in `ChatView`. | — |
 

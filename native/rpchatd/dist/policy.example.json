@@ -55,6 +55,7 @@
     "allowDeleteHistory": true,
     "allowDeleteMemories": true,
     "allowRemoveEvents": true,
+    "allowCloseMedia": true,
     "allowSandbox": true,
     "requireCharacterSession": false
   },

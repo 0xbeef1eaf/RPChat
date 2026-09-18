@@ -22,6 +22,7 @@
     "allowDeleteHistory": false,
     "allowDeleteMemories": false,
     "allowRemoveEvents": false,
+    "allowCloseMedia": false,
     "allowSandbox": false,
     "requireCharacterSession": true
   },

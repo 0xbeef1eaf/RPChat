@@ -131,9 +131,11 @@ export function ChatView() {
         >
           Memories
         </button>
-        <button type="button" className="btn btn-sm" onClick={closeAllMedia} title="Close every open media window">
-          Close media
-        </button>
+        {restrictions.allowCloseMedia ? (
+          <button type="button" className="btn btn-sm" onClick={closeAllMedia} title="Close every open media window">
+            Close media
+          </button>
+        ) : null}
         {restrictions.allowDeleteHistory ? (
           <button
             type="button"

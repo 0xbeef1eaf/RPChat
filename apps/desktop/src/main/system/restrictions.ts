@@ -2,8 +2,8 @@
  * The app-enforced half of the policy's `app` block (docs/spec/system.md "Restrictions"):
  * operations a household admin can take away from this machine — the pack editor, removing or
  * rewriting packs, stopping a reply mid-generation, deleting sessions/history/memories,
- * unsubscribing event handlers, the sandbox — plus `requireCharacterSession`, which keeps the
- * app inside a conversation.
+ * unsubscribing event handlers, closing a character's media, the sandbox — plus
+ * `requireCharacterSession`, which keeps the app inside a conversation.
  *
  * The `guard` block confines the session *around* the app with AppArmor; this confines the app
  * itself. Enforcement is one table consulted in `registerIpc`'s dispatch loop, so every guarded
@@ -44,7 +44,9 @@ export const RESTRICTED_CHANNELS: Readonly<Record<string, ChannelRule>> = {
   'memories:remove': { key: 'allowDeleteMemories', what: 'Deleting a memory' },
   // 6. Event handlers.
   'events:remove': { key: 'allowRemoveEvents', what: 'Removing an event handler' },
-  // 7. The sandbox.
+  // 7. Sweeping a character's media off the screen by hand.
+  'media:closeAll': { key: 'allowCloseMedia', what: 'Closing a character’s media' },
+  // 8. The sandbox.
   'sandbox:run': { key: 'allowSandbox', what: 'Running a sandbox script' },
   'sandbox:cancel': { key: 'allowSandbox', what: 'Running a sandbox script' },
 } as const;
