@@ -200,10 +200,11 @@ describe('BrowserHandler: blocking, effects, home page, bookmarks, eval, history
 
   it('block: { allow } turns the patterns into the only pages that may open, the app\'s own among them', async () => {
     const { commands } = fakeCommands();
-    const { bridge, calls } = fakeBridge(true, { 'rules.block': (a) => ({ ...a, redirectedTabs: 2 }) });
+    const { bridge, calls } = fakeBridge(true, { 'rules.block': (a) => ({ ...a, redirectedTabs: 2, replacedAllowlist: 'blk-older' }) });
     const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf(), characterName: () => 'Mira' });
     const r = (await h.invoke('block', [{ allow: ['wiki.test', ' arxiv.test '] }, { reason: 'the study hour' }], ctxNamed)) as Record<string, unknown>;
-    expect(r).toMatchObject({ mode: 'allow', patterns: ['wiki.test', 'arxiv.test'], expiresAt: null, redirectedTabs: 2 });
+    // The allowlist this one lifted comes back with it, so the character can say what became of the last.
+    expect(r).toMatchObject({ mode: 'allow', patterns: ['wiki.test', 'arxiv.test'], expiresAt: null, redirectedTabs: 2, replacedAllowlist: 'blk-older' });
     expect(calls.at(-1)).toMatchObject({ op: 'rules.block', args: { mode: 'allow', patterns: ['wiki.test', 'arxiv.test'], by: 'Mira', reason: 'the study hour' } });
     // The app's own pages are protected from a denylist; an allowlist may name them (it lets them through anyway).
     await h.invoke('block', [{ allow: ['localhost', 'wiki.test'] }], ctxNamed);

@@ -83,10 +83,11 @@ own resources. The extension's own traffic and the app's pages are never touched
 Priorities keep the two composable: a denylist rule (3) outranks an allowlist's `allow` (2),
 which outranks its catch-all (1), so a character can still shut one site inside an allowlist.
 Two allowlists cannot be in place at once — each one's `allow` rules would override the other's
-catch-all, widening both, and DNR cannot intersect them — so a second one is refused naming the
-first (re-using an id replaces that block, which is how an allowlist is widened). A block's
-`redirect` must be reachable under its own rule: off the patterns for a denylist, on them for an
-allowlist. Without `redirect` the rule sends the navigation to the extension's `blocked.html`
+catch-all, widening both, and DNR cannot intersect them — so installing one lifts the allowlist
+already in place and returns its id as `replacedAllowlist`: a second call restates the whole list
+rather than adding to it. Denylists are unaffected, and re-using an id still replaces that block.
+A block's `redirect` must be reachable under its own rule: off the patterns for a denylist, on
+them for an allowlist. Without `redirect` the rule sends the navigation to the extension's `blocked.html`
 ("This page is unavailable right now — blocked by *character* until *time*", the reason, and an
 "Ask in rpchat" hint); with `redirect` it goes to that URL instead. Tabs already showing a
 newly blocked page are moved the same way. The rule table lives in `chrome.storage.local`
@@ -419,8 +420,9 @@ that version so browsers pick updates up. `GET /extension/id` returns the id as 
   `--host-resolver-rules`, since 127.0.0.1 itself is protected), open it and land on the blocked
   page, unblock and open it for real; then an allowlist (`{ allow: ["nothing.invalid"] }`) — the
   `smoke.test` page lands on the blocked page, the app's own 127.0.0.1 page opens without being
-  listed and still loads a `smoke.test` image (top-level navigations only), and lifting it lets
-  `smoke.test` back in; `grayscale` + a pack-asset `replaceWith` on the smoke page
+  listed and still loads a `smoke.test` image (top-level navigations only), a second allowlist
+  that also names `smoke.test` replaces the first (one block left, and the page opens), and
+  lifting it leaves `smoke.test` open; `grayscale` + a pack-asset `replaceWith` on the smoke page
   with the computed style and `src` read back through `eval`; set the home page (the launcher
   then opens `chrome://newtab` and the app waits for the `browser-navigated` event on it); add,
   search, list and remove a bookmark; `eval` in the isolated world (`document.title`, plus a
