@@ -45,6 +45,17 @@ const CHEER = `async (mood) => {
   return Boolean(pic);
 }`;
 
+/** The other format: helpers of the file's own, and one export — the function the character calls. */
+const CHEER_MODULE = `function pick(mood: string) {
+  return { anyTags: [mood], kind: "image" } as const;
+}
+
+export default async (mood: string) => {
+  const found = (await sdk.pack.findAssets(pick(mood)))[0];
+  if (found) await sdk.media.showImage(found, { durationMs: 6000 });
+  return Boolean(found);
+};`;
+
 describe('LibraryService helpers', () => {
   it('unwraps the sandbox handler wrapper and accepts a bare function expression', () => {
     expect(unwrapFunctionSource(asHandlerArg(CHEER))).toBe(CHEER);
@@ -118,6 +129,24 @@ describe('LibraryService helpers', () => {
     expect(buildPrelude([])).toBe(EMPTY_PRELUDE);
   });
 
+  it('builds the prelude of a function written as a module out of its statements and its export', () => {
+    const prelude = buildPrelude([{ name: 'cheer', source: CHEER_MODULE, bytes: 1, updatedAt: 't' }]);
+    // the file's statements run once per run inside an arrow that hands the exported function over,
+    // so `pick` belongs to `cheer` alone — it is not a second entry on `lib` and not a `<library>` line
+    expect(prelude).toContain('"cheer": (() => {\nfunction pick(mood: string) {');
+    expect(prelude).toContain('\n;return __rp_default;\n})(),');
+    expect(prelude).not.toContain('export');
+    // and it evaluates: the same shape in plain JavaScript (the sandbox transpiles the TypeScript one)
+    const js = buildPrelude([{ name: 'shout', source: 'const mark = "!";\nexport default (t) => t + mark;', bytes: 1, updatedAt: 't' }]);
+    expect(new Function('__rp_lib', `${js}\nreturn lib;`)((o) => o).shout('hi')).toBe('hi!');
+  });
+
+  it('reads the signature of a module function from its export, not from the first helper', () => {
+    expect(functionParams(CHEER_MODULE)).toBe('mood: string');
+    expect(functionParams('const n = 1;\nexport function greet(name: string, loud?: boolean) { return name; }')).toBe('name: string, loud?: boolean');
+    expect(libraryLine({ name: 'cheer', source: CHEER_MODULE, description: 'show a picture for a mood' })).toBe('- lib.cheer(mood: string) — show a picture for a mood');
+  });
+
   it('renders one prompt line per function', () => {
     expect(libraryLine({ name: 'cheer', source: 'async (mood: string) => 1', description: 'show a picture for a mood' })).toBe('- lib.cheer(mood: string) — show a picture for a mood');
     expect(libraryLine({ name: 'tick', source: '() => 1' })).toBe('- lib.tick()');
@@ -160,6 +189,13 @@ describe('the lib module through the engine', () => {
     // No per-file size cap: only the total and the count are capped.
     expect((await invoke(ctx, 'register', 'big', `(x) => "${'a'.repeat(20 * 1024)}"`)).ok).toBe(true);
     expect(await invoke(ctx, 'unregister', 'big')).toEqual({ ok: true, value: true });
+    // a string may hold a whole module: helpers in the file, one exported function to call
+    expect((await invoke(ctx, 'register', 'shout', 'function mark(t: string) { return t + "!"; }\nexport default (t: string) => mark(t);')).ok).toBe(true);
+    expect(await fs.readFile(libFile(MINIMAL_ID, 'echo', 'shout'), 'utf8')).toBe('function mark(t: string) { return t + "!"; }\nexport default (t: string) => mark(t);\n');
+    expect(await t.engine.library.preludeFor(MINIMAL_ID, 'echo')).toContain('"shout": (() => {\nfunction mark(t: string)');
+    expect((await bad('ok', 'export default 1;\nexport default 2;'))?.message).toMatch(/exports more than one thing/);
+    expect((await bad('ok', 'import { x } from "./x";\nexport default () => x;'))?.message).toMatch(/cannot `import` anything/);
+    expect(await invoke(ctx, 'unregister', 'shout')).toEqual({ ok: true, value: true });
     expect((await bad('ok', 'x => x', { description: 5 }))?.code).toBe('INVALID_ARGUMENT');
     expect((await bad('ok', 'x => x', { internal: 'yes' }))?.code).toBe('INVALID_ARGUMENT');
     expect(await invoke(ctx, 'nope')).toMatchObject({ ok: false, error: { code: 'CAPABILITY_UNKNOWN' } });

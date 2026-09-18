@@ -343,7 +343,7 @@ my-pack/
 │       ├── persona.md
 │       ├── avatar.png
 │       ├── lib/                  (optional) the character's `lib` functions, one per file
-│       │   └── cheer.ts          `// <description>` + one function expression
+│       │   └── cheer.ts          `// <description>` + one function expression (or a module exporting one)
 │       └── scripts/
 │           ├── on-session-start.ts
 │           └── on-timer.ts

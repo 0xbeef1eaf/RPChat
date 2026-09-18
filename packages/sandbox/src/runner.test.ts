@@ -398,6 +398,38 @@ describe('QuickJsRunner', () => {
       }
     });
 
+    // What buildPrelude emits for a file written as a module: its statements run inside an arrow
+    // that hands back the exported function, so the helpers belong to that one entry alone.
+    const withHelpers = [
+      'const lib = __rp_lib({',
+      '  "greet": (() => {',
+      '    const mark = "!";',
+      '    function shout(text: string) { return text.toUpperCase() + mark; }',
+      '    var __rp_default = (name: string) => shout("hi " + name);',
+      '    ;return __rp_default;',
+      '  })(),',
+      '  "farewell": (() => {',
+      '    const mark = "?";',
+      '    function shout(text: string) { return text.toLowerCase() + mark; }',
+      '    ;return (name: string) => shout("BYE " + name);',
+      '  })(),',
+      '});',
+    ].join('\n');
+
+    it('runs a library function that keeps helpers of its own, one file at a time', async () => {
+      const result = await runner.run(
+        req('return { hi: await lib.greet("ada"), bye: await lib.farewell("ada"), keys: Object.keys(lib), source: String(lib.greet), leaked: typeof shout };', {
+          prelude: withHelpers,
+        }),
+      );
+      expect(result.error).toBeUndefined();
+      // each file's `shout` and `mark` are its own, and neither reaches the action body
+      expect(result.returnValue).toMatchObject({ hi: 'HI ADA!', bye: 'bye ada?', keys: ['greet', 'farewell'], leaked: 'undefined' });
+      // the transpiler numbers the two `shout` declarations apart, which is why a handler stored
+      // out of such a function must call `lib.<name>` rather than reach for a helper beside it
+      expect((result.returnValue as { source: string }).source).toMatch(/^\(name\) => shout\d*\("hi " \+ name\)$/);
+    });
+
     it('stores a handler a library function installs without a renamed binding', async () => {
       const invoker = makeInvoker();
       const result = await runner.run(req('return await lib.watch();', { prelude: withInternal, surface: libSurface, invoker }));

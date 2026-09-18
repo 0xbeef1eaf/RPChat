@@ -57,7 +57,10 @@ reject with `sdk.<module>.<method>: arguments must be JSON-serialisable`.
 
 The host may put source in front of the user's code: the character's function library, which core's
 `LibraryService` renders as `const lib = __rp_lib({ "<name>": (<source>), … });` (or
-`const lib = __rp_lib({});` when empty), `__rp_lib` being the bootstrap's library factory (§3).
+`const lib = __rp_lib({});` when empty), `__rp_lib` being the bootstrap's library factory (§3). A
+function whose file keeps helpers of its own (docs/spec/pack.md "Function library") is a
+`(() => { … ;return <its export>; })()` in that same object, so those helpers run once per run and
+belong to that one entry — they are not on `lib` and not in any other function's scope.
 A library holding an internal helper renders exactly the same way plus a second argument naming the
 helpers — `__rp_lib({ … }, ["<helper>"])` — never as a second, shadowing scope, whose rename (`lib` →
 `lib2`) would travel into any handler the library stores through §4. `transpile(code, language, { prelude })` places it between

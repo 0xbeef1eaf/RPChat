@@ -407,7 +407,8 @@ export class EditorService {
   async checkScript(source: string, kind: ScriptKind = 'behaviour'): Promise<ScriptProblem[]> {
     if (typeof source !== 'string' || source.trim().length === 0) return [];
     if (kind === 'function') {
-      // The loader's own check: exactly one function expression. Its message names the line and column when esbuild does.
+      // The loader's own check: one function expression, or a module with one exported function.
+      // Its message names the line and column when esbuild does.
       const problem = functionSourceProblem(source.trim());
       if (problem === undefined) return [];
       const out: ScriptProblem = { message: problem };
@@ -454,8 +455,8 @@ export class EditorService {
 
   /**
    * Write one library function file, `<dir>/lib/<name>.ts` (docs/spec/pack.md "Function library").
-   * The name must be a valid function name; the source has no size cap. A source that is
-   * not a single function expression is still saved (the author is mid-edit) and comes back with
+   * The name must be a valid function name; the source has no size cap. A source that does not hold
+   * one function for the character to call is still saved (the author is mid-edit) and comes back with
    * `problem` set, exactly as the loader reports it. `previousName` renames: the old file goes once
    * the new one is written.
    */
@@ -468,7 +469,7 @@ export class EditorService {
     const nameProblem = libraryNameProblem(name);
     if (nameProblem !== undefined) throw new RpError('INVALID_ARGUMENT', nameProblem);
     const source = typeof input.source === 'string' ? input.source.trim() : '';
-    if (source.length === 0) throw new RpError('INVALID_ARGUMENT', 'source is required: one function expression');
+    if (source.length === 0) throw new RpError('INVALID_ARGUMENT', 'source is required: one function expression, or a file exporting one');
     const description = typeof input.description === 'string' && input.description.trim().length > 0 ? input.description.trim() : undefined;
     const previous = typeof input.previousName === 'string' ? input.previousName.trim() : '';
     if (previous.length > 0 && previous !== name && libraryNameProblem(previous) !== undefined) throw new RpError('INVALID_ARGUMENT', `Invalid previous name "${previous}"`);

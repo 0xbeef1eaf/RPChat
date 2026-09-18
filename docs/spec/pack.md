@@ -23,6 +23,10 @@ export function readCharacterLibrary(rootAbs, charDir, { previous? }): Promise<{
 export function writeLibraryFunction(root, charDir, name, source, description?, internal?): Promise<string>;   // atomic (temp + rename); returns the pack-relative path
 export function removeLibraryFunction(root, charDir, name): Promise<boolean>;
 export function functionSourceProblem(source): string | undefined; export function unwrapFunctionSource(raw): string; export function libraryNameProblem(name): string | undefined;
+// the shape of one source (`library-source.ts`): a bare function expression, or a module with helpers and one exported function
+export function libraryFunctionShape(source): { fn: string; module?: { body: string; returns: string } } | { problem: string; module: boolean };
+export function libraryValueExpression(source): string;   // what the prelude puts on `lib`: `(<fn>)`, or `(() => { <body>; return <returns>; })()`
+export function exportedFunctionSource(source): string; export function isLibraryModule(source): boolean;
 export function parseLibraryFile(text): { source; description?; internal? }; export function formatLibraryFile(source, description?, internal?): string; export function libraryFilePath(name): string;
 export function libraryReadme(name): string; export function libraryFunctionTemplate(): string;      // scaffold text for lib/README.md and the editor's starter function
 ```
@@ -31,7 +35,7 @@ export function libraryReadme(name): string; export function libraryFunctionTemp
 
 - `id`: /^[a-z0-9]+(\.[a-z0-9-]+)+$/ ; `version`: semver (simple regex `^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`); `formatVersion === 1`
 - **A pack has exactly one character.** `characters` holds exactly one relative dir containing `character.json` (the schema rejects zero or two entries); the loader also reports a problem when `characters/` holds a second directory with a `character.json` that the manifest does not list (`characters/<x>/character.json: a pack has exactly one character …`). The on-disk layout `characters/<id>/…`, the array in `pack.json` and the `packId/characterId` character ref are unchanged; `LoadedPack.character` is the convenience accessor and `LoadedPack.characters` stays a one-entry array for compatibility. `persona` file must exist; `behaviours` files must exist and end with `.ts` or `.js`; `avatar` must exist and be an image.
-- `characters/<id>/lib/*.ts`: see "Function library". A file that is not one function expression (or whose stem is not a valid name) is a `warning:` and skipped; the caps are problems.
+- `characters/<id>/lib/*.ts`: see "Function library". A file that does not hold exactly one function for the character to call (or whose stem is not a valid name) is a `warning:` and skipped; the caps are problems.
 - `capabilities` (pack.json and character.json) is a **legacy key**: permissions are app-wide (Settings → Permissions), packs declare none. The schemas accept the key with any value, strip it from the parsed `PackManifest` / `CharacterDefinition` (the types have no such field), and `inspectPack`/`validatePack` add the warning `warning: <file>: "capabilities" is ignored; permissions are set in the app under Settings → Permissions`. `scaffoldPack`, `writeManifest` and `writeCharacter` never write it.
 - `promptFunctions` (character.json, optional): the SDK the character's **prompt** describes — an array of module ids (`"avatar"`) and/or single functions (`"avatar.show"`), validated against `PROMPT_FUNCTION_PATTERN` and required to be free of duplicates. Unknown names are not an error: a pack may name a plugin module this machine does not have. It is not a permission — the code keeps every function the user allows (docs/spec/core.md, `promptSelection`) — so it is the author's way of keeping a prompt short and focused. Omit the key for "everything the user allows"; `[]` means "nothing but `sdk.lib`".
 - `mediaRoot` default `media`; may not exist (a pack can have no media).
@@ -39,7 +43,7 @@ export function libraryReadme(name): string; export function libraryFunctionTemp
 
 ## Function library (`characters/<id>/lib/`)
 
-The character's `lib` functions live in the pack, one file per function: `characters/<id>/lib/<name>.ts`. The file is an optional first line `// <description>` followed by the function expression exactly as `lib.register` received it (arrow or `async function`):
+The character's `lib` functions live in the pack, one file per function: `characters/<id>/lib/<name>.ts`. The file is an optional first line `// <description>` followed by the function exactly as `lib.register` received it — a bare function expression (arrow or `async function`):
 
 ```ts
 // show a picture for a mood
@@ -50,10 +54,28 @@ async (mood: string) => {
 }
 ```
 
-- Only the first line becomes the description; further `//` or `/* */` comments above the function are part of the source and are kept verbatim (the check below ignores them, and the prelude parenthesises the source across lines, so they are safe there). The source is an expression, so it ends without a `;`.
+…or a **module**: any number of helpers, constants and types of the file's own, with exactly one `export` — the function the character calls. Everything else in the file is private to it, so one long function can be broken up without spending a library name (and a `<library>` line) on each piece:
+
+```ts
+// show a picture for a mood
+type Mood = "happy" | "sad";
+
+function query(mood: Mood) {
+  return { anyTags: [mood], kind: "image" } as const;
+}
+
+export default async (mood: Mood) => {
+  const pic = (await sdk.pack.findAssets(query(mood)))[0];
+  if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
+  return Boolean(pic);
+};
+```
+
+- Only the first line becomes the description; further `//` or `/* */` comments above the function are part of the source and are kept verbatim (the check below ignores them, and the prelude parenthesises the source across lines, so they are safe there). A bare function expression is an expression, so it ends without a `;`; a module's statements end as statements do.
 - `<name>` is the function name: `^[a-zA-Z_$][\w$]*$`, at most 64 characters, no JavaScript reserved words, not `__proto__`, and not `register` or `unregister` — the library object's own methods (`LIB_NAME_PATTERN` / `LIB_NAME_MAX_CHARS` in `@rp/shared`, `LIB_STATIC_NAMES` in `@rp/pack`). Only regular `.ts` files count; a `README.md`, sub-folders and dotfiles in `lib/` are ignored.
-- **Internal helpers.** A first line of `// @internal` (optionally `// @internal <description>`, `LIB_INTERNAL_MARKER` in `@rp/shared`) marks a function as the author's plumbing: `parseLibraryFile` returns `internal: true` and the loader sets it on the entry, `formatLibraryFile(source, description?, internal?)` and `writeLibraryFunction(…, description?, internal?)` write the marker back. Everything else about the file is unchanged (name rules, the one-function-expression check, the caps). What it means for the character is core's business (docs/spec/core.md "Internal helpers"): it is left out of the prompt and the model's own action code cannot call it, while the library's other functions, the pack's behaviour hooks, its event handlers and its timers all reach it; `lib.register` refuses the name unless the call passes `internal: true` too.
-- The loader reads the folder into `LoadedCharacter.library: Record<name, { source; description?; internal?; bytes; file; updatedAt }>` (sorted by name; `updatedAt` is the file's mtime) and checks each source with `functionSourceProblem` — the same esbuild "exactly one function expression" check `LibraryService` applies to `lib.register`, so both cannot drift. A file that fails is reported as `warning: characters/<id>/lib/<name>.ts: not a single function expression: …` and left out; the pack still loads.
+- **Internal helpers.** A first line of `// @internal` (optionally `// @internal <description>`, `LIB_INTERNAL_MARKER` in `@rp/shared`) marks a function as the author's plumbing: `parseLibraryFile` returns `internal: true` and the loader sets it on the entry, `formatLibraryFile(source, description?, internal?)` and `writeLibraryFunction(…, description?, internal?)` write the marker back. Everything else about the file is unchanged (name rules, the one-function check, the caps), and a helper may be written either way. What it means for the character is core's business (docs/spec/core.md "Internal helpers"): it is left out of the prompt and the model's own action code cannot call it, while the library's other functions, the pack's behaviour hooks, its event handlers and its timers all reach it; `lib.register` refuses the name unless the call passes `internal: true` too.
+- **The module form** (`library-source.ts`, shared with `lib.register`, which takes it in a string). `libraryFunctionShape` reads the source textually — no parser, so a prelude is cheap to rebuild — and reports `{ fn }` for a bare expression or `{ fn, module: { body, returns } }` for a module; `functionSourceProblem` is what puts it through esbuild. The rules: exactly one value export, in one of the three forms `export default <function>`, `export const|let|var <name> = <function>` or `export [async] function <name>() {…}` (a named `export default function f() {}` keeps its name; anything else is bound to `__rp_default`); `export type` / `export interface` are erased with the types and do not count; `export { … }`, `export * from …` and a non-function export are refused, as is any `import` (a library file cannot pull in another). The file name is the function's name whatever the export is called. `libraryValueExpression` renders the prelude value: `(<source>)` for an expression, `(() => {\n<body>\n;return <returns>;\n})()` for a module, where `body` is the file verbatim with its `export` keywords rewritten away — so the statements around the function run once at the start of every run, and the helpers belong to that one entry. `exportedFunctionSource` is the export on its own: what `functionParams` reads for the `<library>` line, and what the isolate reports as `String(lib.<name>)`. A handler such a function hands to `sdk.events.on` is stored as that source alone, so it must call `lib.<name>(...)` rather than reach for a helper of its file (the transpiler also numbers same-named helpers of different files apart).
+- The loader reads the folder into `LoadedCharacter.library: Record<name, { source; description?; internal?; bytes; file; updatedAt }>` (sorted by name; `updatedAt` is the file's mtime; `source` is the whole file, helpers included, and `bytes` counts it) and checks each source with `functionSourceProblem` — the same check `LibraryService` applies to `lib.register`, so both cannot drift. A file that fails is reported as `warning: characters/<id>/lib/<name>.ts: not a single function expression: …` (`not one exported function: …` when it was written as a module) and left out; the pack still loads. Several statements with no `export` are diagnosed as the module form written without one.
 - Caps, reported as problems: 50 files (`LIB_MAX_FUNCTIONS`), 128 KiB in total (`LIB_MAX_TOTAL_BYTES`). A single file has no size cap — the total is what bounds the prelude prepended to every run.
 - `readCharacterLibrary(rootAbs, charDir, { previous })` reuses entries whose source text is unchanged, so core's rescan after every `register` stays cheap. `writeLibraryFunction` writes atomically (temp file + rename) and `removeLibraryFunction` deletes; core calls both against the installed copy, so what a character registers lands next to what the author shipped. `scaffoldPack` creates `lib/README.md` (`libraryReadme`) explaining the format. `packDirectory` zips the folder like any other pack file.
 
@@ -74,5 +96,6 @@ Also add `examples/packs/README.md` documenting the format for pack authors (cop
 - loadPack on `examples/packs/luna` yields 1 character, persona text, behaviour sources, asset index with correct kinds; on `examples/packs/makima` the shipped `lib/glance.ts` loads with its description
 - a second character (listed in `pack.json`, or only present on disk) is a problem; a directory under `characters/` without a `character.json` is not a character
 - library files: read sorted with descriptions; a `// @internal` first line sets `internal` and keeps the rest of the line as the description; bad ones skipped with a warning; caps are problems; `writeLibraryFunction`/`removeLibraryFunction` round-trip and leave no temp files; `packDirectory` → `extractPack` carries `lib/*.ts`
+- the module form: a file with helpers and one export loads whole (`bytes` counts the helpers) under its file name whatever the export is called; type-only exports do not count; two exports, a non-function export, an `import` and helpers with no export at all are each skipped with their own reason; `libraryValueExpression` round-trips through esbuild and runs (helpers private per file, statements once per run), and the word `export` inside a string, a comment or a regular expression is not one
 - resolveAssetPath rejects `../x`, `/etc/passwd`, `media\\..\\x`, and a symlink pointing outside root (create in a temp dir)
 - packDirectory → extractPack round-trips byte-for-byte; extractPack rejects a hand-built zip containing `../evil.txt`

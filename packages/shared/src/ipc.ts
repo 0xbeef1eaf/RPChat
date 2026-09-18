@@ -405,7 +405,7 @@ export interface IpcApi {
      * Compile a script without saving it: what the editor calls while the author types, so a
      * syntax error shows up under the box instead of at the next session start. `kind`
      * `behaviour` (default) compiles a hook script; `function` checks a library function the way
-     * the pack loader does (exactly one function expression).
+     * the pack loader does (one function expression, or a module exporting one function).
      */
     checkScript(source: string, kind?: ScriptKind): Promise<ScriptProblem[]>;
     /** Save dialog → writes the .rppack; returns the file path or null when cancelled. */

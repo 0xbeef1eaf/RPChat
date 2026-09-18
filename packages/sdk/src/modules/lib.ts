@@ -45,7 +45,8 @@ interface LibApi {
    * @param name A JavaScript identifier (max 64 chars, no reserved words, not \`register\` or \`unregister\`).
    * @param fn Write it as a function (arrow or \`async function\`); it may be async, may take any arguments and
    *   may use \`sdk\` and \`lib\` (your other functions) — but nothing else from the action defining it: no
-   *   variables, no helpers declared above it. (A string holding a function expression also works.)
+   *   variables, no helpers declared above it. To keep helpers of its own, pass a string holding a whole
+   *   file instead: any number of declarations, with \`export default\` on the one this name calls.
    * @param opts description: one line saying what it is for, shown in <library>. internal: true keeps it out
    *   of <library> and out of the \`lib\` your action code sees — only your other library functions reach it.
    * @throws INVALID_ARGUMENT when the name is reserved by one of your pack's own helpers; pick another.
@@ -68,8 +69,9 @@ interface LibApi {
 
 - \`sdk.lib\` **is** the \`lib\` object, not a second API: \`sdk.lib.cheer(1)\` and \`lib.cheer(1)\` run the same saved function, and \`sdk.lib.register\` is \`lib.register\`. There is no \`sdk.lib.define\`.
 - A library function may be async and may call \`sdk\` and other \`lib\` functions, but it closes over **nothing** from the action that registered it: pass what it needs as arguments.
-- Your prompt lists the library under \`<library>\` with each function's parameters; \`String(lib.<name>)\` is its source, e.g. to read it before changing it, and \`Object.keys(lib)\` are the names.
-- Functions live in your pack as \`characters/<id>/lib/<name>.ts\` (a \`// description\` line, then the function); some may have been shipped by your author, the rest you saved. \`register\` writes the file, \`unregister\` deletes it.
+- One name is one file, but that file may hold more than one function: pass \`register\` a string with helpers of its own and \`export\` the one this name calls (\`export default\`, \`export const <name> =\` or \`export function <name>()\`). The rest stay private to it — out of \`<library>\`, out of \`lib\` — and their statements run once at the start of every run. There is no \`import\`, and a handler you hand to \`sdk.events.on\` from inside such a function is stored as its own source alone, so let it call \`lib.<name>(...)\` rather than a helper beside it.
+- Your prompt lists the library under \`<library>\` with each function's parameters; \`String(lib.<name>)\` is its source — the exported function, without the helpers of its file — and \`Object.keys(lib)\` are the names.
+- Functions live in your pack as \`characters/<id>/lib/<name>.ts\` (a \`// description\` line, then the function, or the file around it); some may have been shipped by your author, the rest you saved. \`register\` writes the file, \`unregister\` deletes it.
 - Prefer one clear function per repeated routine; the library is not a place for state (use \`sdk.state\` / \`sdk.memory\`).
 - \`{ internal: true }\` saves a helper your other library functions can call while it stays out of \`<library>\` and out of the \`lib\` your action code sees. Your author may have shipped plumbing of their own that way: it is not yours to call or replace, and \`register\` refuses its name (\`lib.<name> is reserved by this pack\`) unless you pass \`internal: true\` yourself.
 
@@ -79,8 +81,9 @@ await lib.register("cheer", async (mood: string) => {
   if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
   return Boolean(pic);
 }, { description: "show a picture for a mood" });
-// in a later action:
-await lib.cheer("happy");
+await lib.cheer("happy");   // in a later action
+// a file with helpers of its own: \`lib.greet\` is the export, \`partOfDay\` stays inside it
+await lib.register("greet", 'function partOfDay(h) { return h < 12 ? "morning" : "evening"; }\\nexport default async (name) => sdk.chat.say(\`Good \${partOfDay(new Date().getHours())}, \${name}!\`);');
 \`\`\``,
   methods: {
     register: { description: 'Save or replace a library function.' },

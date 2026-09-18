@@ -173,7 +173,8 @@ export function ScriptsSection() {
       </div>
       <p className="muted small" style={{ marginBottom: 14 }}>
         Each file is one function of {character.definition.name || character.definition.id}'s <code>lib</code> library, callable as <code>lib.&lt;name&gt;(...)</code> in every
-        action, timer handler and event handler. The first line <code>// …</code> is its description in the prompt; the rest is exactly one function expression.
+        action, timer handler and event handler. The first line <code>// …</code> is its description in the prompt; the rest is one function expression — or a whole
+        file, with helpers of its own and <code>export default</code> (or <code>export const</code>/<code>export function</code>) on the one the character calls.
         The character's own <code>lib.register</code> calls are saved into the same folder of the installed pack. Mark a function <em>internal</em> to keep it as
         plumbing for your other functions and hooks, out of sight of the character.
       </p>
@@ -238,7 +239,7 @@ export function ScriptsSection() {
                 <strong>{problem.line !== undefined ? `Line ${problem.line}${problem.column !== undefined ? `, column ${problem.column}` : ''}: ` : ''}</strong>
                 {problem.message}
                 {problem.lineText ? <pre>{problem.lineText.trim()}</pre> : null}
-                <span className="muted small">The loader skips a file that is not exactly one function expression; the character will not see it until this is fixed.</span>
+                <span className="muted small">The loader skips a file that does not hold exactly one function for the character to call; it will not see this one until the problem is fixed.</span>
               </div>
             ) : current?.problem && !dirty ? (
               <div className="script-problem">
