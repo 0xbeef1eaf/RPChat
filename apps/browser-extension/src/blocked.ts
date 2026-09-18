@@ -18,8 +18,9 @@ async function main(): Promise<void> {
   }
   const who = rule.by ? rule.by : 'a character';
   const until = rule.expiresAt ? ` until ${new Date(rule.expiresAt).toLocaleString()}` : '';
-  reason.textContent = `Blocked by ${who}${until}.`;
-  if (patterns) patterns.textContent = rule.patterns.join(', ');
+  const allowlist = rule.mode === 'allow';
+  reason.textContent = allowlist ? `${who} left only a few sites open${until}.` : `Blocked by ${who}${until}.`;
+  if (patterns) patterns.textContent = allowlist ? `Open right now: ${rule.patterns.join(', ')}` : rule.patterns.join(', ');
   const why = document.getElementById('why');
   if (why && rule.reason) {
     why.textContent = `“${rule.reason}”`;

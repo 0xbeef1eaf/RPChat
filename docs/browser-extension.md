@@ -57,7 +57,7 @@ Vivaldi, Opera. Firefox is not supported (different extension platform).
   **`browser-navigated`** host event (`{ tabId, url, title }`, filter `{ url?, title? }`
   substrings) for `sdk.events.on`.
 
-## What else a character can do (`sdk.browser` 2.1)
+## What else a character can do (`sdk.browser` 2.1+)
 
 Every method below needs the extension, passes the web allowlist for any URL it takes, and is
 audited like the rest. Settings → Browser → **What characters may do** switches page blocking,
@@ -66,13 +66,27 @@ JavaScript injection and history access off individually; a switched-off call fa
 
 ### Blocking pages for a while
 
-`sdk.browser.block(patterns, { durationMs, redirect?, reason? })` → `{ id, expiresAt }`,
-`unblock(id)`, `blocks()`, `clearBlocks()`. Patterns: `example.com` (the host and every
-subdomain), `*.example.com` (the same), `example.com/path*` (a path prefix), `example.com/exact`
-(that path; `*` inside a path matches anything). Each pattern becomes one dynamic
-`declarativeNetRequest` rule (`regexFilter`, `main_frame` only, any port), so only top-level
-navigations are affected — embedded resources, the extension's own traffic and the app's pages
-are not. Without `redirect` the rule sends the navigation to the extension's `blocked.html`
+`sdk.browser.block(patterns | { deny } | { allow }, { durationMs, redirect?, reason? })` →
+`{ id, mode, expiresAt }`, `unblock(id)`, `blocks()`, `clearBlocks()`. Patterns: `example.com`
+(the host and every subdomain), `*.example.com` (the same), `example.com/path*` (a path prefix),
+`example.com/exact` (that path; `*` inside a path matches anything).
+
+A **denylist** (an array, or `{ deny }`) turns each pattern into one dynamic
+`declarativeNetRequest` rule (`regexFilter`, `main_frame` only, any port). An **allowlist**
+(`{ allow }`) instead installs one catch-all rule (`^https?://`, `main_frame`) that redirects
+every top-level navigation, and one higher-priority `allow` rule per pattern — plus one each for
+`127.0.0.1`, `localhost` and `0.0.0.0`, which an allowlist may name but never has to. Either way
+only top-level navigations are judged: a page the user may open loads every asset, frame and
+request it likes, wherever from — `{ allow: ["google.com"] }` opens google.com with all of its
+own resources. The extension's own traffic and the app's pages are never touched.
+
+Priorities keep the two composable: a denylist rule (3) outranks an allowlist's `allow` (2),
+which outranks its catch-all (1), so a character can still shut one site inside an allowlist.
+Two allowlists cannot be in place at once — each one's `allow` rules would override the other's
+catch-all, widening both, and DNR cannot intersect them — so a second one is refused naming the
+first (re-using an id replaces that block, which is how an allowlist is widened). A block's
+`redirect` must be reachable under its own rule: off the patterns for a denylist, on them for an
+allowlist. Without `redirect` the rule sends the navigation to the extension's `blocked.html`
 ("This page is unavailable right now — blocked by *character* until *time*", the reason, and an
 "Ask in rpchat" hint); with `redirect` it goes to that URL instead. Tabs already showing a
 newly blocked page are moved the same way. The rule table lives in `chrome.storage.local`
@@ -303,7 +317,7 @@ Can (unless you switched `browser`, or the single function named, off under Sett
   contenteditables (with a real form submit when asked), scroll;
 - take a PNG screenshot of the visible part of a tab (the tab is brought to the front first);
 - get `browser-navigated` events when a tab finishes loading;
-- (2.1) block pages for a while, restyle or swap a page's pictures, set the home page, list,
+- (2.1) block pages for a while — or (2.2) allow only a few —, restyle or swap a page's pictures, set the home page, list,
   search, add and remove bookmarks, read the history, and run a script in a page — each
   described above, and each of blocking, scripting and history switchable off in Settings →
   Browser.
@@ -403,7 +417,10 @@ that version so browsers pick updates up. `GET /extension/id` returns the id as 
   host subscriber and the character's own `sdk.events` handler. A second turn exercises the 2.1
   capabilities: block `smoke.test/smoke/page2*` (Chromium maps `smoke.test` onto 127.0.0.1 with
   `--host-resolver-rules`, since 127.0.0.1 itself is protected), open it and land on the blocked
-  page, unblock and open it for real; `grayscale` + a pack-asset `replaceWith` on the smoke page
+  page, unblock and open it for real; then an allowlist (`{ allow: ["nothing.invalid"] }`) — the
+  `smoke.test` page lands on the blocked page, the app's own 127.0.0.1 page opens without being
+  listed and still loads a `smoke.test` image (top-level navigations only), and lifting it lets
+  `smoke.test` back in; `grayscale` + a pack-asset `replaceWith` on the smoke page
   with the computed style and `src` read back through `eval`; set the home page (the launcher
   then opens `chrome://newtab` and the app waits for the `browser-navigated` event on it); add,
   search, list and remove a bookmark; `eval` in the isolated world (`document.title`, plus a

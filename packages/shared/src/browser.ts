@@ -48,6 +48,8 @@ export interface BrowserBridgeStatus {
 /** A page block installed through `sdk.browser.block` (as `rules.list` reports it). */
 export interface BrowserBlock {
   id: string;
+  /** `deny`: the patterns are the pages kept shut. `allow`: they are the only ones left open. */
+  mode: 'deny' | 'allow';
   patterns: string[];
   redirect?: string;
   expiresAt?: string;
