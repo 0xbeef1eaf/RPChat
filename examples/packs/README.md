@@ -316,7 +316,7 @@ Standard modules (v1):
 | `lib`    | trusted    | `register(name, fn, opts?)`, `unregister(name)` — `sdk.lib` **is** the `lib` global, so every other member is one of your saved functions; files under `lib/` (§8). The one module the permission policy never touches |
 | `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `overlay(asset, opts?)` (whole-screen, click-through), `close(id)`, `closeAll()`, `list()` |
 | `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`                       |
-| `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — saved under `webcam/` in the character home, returned as a `source: 'home'` AssetRef |
+| `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — saved under `webcam/` in the character home, returned as a `source: 'home'` AssetRef that `sdk.media` can show |
 | `crypto` | pack       | `encrypt(path)`, `decrypt(path)` — one of the user's own files, in place, under a key the app manages |
 | `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)` |
 

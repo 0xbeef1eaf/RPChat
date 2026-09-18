@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ActionContext, AppSettings, HostEvent, LoadedPack, MediaCommand, MediaConcurrencySettings, MediaWindowEvent, MonitorInfo, OverlayUpdate } from '@rp/shared';
 import type { DisplayBackend, OverlayEvent, OverlayHandle, OverlaySpec, OverlayWindowLike } from '../display/backend.js';
 import { MediaManager, mediaLimits } from './media.js';
+import { HomeAssetRoots, characterHomeDir } from './files.js';
 
 /** Minimal listener registry (importing the Electron backend's one here would enter its import cycle first). */
 class OverlayEvents {
@@ -42,13 +43,25 @@ class FakeHandle implements OverlayHandle {
 }
 
 let root: string;
+let userData: string;
+/** The character home of `ctx` below, with one file of each kind in it. */
+let home: string;
 beforeAll(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-media-test-'));
   fs.mkdirSync(path.join(root, 'media'), { recursive: true });
   fs.writeFileSync(path.join(root, 'media', 'a.png'), 'x');
   fs.writeFileSync(path.join(root, 'media', 'v.webm'), 'x');
+  userData = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-media-userdata-'));
+  home = characterHomeDir(userData, 'com.x.p/c');
+  fs.mkdirSync(path.join(home, 'webcam'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'webcam', 'shot.png'), 'x');
+  fs.writeFileSync(path.join(home, 'webcam', 'clip.webm'), 'x');
+  fs.writeFileSync(path.join(home, 'hum.mp3'), 'x');
 });
-afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+afterAll(() => {
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(userData, { recursive: true, force: true });
+});
 
 /** The hidden audio window, enough of it for the manager: `play-audio`/`close` in, reports out. */
 class FakeAudioWindow {
@@ -89,15 +102,17 @@ function make(monitors: MonitorInfo[] = [MONITOR], media?: Partial<MediaConcurre
   const events: HostEvent[] = [];
   const pack = { root, manifest: { id: 'com.x.p', mediaRoot: 'media' }, assets: [] } as unknown as LoadedPack;
   const audio = new FakeAudioWindow();
+  const homes = new HomeAssetRoots(userData);
   const manager = new MediaManager({
     backend: () => backend,
     audioWindow: () => audio as unknown as OverlayWindowLike,
     packs: { getLoaded: () => pack },
+    homes,
     settings: async () => ({ mediaAlwaysOnTop: true, ...(media ? { media } : {}) }) as AppSettings,
     logger: { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined },
     emit: (e) => events.push(e),
   });
-  return { media: manager, specs, handles, events, audio };
+  return { media: manager, specs, handles, events, audio, homes };
 }
 
 /** Let the admission chain and the fire-and-forget queue pump settle. */
@@ -327,5 +342,51 @@ describe('MediaManager media limits', () => {
       ['media-closed', song.id, 'ended'],
       ['media-started', next.id, undefined],
     ]);
+  });
+});
+
+describe('MediaManager home assets', () => {
+  const HOME_URL = /^rp-asset:\/\/home-[a-f0-9]{12}\//;
+
+  it('shows a file from the character home, serving it from the home directory under its own asset host', async () => {
+    const { media, specs, homes } = make();
+    const shown = await media.show('image', ctx, 'home:webcam/shot.png', { durationMs: 5000 });
+    expect(shown.state).toBe('open');
+    // The page loads it over rp-asset://, and that host resolves to this character's home.
+    const url = specs[0]!.assetUrl;
+    expect(url).toMatch(HOME_URL);
+    expect(url.endsWith('/webcam/shot.png')).toBe(true);
+    expect(homes.rootFor(new URL(url).hostname)).toBe(home);
+    expect(specs[0]!.file).toBe(path.join(home, 'webcam', 'shot.png'));
+    // The handle keeps the argument as given, so events and list() say where the file came from.
+    expect(shown.asset).toBe('home:webcam/shot.png');
+    expect(media.list().map((h) => h.asset)).toEqual(['home:webcam/shot.png']);
+  });
+
+  it('washes a home video over the screens and plays home audio through the audio window', async () => {
+    const { media, specs, audio } = make();
+    await media.overlay(ctx, 'home:webcam/clip.webm', { opacity: 0.3 });
+    expect(specs[0]!.kind).toBe('fullscreen');
+    expect(specs[0]!.assetUrl).toMatch(HOME_URL);
+
+    await media.playAudio(ctx, 'home:hum.mp3', { volume: 0.4 });
+    expect(audio.sent[0]).toMatchObject({ type: 'play-audio', options: { volume: 0.4 } });
+    expect((audio.sent[0] as { url: string }).url).toMatch(HOME_URL);
+  });
+
+  it('refuses a home file that is not there and one that tries to leave the home', async () => {
+    const { media, specs } = make();
+    await expect(media.show('image', ctx, 'home:webcam/missing.png', {})).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(media.playAudio(ctx, 'home:../../escape.mp3', {})).rejects.toMatchObject({ code: 'PATH_ESCAPE' });
+    // Neither took a slot or opened anything.
+    expect(specs).toEqual([]);
+    expect(media.list()).toEqual([]);
+  });
+
+  it('keeps pack assets on the pack host', async () => {
+    const { media, specs } = make();
+    await media.show('image', ctx, 'media/a.png', {});
+    expect(specs[0]!.assetUrl).toBe('rp-asset://com.x.p/media/a.png');
+    expect(specs[0]!.file).toBe(path.join(root, 'media', 'a.png'));
   });
 });

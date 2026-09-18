@@ -4,11 +4,17 @@ import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { handleAssetRequest, parseAssetUrl, parseRange, resolveAssetUrl } from './asset-protocol.js';
 import { decodeCommandHash, encodeCommandHash, rewriteAssetUrl } from './loopback.js';
+import { HOME_ASSET_HOST_PREFIX, HomeAssetRoots, characterHomeDir } from './capabilities/files.js';
 
 describe('parseAssetUrl', () => {
   it('accepts well-formed pack asset URLs and decodes segments', () => {
     expect(parseAssetUrl('rp-asset://com.example.luna/media/images/luna-smile.png')).toEqual({ packId: 'com.example.luna', relativePath: 'media/images/luna-smile.png' });
     expect(parseAssetUrl('rp-asset://com.example.luna/media/a%20b.png')).toEqual({ packId: 'com.example.luna', relativePath: 'media/a b.png' });
+  });
+
+  it('accepts the app\'s own hosts: editor projects and character homes', () => {
+    expect(parseAssetUrl('rp-asset://editor-0123456789ab/media/x.png')).toEqual({ packId: 'editor-0123456789ab', relativePath: 'media/x.png' });
+    expect(parseAssetUrl('rp-asset://home-0123456789ab/webcam/shot.png')).toEqual({ packId: 'home-0123456789ab', relativePath: 'webcam/shot.png' });
   });
 
   it('rejects traversal, absolute paths, bad pack ids and other schemes', () => {
@@ -20,6 +26,8 @@ describe('parseAssetUrl', () => {
       'rp-asset://com.example.luna/',
       'rp-asset://Not_A_Pack/x.png',
       'rp-asset://nodots/x.png',
+      'rp-asset://home-nope/x.png',
+      'rp-asset://home-0123456789abcd/x.png',
       'rp-asset://com.example.luna/a%5Cb.png',
       'rp-asset://com.example.luna/a%00.png',
       'file:///etc/passwd',
@@ -45,11 +53,12 @@ describe('parseRange', () => {
   });
 });
 
+const req = (url: string, headers: Record<string, string> = {}, method = 'GET') => ({ url, method, headers: { get: (n: string) => headers[n.toLowerCase()] ?? null } });
+
 describe('handleAssetRequest', () => {
   let root: string;
   let outside: string;
   const packRootFor = (packId: string): string | undefined => (packId === 'com.test.pack' ? root : undefined);
-  const req = (url: string, headers: Record<string, string> = {}, method = 'GET') => ({ url, method, headers: { get: (n: string) => headers[n.toLowerCase()] ?? null } });
 
   beforeAll(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-asset-'));
@@ -104,6 +113,36 @@ describe('handleAssetRequest', () => {
     if (fs.existsSync(path.join(root, 'media', 'link'))) {
       expect((await handleAssetRequest(req('rp-asset://com.test.pack/media/link/secret.txt'), { packRootFor })).status).toBe(403);
       expect(() => resolveAssetUrl('rp-asset://com.test.pack/media/link/secret.txt', { packRootFor })).toThrow(/symlink/);
+    }
+  });
+});
+
+describe('HomeAssetRoots', () => {
+  it('serves a character home under a host of its own, once a media call has registered it', async () => {
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-home-asset-'));
+    try {
+      const homes = new HomeAssetRoots(userData);
+      const home = characterHomeDir(userData, 'com.test.pack/luna');
+      fs.mkdirSync(path.join(home, 'webcam'), { recursive: true });
+      fs.writeFileSync(path.join(home, 'webcam', 'shot.png'), 'image bytes');
+      const packRootFor = (packId: string): string | undefined => homes.rootFor(packId);
+
+      // Nothing is reachable before the home is registered, and registering is what minting the host does.
+      const host = `${HOME_ASSET_HOST_PREFIX}${'0'.repeat(12)}`;
+      expect((await handleAssetRequest(req(`rp-asset://${host}/webcam/shot.png`), { packRootFor })).status).toBe(404);
+
+      const mine = homes.host('com.test.pack/luna');
+      expect(mine).toMatch(new RegExp(`^${HOME_ASSET_HOST_PREFIX}[a-f0-9]{12}$`));
+      expect(homes.host('com.test.pack/luna')).toBe(mine); // stable for the same character
+      expect(homes.host('com.test.pack/mai')).not.toBe(mine); // and its own for another one
+      const served = await handleAssetRequest(req(`rp-asset://${mine}/webcam/shot.png`), { packRootFor });
+      expect(served.status).toBe(200);
+      expect(served.headers.get('content-type')).toBe('image/png');
+      expect(await served.text()).toBe('image bytes');
+      // The same guard as a pack root: nothing above the home is reachable.
+      expect((await handleAssetRequest(req(`rp-asset://${mine}/../../other.png`), { packRootFor })).status).toBe(404);
+    } finally {
+      fs.rmSync(userData, { recursive: true, force: true });
     }
   });
 });

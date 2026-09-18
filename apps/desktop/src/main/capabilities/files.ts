@@ -1,7 +1,8 @@
 /** `sdk.files`: a per-character home directory under userData, with the same path guard as pack assets. */
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { ActionContext, CapabilityHandler, Json } from '@rp/shared';
+import type { ActionContext, CapabilityHandler, CharacterRef, Json } from '@rp/shared';
 import { RpError, characterRef } from '@rp/shared';
 import { normalizeRelativePath, resolveAssetPath } from '@rp/pack';
 
@@ -11,6 +12,38 @@ export const FILES_READ_DEFAULT = 64 * 1024;
 
 export function characterHomeDir(userData: string, ref: string): string {
   return path.join(userData, 'characters', encodeURIComponent(ref), 'home');
+}
+
+/** Host prefix of the `rp-asset://` root a character home is served under (`home-<12 hex>`). */
+export const HOME_ASSET_HOST_PREFIX = 'home-';
+
+/**
+ * Character home directories served over `rp-asset://home-<key>/…`, so `sdk.media` can show a
+ * webcam capture or anything else in the home the way it shows a pack asset. A home is registered
+ * the moment a call names a file in it, which is while that call is still being set up and long
+ * before the overlay window asks for the file; nothing is persisted, since the URLs only have to
+ * outlive the overlays holding them.
+ */
+export class HomeAssetRoots {
+  private readonly roots = new Map<string, string>();
+
+  constructor(private readonly userData: string) {}
+
+  dirFor(ref: CharacterRef): string {
+    return characterHomeDir(this.userData, ref);
+  }
+
+  /** Register `ref`'s home and return the asset-protocol host that serves it. */
+  host(ref: CharacterRef): string {
+    const host = `${HOME_ASSET_HOST_PREFIX}${createHash('sha1').update(ref).digest('hex').slice(0, 12)}`;
+    this.roots.set(host, this.dirFor(ref));
+    return host;
+  }
+
+  /** Root directory behind an `rp-asset://` host, or undefined when it is not a registered home. */
+  rootFor(host: string): string | undefined {
+    return this.roots.get(host);
+  }
 }
 
 /** Validate a character-relative path and resolve it inside `home`. Throws PATH_ESCAPE / INVALID_ARGUMENT. */

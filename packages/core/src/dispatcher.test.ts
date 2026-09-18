@@ -116,7 +116,7 @@ describe('CapabilityDispatcher', () => {
     expect(calls).toHaveLength(2);
   });
 
-  it('refuses a character-home ref (an sdk.webcam capture) where a pack asset is expected', async () => {
+  it('passes a character-home ref (an sdk.webcam capture) to sdk.media as a home: path, by ref or by string', async () => {
     const luna = await loadPack(LUNA_DIR);
     const packs = { tryGetLoaded: (id: string) => (id === LUNA_ID ? luna : undefined) };
     const calls: Json[][] = [];
@@ -124,9 +124,30 @@ describe('CapabilityDispatcher', () => {
     const ctx = { ...context, packId: LUNA_ID, packRoot: luna.root };
     const shot = { source: 'home', path: 'webcam/2026-09-15T12-30-00-123Z-abcdef01.jpg', kind: 'image', mime: 'image/jpeg', bytes: 10 };
 
-    const result = await dispatcher.invoke({ callId: '1', module: 'media', method: 'showImage', args: [shot as unknown as Json], context: ctx });
+    expect(await dispatcher.invoke({ callId: '1', module: 'media', method: 'showImage', args: [shot as unknown as Json], context: ctx })).toMatchObject({ ok: true });
+    expect(await dispatcher.invoke({ callId: '2', module: 'media', method: 'playAudio', args: ['home:clips/hello.mp3'], context: ctx })).toMatchObject({ ok: true });
+    // The handler is told where the file lives; the pack is never consulted for it.
+    expect(calls).toEqual([[`home:${shot.path}`], ['home:clips/hello.mp3']]);
+    // The kind still has to match the method, and it comes from the extension.
+    const wrong = await dispatcher.invoke({ callId: '3', module: 'media', method: 'playVideo', args: [shot as unknown as Json], context: ctx });
+    expect(wrong).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining('needs a video asset') } });
+    // ".." never leaves the home either.
+    const escape = await dispatcher.invoke({ callId: '4', module: 'media', method: 'showImage', args: ['home:../../secrets.png'], context: ctx });
+    expect(escape).toMatchObject({ ok: false, error: { code: 'PATH_ESCAPE' } });
+    expect(calls).toHaveLength(2);
+  });
+
+  it('refuses a character-home ref for sdk.wallpaper.set, which takes pack assets only', async () => {
+    const luna = await loadPack(LUNA_DIR);
+    const packs = { tryGetLoaded: (id: string) => (id === LUNA_ID ? luna : undefined) };
+    const calls: Json[][] = [];
+    const { dispatcher } = setup('allow', { moduleId: 'wallpaper', invoke: async (_m, args) => { calls.push(args); return null; } }, packs);
+    const ctx = { ...context, packId: LUNA_ID, packRoot: luna.root };
+    const shot = { source: 'home', path: 'webcam/2026-09-15T12-30-00-123Z-abcdef01.jpg', kind: 'image', mime: 'image/jpeg', bytes: 10 };
+
+    const result = await dispatcher.invoke({ callId: '1', module: 'wallpaper', method: 'set', args: [shot as unknown as Json], context: ctx });
     // Named for what it is, rather than reported as a pack file that does not exist.
-    expect(result).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining('not a pack asset') } });
+    expect(result).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining('is a file in the character home') } });
     expect(calls).toEqual([]);
   });
 

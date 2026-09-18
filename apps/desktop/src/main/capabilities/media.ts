@@ -5,6 +5,10 @@
  * fails on a `closed` report for an item it already removed. A full-screen
  * overlay (`overlay()`) is one item with one backend overlay per screen.
  *
+ * An asset is either a pack-relative path or `home:<path>`, a file in the character's own home
+ * directory (an `sdk.webcam` capture, anything `sdk.files` wrote). The home is served to the media
+ * pages over `rp-asset://` like a pack root, under the host `HomeAssetRoots` registers for it.
+ *
  * How much may be on screen at once is `settings.media` (`AppSettings.media`, pinnable by the
  * policy's `settings.media` block), counted per `MediaKind`: images, video and audio each have
  * their own concurrency cap and their own queue. Admission never blocks the caller — a call over
@@ -15,7 +19,8 @@
  * nothing queues unless someone asked for a limit.
  */
 import { randomUUID } from 'node:crypto';
-import type { LoadedPack } from '@rp/shared';
+import * as fs from 'node:fs';
+import type { CharacterRef, LoadedPack } from '@rp/shared';
 import type {
   ActionContext,
   AppSettings,
@@ -39,7 +44,7 @@ import type {
   PlayVideoOptions,
   ShowImageOptions,
 } from '@rp/shared';
-import { DEFAULT_MEDIA_SETTINGS, RpError, assetUrl, characterRef } from '@rp/shared';
+import { DEFAULT_MEDIA_SETTINGS, RpError, assetUrl, characterRef, parseAssetSource } from '@rp/shared';
 import { assetKindFor, resolveAssetPath } from '@rp/pack';
 import type { Logger } from '@rp/core';
 import type { DisplayBackend, OverlayClosedDetail, OverlayHandle, OverlaySpec, OverlayWindowLike } from '../display/backend.js';
@@ -54,11 +59,22 @@ export interface MediaHandle {
   state: MediaState;
 }
 
+/**
+ * The character home roots `sdk.files` owns, as `sdk.media` needs them: where a character's home
+ * is, and the `rp-asset://` host that serves it (registering it as a side effect of being asked).
+ */
+export interface CharacterHomeAssets {
+  dirFor(ref: CharacterRef): string;
+  host(ref: CharacterRef): string;
+}
+
 export interface MediaManagerDeps {
   backend(): DisplayBackend;
   /** Hidden window for audio (created lazily by the caller). */
   audioWindow(): OverlayWindowLike;
   packs: { getLoaded(packId: string): LoadedPack };
+  /** Character home directories and the asset-protocol hosts they are served under. */
+  homes: CharacterHomeAssets;
   settings(): Promise<AppSettings>;
   logger: Logger;
   /** Host events for `sdk.events`: `media-clicked` and `media-closed` (see `docs/spec/living.md`). */
@@ -183,7 +199,7 @@ export class MediaManager {
     if (typeof asset !== 'string' || asset.length === 0) throw new RpError('INVALID_ARGUMENT', 'Asset path must be a string');
     // Resolved here rather than in `start`: a bad asset must fail the character's call, not a
     // queued start it can no longer catch.
-    resolveAssetPath(this.deps.packs.getLoaded(context.packId).root, asset);
+    this.locate(context, asset);
     return this.admit({ id: randomUUID(), kind, mode: 'show', asset, context, owner: characterRef(context.packId, context.characterId), options: asObject(rawOptions), queuedAt: new Date().toISOString() });
   }
 
@@ -191,8 +207,7 @@ export class MediaManager {
     const { id, context, asset } = pending;
     const kind = pending.kind as 'image' | 'video';
     const options = pending.options as ShowImageOptions & PlayVideoOptions;
-    const pack = this.deps.packs.getLoaded(context.packId);
-    const file = resolveAssetPath(pack.root, asset);
+    const { file, url } = this.locate(context, asset);
     const backend = this.deps.backend();
     const settings = await this.deps.settings();
     const monitors = await backend.monitors();
@@ -214,7 +229,7 @@ export class MediaManager {
       id,
       kind,
       file,
-      assetUrl: assetUrl(context.packId, asset),
+      assetUrl: url,
       packId: context.packId,
       asset,
       options: resolved,
@@ -277,11 +292,11 @@ export class MediaManager {
    */
   async overlay(context: ActionContext, asset: string, rawOptions: unknown): Promise<MediaHandle> {
     if (typeof asset !== 'string' || asset.length === 0) throw new RpError('INVALID_ARGUMENT', 'Asset path must be a string');
-    const kind = assetKindFor(asset);
+    const kind = assetKindFor(parseAssetSource(asset).path);
     if (kind !== 'image' && kind !== 'video') {
       throw new RpError('INVALID_ARGUMENT', `sdk.media.overlay needs an image or video asset; "${asset}" is ${kind}`, { path: asset, kind });
     }
-    resolveAssetPath(this.deps.packs.getLoaded(context.packId).root, asset);
+    this.locate(context, asset);
     return this.admit({ id: randomUUID(), kind, mode: 'overlay', asset, context, owner: characterRef(context.packId, context.characterId), options: asObject(rawOptions), queuedAt: new Date().toISOString() });
   }
 
@@ -289,8 +304,7 @@ export class MediaManager {
     const { id, context, asset } = pending;
     const kind = pending.kind as 'image' | 'video';
     const options = pending.options as MediaOverlayOptions;
-    const pack = this.deps.packs.getLoaded(context.packId);
-    const file = resolveAssetPath(pack.root, asset);
+    const { file, url } = this.locate(context, asset);
     const backend = this.deps.backend();
     const screens = overlayScreens(options.monitor, await backend.monitors());
     const opacity = clampOpacity(options.opacity, FULLSCREEN_DEFAULT_OPACITY);
@@ -299,7 +313,6 @@ export class MediaManager {
     const duration = durationOf(options);
     // A timed overlay should stay filled for its whole duration, so a video loops unless told not to.
     const loop = options.loop !== undefined ? Boolean(options.loop) : duration !== undefined;
-    const url = assetUrl(context.packId, asset);
     const item: MediaItem = {
       id,
       kind,
@@ -379,6 +392,7 @@ export class MediaManager {
 
   async playAudio(context: ActionContext, asset: string, rawOptions: unknown): Promise<MediaHandle> {
     if (typeof asset !== 'string' || asset.length === 0) throw new RpError('INVALID_ARGUMENT', 'Asset path must be a string');
+    this.locate(context, asset);
     return this.admit({ id: randomUUID(), kind: 'audio', mode: 'audio', asset, context, owner: characterRef(context.packId, context.characterId), options: asObject(rawOptions), queuedAt: new Date().toISOString() });
   }
 
@@ -393,8 +407,29 @@ export class MediaManager {
     const page: PlayAudioOptions = {};
     if (typeof options.volume === 'number') page.volume = options.volume;
     if (options.loop !== undefined) page.loop = Boolean(options.loop);
-    win.send({ type: 'play-audio', id, url: assetUrl(context.packId, asset), options: page });
+    win.send({ type: 'play-audio', id, url: this.locate(context, asset).url, options: page });
     return toHandle(item);
+  }
+
+  /**
+   * The file behind an asset argument and the URL the media page loads it from: a pack asset from
+   * the pack root under the pack's own id, a `home:<path>` one from the character's home directory
+   * under the host `HomeAssetRoots` hands out for it. Both are resolved through the same path guard.
+   * A home file's existence is checked here, since the dispatcher resolves pack paths against the
+   * pack but cannot see into the home.
+   */
+  private locate(context: ActionContext, asset: string): { file: string; url: string } {
+    const parsed = parseAssetSource(asset);
+    if (parsed.source !== 'home') {
+      const pack = this.deps.packs.getLoaded(context.packId);
+      return { file: resolveAssetPath(pack.root, asset), url: assetUrl(context.packId, asset) };
+    }
+    const ref = characterRef(context.packId, context.characterId);
+    const file = resolveAssetPath(this.deps.homes.dirFor(ref), parsed.path);
+    if (!isFile(file)) {
+      throw new RpError('NOT_FOUND', `"${parsed.path}" is not a file in your home directory (sdk.files.list shows what is)`, { path: parsed.path, source: 'home' });
+    }
+    return { file, url: assetUrl(this.deps.homes.host(ref), parsed.path) };
   }
 
   /**
@@ -592,6 +627,14 @@ export class MediaManager {
 
   async dispose(): Promise<void> {
     await this.closeAll();
+  }
+}
+
+function isFile(absolute: string): boolean {
+  try {
+    return fs.statSync(absolute).isFile();
+  } catch {
+    return false;
   }
 }
 

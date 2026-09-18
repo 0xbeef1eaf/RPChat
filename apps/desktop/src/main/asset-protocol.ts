@@ -1,6 +1,7 @@
 /**
- * `rp-asset://<packId>/<relative path>` protocol: serves files only from
- * installed pack roots, with `Range` support for media. The URL parsing, path
+ * `rp-asset://<packId>/<relative path>` protocol: serves files only from the roots
+ * `packRootFor` knows (installed packs, editor projects, app-generated roots and
+ * character home directories), with `Range` support for media. The URL parsing, path
  * guard and range parsing are pure and unit-tested; `handleAssetRequest`
  * builds a Fetch `Response` (available in Node ≥ 18 and Electron main).
  */
@@ -9,8 +10,8 @@ import { Readable } from 'node:stream';
 import { mimeFor, normalizeRelativePath, resolveAssetPath } from '@rp/pack';
 import { ASSET_PROTOCOL, RpError } from '@rp/shared';
 
-/** Installed pack ids (reverse-DNS) plus editor project roots (`editor-<12 hex>`). */
-const PACK_ID = /^([a-z0-9]+(\.[a-z0-9-]+)+|editor-[a-f0-9]{12})$/;
+/** Installed pack ids (reverse-DNS), editor project roots (`editor-<12 hex>`) and character homes (`home-<12 hex>`). */
+const PACK_ID = /^([a-z0-9]+(\.[a-z0-9-]+)+|(editor|home)-[a-f0-9]{12})$/;
 
 export interface ParsedAssetUrl {
   packId: string;

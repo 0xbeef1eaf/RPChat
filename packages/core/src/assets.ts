@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import type { AssetEntry, AssetKind, LoadedPack, TagSummary } from '@rp/shared';
-import { RpError } from '@rp/shared';
+import { RpError, parseAssetSource } from '@rp/shared';
 import { DEFAULT_MEDIA_ROOT, assetKindFor, mimeFor, normalizeRelativePath, resolveAssetPath, summariseTags as packSummariseTags } from '@rp/pack';
 
 /** The shape of `AssetRef` in the SDK preamble (mirrors `AssetEntry`). */
@@ -155,21 +155,47 @@ export function resolvePackAsset(pack: LoadedPack, input: string): AssetRef {
 }
 
 /**
- * Accepts a path string or an `AssetRef`-like object and returns the validated `AssetRef`.
- * Only pack assets can be shown or set as wallpaper, so a `source: 'home'` ref (an `sdk.webcam`
- * capture, say) is rejected by name rather than reported as a pack file that does not exist.
+ * A file in the character's own home directory named as an asset. Validated lexically only — the
+ * home directory belongs to the host handler, so whether the file is there is its call — with the
+ * kind and MIME read off the extension, as an unindexed pack file's are.
  */
-export function coerceAssetArg(pack: LoadedPack, arg: unknown): AssetRef {
-  if (typeof arg === 'string') return resolvePackAsset(pack, arg);
+export function homeAssetRef(input: string): AssetRef {
+  if (typeof input !== 'string' || input.trim().length === 0) throw new RpError('INVALID_ARGUMENT', 'Asset path must be a non-empty string');
+  const n = normalizeRelativePath(input);
+  if (!n.ok) throw new RpError('PATH_ESCAPE', `Unsafe asset path "${input}": ${n.reason}`, { path: input, source: 'home' });
+  return { source: 'home', path: n.path, kind: assetKindFor(n.path), mime: mimeFor(n.path), bytes: 0, tags: [] };
+}
+
+export interface CoerceAssetOptions {
+  /** Whether the call takes a file from the character home as well as a pack asset. Default false. */
+  home?: boolean;
+  /** The call being made (`sdk.wallpaper.set`), to name it in the message when it takes pack assets only. */
+  call?: string;
+}
+
+/**
+ * Accepts a path string or an `AssetRef`-like object and returns the validated `AssetRef`.
+ * A file in the character's home directory — an `sdk.webcam` capture, anything `sdk.files` wrote —
+ * comes in either as a `source: 'home'` ref or as a `home:<path>` string, and is taken only by the
+ * calls that can serve one (`options.home`); the rest name it for what it is rather than report it
+ * as a pack file that does not exist.
+ */
+export function coerceAssetArg(pack: LoadedPack, arg: unknown, options: CoerceAssetOptions = {}): AssetRef {
+  const home = (relative: string): AssetRef => {
+    if (options.home) return homeAssetRef(relative);
+    throw new RpError(
+      'INVALID_ARGUMENT',
+      `${options.call ?? 'This call'} needs a pack asset; "${relative}" is a file in the character home. sdk.media can show one of those, and sdk.files.open/read can open or read it.`,
+      { path: relative, source: 'home' },
+    );
+  };
+  if (typeof arg === 'string') {
+    const parsed = parseAssetSource(arg);
+    return parsed.source === 'home' ? home(parsed.path) : resolvePackAsset(pack, arg);
+  }
   if (arg && typeof arg === 'object' && typeof (arg as { path?: unknown }).path === 'string') {
     const ref = arg as { path: string; source?: unknown };
-    if (ref.source === 'home') {
-      throw new RpError(
-        'INVALID_ARGUMENT',
-        `"${ref.path}" is a file in the character home, not a pack asset; only pack assets can be shown or set as wallpaper. Use sdk.files.open/read on it instead.`,
-        { path: ref.path, source: 'home' },
-      );
-    }
+    if (ref.source === 'home') return home(ref.path);
     return resolvePackAsset(pack, ref.path);
   }
   throw new RpError('INVALID_ARGUMENT', 'Expected an asset path string or an AssetRef object');
