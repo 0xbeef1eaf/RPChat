@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const mediaModule: CapabilityModuleSpec = {
   id: 'media',
-  version: '1.3.0',
+  version: '1.4.0',
   title: 'Media playback',
   summary: 'Show images and play video/audio from the pack in an overlay window on the user\'s screen, or wash one over whole screens.',
   permission: 'pack',
@@ -13,6 +13,11 @@ export const mediaModule: CapabilityModuleSpec = {
  * through OverlayOptions; audio plays without a window. Only pack assets can be shown
  * (no URLs, no files outside the pack). Every call returns a MediaHandle you can pass
  * to update() or close(). Use sdk.display to discover monitors and backend abilities.
+ *
+ * The user can cap how many images, videos and sounds run at once. Over that cap a call still
+ * returns straight away, with handle.state === 'queued': the item waits its turn and opens by
+ * itself when one of its kind closes (raising the 'media-started' event). Never wait for a slot
+ * yourself — ask for what you want and let the queue order it.
  */
 interface MediaApi {
   /**
@@ -78,7 +83,7 @@ interface MediaApi {
   close(handle: MediaHandle | string): Promise<void>;
   /** Close every media item this character has open. */
   closeAll(): Promise<void>;
-  /** Media items currently open/playing for this character. */
+  /** Media items this character has open/playing, then the ones still waiting their turn. */
   list(): Promise<MediaHandle[]>;
 }`,
   docs: `Show pictures, play video or audio from the pack in a small overlay on the user's screen. Available unless the user switched \`media\` off under Settings → Permissions.
@@ -86,6 +91,7 @@ interface MediaApi {
 - Pass a pack-relative path (or an \`AssetRef\`); files must exist in the pack — check the asset list in your prompt or use \`sdk.pack.listAssets\`.
 - Images stay open until \`durationMs\` elapses or you \`close()\` them; videos close on end by default. Without \`durationMs\` the user can click an overlay away; with one it is theirs for that long, so keep timed overlays short and out of the way. Do not open many overlays at once — \`closeAll()\` before showing something new if the screen is getting busy.
 - Playback calls resolve when playback starts, not when it finishes; do not wait for the end inside an action (schedule a timer instead if you need to react later).
+- The user can limit how many images, videos and sounds may run at once, each kind separately. Asking for more does not fail and does not block: the call returns a handle with \`state: 'queued'\` and that item opens by itself the moment one of its kind goes away, raising \`media-started\` \`{ mediaId, asset, packId, kind }\`. So three videos with a limit of one play one after another, in the order you asked for them. \`close()\` on a queued handle takes it out of the queue (reported as \`media-closed\`), and \`update()\` on one changes how it will open. Only when the queue is full as well is the call refused, with CAPABILITY_FAILED.
 - Keep a handle in session state if you want to close it in a later action: \`await sdk.state.session.set("song", handle.id)\`.
 - Placement: \`monitor\` ('primary', 'cursor', an index or a name from \`sdk.display.monitors()\`), an anchor \`position\`, or exact \`x\`/\`y\` (fractions 0..1 or px). With none of these each window lands on a random monitor at a random spot that stays fully on it, so you do not need to place things unless it matters ('primary' or 'cursor' pin the monitor). Size works the same way: without \`width\`/\`height\` each image or video is drawn a random size between 5% and 50% of the monitor, keeping its aspect ratio; give \`width\` (and optionally \`height\` as a cap) when the size matters. \`layer\` picks stacking: 'top' (default) or 'overlay' float above windows; 'bottom' sits behind windows but above the wallpaper (use it for ambient art); 'background' shares the wallpaper's layer and is usually hidden by the wallpaper daemon. \`opacity\` fades; \`clickThrough: true\` lets the user keep working through the overlay — combine it with a background layer for decorations, never for things they must click.
 - \`overlay(asset, { monitor, opacity, durationMs, volume, loop, muted })\` is the whole-screen version: an image or video covering every screen (\`monitor: 'all'\`, the default) or one of them, on the \`overlay\` layer, always click-through so the user keeps working through it. Its shape does not have to match the screen's — the picture is fitted in keeping its aspect ratio and copies repeat outwards from the centred one. Keep \`opacity\` under 0.5 (default 0.25): this covers everything the user is doing, and higher values are for when they asked for them. A video starts at volume 0.5, loops while a \`durationMs\` runs, and only one screen plays sound. \`update()\` on it only fades it; \`close()\` takes it off every screen at once.
@@ -104,6 +110,6 @@ await sdk.media.showImage(pic, { durationMs: 8000, position: "bottom-right", cap
     update: { description: 'Move, re-layer, fade, resize or toggle click-through on an open overlay.' },
     close: { description: 'Close one media item.' },
     closeAll: { description: "Close all of the character's media items." },
-    list: { description: 'List open media items.' },
+    list: { description: 'List open and queued media items.' },
   },
 };

@@ -36,6 +36,10 @@
       "allowBlocking": true,
       "allowEval": true,
       "allowHistory": true
+    },
+    "media": {
+      "maxConcurrent": { "image": 0, "video": 0, "audio": 0 },
+      "maxQueued": { "image": 8, "video": 8, "audio": 8 }
     }
   },
   "inputLock": {

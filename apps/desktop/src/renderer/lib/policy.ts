@@ -33,7 +33,7 @@ export interface PolicySettingSpec {
   placeholder?: string;
 }
 
-export type PolicyGroupId = 'autonomy' | 'access' | 'memory' | 'senses' | 'browser' | 'updates' | 'display';
+export type PolicyGroupId = 'autonomy' | 'access' | 'memory' | 'senses' | 'browser' | 'updates' | 'display' | 'media';
 
 export const POLICY_GROUPS: ReadonlyArray<{ id: PolicyGroupId; title: string; hint: string }> = [
   { id: 'access', title: 'What characters may reach', hint: 'The allowlists and capability switches every character on this machine is held to.' },
@@ -43,6 +43,7 @@ export const POLICY_GROUPS: ReadonlyArray<{ id: PolicyGroupId; title: string; hi
   { id: 'browser', title: 'Browser', hint: 'What a character with the browser capability may do in the user’s browser.' },
   { id: 'updates', title: 'Updates', hint: 'Whether this machine updates itself, and who decides.' },
   { id: 'display', title: 'Display', hint: 'How characters are drawn on screen.' },
+  { id: 'media', title: 'Media on screen', hint: 'How many images, videos and sounds a character may have running at once, and how many more may wait their turn. 0 items at once means no limit; 0 waiting means a call over the limit is refused instead of queued.' },
 ];
 
 /**
@@ -79,6 +80,13 @@ export const POLICY_SETTINGS: readonly PolicySettingSpec[] = [
   { path: 'updates.allowDowngrade', group: 'updates', kind: 'boolean', label: 'Allow downgrades', hint: 'Lets the daemon install a version older than the one on the system. Refused unless this is on.', fallback: false },
 
   { path: 'displayBackend', group: 'display', kind: 'choice', label: 'Display backend', hint: 'How character windows are drawn.', fallback: 'auto', choices: ['auto', 'electron', 'hyprland'] },
+
+  { path: 'media.maxConcurrent.image', group: 'media', kind: 'number', label: 'Images at once', hint: 'Images sdk.media may have on screen together. 0 = no limit.', fallback: 3, min: 0 },
+  { path: 'media.maxConcurrent.video', group: 'media', kind: 'number', label: 'Videos at once', hint: 'Videos playing together, whether in a window or washed over the screen. 0 = no limit.', fallback: 1, min: 0 },
+  { path: 'media.maxConcurrent.audio', group: 'media', kind: 'number', label: 'Sounds at once', hint: 'Audio tracks playing together. 0 = no limit.', fallback: 2, min: 0 },
+  { path: 'media.maxQueued.image', group: 'media', kind: 'number', label: 'Images waiting', hint: 'Images that may queue behind the limit above. 0 refuses the call instead of queueing it.', fallback: 8, min: 0 },
+  { path: 'media.maxQueued.video', group: 'media', kind: 'number', label: 'Videos waiting', hint: 'Videos that may queue behind the limit above. 0 refuses the call instead of queueing it.', fallback: 8, min: 0 },
+  { path: 'media.maxQueued.audio', group: 'media', kind: 'number', label: 'Sounds waiting', hint: 'Audio tracks that may queue behind the limit above. 0 refuses the call instead of queueing it.', fallback: 8, min: 0 },
 ];
 
 /** The `app` restrictions, phrased as the switches the form shows (on = the app may do it). */

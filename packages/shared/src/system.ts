@@ -35,6 +35,13 @@ export interface PolicyFile {
      * them — only a character sets it, through `sdk.browser.setHomePage`.
      */
     browser?: Partial<Pick<AppSettings['browser'], 'allowBlocking' | 'allowEval' | 'allowHistory'>>;
+    /**
+     * How much media a character may put on screen at once, per kind: `maxConcurrent` is the cap
+     * (`0` = none) and `maxQueued` how many calls may wait behind it (`0` = over-cap calls are
+     * refused rather than queued). Each kind is pinned on its own, so a policy can cap video
+     * without saying anything about images.
+     */
+    media?: { maxConcurrent?: Partial<AppSettings['media']['maxConcurrent']>; maxQueued?: Partial<AppSettings['media']['maxQueued']> };
   };
   /** Input-lock hard limits enforced by the daemon regardless of app settings. */
   inputLock?: {

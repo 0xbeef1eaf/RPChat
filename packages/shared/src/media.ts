@@ -193,14 +193,25 @@ export interface WidgetSpec {
   height: number;
 }
 
+/**
+ * Whether a media item is on screen/playing (`open`) or waiting for one of its kind to go away
+ * (`queued`, see `AppSettings.media`). A queued item already has its id and can be closed — closing
+ * it takes it out of the queue instead of off the screen.
+ */
+export type MediaState = 'open' | 'queued';
+
 export interface MediaItem {
   id: MediaItemId;
   kind: MediaKind;
   /** Asset path relative to the pack root. */
   asset: string;
   packId: string;
+  /** When the item started; for a queued item, when it will have started — set as it opens. */
   startedAt: string;
-  /** Effective overlay settings after backend fallbacks. */
+  state: MediaState;
+  /** Set on a queued item: when it joined the queue. */
+  queuedAt?: string;
+  /** Effective overlay settings after backend fallbacks. Absent until a queued item opens. */
   overlay?: Required<Pick<OverlayOptions, 'layer' | 'opacity' | 'clickThrough'>> & { monitorId?: string };
 }
 

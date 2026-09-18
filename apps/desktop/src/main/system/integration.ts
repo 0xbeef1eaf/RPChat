@@ -154,6 +154,7 @@ export function policyTemplate(settings: AppSettings, userName?: string): string
       displayBackend: settings.displayBackend,
       updates: { enabled: true, automatic: settings.updates.automatic },
       browser: { allowBlocking: settings.browser.allowBlocking, allowEval: settings.browser.allowEval, allowHistory: settings.browser.allowHistory },
+      media: { maxConcurrent: { ...settings.media.maxConcurrent }, maxQueued: { ...settings.media.maxQueued } },
     },
     inputLock: { enabled: true, maxDurationMs: settings.maxInputLockMs, emergencyKey: 'esc', emergencyHoldMs: 5000 },
     // Off by default so a freshly created policy changes nothing; every key is present to edit.

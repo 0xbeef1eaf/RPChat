@@ -2,9 +2,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ActionContext, AppSettings, HostEvent, LoadedPack, MediaCommand, MonitorInfo, OverlayUpdate } from '@rp/shared';
-import type { DisplayBackend, OverlayEvent, OverlayHandle, OverlaySpec } from '../display/backend.js';
-import { MediaManager } from './media.js';
+import type { ActionContext, AppSettings, HostEvent, LoadedPack, MediaCommand, MediaConcurrencySettings, MediaWindowEvent, MonitorInfo, OverlayUpdate } from '@rp/shared';
+import type { DisplayBackend, OverlayEvent, OverlayHandle, OverlaySpec, OverlayWindowLike } from '../display/backend.js';
+import { MediaManager, mediaLimits } from './media.js';
 
 /** Minimal listener registry (importing the Electron backend's one here would enter its import cycle first). */
 class OverlayEvents {
@@ -50,7 +50,27 @@ beforeAll(() => {
 });
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
-function make(monitors: MonitorInfo[] = [MONITOR]) {
+/** The hidden audio window, enough of it for the manager: `play-audio`/`close` in, reports out. */
+class FakeAudioWindow {
+  readonly sent: MediaCommand[] = [];
+  private report: ((event: MediaWindowEvent) => void) | undefined;
+  async whenReady(): Promise<void> {}
+  send(command: MediaCommand): void {
+    this.sent.push(command);
+  }
+  onReport(listener: (event: MediaWindowEvent) => void): void {
+    this.report = listener;
+  }
+  onClosed(): void {}
+  isDestroyed(): boolean {
+    return false;
+  }
+  end(id: string): void {
+    this.report?.({ type: 'ended', id });
+  }
+}
+
+function make(monitors: MonitorInfo[] = [MONITOR], media?: Partial<MediaConcurrencySettings>) {
   const specs: OverlaySpec[] = [];
   const handles: FakeHandle[] = [];
   const backend: DisplayBackend = {
@@ -68,18 +88,22 @@ function make(monitors: MonitorInfo[] = [MONITOR]) {
   };
   const events: HostEvent[] = [];
   const pack = { root, manifest: { id: 'com.x.p', mediaRoot: 'media' }, assets: [] } as unknown as LoadedPack;
-  const media = new MediaManager({
+  const audio = new FakeAudioWindow();
+  const manager = new MediaManager({
     backend: () => backend,
-    audioWindow: () => {
-      throw new Error('no audio in this test');
-    },
+    audioWindow: () => audio as unknown as OverlayWindowLike,
     packs: { getLoaded: () => pack },
-    settings: async () => ({ mediaAlwaysOnTop: true }) as AppSettings,
+    settings: async () => ({ mediaAlwaysOnTop: true, ...(media ? { media } : {}) }) as AppSettings,
     logger: { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined },
     emit: (e) => events.push(e),
   });
-  return { media, specs, handles, events };
+  return { media: manager, specs, handles, events, audio };
 }
+
+/** Let the admission chain and the fire-and-forget queue pump settle. */
+const settle = async () => {
+  for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+};
 
 const ctx: ActionContext = { packId: 'com.x.p', characterId: 'c', sessionId: 's', packRoot: '', trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } };
 const summary = (e: HostEvent) => [e.name, (e.data as { mediaId: string }).mediaId, (e.data as { reason?: string }).reason];
@@ -204,5 +228,104 @@ describe('MediaManager.overlay', () => {
   it('refuses an asset that is neither image nor video', async () => {
     const { media } = make();
     await expect(media.overlay(ctx, 'media/song.mp3', {})).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+  });
+});
+
+describe('mediaLimits', () => {
+  it('defaults to no cap, and keeps only non-negative whole numbers', () => {
+    expect(mediaLimits(undefined)).toEqual({ maxConcurrent: { image: 0, video: 0, audio: 0 }, maxQueued: { image: 8, video: 8, audio: 8 } });
+    expect(mediaLimits({ maxConcurrent: { image: 2.4, video: -1, audio: Number.NaN } as never, maxQueued: { video: 0 } as never })).toEqual({
+      maxConcurrent: { image: 2, video: 0, audio: 0 },
+      maxQueued: { image: 8, video: 0, audio: 8 },
+    });
+  });
+});
+
+describe('MediaManager media limits', () => {
+  it('starts what fits, queues the rest per kind, and hands the slot on as each one closes', async () => {
+    const { media, handles, events } = make([MONITOR], { maxConcurrent: { image: 0, video: 1, audio: 0 } });
+    // Three videos with room for one: all three calls return at once, only the first is playing.
+    const [a, b, c] = await Promise.all([media.show('video', ctx, 'media/v.webm', {}), media.show('video', ctx, 'media/v.webm', {}), media.show('video', ctx, 'media/v.webm', {})]);
+    expect([a?.state, b?.state, c?.state]).toEqual(['open', 'queued', 'queued']);
+    expect(handles).toHaveLength(1);
+    expect(media.list().map((h) => h.state)).toEqual(['open', 'queued', 'queued']);
+    // An image is a different kind and is not held up by the videos.
+    const pic = await media.show('image', ctx, 'media/a.png', {});
+    expect(pic.state).toBe('open');
+
+    handles[0]!.events.emit('ended'); // closeOnEnd → the first video goes, the second takes its place
+    await settle();
+    expect(handles).toHaveLength(3); // video a, the image, video b
+    expect(events.map(summary)).toEqual([
+      ['media-closed', a!.id, 'ended'],
+      ['media-started', b!.id, undefined],
+    ]);
+    handles[2]!.events.emit('ended');
+    await settle();
+    expect(events.map(summary).slice(2)).toEqual([
+      ['media-closed', b!.id, 'ended'],
+      ['media-started', c!.id, undefined],
+    ]);
+    expect(media.list().map((h) => h.state)).toEqual(['open', 'open']); // the image and video c
+  });
+
+  it('refuses only when the queue is full too, and names both numbers', async () => {
+    const { media } = make([MONITOR], { maxConcurrent: { image: 1, video: 0, audio: 0 }, maxQueued: { image: 1, video: 8, audio: 8 } });
+    await media.show('image', ctx, 'media/a.png', {});
+    await media.show('image', ctx, 'media/a.png', {}); // the one queue slot
+    await expect(media.show('image', ctx, 'media/a.png', {})).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', details: { kind: 'image', maxConcurrent: 1, maxQueued: 1 } });
+  });
+
+  it('closes a queued item out of the queue without ever showing it, and update changes how it opens', async () => {
+    const { media, specs, events } = make([MONITOR], { maxConcurrent: { image: 1, video: 0, audio: 0 } });
+    const open = await media.show('image', ctx, 'media/a.png', {});
+    const waiting = await media.show('image', ctx, 'media/a.png', { opacity: 1 });
+    const dropped = await media.show('image', ctx, 'media/a.png', {});
+    await media.update(waiting.id, { opacity: 0.2 });
+    await media.close(dropped.id);
+    expect(events.map(summary)).toEqual([['media-closed', dropped.id, 'api']]);
+    expect(specs).toHaveLength(1); // nothing was ever put on screen for either queued item
+
+    await media.close(open.id);
+    await settle();
+    expect(specs).toHaveLength(2);
+    expect(specs[1]?.options.opacity).toBe(0.2); // the patch it was given while it waited
+    expect(events.map(summary).slice(1)).toEqual([
+      ['media-closed', open.id, 'api'],
+      ['media-started', waiting.id, undefined],
+    ]);
+  });
+
+  it('closeAll empties the queue as well as the screen', async () => {
+    const { media, events } = make([MONITOR], { maxConcurrent: { image: 1, video: 0, audio: 0 } });
+    const open = await media.show('image', ctx, 'media/a.png', {});
+    const waiting = await media.show('image', ctx, 'media/a.png', {});
+    await media.closeAll('com.x.p/c');
+    await settle();
+    expect(events.map(summary)).toEqual([
+      ['media-closed', waiting.id, 'api'],
+      ['media-closed', open.id, 'api'],
+    ]);
+    expect(media.list()).toEqual([]);
+  });
+
+  it('counts a full-screen overlay as its own kind, and queues audio behind audio', async () => {
+    const { media, specs, audio, events } = make([MONITOR, SECOND], { maxConcurrent: { image: 1, video: 0, audio: 1 } });
+    const wash = await media.overlay(ctx, 'media/a.png', {}); // one item, two screens, one image slot
+    expect(wash.state).toBe('open');
+    expect(specs).toHaveLength(2);
+    expect((await media.show('image', ctx, 'media/a.png', {})).state).toBe('queued');
+
+    const song = await media.playAudio(ctx, 'media/song.mp3', { volume: 0.5 });
+    const next = await media.playAudio(ctx, 'media/song.mp3', {});
+    expect([song.state, next.state]).toEqual(['open', 'queued']);
+    expect(audio.sent).toHaveLength(1);
+    audio.end(song.id);
+    await settle();
+    expect(audio.sent.map((c) => c.type)).toEqual(['play-audio', 'play-audio']);
+    expect(events.map(summary)).toEqual([
+      ['media-closed', song.id, 'ended'],
+      ['media-started', next.id, undefined],
+    ]);
   });
 });

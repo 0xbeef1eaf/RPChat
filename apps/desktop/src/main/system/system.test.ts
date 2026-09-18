@@ -512,6 +512,26 @@ describe('policy', () => {
     expect(stripManagedPatch({ browser: { ...base.browser, allowEval: true, homePage: 'https://x.test/' } }, ['browser.allowEval'])).toEqual({ browser: { ...rest, homePage: 'https://x.test/' } });
   });
 
+  it('parses and applies the media block one number at a time', () => {
+    const policy = parsePolicy({ version: 1, settings: { media: { maxConcurrent: { video: 1 }, maxQueued: { video: 2, audio: 0 } } } });
+    expect(policy.settings?.media).toEqual({ maxConcurrent: { video: 1 }, maxQueued: { video: 2, audio: 0 } });
+    expect(managedPaths(policy)).toEqual(['media.maxConcurrent.video', 'media.maxQueued.audio', 'media.maxQueued.video']);
+    expect(managedPaths(parsePolicy({ version: 1, settings: { media: {} } }))).toEqual([]);
+    // Unknown kinds inside a side are ignored, the way unknown keys are everywhere else.
+    expect(parsePolicy({ version: 1, settings: { media: { maxConcurrent: { gif: 2 } } } }).settings?.media).toEqual({ maxConcurrent: {} });
+    expect(() => parsePolicy({ version: 1, settings: { media: { maxConcurrent: { image: -1 } } } })).toThrow(/media.maxConcurrent.image must be a non-negative number/);
+    expect(() => parsePolicy({ version: 1, settings: { media: { maxQueued: 4 } } })).toThrow(/media.maxQueued must be an object/);
+    // A pinned number replaces only itself: the other five stay the user's.
+    const applied = applyPolicy(base, policy);
+    expect(applied.settings.media).toEqual({
+      maxConcurrent: { ...base.media.maxConcurrent, video: 1 },
+      maxQueued: { ...base.media.maxQueued, video: 2, audio: 0 },
+    });
+    expect(stripManagedPatch({ media: { maxConcurrent: { image: 5, video: 9, audio: 1 }, maxQueued: base.media.maxQueued } }, ['media.maxConcurrent.video'])).toEqual({
+      media: { maxConcurrent: { image: 5, audio: 1 }, maxQueued: base.media.maxQueued },
+    });
+  });
+
   it('applyPolicy pins updates.automatic and switches it off when updates are disabled', () => {
     const pinned = applyPolicy({ ...base, updates: { automatic: true, checkIntervalHours: 6 } }, parsePolicy({ version: 1, settings: { updates: { automatic: false } } }));
     expect(pinned.settings.updates).toEqual({ automatic: false, checkIntervalHours: 6 });

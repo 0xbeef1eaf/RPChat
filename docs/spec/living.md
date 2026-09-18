@@ -62,7 +62,7 @@ EngineOptions {
 }
 interface SensesProvider {
   snapshot(sessionId?: string): Promise<PresenceSnapshot>;     // host samples; core adds sinceLastMessageMs/localTime/dayPart if missing
-  /** Host pushes raw events (window-changed, user-idle/back, battery-low, screen-locked/unlocked, song-changed, file-added, widget-message, avatar-clicked, media-clicked, media-closed). */
+  /** Host pushes raw events (window-changed, user-idle/back, battery-low, screen-locked/unlocked, song-changed, file-added, widget-message, avatar-clicked, media-clicked, media-started, media-closed). */
   subscribe(listener: (event: HostEvent) => void): () => void;
   /** Called with the union of event names any live subscription needs, so the host only samples what is used. */
   setInterest?(events: HostEventName[]): void;
@@ -105,8 +105,11 @@ manifest, characters, README and asset summary (no permission information).
   edge below `filter.percent ?? 20`. `window-changed`/`app-launched`: optional `filter.app`/`filter.title`
   (case-insensitive substring). `file-added`: optional `filter.dir`, `filter.ext`. `song-changed`: any.
   `widget-message`: `filter.widgetId`. `media-clicked` (data `{ mediaId, asset, packId, kind }`, the user clicked an
-  image/video overlay of `sdk.media`) and `media-closed` (the same plus `reason: 'click' | 'timeout' | 'ended' | 'api' |
-  'error'`, whenever an item goes away — including `closeAll` and app shutdown): no special keys, so `{ mediaId }`,
+  image/video overlay of `sdk.media`), `media-started` (the same data, a call that had to wait for a free slot under
+  `settings.media` reached the front of its queue and opened — immediate starts do not raise it, since the call itself
+  already resolved with `state: 'open'`) and `media-closed` (the same plus `reason: 'click' | 'timeout' | 'ended' | 'api' |
+  'error'`, whenever an item goes away — including `closeAll`, app shutdown, and a queued item that was closed or could
+  not start): no special keys, so `{ mediaId }`,
   `{ asset }` or `{ reason }` match through the generic path. Generic: any other filter key must equal `data[key]`.
 - Firing: run `code` via `BehaviourRunner.runScript` with `input = { event, data, ...input }`, trigger
   `{ kind: 'event', subscriptionId, event }`; if the character has an `onEvent` behaviour it also runs
@@ -118,7 +121,7 @@ manifest, characters, README and asset summary (no permission information).
   nothing, and everything it needs travels in `opts.input`
   allowed/failed; `fired++`; `once` → remove. Event code runs do not count toward autonomy limits, but
   wakes they trigger do. Emit `event-fired` chat event. Debounce identical event+subscription within 2 s —
-  except the interaction events (`widget-message`, `avatar-clicked`, `media-clicked`, `media-closed`,
+  except the interaction events (`widget-message`, `avatar-clicked`, `media-clicked`, `media-started`, `media-closed`,
   `INTERACTION_EVENTS`): each of those is a distinct user action (the next card, the next click) and
   always fires. One that arrives while the same subscription's handler is still running is queued
   behind it, so a subscription handles its own events in order, one at a time.
@@ -232,7 +235,7 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   `{file}` in the character home under `webcam/`; a clip raises the command timeout to
   `seconds + 30 s`; a command that exits 0 without writing, or writes an empty file, is a
   CAPABILITY_FAILED and the file is removed), `system.clipboardRead`. The `media` handler (`MediaManager`,
-  `emit` dep) raises `media-clicked` from the overlay's `clicked` event and `media-closed` with the
+  `emit` dep) raises `media-clicked` from the overlay's `clicked` event, `media-started` when a queued item finally opens, and `media-closed` with the
   reason from the overlay's `closed` detail, the page (`click`/`timeout`/`ended`/`error`) or its own
   close (`api`); `ShowImageOptions.closeOnClick` is forwarded to the page.
 - **IPC**: `characters.status`, `events.list/remove`, `senses.snapshot`, `packs.inspect`, and the new

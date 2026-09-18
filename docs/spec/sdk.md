@@ -109,9 +109,10 @@ media (pack)
 - `playVideo(asset: AssetRef | string, options?: PlayVideoOptions): Promise<MediaHandle>`
 - `playAudio(asset: AssetRef | string, options?: PlayAudioOptions): Promise<MediaHandle>`
 - `overlay(asset: AssetRef | string, options?: MediaOverlayOptions): Promise<MediaHandle>` — one image or video washed over whole screens. `MediaOverlayOptions { monitor?: MonitorSelector | 'all'; opacity?; durationMs?; volume?; loop?; muted? }` (mirrors `@rp/shared/media`): `monitor` defaults to `'all'` (one backend overlay per monitor, a single `MediaItem` and handle behind them), `opacity` to 0.25 — the docs tell the character to stay under 0.5 — and a video's `volume` to 0.5, played on one screen only (the others are muted copies). Placement, size, layer and click-through are not options: it always covers the screen on the `overlay` layer, click-through. The page keeps the aspect ratio: the media is fitted into the screen and copies repeat out from the centred one (`tileLayout`, `media/tile.ts`). `durationMs` closes it (and makes a video loop by default); `update()` on it only takes `opacity`.
-- `close(handle: MediaHandle | string): Promise<void>`
+- `close(handle: MediaHandle | string): Promise<void>` — also takes a still-queued item out of its queue.
 - `closeAll(): Promise<void>`
-- `list(): Promise<MediaHandle[]>`
+- `list(): Promise<MediaHandle[]>` — open items first, then the queued ones.
+- `MediaHandle { id; kind; asset; state: 'open' | 'queued' }`. `settings.media` caps how many items of each kind may run at once (`maxConcurrent`, `0` = no cap) and how many may wait (`maxQueued`, `0` = refuse rather than queue); the policy pins each number on its own. Over the cap a call **does not block and does not throw**: it returns a `queued` handle and the item opens by itself when one of its kind goes away, raising `media-started`. Only a full queue refuses, with `CAPABILITY_FAILED`. See `docs/spec/desktop.md` "Media limits and the queue".
 
 ui (pack)
 - `notify(title: string, body?: string, opts?: { urgency?: "low" | "normal" | "critical" }): Promise<void>` — OS notification; `low` is silent, `critical` stays until dismissed.
