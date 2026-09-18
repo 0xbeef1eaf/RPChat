@@ -53,7 +53,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
 
 /** `namespace.method` → push channel. */
 export const EVENT_METHODS: { [K in Namespaces]?: Partial<Record<keyof IpcApi[K] & string, string>> } = {
-  app: { onShowSession: IPC_EVENT_CHANNELS.showSession },
+  app: { onShowSession: IPC_EVENT_CHANNELS.showSession, onPolicyChange: IPC_EVENT_CHANNELS.policyChanged },
   chat: { onEvent: IPC_EVENT_CHANNELS.chatEvent },
   permissions: { onRequest: IPC_EVENT_CHANNELS.permissionRequest },
   ui: { onPrompt: IPC_EVENT_CHANNELS.uiPrompt },

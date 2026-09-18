@@ -37,6 +37,10 @@ export function SystemSection() {
     void load();
   }, [load]);
 
+  // The policy changed under the running app (root edited the file, the daemon published one,
+  // this app created one): this page is where it is spelled out, so re-read it at once.
+  useEffect(() => api().app.onPolicyChange(() => void load()), [load]);
+
   const install = async () => {
     setInstallDialog(false);
     setRunning(true);

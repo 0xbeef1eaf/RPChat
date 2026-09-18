@@ -9,7 +9,7 @@ import type { MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, SaveScriptInput, ScriptKind, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
-import type { AppRestrictions, ChainAuthorStatus, ChainLink, GuardAttemptRecord, ManagedSettingsPaths, PolicyChain, PolicyFile, RemoteLink, SealMode, SystemIntegrationStatus } from './system.js';
+import type { AppRestrictions, ChainAuthorStatus, ChainLink, GuardAttemptRecord, ManagedSettingsPaths, PolicyChain, PolicyFile, PolicySnapshot, RemoteLink, SealMode, SystemIntegrationStatus } from './system.js';
 import type { CryptoStatus } from './crypto.js';
 import type { BrowserBlock, BrowserBridgeStatus } from './browser.js';
 import type { UpdateStatus } from './updates.js';
@@ -114,6 +114,12 @@ export interface IpcApi {
      * the renderer shows. Permissive defaults without a policy file.
      */
     restrictions(): Promise<AppRestrictions>;
+    /**
+     * The policy changed while the app was running (written, replaced, removed, or pushed by the
+     * daemon): the restrictions and managed settings as they are now. The UI applies them at once,
+     * so withdrawing e.g. the pack editor takes the view away without a restart.
+     */
+    onPolicyChange(listener: (snapshot: PolicySnapshot) => void): Unsubscribe;
   };
   packs: {
     list(): Promise<InstalledPackView[]>;
@@ -442,6 +448,7 @@ export const IPC_EVENT_CHANNELS = {
   mediaCommand: 'media:command',
   uiPrompt: 'ui:prompt',
   showSession: 'app:showSession',
+  policyChanged: 'app:policyChanged',
   updateStatus: 'updates:status',
   browserStatus: 'browser:status',
 } as const;

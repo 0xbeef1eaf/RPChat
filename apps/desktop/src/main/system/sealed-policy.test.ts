@@ -132,6 +132,39 @@ describe('loadPolicy sources', () => {
     expect(none.error).toBeUndefined();
   });
 
+  it('tells its subscribers when the policy changed, and polls for a change made outside the app', async () => {
+    const dir = await tempDir();
+    const file = path.join(dir, 'policy.json');
+    const runtime = path.join(dir, 'runtime.json');
+    const marker = path.join(dir, 'policy.sealed');
+    await fs.writeFile(file, JSON.stringify({ version: 1, managedBy: 'local', app: { allowPackEditor: false } }));
+    const watcher = new PolicyWatcher(file, undefined, { runtime, marker });
+    const seen: Array<Record<string, unknown>> = [];
+    const off = watcher.onChange((state) => seen.push({ managedBy: state.managedBy, editor: state.restrictions.allowPackEditor }));
+    cleanups.push(() => watcher.stop());
+
+    // The first load is what `current()` answers, not a change: nobody is told about it.
+    expect((await watcher.current()).restrictions.allowPackEditor).toBe(false);
+    expect(seen).toEqual([]);
+
+    // Re-reading the same policy is not a change either.
+    watcher.invalidate();
+    await watcher.current();
+    expect(seen).toEqual([]);
+
+    // A policy edited outside the app: the poll finds it without anything calling `current()`.
+    watcher.start(5);
+    await fs.writeFile(file, JSON.stringify({ version: 1, managedBy: 'IT', app: { allowPackEditor: true } }));
+    await vi.waitFor(() => expect(seen).toEqual([{ managedBy: 'IT', editor: true }]));
+
+    // And an unsubscribed listener hears nothing more.
+    off();
+    await fs.writeFile(file, JSON.stringify({ version: 1, managedBy: 'IT', app: { allowPackEditor: false } }));
+    await watcher.current();
+    expect(seen).toHaveLength(1);
+    watcher.stop();
+  });
+
   it('re-reads when the runtime copy changes although the file did not', async () => {
     const dir = await tempDir();
     const file = path.join(dir, 'policy.json');

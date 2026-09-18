@@ -360,6 +360,19 @@ export const SYSTEM_INSTALL_DIR = `${SYSTEM_INSTALL_ROOT}/current`;
 /** Dotted settings paths the policy currently forces (e.g. `autonomy.maxSelfWakesPerHour`). */
 export type ManagedSettingsPaths = string[];
 
+/**
+ * What the renderer has to know the moment the policy changes, pushed on `app.onPolicyChange`
+ * so a policy written, replaced or removed while the app runs takes effect without a restart.
+ * The forced settings *values* are not in here: the renderer re-reads `settings.get()`, which
+ * main already resolves through the policy.
+ */
+export interface PolicySnapshot {
+  restrictions: AppRestrictions;
+  managed: ManagedSettingsPaths;
+  /** `app.managedBy`, for the "managed by X" wording; absent when the policy names nobody. */
+  managedBy?: string;
+}
+
 export interface DaemonStatus {
   /** Whether the app could reach the daemon socket and complete `hello`. */
   connected: boolean;
