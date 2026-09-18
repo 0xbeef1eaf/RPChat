@@ -21,6 +21,7 @@ const POLICY_TEMPLATE: PolicyFile = {
     displayBackend: 'auto',
     updates: { enabled: true, automatic: true },
     browser: { allowBlocking: true, allowEval: true, allowHistory: true },
+    media: { maxConcurrent: { image: 0, video: 0, audio: 0 }, maxQueued: { image: 8, video: 8, audio: 8 } },
   },
   inputLock: { enabled: true, maxDurationMs: 300_000, emergencyKey: 'esc', emergencyHoldMs: 5000 },
   app: { allowQuit: true, users: ['alice'] },

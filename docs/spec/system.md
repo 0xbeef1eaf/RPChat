@@ -599,6 +599,7 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
 | `displayBackend` | `displayBackend` | `auto` \| `electron` \| `hyprland` |
 | `updates` | `updates.automatic`, `updates.enabled` (`allowDowngrade` accepted, never managed) | booleans. `enabled: false` switches update checks off entirely (`UpdateStatus.state === 'disabled'`, token field hidden, `automatic` forced off); `automatic` pins the background-check toggle; `allowDowngrade: true` lets the daemon's `apply-update` install an older version (daemon-enforced, default false). |
 | `browser` | `browser.allowBlocking`, `browser.allowEval`, `browser.allowHistory` | booleans. What characters may do through the browser extension (docs/browser-extension.md). The home page is not managed: only a character sets it, with `sdk.browser.setHomePage`. |
+| `media` | `media.maxConcurrent.image`, `media.maxConcurrent.video`, `media.maxConcurrent.audio`, `media.maxQueued.image`, `media.maxQueued.video`, `media.maxQueued.audio` | non-negative numbers, each pinned on its own. How many `sdk.media` items of a kind may run at once (`0` = no cap) and how many more may wait behind them (`0` = an over-cap call is refused rather than queued). Enforced by `MediaManager` (docs/spec/desktop.md "Media limits and the queue"); each kind is counted separately. |
 
 ## Renderer
 

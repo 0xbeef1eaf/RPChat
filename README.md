@@ -47,6 +47,11 @@ Characters, their behaviours and their media are distributed as shareable
   `sdk.media.overlay` covers every monitor (or one) with a click-through image or
   video on the overlay layer — faint by default, tiled rather than stretched when
   the shape does not match, one handle closing it everywhere at once.
+- **A limit on how busy the screen gets**: Settings → General caps how many images,
+  videos and sounds a character may have running at once, each kind counted on its
+  own, and the policy can pin those numbers. Nothing is dropped or blocked when a
+  character asks for more — the extras queue and open by themselves as the ones
+  before them close, so three videos with a limit of one simply play in turn.
 - **Long-term memory**: characters remember facts about you across sessions,
   consolidated automatically and editable in the app.
 - **Initiative**: characters can schedule code to run later, wake themselves

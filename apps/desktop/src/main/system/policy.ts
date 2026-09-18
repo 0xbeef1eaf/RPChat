@@ -17,6 +17,9 @@ const UPDATES_KEYS = ['automatic', 'enabled', 'allowDowngrade'] as const;
 /** `updates.enabled` and `updates.allowDowngrade` are updater/daemon rules, not settings the UI pins. */
 const UPDATES_MANAGED_KEYS = ['automatic', 'enabled'] as const;
 const BROWSER_KEYS = ['allowBlocking', 'allowEval', 'allowHistory'] as const;
+/** The two halves of `settings.media`, each holding one number per `MediaKind`. */
+const MEDIA_SIDES = ['maxConcurrent', 'maxQueued'] as const;
+const MEDIA_KINDS = ['image', 'video', 'audio'] as const;
 const BACKENDS = new Set(['auto', 'electron', 'hyprland']);
 
 function isNumber(v: unknown): v is number {
@@ -131,6 +134,26 @@ export function parsePolicy(json: unknown): PolicyFile {
         else problems.push(`settings.browser.${k} must be a boolean`);
       }
       settings.browser = b;
+    }
+    if (s.media && typeof s.media === 'object') {
+      const m: NonNullable<NonNullable<PolicyFile['settings']>['media']> = {};
+      for (const side of MEDIA_SIDES) {
+        const raw4 = (s.media as Record<string, unknown>)[side];
+        if (raw4 === undefined) continue;
+        if (!raw4 || typeof raw4 !== 'object' || Array.isArray(raw4)) {
+          problems.push(`settings.media.${side} must be an object`);
+          continue;
+        }
+        const limits: Record<string, number> = {};
+        for (const kind of MEDIA_KINDS) {
+          const v = (raw4 as Record<string, unknown>)[kind];
+          if (v === undefined) continue;
+          if (isNumber(v) && v >= 0) limits[kind] = Math.round(v);
+          else problems.push(`settings.media.${side}.${kind} must be a non-negative number`);
+        }
+        m[side] = limits;
+      }
+      settings.media = m;
     }
     out.settings = settings;
   }
@@ -443,6 +466,7 @@ export function managedPaths(policy: PolicyFile | null | undefined): ManagedSett
   if (s.displayBackend !== undefined) out.add('displayBackend');
   for (const k of UPDATES_MANAGED_KEYS) if (s.updates?.[k] !== undefined) out.add(`updates.${k}`);
   for (const k of BROWSER_KEYS) if (s.browser?.[k] !== undefined) out.add(`browser.${k}`);
+  for (const side of MEDIA_SIDES) for (const kind of MEDIA_KINDS) if (s.media?.[side]?.[kind] !== undefined) out.add(`media.${side}.${kind}`);
   return [...out].sort();
 }
 
@@ -475,6 +499,13 @@ export function applyPolicy(settings: AppSettings, policy: PolicyFile | null | u
   if (s.updates?.automatic !== undefined) next.updates = { ...settings.updates, automatic: s.updates.automatic };
   if (s.updates?.enabled === false) next.updates = { ...next.updates, automatic: false };
   if (s.browser) next.browser = { ...settings.browser, ...definedOnly(s.browser) };
+  // Per kind, so a policy that caps video leaves the user's image and audio numbers alone.
+  if (s.media) {
+    next.media = {
+      maxConcurrent: { ...settings.media.maxConcurrent, ...definedOnly(s.media.maxConcurrent ?? {}) },
+      maxQueued: { ...settings.media.maxQueued, ...definedOnly(s.media.maxQueued ?? {}) },
+    };
+  }
   const hardMax = policy.inputLock?.maxDurationMs;
   if (hardMax !== undefined && next.maxInputLockMs > hardMax) next.maxInputLockMs = hardMax;
   if (policy.inputLock?.enabled === false) next.maxInputLockMs = Math.min(next.maxInputLockMs, 1000);

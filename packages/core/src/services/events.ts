@@ -14,7 +14,7 @@ export const HOST_EVENT_NAMES: readonly HostEventName[] = [
  * Discrete user interactions: every one of them is meaningful (a second click, the next widget
  * message), so they are never debounced — unlike sensor events, which hosts tend to repeat.
  */
-export const INTERACTION_EVENTS: ReadonlySet<string> = new Set(['widget-message', 'avatar-clicked', 'media-clicked', 'media-closed']);
+export const INTERACTION_EVENTS: ReadonlySet<string> = new Set(['widget-message', 'avatar-clicked', 'media-clicked', 'media-started', 'media-closed']);
 export const SUBSCRIPTIONS_PER_SESSION = 30;
 export const SUBSCRIPTION_CODE_MAX_BYTES = 16 * 1024;
 export const EVENT_DEBOUNCE_MS = 2000;

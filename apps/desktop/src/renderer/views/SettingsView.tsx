@@ -83,6 +83,55 @@ function NumberField({ id, label, value, hint, min, step, path, onCommit }: Numb
   );
 }
 
+/** One `MediaKind` per row: how many may run at once, and how many may wait behind them. */
+const MEDIA_LIMIT_ROWS: ReadonlyArray<{ kind: keyof AppSettings['media']['maxConcurrent']; at: string; waiting: string }> = [
+  { kind: 'image', at: 'Images on screen at once', waiting: 'Images waiting' },
+  { kind: 'video', at: 'Videos playing at once', waiting: 'Videos waiting' },
+  { kind: 'audio', at: 'Sounds playing at once', waiting: 'Sounds waiting' },
+];
+
+/**
+ * `settings.media`: the per-kind concurrency caps and queue lengths for `sdk.media`. A call over a
+ * cap is not refused and does not block the character — it waits its turn and opens when one of
+ * the open items of its kind goes away.
+ */
+function MediaLimitFields({ settings }: { settings: AppSettings }) {
+  const patch = (side: 'maxConcurrent' | 'maxQueued', kind: keyof AppSettings['media']['maxConcurrent'], value: number) =>
+    void patchSettings({ media: { ...settings.media, [side]: { ...settings.media[side], [kind]: Math.max(0, Math.round(value)) } } });
+  return (
+    <div className="field">
+      <span className="field-label">How much media at once</span>
+      <span className="field-hint">
+        Per kind: how many a character may have running together, and how many more may queue behind them. A call over the limit does not fail — it waits, and
+        starts by itself as soon as one closes. <strong>0 at once</strong> means no limit; <strong>0 waiting</strong> refuses the call instead of queueing it.
+      </span>
+      <div className="field-grid">
+        {MEDIA_LIMIT_ROWS.map((row) => (
+          <NumberField
+            key={`at-${row.kind}`}
+            id={`media-at-once-${row.kind}`}
+            label={row.at}
+            min={0}
+            value={settings.media.maxConcurrent[row.kind]}
+            path={`media.maxConcurrent.${row.kind}`}
+            onCommit={(v) => patch('maxConcurrent', row.kind, v)}
+          />
+        ))}
+        {MEDIA_LIMIT_ROWS.map((row) => (
+          <NumberField
+            key={`queue-${row.kind}`}
+            id={`media-queued-${row.kind}`}
+            label={row.waiting}
+            min={0}
+            value={settings.media.maxQueued[row.kind]}
+            path={`media.maxQueued.${row.kind}`}
+            onCommit={(v) => patch('maxQueued', row.kind, v)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'providers', label: 'Providers' },
@@ -437,6 +486,7 @@ export function SettingsView() {
             </label>
             <span className="field-hint">Default overlay layer: above (top) or below (bottom) normal windows.</span>
           </div>
+          <MediaLimitFields settings={settings} />
           <div className="field">
             <label htmlFor="display-backend">
               Display backend

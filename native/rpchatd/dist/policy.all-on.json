@@ -3,7 +3,11 @@
   "managedBy": "Everything on: the app cannot be quit or taken apart, a conversation stays open, development switches are off, the session is guarded, and the policy itself is locked once you seal it (replace \"alice\" with your user name)",
   "settings": {
     "permissions": { "moduleAllow": {} },
-    "updates": { "enabled": true, "automatic": true, "allowDowngrade": false }
+    "updates": { "enabled": true, "automatic": true, "allowDowngrade": false },
+    "media": {
+      "maxConcurrent": { "image": 3, "video": 1, "audio": 1 },
+      "maxQueued": { "image": 8, "video": 4, "audio": 4 }
+    }
   },
   "inputLock": {
     "enabled": true,

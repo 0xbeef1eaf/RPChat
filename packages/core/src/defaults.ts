@@ -3,8 +3,13 @@ import type { AppSettings, CommandTemplates, RunLimits } from '@rp/shared';
 
 /** A fresh, fully populated `AppSettings` (deep copies of the defaults). */
 export function defaultSettings(): AppSettings {
-  const { runLimits, ...rest } = DEFAULT_SETTINGS;
-  return { ...rest, providers: [], runLimits: { ...(runLimits ?? DEFAULT_RUN_LIMITS) } };
+  const { runLimits, media, ...rest } = DEFAULT_SETTINGS;
+  return {
+    ...rest,
+    providers: [],
+    runLimits: { ...(runLimits ?? DEFAULT_RUN_LIMITS) },
+    media: { maxConcurrent: { ...media.maxConcurrent }, maxQueued: { ...media.maxQueued } },
+  };
 }
 
 /** Merge a stored/partial settings object onto the defaults (run limits merged field by field). */
@@ -49,6 +54,13 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
   if (stored.web && typeof stored.web === 'object') merged.web = { ...base.web, ...stored.web };
   if (stored.desktop && typeof stored.desktop === 'object') merged.desktop = { ...base.desktop, ...stored.desktop };
   if (stored.browser && typeof stored.browser === 'object') merged.browser = { ...base.browser, ...stored.browser };
+  // Two levels deep, so a patch of one kind's cap keeps the other five numbers.
+  if (stored.media && typeof stored.media === 'object') {
+    merged.media = {
+      maxConcurrent: { ...base.media.maxConcurrent, ...(stored.media.maxConcurrent ?? {}) },
+      maxQueued: { ...base.media.maxQueued, ...(stored.media.maxQueued ?? {}) },
+    };
+  }
   if (stored.messaging && typeof stored.messaging === 'object') merged.messaging = { ...base.messaging, ...stored.messaging };
   if (stored.updates && typeof stored.updates === 'object') merged.updates = { ...base.updates, ...stored.updates };
   if (stored.debug && typeof stored.debug === 'object') merged.debug = { ...base.debug, ...stored.debug };

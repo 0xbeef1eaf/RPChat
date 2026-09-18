@@ -175,13 +175,19 @@ interface DisplayBackendInfo {
   };
 }
 
-/** A media item currently shown/playing. Returned by sdk.media.* and accepted by sdk.media.close(). */
+/** A media item currently shown/playing, or waiting its turn. Returned by sdk.media.* and accepted by sdk.media.close(). */
 interface MediaHandle {
   /** Opaque id of the media item. */
   readonly id: string;
   readonly kind: 'image' | 'video' | 'audio';
   /** Pack-relative path of the asset being shown. */
   readonly asset: string;
+  /**
+   * 'open' = on screen or playing. 'queued' = the user's settings cap how many of this kind may run
+   * at once, so it is waiting behind them; it opens by itself when one closes (raising
+   * 'media-started'), and close() takes it out of the queue.
+   */
+  readonly state: 'open' | 'queued';
 }
 
 /** A long-term memory as returned by sdk.memory.*. */
@@ -282,7 +288,9 @@ interface CalendarEvent {
  * 'avatar-clicked' {}; 'routine-changed' { from, to, label? }; 'browser-navigated' { tabId, url, title }
  * (a browser tab finished loading; filter { url?, title? } substrings; needs the browser extension);
  * 'media-clicked' { mediaId, asset, packId, kind } (the user clicked an image/video you showed;
- * filter { mediaId? } or { asset? }); 'media-closed' { mediaId, asset, packId, kind, reason } (an item
+ * filter { mediaId? } or { asset? }); 'media-started' { mediaId, asset, packId, kind } (a call that had to
+ * wait its turn reached the front of its queue and opened; filter { mediaId?, asset? });
+ * 'media-closed' { mediaId, asset, packId, kind, reason } (an item
  * went away: reason 'click' | 'timeout' | 'ended' | 'api' | 'error'; filter { mediaId?, asset?, reason? });
  * 'guard-attempt' { kind: 'ipc' | 'config' | 'signal' | 'ptrace' | 'exec', target, command, pid, blocked } (the
  * session guard on Linux saw the user's own terminal, keybind or picker try to reach the compositor/shell IPC,
@@ -304,6 +312,7 @@ type HostEventName =
   | 'routine-changed'
   | 'browser-navigated'
   | 'media-clicked'
+  | 'media-started'
   | 'media-closed'
   | 'guard-attempt';
 

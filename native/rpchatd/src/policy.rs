@@ -377,7 +377,7 @@ pub struct PolicyFile {
 }
 
 /// Keys allowed under `settings` (documented in `docs/spec/system.md`).
-pub const SETTINGS_KEYS: [&str; 10] = [
+pub const SETTINGS_KEYS: [&str; 11] = [
     "autonomy",
     "maxInputLockMs",
     "permissions",
@@ -388,6 +388,7 @@ pub const SETTINGS_KEYS: [&str; 10] = [
     "displayBackend",
     "updates",
     "browser",
+    "media",
 ];
 
 impl PolicyFile {
@@ -421,6 +422,7 @@ impl PolicyFile {
                 "senses",
                 "updates",
                 "browser",
+                "media",
             ] {
                 if let Some(v) = map.get(key) {
                     if !v.is_object() {
@@ -453,6 +455,32 @@ impl PolicyFile {
                         }
                         _ => {
                             return Err(format!("settings.browser.{key} is not a managed setting"))
+                        }
+                    }
+                }
+            }
+            // `media` holds one object per side, each with a non-negative number per media kind.
+            if let Some(media) = map.get("media").and_then(Value::as_object) {
+                for (side, value) in media {
+                    if !matches!(side.as_str(), "maxConcurrent" | "maxQueued") {
+                        return Err(format!("settings.media.{side} is not a managed setting"));
+                    }
+                    let limits = value
+                        .as_object()
+                        .ok_or_else(|| format!("settings.media.{side} must be an object"))?;
+                    for (kind, limit) in limits {
+                        if !matches!(kind.as_str(), "image" | "video" | "audio") {
+                            return Err(format!(
+                                "settings.media.{side}.{kind} is not a media kind"
+                            ));
+                        }
+                        match limit.as_f64() {
+                            Some(n) if n.is_finite() && n >= 0.0 => {}
+                            _ => {
+                                return Err(format!(
+                                    "settings.media.{side}.{kind} must be a non-negative number"
+                                ))
+                            }
                         }
                     }
                 }
@@ -943,7 +971,8 @@ mod tests {
                 "senses": {"includeInPrompt": false},
                 "displayBackend": "electron",
                 "updates": {"automatic": false, "enabled": true, "allowDowngrade": true},
-                "browser": {"allowBlocking": false, "allowEval": true, "allowHistory": false}
+                "browser": {"allowBlocking": false, "allowEval": true, "allowHistory": false},
+                "media": {"maxConcurrent": {"image": 3, "video": 1, "audio": 0}, "maxQueued": {"video": 4}}
             },
             "inputLock": {"maxDurationMs": 60000, "emergencyKey": "f12", "emergencyHoldMs": 2000, "enabled": true}
         }))
@@ -968,6 +997,10 @@ mod tests {
         // Round trip keeps the settings block verbatim.
         let back = serde_json::to_value(&p).unwrap();
         assert_eq!(back["settings"]["web"]["allowlist"], json!(["example.com"]));
+        assert_eq!(
+            back["settings"]["media"]["maxConcurrent"]["video"],
+            json!(1)
+        );
         assert_eq!(back["inputLock"]["emergencyKey"], json!("f12"));
     }
 
@@ -991,6 +1024,12 @@ mod tests {
             // The home page is a character's to set (sdk.browser.setHomePage), never the policy's.
             json!({"version": 1, "settings": {"browser": {"homePage": "https://example.com/"}}}),
             json!({"version": 1, "settings": {"browser": {"bridgePort": 1}}}),
+            json!({"version": 1, "settings": {"media": "x"}}),
+            json!({"version": 1, "settings": {"media": {"maxOpen": {"image": 1}}}}),
+            json!({"version": 1, "settings": {"media": {"maxConcurrent": 2}}}),
+            json!({"version": 1, "settings": {"media": {"maxConcurrent": {"gif": 1}}}}),
+            json!({"version": 1, "settings": {"media": {"maxConcurrent": {"image": -1}}}}),
+            json!({"version": 1, "settings": {"media": {"maxQueued": {"video": "two"}}}}),
             json!({"version": 1, "inputLock": {"emergencyKey": "space"}}),
             json!({"version": 1, "inputLock": {"maxDurationMs": -5}}),
             json!({"version": 1, "inputLock": {"foo": 1}}),

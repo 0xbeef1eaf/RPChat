@@ -31,6 +31,41 @@ export const DEFAULT_HISTORY_SETTINGS: HistorySettings = {
   summaryBudgetTokens: 700,
   keepActionDetailFor: 0,
 };
+
+/**
+ * How much of the screen a character may take at once (`sdk.media`). Each media kind is counted on
+ * its own: three images on screen say nothing about whether a video may start. A call over the
+ * concurrency cap does not block and does not fail — it joins that kind's queue and starts as soon
+ * as one of the open items goes away, which is why `showImage`/`playVideo`/`playAudio`/`overlay`
+ * can return a handle whose `state` is `queued`.
+ */
+export interface MediaConcurrencySettings {
+  /** Items of this kind that may be on screen or playing at once. `0` = no limit. */
+  maxConcurrent: MediaKindLimits;
+  /**
+   * Items of this kind that may wait for a slot. `0` means nothing waits: a call over the
+   * concurrency cap is refused with `CAPABILITY_FAILED` instead of being queued. Ignored while
+   * the matching `maxConcurrent` is `0`, since nothing ever queues then.
+   */
+  maxQueued: MediaKindLimits;
+}
+
+/** One number per `MediaKind`. */
+export interface MediaKindLimits {
+  image: number;
+  video: number;
+  audio: number;
+}
+
+/**
+ * Permissive by default, the way the `app` restrictions are: no concurrency cap at all, so a pack
+ * that shows six cards at once keeps working until someone sets a limit. The queue lengths only
+ * come into play once a cap is set.
+ */
+export const DEFAULT_MEDIA_SETTINGS: MediaConcurrencySettings = {
+  maxConcurrent: { image: 0, video: 0, audio: 0 },
+  maxQueued: { image: 8, video: 8, audio: 8 },
+};
 import type { MessagingChannel } from './senses.js';
 
 /**
@@ -164,6 +199,8 @@ export interface AppSettings {
   chatZoom: number;
   /** Whether media windows stay above other windows (used as the default layer: true → `top`, false → `bottom`). */
   mediaAlwaysOnTop: boolean;
+  /** How many images/videos/audio tracks `sdk.media` may have running at once, and how many may wait. */
+  media: MediaConcurrencySettings;
   /** Display backend: `auto` picks `hyprland` when running under Hyprland, else `electron`. */
   displayBackend: 'auto' | 'electron' | 'hyprland';
   commandTemplates: CommandTemplates;
@@ -284,6 +321,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   closeToTray: true,
   chatZoom: 1,
   mediaAlwaysOnTop: true,
+  media: DEFAULT_MEDIA_SETTINGS,
   displayBackend: 'auto',
   commandTemplates: {
     wallpaper: { command: '' },
