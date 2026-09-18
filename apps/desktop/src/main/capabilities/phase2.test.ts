@@ -8,7 +8,7 @@ import { avatarPlacement, clampSize, expressionMap, fitToMonitor } from './avata
 import { clampLevel, hyprFocusCommand, hyprMoveWindowCommands, hyprWorkspaceCommand, matchWindow, parseVolumeOutput, windowsFromHyprClients } from './desktop.js';
 import { FilesHandler, characterHomeDir, resolveHomePath } from './files.js';
 import { expandEvents, occurrences, parseDateValue, parseIcs, parseProperty, unfoldLines } from './ics.js';
-import { buildMessageRequest } from './messaging.js';
+import { buildMessageRequest, telegramChatsFromUpdates } from './messaging.js';
 import { decodeEntities, parseFeed } from './rss.js';
 import { resolveShape, validateShape } from './screen.js';
 
@@ -161,6 +161,39 @@ describe('messaging payloads', () => {
     const tg = buildMessageRequest({ name: 't', kind: 'telegram', url: 'https://api.telegram.org/botTOKEN/sendMessage?chat_id=42' }, 'hi');
     expect(tg).toEqual({ url: 'https://api.telegram.org/botTOKEN/sendMessage', method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"text":"hi","chat_id":"42"}' });
     expect(buildMessageRequest({ name: 'c', kind: 'command', command: { command: 'notify-send {text}' } }, 'hi')).toBeUndefined();
+  });
+
+  it('builds a telegram request from the token and chat id fields', () => {
+    expect(buildMessageRequest({ name: 't', kind: 'telegram', token: '123:AA-bb_cc', chatId: '-10042' }, 'hi')).toEqual({
+      url: 'https://api.telegram.org/bot123:AA-bb_cc/sendMessage',
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"text":"hi","chat_id":"-10042"}',
+    });
+    // A chat id field fills in for an older URL that has none, and wins over the one in its query.
+    expect(buildMessageRequest({ name: 't', kind: 'telegram', url: 'https://api.telegram.org/botTOKEN/sendMessage', chatId: '@news' }, 'hi')?.body).toBe('{"text":"hi","chat_id":"@news"}');
+    expect(buildMessageRequest({ name: 't', kind: 'telegram', url: 'https://api.telegram.org/botTOKEN/sendMessage?chat_id=1', chatId: '2' }, 'hi')?.body).toBe('{"text":"hi","chat_id":"2"}');
+    // The token goes into the URL path, so a malformed one is refused rather than sent.
+    expect(buildMessageRequest({ name: 't', kind: 'telegram', token: 'bot/../../x', chatId: '1' }, 'hi')).toBeUndefined();
+  });
+
+  it('reads the chats a telegram bot has heard from, newest first', () => {
+    const chats = telegramChatsFromUpdates({
+      ok: true,
+      result: [
+        { update_id: 1, message: { chat: { id: 7, type: 'private', first_name: 'Ada', last_name: 'L' } } },
+        { update_id: 2, message: { chat: { id: -100, type: 'supergroup', title: 'Lab' } } },
+        { update_id: 3, edited_message: { chat: { id: 7, type: 'private', first_name: 'Ada' } } },
+        { update_id: 4, channel_post: { chat: { id: 9, type: 'channel', username: 'news' } } },
+      ],
+    });
+    expect(chats).toEqual([
+      { id: '9', title: '@news', type: 'channel' },
+      { id: '7', title: 'Ada', type: 'private' },
+      { id: '-100', title: 'Lab', type: 'supergroup' },
+    ]);
+    expect(telegramChatsFromUpdates({ ok: true, result: [] })).toEqual([]);
+    expect(telegramChatsFromUpdates(undefined)).toEqual([]);
   });
 });
 

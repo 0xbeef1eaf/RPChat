@@ -24,6 +24,7 @@ import type {
 import { IPC_EVENT_CHANNELS, RpError } from '@rp/shared';
 import type { Engine, Logger } from '@rp/core';
 import { notConfigured } from './commands.js';
+import { fetchTelegramChats } from './capabilities/messaging.js';
 import type { AppServices } from './engine.js';
 import { phase2, unavailable } from './phase2.js';
 import type { ChainAuthor } from './system/chain-author.js';
@@ -218,6 +219,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
         return services.commands.runTemplate(effective, vars, `test:${name}`);
       },
       defaultCommands: async () => services.commands.defaults(),
+      telegramChats: (_e, token: string) => fetchTelegramChats(requireString(token, 'token')),
     },
     audit: {
       list: (_e, options) => engine.audit.list(options ?? {}),

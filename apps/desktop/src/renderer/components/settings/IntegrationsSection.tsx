@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import type { AppSettings, MessagingChannel } from '@rp/shared';
+import type { AppSettings, MessagingChannel, TelegramChat } from '@rp/shared';
+import { api, errorMessage } from '../../api';
+import { channelForEditing, channelForSaving, channelSummary } from '../../lib/messaging';
 import { StringListEditor } from '../common/StringListEditor';
 import { ManagedBadge, useManaged } from './Managed';
 
@@ -12,7 +14,7 @@ interface IntegrationsSectionProps {
 const KINDS: Array<{ value: MessagingChannel['kind']; label: string; hint: string }> = [
   { value: 'discord', label: 'Discord webhook', hint: 'Webhook URL from the channel settings.' },
   { value: 'slack', label: 'Slack webhook', hint: 'Incoming webhook URL.' },
-  { value: 'telegram', label: 'Telegram bot', hint: 'https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>' },
+  { value: 'telegram', label: 'Telegram bot', hint: 'The bot token from @BotFather, plus the chat to send to.' },
   { value: 'generic-json', label: 'Generic JSON POST', hint: 'POSTs {"text": …} to the URL.' },
   { value: 'command', label: 'Command', hint: 'Runs a command template with {text} and {channel}.' },
 ];
@@ -72,12 +74,9 @@ function ChannelsEditor({ channels, onChange }: { channels: MessagingChannel[]; 
 
   const save = async () => {
     if (!editing) return;
-    const name = editing.name.trim();
-    if (!name) return;
-    const clean: MessagingChannel = { name, kind: editing.kind };
-    if (editing.kind === 'command') clean.command = { command: editing.command?.command ?? '', shell: editing.command?.shell || undefined };
-    else if (editing.url?.trim()) clean.url = editing.url.trim();
-    const next = isNew ? [...channels.filter((c) => c.name !== name), clean] : channels.map((c) => (c.name === editing.name ? clean : c));
+    const clean = channelForSaving(editing);
+    if (!clean.name) return;
+    const next = isNew ? [...channels.filter((c) => c.name !== clean.name), clean] : channels.map((c) => (c.name === editing.name ? clean : c));
     if (await onChange(next)) setEditing(null);
   };
 
@@ -88,13 +87,9 @@ function ChannelsEditor({ channels, onChange }: { channels: MessagingChannel[]; 
         <div key={c.name} className="provider-row">
           <div className="item-text">
             <span className="item-title">{c.name}</span>
-            <span className="item-sub">
-              {c.kind}
-              {c.url ? ` · ${c.url.replace(/(bot)[^/]+/, '$1…')}` : ''}
-              {c.command ? ` · ${c.command.command}` : ''}
-            </span>
+            <span className="item-sub">{channelSummary(c)}</span>
           </div>
-          <button type="button" className="btn btn-sm" onClick={() => (setEditing({ ...c }), setIsNew(false))} disabled={editing !== null}>
+          <button type="button" className="btn btn-sm" onClick={() => (setEditing(channelForEditing(c)), setIsNew(false))} disabled={editing !== null}>
             Edit
           </button>
           <button type="button" className="btn btn-sm btn-danger" onClick={() => onChange(channels.filter((x) => x.name !== c.name))} disabled={editing !== null}>
@@ -136,6 +131,8 @@ function ChannelsEditor({ channels, onChange }: { channels: MessagingChannel[]; 
                   Run through the platform shell
                 </label>
               </div>
+            ) : editing.kind === 'telegram' ? (
+              <TelegramFields channel={editing} onChange={setEditing} />
             ) : (
               <div className="field" style={{ gridColumn: '1 / -1' }}>
                 <label htmlFor="ch-url">URL</label>
@@ -160,5 +157,92 @@ function ChannelsEditor({ channels, onChange }: { channels: MessagingChannel[]; 
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Token and recipient for a Telegram bot. Telegram will not tell a bot which chats exist, so the
+ * chat id only becomes knowable once someone has written to the bot: "Find chats" asks the bot for
+ * its recent updates and offers whatever chats turn up.
+ */
+function TelegramFields({ channel, onChange }: { channel: MessagingChannel; onChange: (c: MessagingChannel) => void }) {
+  const [showToken, setShowToken] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [chats, setChats] = useState<TelegramChat[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const token = channel.token ?? '';
+
+  const findChats = async () => {
+    setBusy(true);
+    setError(null);
+    setChats(null);
+    try {
+      setChats(await api().settings.telegramChats(token));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="field" style={{ gridColumn: '1 / -1' }}>
+        <label htmlFor="ch-token">Bot token</label>
+        <div className="input-with-btn">
+          <input
+            id="ch-token"
+            type={showToken ? 'text' : 'password'}
+            className="mono"
+            autoComplete="off"
+            value={token}
+            placeholder="123456789:AAE…"
+            onChange={(e) => onChange({ ...channel, token: e.target.value })}
+          />
+          <button type="button" className="btn btn-sm" onClick={() => setShowToken((v) => !v)} aria-pressed={showToken}>
+            {showToken ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        <span className="field-hint">
+          Message <code>@BotFather</code> on Telegram, send <code>/newbot</code>, and it replies with this token.
+        </span>
+      </div>
+      <div className="field" style={{ gridColumn: '1 / -1' }}>
+        <label htmlFor="ch-chat">Send to (chat id)</label>
+        <div className="input-with-btn">
+          <input
+            id="ch-chat"
+            type="text"
+            className="mono"
+            value={channel.chatId ?? ''}
+            placeholder="123456789 or @mychannel"
+            onChange={(e) => onChange({ ...channel, chatId: e.target.value })}
+          />
+          <button type="button" className="btn btn-sm" onClick={findChats} disabled={busy || !token.trim()}>
+            {busy ? 'Looking…' : 'Find chats'}
+          </button>
+        </div>
+        <span className="field-hint">
+          Your own chat with the bot, a group it was added to, or <code>@name</code> for a public channel. Say hello to the bot in Telegram
+          first, then press Find chats — a bot cannot see a chat that has never written to it.
+        </span>
+        {error ? <div className="callout callout-danger">{error}</div> : null}
+        {chats ? (
+          chats.length === 0 ? (
+            <span className="field-hint">
+              No chats yet. Open Telegram, send the bot any message (or add it to the group and post there), then try again.
+            </span>
+          ) : (
+            <div className="stack" style={{ gap: 4, marginTop: 4 }}>
+              {chats.map((c) => (
+                <button key={c.id} type="button" className="btn btn-sm" onClick={() => onChange({ ...channel, chatId: c.id })}>
+                  {c.title} · {c.type} · <span className="mono">{c.id}</span>
+                </button>
+              ))}
+            </div>
+          )
+        ) : null}
+      </div>
+    </>
   );
 }
