@@ -348,6 +348,7 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
                 <li key={b.id} className="stack" style={{ gap: 2, padding: '4px 0' }}>
                   <code style={{ overflowWrap: 'anywhere' }}>{b.patterns.join(', ')}</code>
                   <span className="muted small">
+                    {b.mode === 'allow' ? 'the only pages that may open · ' : ''}
                     {b.by ? `by ${b.by}` : 'by a character'}
                     {b.expiresAt ? ` · until ${new Date(b.expiresAt).toLocaleString()}` : ' · no expiry'}
                     {b.redirect ? ` · redirects to ${b.redirect}` : ''}

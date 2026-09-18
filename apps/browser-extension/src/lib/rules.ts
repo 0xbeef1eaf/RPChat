@@ -8,8 +8,13 @@
  *   `*.example.com`        the same (the leading `*.` is accepted for symmetry with the allowlist)
  *   `example.com/path*`    the host (and subdomains) with a path prefix; `*` inside a path matches anything
  *   `example.com/exact`    that path exactly (query string / fragment allowed)
- * Every pattern becomes one `regexFilter` rule for `main_frame` requests only, so embedded
- * resources are untouched and a port in the URL does not defeat the rule.
+ * A block is a denylist (`mode: 'deny'`) unless it says otherwise: every pattern becomes one
+ * `regexFilter` redirect rule. An allowlist (`mode: 'allow'`) inverts it — one catch-all rule sends
+ * every top-level navigation to the blocked page, and each pattern (plus the app's own loopback
+ * pages) gets a higher-priority `allow` rule that overrides it.
+ * Either way the rules only ever match `main_frame` requests, so a page the user may open loads all
+ * of its own assets, frames and requests however far off its patterns they are — and a port in the
+ * URL does not defeat a rule.
  */
 
 export const RULES_STORAGE_KEY = 'blockRules';
@@ -17,10 +22,22 @@ export const RULES_ALARM = 'rpchat-rules-expiry';
 /** Longest regex the DNR API accepts (Chromium checks 2 KB after its own compilation; keep a margin). */
 const MAX_REGEX_LENGTH = 1500;
 export const MAX_PATTERNS_PER_RULE = 50;
+/** Matches every top-level http(s) navigation: the catch-all an allowlist block redirects. */
+export const CATCH_ALL_REGEX = '^https?://';
+/**
+ * DNR priorities. A denylist rule outranks an allowlist's `allow` (blocking one site stays possible
+ * while an allowlist is up), which in turn outranks that allowlist's catch-all.
+ */
+export const RULE_PRIORITY = { catchAll: 1, allow: 2, deny: 3 } as const;
+
+/** Whether the patterns are the pages that may *not* open (`deny`) or the only ones that may (`allow`). */
+export type BlockMode = 'deny' | 'allow';
 
 export interface BlockRule {
   /** The app's id for the block (returned by `sdk.browser.block`). */
   id: string;
+  /** Denylist or allowlist; rules stored before allowlists existed read back as `deny`. */
+  mode: BlockMode;
   patterns: string[];
   /** Where blocked navigations go instead of the extension's blocked page. */
   redirect?: string;
@@ -43,7 +60,7 @@ export interface RuleTable {
 export interface DnrRuleLike {
   id: number;
   priority: number;
-  action: { type: 'redirect'; redirect: { url: string } } | { type: 'block' };
+  action: { type: 'redirect'; redirect: { url: string } } | { type: 'block' } | { type: 'allow' };
   condition: { regexFilter: string; resourceTypes: ['main_frame']; isUrlFilterCaseSensitive: false };
 }
 
@@ -51,6 +68,9 @@ export const EMPTY_TABLE: RuleTable = { nextRuleId: 1, rules: [] };
 
 /** Hosts a character may never block: the app's own pages and browser internals. */
 const PROTECTED_HOSTS = new Set(['127.0.0.1', 'localhost', '0.0.0.0', '::1', '[::1]']);
+
+/** Patterns an allowlist always lets through, for the same reason it may not deny them. */
+export const ALWAYS_ALLOWED_PATTERNS = ['127.0.0.1', 'localhost', '0.0.0.0'];
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
@@ -111,31 +131,59 @@ export function urlMatchesPattern(url: string, pattern: string): boolean {
   }
 }
 
-/** Build the DNR rules for one block; `target` is the blocked page URL (or the block's redirect). */
-export function dnrRulesFor(patterns: string[], firstRuleId: number, target: string): DnrRuleLike[] {
+/** Whether `url` matches any of the patterns. */
+export function urlMatchesAny(url: string, patterns: string[]): boolean {
+  return patterns.some((p) => urlMatchesPattern(url, p));
+}
+
+/**
+ * Whether a rule keeps `url` from opening: on the list for a denylist, off it for an allowlist —
+ * which always lets the app's own pages through, as it may not list them itself.
+ */
+export function ruleBlocks(url: string, mode: BlockMode, patterns: string[]): boolean {
+  if (mode === 'allow') return !urlMatchesAny(url, patterns) && !urlMatchesAny(url, ALWAYS_ALLOWED_PATTERNS);
+  return urlMatchesAny(url, patterns);
+}
+
+/**
+ * Build the DNR rules for one block; `target` is the blocked page URL (or the block's redirect).
+ * A denylist is one redirect rule per pattern. An allowlist is the catch-all redirect plus one
+ * `allow` rule per pattern: an unusable pattern would quietly shut out a site the character meant
+ * to let through, so the whole set is refused (empty) instead of being installed short.
+ */
+export function dnrRulesFor(patterns: string[], firstRuleId: number, target: string, mode: BlockMode = 'deny'): DnrRuleLike[] {
+  const condition = (regexFilter: string): DnrRuleLike['condition'] => ({ regexFilter, resourceTypes: ['main_frame'], isUrlFilterCaseSensitive: false });
   const out: DnrRuleLike[] = [];
   let id = firstRuleId;
+  if (mode === 'allow') {
+    out.push({ id: id++, priority: RULE_PRIORITY.catchAll, action: { type: 'redirect', redirect: { url: target } }, condition: condition(CATCH_ALL_REGEX) });
+    for (const pattern of new Set([...patterns, ...ALWAYS_ALLOWED_PATTERNS])) {
+      const regexFilter = patternToRegex(pattern);
+      if (!regexFilter) return [];
+      out.push({ id: id++, priority: RULE_PRIORITY.allow, action: { type: 'allow' }, condition: condition(regexFilter) });
+    }
+    return out;
+  }
   for (const pattern of patterns) {
     const regexFilter = patternToRegex(pattern);
     if (!regexFilter) continue;
-    out.push({
-      id: id++,
-      priority: 1,
-      action: { type: 'redirect', redirect: { url: target } },
-      condition: { regexFilter, resourceTypes: ['main_frame'], isUrlFilterCaseSensitive: false },
-    });
+    out.push({ id: id++, priority: RULE_PRIORITY.deny, action: { type: 'redirect', redirect: { url: target } }, condition: condition(regexFilter) });
   }
   return out;
 }
 
-/** Validate and normalise the patterns of a `rules.block` request; throws with a reason when any is unusable. */
-export function normalisePatterns(raw: unknown): string[] {
+/**
+ * Validate and normalise the patterns of a `rules.block` request; throws with a reason when any is
+ * unusable. The app's own pages are refused in a denylist only — an allowlist lets them through
+ * whether or not it names them.
+ */
+export function normalisePatterns(raw: unknown, mode: BlockMode = 'deny'): string[] {
   if (!Array.isArray(raw) || raw.length === 0) throw new Error('patterns must be a non-empty array of strings');
   if (raw.length > MAX_PATTERNS_PER_RULE) throw new Error(`at most ${MAX_PATTERNS_PER_RULE} patterns per block`);
   const out: string[] = [];
   for (const p of raw) {
     if (typeof p !== 'string' || !parsePattern(p)) throw new Error(`"${String(p).slice(0, 80)}" is not a URL pattern (use example.com, *.example.com or example.com/path*)`);
-    if (isProtectedPattern(p)) throw new Error(`"${p}" cannot be blocked (the app's own pages and browser internals are protected)`);
+    if (mode === 'deny' && isProtectedPattern(p)) throw new Error(`"${p}" cannot be blocked (the app's own pages and browser internals are protected)`);
     const clean = p.trim().toLowerCase().replace(/^[a-z*]+:\/\//, '');
     if (!out.includes(clean)) out.push(clean);
   }
@@ -146,7 +194,11 @@ export function normalisePatterns(raw: unknown): string[] {
 export function readTable(value: unknown): RuleTable {
   if (!value || typeof value !== 'object') return { ...EMPTY_TABLE, rules: [] };
   const t = value as Partial<RuleTable>;
-  const rules = Array.isArray(t.rules) ? t.rules.filter((r): r is BlockRule => Boolean(r && typeof r === 'object' && typeof r.id === 'string' && Array.isArray(r.patterns) && Array.isArray(r.ruleIds))) : [];
+  const rules = Array.isArray(t.rules)
+    ? t.rules
+        .filter((r): r is BlockRule => Boolean(r && typeof r === 'object' && typeof r.id === 'string' && Array.isArray(r.patterns) && Array.isArray(r.ruleIds)))
+        .map((r) => ({ ...r, mode: r.mode === 'allow' ? ('allow' as const) : ('deny' as const) }))
+    : [];
   const nextRuleId = typeof t.nextRuleId === 'number' && Number.isInteger(t.nextRuleId) && t.nextRuleId >= 1 ? t.nextRuleId : Math.max(1, ...rules.flatMap((r) => r.ruleIds)) + 1;
   return { nextRuleId, rules };
 }
@@ -170,9 +222,10 @@ export function nextExpiry(table: RuleTable, now: number = Date.now()): number |
 }
 
 /** What `rules.list` returns (no DNR internals). */
-export function describeRule(rule: BlockRule): { id: string; patterns: string[]; redirect?: string; expiresAt?: string; by?: string; reason?: string; createdAt: string } {
+export function describeRule(rule: BlockRule): { id: string; mode: BlockMode; patterns: string[]; redirect?: string; expiresAt?: string; by?: string; reason?: string; createdAt: string } {
   return {
     id: rule.id,
+    mode: rule.mode === 'allow' ? 'allow' : 'deny',
     patterns: [...rule.patterns],
     ...(rule.redirect ? { redirect: rule.redirect } : {}),
     ...(rule.expiresAt ? { expiresAt: rule.expiresAt } : {}),

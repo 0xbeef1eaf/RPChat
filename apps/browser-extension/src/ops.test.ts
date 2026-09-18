@@ -339,6 +339,43 @@ describe('BridgeOps: blocking, effects, eval, home, bookmarks, history', () => {
     expect(f.alarms.has(RULES_ALARM)).toBe(false);
   });
 
+  it('an allowlist shuts every other page, moves the tabs on one, and stands alone', async () => {
+    const f = fakeChrome();
+    f.add({ id: 1, windowId: 1, url: 'https://noise.test/feed', status: 'complete' });
+    f.add({ id: 2, windowId: 1, url: 'https://wiki.test/Article', status: 'complete' });
+    f.add({ id: 3, windowId: 1, url: 'http://127.0.0.1:47821/media', status: 'complete' });
+    const ops = new BridgeOps(f.chrome, { loadWaitMs: 0 });
+    const h = ops.handlers();
+    const blocked = await dispatch({ id: 'a', op: 'rules.block', args: { id: 'r1', mode: 'allow', patterns: ['wiki.test'], by: 'Mira' } }, h);
+    expect(blocked).toMatchObject({ ok: true, value: { id: 'r1', mode: 'allow', patterns: ['wiki.test'], redirectedTabs: 1 } });
+    // The catch-all plus one allow rule per pattern and per always-open host.
+    expect([...f.dynamicRules.values()].filter((r) => r.action.type === 'allow')).toHaveLength(4);
+    expect(f.calls).toContain('update 1 {"url":"chrome-extension://abcdefghijklmnopabcdefghijklmnop/blocked.html?rule=r1"}');
+    // The allowed page and the app's own loopback page stay where they are.
+    expect(f.calls.some((c) => c.startsWith('update 2') || c.startsWith('update 3'))).toBe(false);
+    // A second allowlist would widen the first instead of narrowing it.
+    expect(await dispatch({ id: 'b', op: 'rules.block', args: { id: 'r2', mode: 'allow', patterns: ['docs.test'] } }, h)).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining('r1') },
+    });
+    // Replacing the allowlist under its own id is how it is widened; a denylist alongside it is fine.
+    expect(await dispatch({ id: 'c', op: 'rules.block', args: { id: 'r1', mode: 'allow', patterns: ['wiki.test', 'docs.test'] } }, h)).toMatchObject({ ok: true });
+    expect(await dispatch({ id: 'd', op: 'rules.block', args: { id: 'r3', patterns: ['docs.test/secret*'] } }, h)).toMatchObject({ ok: true });
+    expect((await ops.listBlocks()).map((r) => `${r.id}:${r.mode}`)).toEqual(['r1:allow', 'r3:deny']);
+  });
+
+  it('refuses an allowlist whose redirect is not itself allowed, and takes the app\'s own pages on one', async () => {
+    const f = fakeChrome();
+    const h = new BridgeOps(f.chrome, { loadWaitMs: 0 }).handlers();
+    expect(await dispatch({ id: '1', op: 'rules.block', args: { id: 'x', mode: 'allow', patterns: ['a.test'], redirect: 'https://calm.test/' } }, h)).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining('itself') },
+    });
+    expect(await dispatch({ id: '2', op: 'rules.block', args: { id: 'x', mode: 'sometimes', patterns: ['a.test'] } }, h)).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT' } });
+    expect(f.dynamicRules.size).toBe(0);
+    expect(await dispatch({ id: '3', op: 'rules.block', args: { id: 'x', mode: 'allow', patterns: ['a.test', 'localhost'], redirect: 'https://a.test/calm' } }, h)).toMatchObject({ ok: true });
+  });
+
   it('refuses protected hosts, bad patterns, past expiries and non-http redirects', async () => {
     const f = fakeChrome();
     const h = new BridgeOps(f.chrome).handlers();

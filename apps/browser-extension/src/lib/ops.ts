@@ -9,8 +9,8 @@ import { MAX_EFFECT_DURATION_MS, buildEffect, effectSelector, effectStylesheet }
 import { pageClearImageEffects, pageClick, pageEval, pageFind, pageImageEffect, pageQuery, pageRead, pageScroll, pageType } from './page.js';
 import { BridgeError, DEFAULT_MAX_CHARS, describeTab, isNavigableUrl, isWebUrl, normaliseText, positiveInt } from './protocol.js';
 import type { OpHandler, TabInfo } from './protocol.js';
-import { RULES_ALARM, RULES_STORAGE_KEY, describeRule, dnrRulesFor, expiredRules, nextExpiry, normalisePatterns, readTable, urlMatchesPattern } from './rules.js';
-import type { BlockRule, DnrRuleLike, RuleTable } from './rules.js';
+import { RULES_ALARM, RULES_STORAGE_KEY, describeRule, dnrRulesFor, expiredRules, nextExpiry, normalisePatterns, readTable, ruleBlocks } from './rules.js';
+import type { BlockMode, BlockRule, DnrRuleLike, RuleTable } from './rules.js';
 
 /** How long `tabs.open` / `tabs.navigate` wait for the page to finish loading before answering. */
 export const LOAD_WAIT_MS = 10_000;
@@ -341,15 +341,19 @@ export class BridgeOps {
   async block(args: Record<string, unknown>): Promise<ReturnType<typeof describeRule> & { redirectedTabs: number }> {
     const id = stringArg(args, 'id');
     if (id.length > 100) throw new BridgeError('INVALID_ARGUMENT', 'id is too long');
+    if (args['mode'] !== undefined && args['mode'] !== 'deny' && args['mode'] !== 'allow') throw new BridgeError('INVALID_ARGUMENT', 'mode must be "deny" (the default) or "allow"');
+    const mode: BlockMode = args['mode'] === 'allow' ? 'allow' : 'deny';
     let patterns: string[];
     try {
-      patterns = normalisePatterns(args['patterns']);
+      patterns = normalisePatterns(args['patterns'], mode);
     } catch (err) {
       throw new BridgeError('INVALID_ARGUMENT', (err as Error).message);
     }
     const redirect = typeof args['redirect'] === 'string' && args['redirect'].length > 0 ? args['redirect'] : undefined;
     if (redirect !== undefined && !isNavigableUrl(redirect)) throw new BridgeError('INVALID_URL', 'redirect must be an http(s) URL');
-    if (redirect !== undefined && patterns.some((p) => urlMatchesPattern(redirect, p))) throw new BridgeError('INVALID_ARGUMENT', 'redirect must not itself match a blocked pattern');
+    if (redirect !== undefined && ruleBlocks(redirect, mode, patterns)) {
+      throw new BridgeError('INVALID_ARGUMENT', mode === 'allow' ? 'redirect must itself be on the allowlist' : 'redirect must not itself match a blocked pattern');
+    }
     let expiresAt: string | undefined;
     if (args['expiresAt'] !== undefined && args['expiresAt'] !== null) {
       const at = typeof args['expiresAt'] === 'string' ? Date.parse(args['expiresAt']) : Number.NaN;
@@ -359,14 +363,22 @@ export class BridgeOps {
     }
     const by = typeof args['by'] === 'string' && args['by'].trim().length > 0 ? args['by'].trim().slice(0, 80) : undefined;
     const reason = typeof args['reason'] === 'string' && args['reason'].trim().length > 0 ? args['reason'].trim().slice(0, 300) : undefined;
+    // A lapsed allowlist must not stand in the way of a new one.
+    if (mode === 'allow') await this.purgeExpired();
     const table = await this.table();
     const existing = table.rules.find((r) => r.id === id);
+    if (mode === 'allow') {
+      // Each allowlist's `allow` rules override the other's catch-all, so two of them would let
+      // through the pages of either. DNR cannot intersect them; the first one has to go first.
+      const other = table.rules.find((r) => r.mode === 'allow' && r !== existing);
+      if (other) throw new BridgeError('INVALID_ARGUMENT', `an allowlist is already in place (${other.id}); lift that one first`);
+    }
     if (existing) {
       await this.chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: existing.ruleIds });
       table.rules = table.rules.filter((r) => r !== existing);
     }
     const target = redirect ?? this.blockedPageUrl(id);
-    const dnr = dnrRulesFor(patterns, table.nextRuleId, target);
+    const dnr = dnrRulesFor(patterns, table.nextRuleId, target, mode);
     if (dnr.length === 0) throw new BridgeError('INVALID_ARGUMENT', 'no usable pattern');
     try {
       await this.chrome.declarativeNetRequest.updateDynamicRules({ addRules: dnr });
@@ -375,6 +387,7 @@ export class BridgeOps {
     }
     const rule: BlockRule = {
       id,
+      mode,
       patterns,
       ...(redirect ? { redirect } : {}),
       ...(expiresAt ? { expiresAt } : {}),
@@ -386,12 +399,12 @@ export class BridgeOps {
     table.nextRuleId += dnr.length;
     table.rules.push(rule);
     await this.saveTable(table);
-    // Tabs already showing a blocked page are moved off it right away.
+    // Tabs already showing a page the rule keeps shut are moved off it right away.
     let redirectedTabs = 0;
     for (const tab of await this.chrome.tabs.query({})) {
       const url = tab.url ?? tab.pendingUrl ?? '';
       if (typeof tab.id !== 'number' || !/^https?:/i.test(url)) continue;
-      if (!patterns.some((p) => urlMatchesPattern(url, p))) continue;
+      if (!ruleBlocks(url, mode, patterns)) continue;
       await this.chrome.tabs.update(tab.id, { url: target }).catch(() => undefined);
       redirectedTabs++;
     }

@@ -171,7 +171,7 @@ describe('BrowserHandler: blocking, effects, home page, bookmarks, eval, history
     const expires = Date.parse(r['expiresAt'] as string);
     expect(expires).toBeGreaterThanOrEqual(before + 5 * 60_000 - 5);
     expect(expires).toBeLessThan(before + 5 * 60_000 + 5_000);
-    expect(calls[0]).toMatchObject({ op: 'rules.block', args: { patterns: ['*.social.test', 'news.test/feed*'], by: 'Mira', reason: 'focus time' } });
+    expect(calls[0]).toMatchObject({ op: 'rules.block', args: { mode: 'deny', patterns: ['*.social.test', 'news.test/feed*'], by: 'Mira', reason: 'focus time' } });
     // No cap on the duration.
     const long = (await h.invoke('block', [['a.test'], { durationMs: 10 * 60 * 60_000 }], ctxNamed)) as Record<string, unknown>;
     expect(Date.parse(long['expiresAt'] as string)).toBeGreaterThanOrEqual(before + 10 * 60 * 60_000); // no cap
@@ -189,10 +189,28 @@ describe('BrowserHandler: blocking, effects, home page, bookmarks, eval, history
       await expect(h.invoke('block', [[p]], ctxNamed), p).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
     }
     await expect(h.invoke('block', [['a.test'], { durationMs: -1 }], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    // `{ deny }` says the same thing as a bare array.
+    await h.invoke('block', [{ deny: ['a.test'] }], ctxNamed);
+    expect(calls.at(-1)).toMatchObject({ op: 'rules.block', args: { mode: 'deny', patterns: ['a.test'] } });
     expect(await h.invoke('blocks', [], ctxNamed)).toEqual([{ id: 'blk-1', patterns: ['a.test'] }]);
     expect(await h.invoke('unblock', ['blk-1'], ctxNamed)).toEqual({ removed: true });
     expect(await h.invoke('clearBlocks', [], ctxNamed)).toEqual({ removed: 2 });
     expect(calls.map((c) => c.op).slice(-3)).toEqual(['rules.list', 'rules.unblock', 'rules.clear']);
+  });
+
+  it('block: { allow } turns the patterns into the only pages that may open, the app\'s own among them', async () => {
+    const { commands } = fakeCommands();
+    const { bridge, calls } = fakeBridge(true, { 'rules.block': (a) => ({ ...a, redirectedTabs: 2 }) });
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf(), characterName: () => 'Mira' });
+    const r = (await h.invoke('block', [{ allow: ['wiki.test', ' arxiv.test '] }, { reason: 'the study hour' }], ctxNamed)) as Record<string, unknown>;
+    expect(r).toMatchObject({ mode: 'allow', patterns: ['wiki.test', 'arxiv.test'], expiresAt: null, redirectedTabs: 2 });
+    expect(calls.at(-1)).toMatchObject({ op: 'rules.block', args: { mode: 'allow', patterns: ['wiki.test', 'arxiv.test'], by: 'Mira', reason: 'the study hour' } });
+    // The app's own pages are protected from a denylist; an allowlist may name them (it lets them through anyway).
+    await h.invoke('block', [{ allow: ['localhost', 'wiki.test'] }], ctxNamed);
+    expect(calls.at(-1)!.args['patterns']).toEqual(['localhost', 'wiki.test']);
+    for (const bad of [{ allow: [] }, { allow: 'wiki.test' }, { allow: ['a.test'], deny: ['b.test'] }, {}, { deny: [] }, 42]) {
+      await expect(h.invoke('block', [bad as never], ctxNamed), JSON.stringify(bad)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    }
   });
 
   it('the toggles in Settings → Browser switch block, eval and history off with a clear message', async () => {

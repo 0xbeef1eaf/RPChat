@@ -5,7 +5,8 @@
  * home page must be http(s) and, when the user set `settings.web.allowlist`, on it. Page blocking,
  * JavaScript injection and history access are switchable in Settings → Browser
  * (`settings.browser.allowBlocking` / `allowEval` / `allowHistory`). A block without durationMs lasts
- * until it is lifted.
+ * until it is lifted, and names either the pages that may not open (a denylist, the default) or the
+ * only ones that may (`{ allow }`) — top-level pages either way, never the assets one loads.
  */
 import { randomUUID } from 'node:crypto';
 import { shell } from 'electron';
@@ -88,6 +89,33 @@ export function isProtectedBlockPattern(pattern: string): boolean {
   if (/^(chrome|chrome-extension|edge|brave|about|devtools|file):/.test(raw)) return true;
   const host = blockPatternHost(pattern);
   return host === '' || host === '127.0.0.1' || host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0' || host === '::1' || host === '[::1]';
+}
+
+/** Whether a block's patterns are the pages that may *not* open (`deny`) or the only ones that may (`allow`). */
+export type BlockMode = 'deny' | 'allow';
+
+/**
+ * What `block()`'s first argument names: an array (or `{ deny }`) is the pages to keep shut,
+ * `{ allow }` the only ones left open. Patterns are trimmed, never reordered.
+ */
+export function blockTarget(raw: Json | undefined): { mode: BlockMode; patterns: string[] } {
+  const patternsOf = (value: Json | undefined, what: string): string[] => {
+    if (!Array.isArray(value) || value.length === 0 || !value.every((p) => typeof p === 'string' && p.trim().length > 0)) {
+      throw new RpError('INVALID_ARGUMENT', `${what} must be a non-empty array of strings such as "example.com", "*.example.com" or "example.com/path*"`);
+    }
+    if (value.length > MAX_BLOCK_PATTERNS) throw new RpError('INVALID_ARGUMENT', `at most ${MAX_BLOCK_PATTERNS} patterns per block`);
+    return (value as string[]).map((p) => p.trim());
+  };
+  if (Array.isArray(raw)) return { mode: 'deny', patterns: patternsOf(raw, 'patterns') };
+  if (raw && typeof raw === 'object') {
+    const o = raw as Record<string, Json>;
+    const allow = o['allow'] !== undefined && o['allow'] !== null;
+    const deny = o['deny'] !== undefined && o['deny'] !== null;
+    if (allow && deny) throw new RpError('INVALID_ARGUMENT', 'pass either { allow } or { deny }, not both');
+    if (allow) return { mode: 'allow', patterns: patternsOf(o['allow'], 'allow') };
+    if (deny) return { mode: 'deny', patterns: patternsOf(o['deny'], 'deny') };
+  }
+  throw new RpError('INVALID_ARGUMENT', 'block takes the patterns to block, or { allow: [...] } for the only pages that may open');
 }
 
 /** `since` / `until` for history: an ISO date-time, or a number of milliseconds ago. */
@@ -229,12 +257,9 @@ export class BrowserHandler implements CapabilityHandler {
   private async block(rawPatterns: Json | undefined, options: Record<string, Json>, context: ActionContext): Promise<Json> {
     const settings = await this.settings();
     if (!settings.allowBlocking) throw new RpError('CAPABILITY_FAILED', BLOCKING_DISABLED_MESSAGE);
-    if (!Array.isArray(rawPatterns) || rawPatterns.length === 0 || !rawPatterns.every((p) => typeof p === 'string' && p.trim().length > 0)) {
-      throw new RpError('INVALID_ARGUMENT', 'patterns must be a non-empty array of strings such as "example.com", "*.example.com" or "example.com/path*"');
-    }
-    if (rawPatterns.length > MAX_BLOCK_PATTERNS) throw new RpError('INVALID_ARGUMENT', `at most ${MAX_BLOCK_PATTERNS} patterns per block`);
-    const patterns = (rawPatterns as string[]).map((p) => p.trim());
-    const protectedOne = patterns.find(isProtectedBlockPattern);
+    const { mode, patterns } = blockTarget(rawPatterns);
+    // An allowlist needs no such check: it lets the app's own pages through whether or not it names them.
+    const protectedOne = mode === 'deny' ? patterns.find(isProtectedBlockPattern) : undefined;
     if (protectedOne) throw new RpError('PERMISSION_DENIED', `"${protectedOne}" cannot be blocked: the app's own pages (127.0.0.1, localhost) and browser pages are protected`);
     // No cap: a block without durationMs stays until unblock()/clearBlocks() or the user clears it in Settings → Browser.
     const wanted = optionalNumber(options['durationMs']);
@@ -245,8 +270,8 @@ export class BrowserHandler implements CapabilityHandler {
     const reason = typeof options['reason'] === 'string' && options['reason'].trim().length > 0 ? options['reason'].trim().slice(0, 300) : undefined;
     const id = `blk-${randomUUID().slice(0, 8)}`;
     const by = this.deps.characterName ? this.deps.characterName(context) : context.characterId;
-    const result = record(await this.bridged('rules.block', { id, patterns, ...(expiresAt ? { expiresAt } : {}), by, ...(redirect ? { redirect } : {}), ...(reason ? { reason } : {}) }));
-    return { id, expiresAt, patterns, ...(redirect ? { redirect } : {}), redirectedTabs: result['redirectedTabs'] ?? 0 };
+    const result = record(await this.bridged('rules.block', { id, mode, patterns, ...(expiresAt ? { expiresAt } : {}), by, ...(redirect ? { redirect } : {}), ...(reason ? { reason } : {}) }));
+    return { id, mode, expiresAt, patterns, ...(redirect ? { redirect } : {}), redirectedTabs: result['redirectedTabs'] ?? 0 };
   }
 
   // ---- image effects -----------------------------------------------------------------------

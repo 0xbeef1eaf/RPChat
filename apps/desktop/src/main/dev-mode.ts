@@ -86,8 +86,9 @@ return { status, tab: tab.id, url: page.url, title: page.title, text: page.text.
 /**
  * The browser smoke's second turn: "exercise <smoke url> <blocked url> <home url>" runs the
  * capabilities added in `sdk.browser` 2.1: block a pattern and try to open it, unblock and open it
- * again, apply an image effect with a pack-asset replacement and read the style back, set the home
- * page, add/search/remove a bookmark, eval in both worlds, and read the history.
+ * again, put up an allowlist and check what it does and does not shut (2.2), apply an image effect
+ * with a pack-asset replacement and read the style back, set the home page, add/search/remove a
+ * bookmark, eval in both worlds, and read the history.
  */
 export const EXERCISE_SMOKE_MESSAGE = 'exercise';
 /** Host the smoke Chromium maps onto 127.0.0.1 (`--host-resolver-rules`) so a loopback page can be blocked (127.0.0.1 itself is protected). */
@@ -96,6 +97,13 @@ export const SMOKE_BLOCK_PATTERN = `${SMOKE_BLOCK_HOST}/smoke/page2*`;
 export const SMOKE_ASSET = 'media/smoke.png';
 
 export function exerciseCodeFor(smokeUrl: string, blockUrl: string, homeUrl: string): string {
+  // The image of the smoke page under the blockable host, to load from a page the allowlist permits.
+  const offListAsset = blockUrl.replace(SMOKE_PAGE2_PATH, SMOKE_IMAGE_PATH);
+  const assetProbe = `const im = new Image();
+const done = new Promise((r) => { im.onload = () => r("loaded"); im.onerror = () => r("failed"); setTimeout(() => r("timeout"), 4000); });
+im.src = ${JSON.stringify(offListAsset)};
+document.body.appendChild(im);
+return await done;`;
   return `const out = {};
 const block = await sdk.browser.block([${JSON.stringify(SMOKE_BLOCK_PATTERN)}], { durationMs: 120000, reason: "smoke test" });
 out.block = { id: block.id, expiresAt: block.expiresAt };
@@ -106,6 +114,17 @@ out.unblocked = await sdk.browser.unblock(block.id);
 out.blocksAfter = (await sdk.browser.blocks()).length;
 out.reopenedUrl = (await sdk.browser.navigate(blockedTab.id, ${JSON.stringify(blockUrl)})).url;
 await sdk.browser.close(blockedTab.id);
+// An allowlist naming a host that does not exist: no page may open but the app's own, which is
+// never on the list, and the page it does open still loads an asset from the host it shut out.
+const allow = await sdk.browser.block({ allow: ["nothing.invalid"] }, { durationMs: 120000, reason: "smoke allowlist" });
+out.allow = { id: allow.id, mode: allow.mode };
+const allowTab = await sdk.browser.openTab(${JSON.stringify(blockUrl)});
+out.allowBlockedUrl = allowTab.url;
+out.allowedUrl = (await sdk.browser.navigate(allowTab.id, ${JSON.stringify(smokeUrl)})).url;
+out.allowedAsset = (await sdk.browser.eval(allowTab.id, ${JSON.stringify(assetProbe)})).value;
+out.allowLifted = await sdk.browser.unblock(allow.id);
+out.allowReopenedUrl = (await sdk.browser.navigate(allowTab.id, ${JSON.stringify(blockUrl)})).url;
+await sdk.browser.close(allowTab.id);
 const tab = await sdk.browser.openTab(${JSON.stringify(smokeUrl)});
 out.effect = await sdk.browser.imageEffect(tab.id, "grayscale", { replaceWith: ${JSON.stringify(SMOKE_ASSET)} });
 const probe = "const img = document.querySelector('img#pic'); await new Promise((r) => { if (img.complete) r(); else { img.onload = r; img.onerror = r; setTimeout(r, 3000); } }); return { filter: getComputedStyle(img).filter, src: img.getAttribute('src'), original: img.getAttribute('data-rp-original-src'), loaded: img.complete && img.naturalWidth > 0 };";
@@ -401,7 +420,7 @@ export async function runBrowserSmoke(services: BrowserSmokeServices, logger: Lo
     const ok = problems.length === 0;
     logger[ok ? 'info' : 'error'](`[smoke] verify browser: ${ok ? 'PASS' : 'FAIL'} (${ok ? `extension ${status.extensionId}, read ${String((result?.['text'] as string | undefined)?.length ?? 0)} chars, ${String((result?.['links'] as unknown[] | undefined)?.length ?? 0)} link(s), screenshot ${String(result?.['screenshotBytes'])} bytes, navigated ${navigated.length} event(s), handler saw ${String(handlerUrl)}` : problems.join(' | ')})`);
 
-    // Second turn: the 2.1 capabilities (block, image effect, home page, bookmarks, eval, history).
+    // Second turn: the 2.1/2.2 capabilities (block, allowlist, image effect, home page, bookmarks, eval, history).
     const port = loopback.listeningPort;
     const blockUrl = `http://${SMOKE_BLOCK_HOST}:${port}${SMOKE_PAGE2_PATH}`;
     const homeUrl = `http://127.0.0.1:${port}${SMOKE_HOME_PATH}`;
@@ -421,6 +440,13 @@ export async function runBrowserSmoke(services: BrowserSmokeServices, logger: Lo
         'block',
         blockedUrl !== blockUrl && (blockedUrl.startsWith('chrome-extension://') || blockedUrl === '') && ex['blocksWhileBlocked'] === 1 && obj(ex['unblocked'])['removed'] === true && ex['blocksAfter'] === 0 && reopened === blockUrl,
         `opening ${blockUrl} landed on ${JSON.stringify(blockedUrl) || 'the blocked page'} while blocked, blocks=${String(ex['blocksWhileBlocked'])}→${String(ex['blocksAfter'])}, reopened ${reopened === blockUrl ? 'fine' : JSON.stringify(reopened)} after unblock`,
+      );
+      const allowBlocked = String(ex['allowBlockedUrl'] ?? '');
+      const allowReopened = String(ex['allowReopenedUrl'] ?? '');
+      check(
+        'allowlist',
+        obj(ex['allow'])['mode'] === 'allow' && allowBlocked !== blockUrl && (allowBlocked.startsWith('chrome-extension://') || allowBlocked === '') && ex['allowedUrl'] === url && ex['allowedAsset'] === 'loaded' && obj(ex['allowLifted'])['removed'] === true && allowReopened === blockUrl,
+        `off-list ${blockUrl} landed on ${JSON.stringify(allowBlocked) || 'the blocked page'}, the app's own page opened (${String(ex['allowedUrl'])}) and loaded an off-list asset (${String(ex['allowedAsset'])}), reopened ${allowReopened === blockUrl ? 'fine' : JSON.stringify(allowReopened)} after lifting`,
       );
       const styled = obj(ex['styled']);
       const restored = obj(ex['restored']);
