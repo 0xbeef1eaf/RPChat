@@ -18,6 +18,47 @@ import { ChainAuthor } from './chain-author.js';
 /** How many `guard-attempt` events the app keeps for Settings → System → Audit log. */
 export const GUARD_ATTEMPT_LOG_SIZE = 50;
 
+/** How many tamper records are kept and shown, matching the daemon's own cap (`TAMPER_LOG_MAX`). */
+export const TAMPER_LOG_SIZE = 20;
+
+/**
+ * The daemon leaves its empty arrays out of the JSON altogether (`skip_serializing_if =
+ * "Vec::is_empty"`), so a perfectly well-shaped `seal-status` arrives without `tampers` on the
+ * overwhelmingly common machine that has never been tampered with — and the shared types promise
+ * every reader an array. Put the empty ones back here, at the one place the daemon's answer
+ * enters the app, rather than teaching each reader to expect a hole: an older daemon omits them
+ * too, and a missing array that survives this far reaches the renderer, where reading it throws
+ * during render and takes the whole window down with it.
+ */
+const SEAL_LISTS = ['paths', 'tampers', 'residual'] as const satisfies readonly (keyof SealInfo)[];
+const REMOTE_LISTS = ['rotations', 'packs'] as const satisfies readonly (keyof RemoteInfo)[];
+const RUNTIME_LISTS = ['degraded'] as const satisfies readonly (keyof RuntimeInfo)[];
+
+function withListsOf<T extends object, K extends keyof T>(value: T, keys: readonly K[]): T {
+  const out = { ...value };
+  for (const key of keys) if (!Array.isArray(out[key])) out[key] = [] as T[K];
+  return out;
+}
+
+/**
+ * The daemon's own log and the records pushed to the app this session, oldest first, capped
+ * like the daemon's own log is. The two overlap, because noticing a tamper both writes it into the
+ * seal and pushes it: a record already in the seal's log is not shown twice. The session's copies
+ * are still worth keeping, since a daemon that could not write the seal pushed the event anyway.
+ */
+export function mergeTampers(sealed: readonly TamperRecord[], session: readonly TamperRecord[]): TamperRecord[] {
+  const key = (r: TamperRecord) => JSON.stringify([r.at, r.kind, r.path, r.healed]);
+  const out = [...sealed];
+  const seen = new Set(out.map(key));
+  // `session` is newest first; the log reads oldest first.
+  for (const record of [...session].reverse()) {
+    if (seen.has(key(record))) continue;
+    seen.add(key(record));
+    out.push(record);
+  }
+  return out.slice(-TAMPER_LOG_SIZE);
+}
+
 /**
  * Pure: `SystemIntegrationStatus.guard` from the policy (what should be engaged) and the
  * daemon's report (what is). Without a daemon that knows the guard, only the policy side is
@@ -347,9 +388,9 @@ export class SystemIntegration {
         // A daemon that predates the seal answers `INVALID`, but a stub or a future daemon could
         // answer something else again: only a well-shaped answer replaces what the app knows.
         if (status && typeof status.seal?.sealed === 'boolean') {
-          const out: { seal: SealInfo; runtime?: RuntimeInfo; remote?: RemoteInfo } = { seal: status.seal };
-          if (status.runtime) out.runtime = status.runtime;
-          if (status.remote) out.remote = status.remote;
+          const out: { seal: SealInfo; runtime?: RuntimeInfo; remote?: RemoteInfo } = { seal: withListsOf(status.seal, SEAL_LISTS) };
+          if (status.runtime) out.runtime = withListsOf(status.runtime, RUNTIME_LISTS);
+          if (status.remote) out.remote = withListsOf(status.remote, REMOTE_LISTS);
           return out;
         }
       } catch (err) {
@@ -400,7 +441,7 @@ export class SystemIntegration {
       users: policyState.app.users,
       restrictions: policyState.restrictions,
       dev: this.deps.dev ?? DEFAULT_DEV_RULES,
-      seal: { ...seal, sealed, tampers: [...this.tampers].reverse().concat(seal.tampers).slice(-20) },
+      seal: { ...seal, sealed, tampers: mergeTampers(seal.tampers, this.tampers) },
     };
     if (runtime) policy.runtime = runtime;
     if (policyState.fromCache) policy.fromCache = true;
@@ -423,7 +464,7 @@ export class SystemIntegration {
   /** Record a `policy-tamper` the daemon pushed, for Settings → System. */
   noteTamper(record: TamperRecord): void {
     this.tampers.unshift(record);
-    if (this.tampers.length > GUARD_ATTEMPT_LOG_SIZE) this.tampers.length = GUARD_ATTEMPT_LOG_SIZE;
+    if (this.tampers.length > TAMPER_LOG_SIZE) this.tampers.length = TAMPER_LOG_SIZE;
   }
 
   /**
