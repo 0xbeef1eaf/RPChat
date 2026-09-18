@@ -230,8 +230,13 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   `pactl`; brightness `brightnessctl set {level}%`), `input` additions (`type`/`key`/`click`/`moveMouse`, daemon-only since the system
   integration — see `docs/spec/system.md`), `files` (home `<userData>/characters/<encoded
   ref>/home`, path guard like assets, 5 MB per file, 200 files, `open` via `shell.openPath`),
-  `messaging` (discord/slack/generic JSON POST, telegram GET/POST `text`, `command` template; 10 s
-  timeout; `channels()` from settings), `webcam` (`webcamImage`/`webcamVideo` templates writing to
+  `messaging` (discord/slack/generic JSON POST, telegram, `command` template; 10 s
+  timeout; `channels()` from settings; a telegram channel holds the @BotFather `token` and the
+  `chatId` to send to as their own fields — channels saved earlier, with the whole
+  `…/bot<token>/sendMessage?chat_id=<id>` endpoint in `url`, still send, and the editor splits
+  such a URL back onto the two fields; `settings.telegramChats(token)` reads `getUpdates` so
+  Settings can offer the chats the bot has heard from, which is the only way a chat id is
+  discoverable), `webcam` (`webcamImage`/`webcamVideo` templates writing to
   `{file}` in the character home under `webcam/`; a clip raises the command timeout to
   `seconds + 30 s`; a command that exits 0 without writing, or writes an empty file, is a
   CAPABILITY_FAILED and the file is removed), `system.clipboardRead`. The `media` handler (`MediaManager`,

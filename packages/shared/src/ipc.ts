@@ -6,7 +6,7 @@ import type { CharacterSummary, InstalledPackRecord, MediaManifest, PackManifest
 import type { VoicePreview, VoiceStudioState } from './voice.js';
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { MemoryEntry, MemoryImportance } from './memory.js';
-import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus } from './senses.js';
+import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus, TelegramChat } from './senses.js';
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, SaveScriptInput, ScriptKind, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
 import type { AppRestrictions, ChainAuthorStatus, ChainLink, GuardAttemptRecord, ManagedSettingsPaths, PolicyChain, PolicyFile, PolicySnapshot, RemoteLink, SealMode, SystemIntegrationStatus } from './system.js';
@@ -194,6 +194,12 @@ export interface IpcApi {
     testCommand(name: keyof CommandTemplates, template: CommandTemplate): Promise<{ code: number; stdout: string; stderr: string }>;
     /** Platform defaults used when a template is left empty (for display in the UI). */
     defaultCommands(): Promise<CommandTemplates>;
+    /**
+     * Chats a Telegram bot has heard from (`getUpdates`), so the user can pick a
+     * `MessagingChannel.chatId` instead of hunting for it by hand. Empty until somebody messages
+     * the bot or adds it to a group.
+     */
+    telegramChats(token: string): Promise<TelegramChat[]>;
   };
   audit: {
     list(options?: { sessionId?: string; limit?: number }): Promise<AuditEntry[]>;

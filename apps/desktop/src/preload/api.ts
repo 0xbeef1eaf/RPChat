@@ -26,7 +26,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   sessions: ['list', 'create', 'get', 'update', 'remove', 'messages', 'removeMessage', 'clearMessages', 'resetState'],
   chat: ['send', 'retry', 'abort'],
   permissions: ['respond'],
-  settings: ['get', 'managed', 'update', 'testProvider', 'listModels', 'testCommand', 'defaultCommands'],
+  settings: ['get', 'managed', 'update', 'testProvider', 'listModels', 'testCommand', 'defaultCommands', 'telegramChats'],
   audit: ['list'],
   sandbox: ['run', 'cancel'],
   memories: ['list', 'add', 'update', 'remove', 'consolidate'],

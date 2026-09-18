@@ -121,8 +121,26 @@ export interface RoutineStatus {
 export interface MessagingChannel {
   name: string;
   kind: 'discord' | 'slack' | 'telegram' | 'generic-json' | 'command';
-  /** Webhook URL for webhook kinds; for telegram: `https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>`. */
+  /**
+   * Webhook URL for webhook kinds. For telegram this is the older form — the whole endpoint
+   * `https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>`; `token`/`chatId` are read
+   * first when they are set, and channels saved before them keep working.
+   */
   url?: string;
+  /** For telegram: the bot token from @BotFather, `<bot id>:<secret>`. */
+  token?: string;
+  /** For telegram: who to send to — a numeric chat id (negative for groups) or `@channelname`. */
+  chatId?: string;
   /** For `command`: template with `{text}` and `{channel}` placeholders. */
   command?: { command: string; shell?: boolean; timeoutMs?: number };
+}
+
+/** One chat a Telegram bot has heard from, for picking a `chatId` in Settings. */
+export interface TelegramChat {
+  /** `chat.id` as a string: what goes in `MessagingChannel.chatId`. */
+  id: string;
+  /** Group title, or the person's name — whatever Telegram gave us. */
+  title: string;
+  /** `private`, `group`, `supergroup` or `channel`. */
+  type: string;
 }
