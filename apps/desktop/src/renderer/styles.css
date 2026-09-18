@@ -1762,6 +1762,34 @@ textarea.persona {
 textarea.code.invalid {
   border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
 }
+
+/* The code editor (components/common/CodeEditor.tsx). Monaco paints itself; this is the
+   frame around it, so a code box sits in a form like the text boxes next to it. */
+.code-editor {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  overflow: hidden;
+  resize: vertical;
+  min-height: 80px;
+}
+.code-editor:focus-within {
+  border-color: var(--accent);
+}
+.code-editor.invalid {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+}
+.code-editor-host {
+  position: absolute;
+  inset: 0;
+}
+.code-editor-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
 .script-problem {
   margin-top: 6px;
   padding: 8px 10px;
@@ -2013,50 +2041,6 @@ textarea.code.invalid {
 }
 .sandbox-editor-column {
   min-width: 0;
-}
-.sandbox-editor {
-  display: flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elev);
-  overflow: hidden;
-}
-.sandbox-editor:focus-within {
-  border-color: var(--accent);
-}
-.sandbox-gutter {
-  flex: none;
-  margin: 0;
-  padding: 8px 8px 8px 12px;
-  border: 0;
-  border-right: 1px solid var(--border);
-  border-radius: 0;
-  background: var(--code-bg);
-  color: var(--fg-muted);
-  text-align: right;
-  user-select: none;
-  overflow: hidden;
-  line-height: 1.5;
-  font-size: 12.5px;
-  min-width: 2.5em;
-}
-.sandbox-editor textarea.code {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  min-height: 320px;
-  height: 56vh;
-  padding: 8px 12px;
-  resize: vertical;
-}
-.sandbox-editor textarea.code:focus-visible {
-  outline: none;
-}
-textarea.code.sandbox-input {
-  min-height: 64px;
-  height: 64px;
 }
 .sandbox-invalid {
   color: var(--danger);

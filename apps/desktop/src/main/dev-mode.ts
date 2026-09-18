@@ -524,12 +524,45 @@ export async function runSmokeTurn(engine: Engine, logger: Logger, mediaList: ()
     // The media checks come first and on their own clock: the mock turn's image closes itself
     // after 20 s, so nothing slower may run before the tour and the compositor captures.
     await captureWindows(logger, mediaList);
+    await verifyCodeEditor(logger);
     await verifyPromptWindow(engine, session.id, logger);
     logger.info('[smoke] smoke done');
   } catch (err) {
     logger.error('[smoke] turn failed', err);
   } finally {
     off();
+  }
+}
+
+/**
+ * Prove the code editor works where it actually has to: in the built renderer, which is a
+ * `file://` page under the app's CSP. An answer here means Monaco's chunk loaded, its
+ * TypeScript service started in a worker Chromium was willing to spawn, and the generated
+ * `sdk.d.ts` reached it — completion after `sdk.` is the SDK's own module list or nothing.
+ */
+export async function verifyCodeEditor(logger: Logger): Promise<void> {
+  const main = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.getTitle() === 'rpchat');
+  if (!main) {
+    logger.error('[smoke] verify editor: FAIL (no main window)');
+    return;
+  }
+  try {
+    await main.webContents.executeJavaScript(`(() => { [...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Sandbox'))?.click(); return true; })()`, true);
+    let ready = false;
+    for (let i = 0; i < 80 && !ready; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      ready = Boolean(await main.webContents.executeJavaScript(`Boolean(document.querySelector('.monaco-editor') && window.__rpCompletionProbe)`, true));
+    }
+    if (!ready) {
+      logger.error('[smoke] verify editor: FAIL (no editor in the Sandbox tab)');
+      return;
+    }
+    // "sdk." with the caret at the end of it: what the author sees the moment they type the dot.
+    const offered = (await main.webContents.executeJavaScript(`window.__rpCompletionProbe('sdk.', 4)`, true)) as string[];
+    const ok = Array.isArray(offered) && offered.includes('chat') && offered.includes('media');
+    logger[ok ? 'info' : 'error'](`[smoke] verify editor: ${ok ? 'PASS' : 'FAIL'} (completion after "sdk." offered ${offered?.length ?? 0}: ${(offered ?? []).slice(0, 8).join(', ')})`);
+  } catch (err) {
+    logger.error('[smoke] verify editor: FAIL', err);
   }
 }
 
@@ -645,6 +678,7 @@ export async function captureWindows(logger: Logger, mediaList: () => unknown[] 
     ['editor-scripts', "[...document.querySelectorAll('.editor-rail button')].find(b => b.textContent.trim().startsWith('Scripts'))?.click()"],
     ['editor-media', "[...document.querySelectorAll('.editor-rail button')].find(b => b.textContent.trim().startsWith('Media'))?.click()"],
     ['editor-publish', "[...document.querySelectorAll('.editor-rail button')].find(b => /Check/.test(b.textContent))?.click()"],
+    ['sandbox', "[...document.querySelectorAll('nav button')].find(b => b.textContent.trim().startsWith('Sandbox'))?.click()"],
   ];
   if (main) {
     for (const [name, script] of tour) {

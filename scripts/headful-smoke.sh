@@ -61,6 +61,8 @@ if grep -qiE "typeerror|unhandled" "$OUT/app.log"; then echo "FAIL: TypeError/un
 if grep -qE "\[smoke\] verify [a-z]+: FAIL" "$OUT/app.log"; then echo "FAIL: media verification failed (see verify lines above)"; STATUS=1; fi
 # `widget` proves a sandboxed widget iframe can load a pack image through an `{{asset:…}}` placeholder (pixel check).
 for kind in image video audio widget; do grep -qE "\[smoke\] verify $kind: PASS" "$OUT/app.log" || { echo "FAIL: no PASS line for $kind"; STATUS=1; }; done
+# The code editor must come up in the built renderer and answer completion from the SDK typings.
+if ! grep -q "\[smoke\] verify editor: PASS" "$OUT/app.log"; then echo "FAIL: the code editor did not come up with SDK completion"; STATUS=1; fi
 # A character's question must open a window of its own and its answer must reach the action.
 if ! grep -q "\[smoke\] verify prompt: PASS" "$OUT/app.log"; then echo "FAIL: the prompt window did not open or its answer did not come back"; STATUS=1; fi
 echo "--- screenshots in $OUT"; ls -1 "$OUT"/*.png

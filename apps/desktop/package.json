@@ -26,6 +26,7 @@
     "esbuild": "^0.28.2",
     "fflate": "^0.8.3",
     "marked": "^18.0.13",
+    "monaco-editor": "^0.56.0",
     "qrcode-generator": "2.0.4",
     "quickjs-emscripten": "^0.32.0",
     "react": "^19.3.0",
