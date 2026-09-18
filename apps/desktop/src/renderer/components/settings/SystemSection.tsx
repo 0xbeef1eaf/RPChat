@@ -581,6 +581,7 @@ const RESTRICTION_LABELS: Record<keyof AppRestrictions, string> = {
   allowDeleteHistory: 'chat history cannot be deleted',
   allowDeleteMemories: 'memories cannot be deleted',
   allowRemoveEvents: 'event handlers cannot be removed',
+  allowCloseMedia: 'media cannot be closed by hand',
   allowSandbox: 'sandbox disabled',
   requireCharacterSession: 'a conversation stays open',
 };

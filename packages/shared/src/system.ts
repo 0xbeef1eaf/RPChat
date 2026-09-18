@@ -267,6 +267,12 @@ export interface AppRestrictions {
   allowDeleteMemories: boolean;
   /** `false` refuses `events.remove` — a character's event handlers cannot be unsubscribed by hand. */
   allowRemoveEvents: boolean;
+  /**
+   * `false` refuses `media.closeAll` and takes *Close media* out of the chat header — the user
+   * cannot sweep a character's overlays off the screen by hand. Characters' own
+   * `sdk.media.close`/`closeAll` are unaffected: they do not cross this channel.
+   */
+  allowCloseMedia: boolean;
   /** `false` closes the Sandbox tab: `sandbox.run`/`sandbox.cancel` are refused and the nav entry is gone. */
   allowSandbox: boolean;
   /**
@@ -288,6 +294,7 @@ export const DEFAULT_APP_RESTRICTIONS: AppRestrictions = {
   allowDeleteHistory: true,
   allowDeleteMemories: true,
   allowRemoveEvents: true,
+  allowCloseMedia: true,
   allowSandbox: true,
   requireCharacterSession: false,
 };
@@ -302,6 +309,7 @@ export const APP_ALLOW_KEYS = [
   'allowDeleteHistory',
   'allowDeleteMemories',
   'allowRemoveEvents',
+  'allowCloseMedia',
   'allowSandbox',
 ] as const satisfies readonly (keyof AppRestrictions)[];
 

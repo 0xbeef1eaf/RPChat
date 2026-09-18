@@ -92,6 +92,7 @@ export const POLICY_RESTRICTIONS: ReadonlyArray<{ key: keyof AppRestrictions; la
   { key: 'allowDeleteHistory', label: 'Delete chat history', hint: 'Clear a conversation or remove single messages from it.' },
   { key: 'allowDeleteMemories', label: 'Delete memories', hint: 'Remove what a character remembers.' },
   { key: 'allowRemoveEvents', label: 'Remove event handlers', hint: 'Unsubscribe a character’s handlers by hand.' },
+  { key: 'allowCloseMedia', label: 'Close media', hint: 'Sweep a character’s open overlays off the screen by hand. Off hides the button; the character’s own scripts still close their media.' },
   { key: 'requireCharacterSession', label: 'Always keep a conversation open', hint: 'The app opens a session with a character and offers no way to sit on an empty chat. This one adds a rule rather than removing one, so it reads the other way round.' },
 ];
 

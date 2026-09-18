@@ -64,6 +64,7 @@ describe('app restrictions — which channels they close', () => {
     expect(refusalFor('sessions:removeMessage', withOff('allowDeleteHistory'))).toMatch(/Deleting a message/);
     expect(refusalFor('memories:remove', withOff('allowDeleteMemories'))).toMatch(/Deleting a memory/);
     expect(refusalFor('events:remove', withOff('allowRemoveEvents'))).toMatch(/event handler/);
+    expect(refusalFor('media:closeAll', withOff('allowCloseMedia'))).toMatch(/Closing a character’s media/);
     expect(refusalFor('sandbox:run', withOff('allowSandbox'))).toMatch(/sandbox script/);
     expect(refusalFor('sandbox:cancel', withOff('allowSandbox'))).toMatch(/sandbox script/);
   });
@@ -73,6 +74,14 @@ describe('app restrictions — which channels they close', () => {
     for (const open of ['packs:list', 'sessions:list', 'sessions:messages', 'memories:list', 'events:list', 'chat:send']) {
       expect(refusalFor(open, off), open).toBeNull();
     }
+  });
+
+  it('takes only the by-hand sweep away with allowCloseMedia, leaving the rest of the media channel open', () => {
+    const off = withOff('allowCloseMedia');
+    // The window's own reports still arrive: a click or a timeout still closes what it closed.
+    expect(refusalFor('media:report', off)).toBeNull();
+    // And nothing else in the app is touched.
+    expect(refusalFor('chat:send', off)).toBeNull();
   });
 
   it('freezes the pack store through the editor too, even with the editor open', () => {
@@ -125,7 +134,7 @@ describe('the restriction table matches the real IPC surface', () => {
   });
 
   it('guards every channel the guards name', () => {
-    const mustBeGuarded = ['packs:uninstall', 'packs:install', 'chat:abort', 'sessions:remove', 'sessions:clearMessages', 'sessions:removeMessage', 'memories:remove', 'events:remove', 'sandbox:run', 'sandbox:cancel', 'editor:installToApp'];
+    const mustBeGuarded = ['packs:uninstall', 'packs:install', 'chat:abort', 'sessions:remove', 'sessions:clearMessages', 'sessions:removeMessage', 'memories:remove', 'events:remove', 'media:closeAll', 'sandbox:run', 'sandbox:cancel', 'editor:installToApp'];
     for (const c of mustBeGuarded) expect(isRestrictable(c), c).toBe(true);
   });
 

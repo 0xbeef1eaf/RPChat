@@ -312,6 +312,7 @@ operation is refused whoever asks: a devtools console or a character's own scrip
 | `allowDeleteHistory` | boolean | `true` | `false` removes *Clear history* and the per-message delete, and refuses `sessions.clearMessages` / `sessions.removeMessage`. |
 | `allowDeleteMemories` | boolean | `true` | `false` removes *Forget* from the memories panel and refuses `memories.remove`. Adding and editing memories still work. |
 | `allowRemoveEvents` | boolean | `true` | `false` removes *Remove* from the events drawer and refuses `events.remove`, so a character's `sdk.events.on` subscriptions cannot be unsubscribed by hand. |
+| `allowCloseMedia` | boolean | `true` | `false` removes *Close media* from the chat header and refuses `media.closeAll`, so a character's overlays cannot be swept off the screen by hand. The character's own `sdk.media.close` / `sdk.media.closeAll` are unaffected — this is only the by-hand button. |
 | `allowSandbox` | boolean | `true` | `false` closes the Sandbox tab: the entry disappears and `sandbox.run` / `sandbox.cancel` are refused. Characters' own scripts are unaffected — this is only the by-hand runner. |
 | `requireCharacterSession` | boolean | `false` | `true` keeps the app inside a conversation: it opens straight into the most recent session (starting one with the first installed character when there is none) instead of an empty chat, and the **last** remaining session cannot be deleted even when `allowDeleteSession` is true. |
 
@@ -336,6 +337,7 @@ it can be taken apart:
     "allowDeleteHistory": false,
     "allowDeleteMemories": false,
     "allowRemoveEvents": false,
+    "allowCloseMedia": false,
     "allowSandbox": false,
     "requireCharacterSession": true
   }

@@ -109,6 +109,8 @@ pub struct AppPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_remove_events: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_close_media: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_sandbox: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub require_character_session: Option<bool>,
@@ -1101,6 +1103,7 @@ mod tests {
             "allowDeleteHistory": false,
             "allowDeleteMemories": false,
             "allowRemoveEvents": false,
+            "allowCloseMedia": false,
             "allowSandbox": false,
             "requireCharacterSession": true
         }});
@@ -1110,6 +1113,7 @@ mod tests {
         assert!(!rules.allow_quit && rules.keeps_alive("alice"));
         let app = loaded.app.as_ref().unwrap();
         assert_eq!(app.allow_pack_editor, Some(false));
+        assert_eq!(app.allow_close_media, Some(false));
         assert_eq!(app.allow_sandbox, Some(false));
         assert_eq!(app.require_character_session, Some(true));
         // Handed back to the app verbatim.
