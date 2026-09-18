@@ -1,6 +1,7 @@
 /**
  * Root-owned policy file (docs/spec/system.md): forces selected settings keys. `applyPolicy`
- * is pure; `PolicyWatcher` re-reads the file whenever its mtime changes.
+ * is pure; `PolicyWatcher` re-reads the file whenever its mtime changes, and — once `start()`ed —
+ * tells its subscribers when the effective policy changed under a running app.
  */
 import * as fs from 'node:fs/promises';
 import type { AppPolicy, AppRestrictions, AppSettings, GuardPolicy, ManagedSettingsPaths, PackSource, PacksPolicy, PolicyFile, PolicyLock, RemotePolicy } from '@rp/shared';
@@ -704,12 +705,19 @@ export async function loadPolicy(path: string = POLICY_FILE_PATH, sources: Polic
   return emptyState(path);
 }
 
-/** Caches the parsed policy and re-reads it when the file's mtime (or existence) changes. */
+/** How often `start()` re-stats the policy sources when nothing else asks for them. */
+export const POLICY_POLL_INTERVAL_MS = 2000;
+
+/** Caches the parsed policy, re-reads it when the file's mtime (or existence) changes, and tells `onChange` subscribers. */
 export class PolicyWatcher {
   private state: PolicyState | undefined;
   private stamp: string | undefined;
   private inflight: Promise<PolicyState> | undefined;
   private readonly sources: PolicySources;
+  private readonly listeners = new Set<(state: PolicyState) => void>();
+  /** What the last notified state looked like to a subscriber; undefined until the first load. */
+  private signature: string | undefined;
+  private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     readonly path: string = POLICY_FILE_PATH,
@@ -719,12 +727,66 @@ export class PolicyWatcher {
     this.sources = sources;
   }
 
+  /**
+   * Called whenever the effective policy changes under a running app — the daemon pushed one, the
+   * app wrote one, or root edited the file. Not called for the first load: that is what `current()`
+   * is for. Returns an unsubscribe.
+   */
+  onChange(listener: (state: PolicyState) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  /**
+   * Re-read the sources on a timer, so a policy edited outside the app is noticed even while
+   * nothing calls `current()`. Idempotent; `stop()` clears it.
+   */
+  start(intervalMs: number = POLICY_POLL_INTERVAL_MS): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      void this.current().catch(() => undefined);
+    }, intervalMs);
+    this.timer.unref?.();
+  }
+
+  stop(): void {
+    if (!this.timer) return;
+    clearInterval(this.timer);
+    this.timer = undefined;
+  }
+
+  /** What subscribers can tell apart: two states with the same signature are the same policy to them. */
+  private static signatureOf(state: PolicyState): string {
+    return JSON.stringify([state.restrictions, state.managed, state.managedBy ?? null, state.app, state.policyHash ?? null, state.present]);
+  }
+
+  private notify(state: PolicyState): void {
+    const signature = PolicyWatcher.signatureOf(state);
+    const first = this.signature === undefined;
+    if (signature === this.signature) return;
+    this.signature = signature;
+    if (first) return;
+    for (const listener of this.listeners) {
+      try {
+        listener(state);
+      } catch (err) {
+        this.logger?.warn?.(`[policy] a change listener failed: ${String(err)}`);
+      }
+    }
+  }
+
   /** Every file `current()` may read, in the order `loadPolicy` tries them. */
   private watchedPaths(): string[] {
     return [this.sources.runtime ?? RUNTIME_POLICY_FILE, this.path, this.sources.marker ?? SEAL_MARKER_PATH];
   }
 
-  /** Drop the cache so the next `current()` re-reads the file whatever its mtime (e.g. right after creating it). */
+  /**
+   * Drop the cache so the next `current()` re-reads the file whatever its mtime (e.g. right after
+   * creating it). The signature stays: the re-read is still compared against what subscribers were
+   * last told, so writing the same policy back notifies nobody.
+   */
   invalidate(): void {
     this.state = undefined;
     this.stamp = undefined;
@@ -759,6 +821,7 @@ export class PolicyWatcher {
           const restricted = activeRestrictions(state.restrictions);
           this.logger?.info?.(`[policy] ${changed ? 'reloaded' : 'loaded'} ${this.path}: ${state.managed.length} managed setting(s)${state.app.allowQuit ? '' : `, quitting disabled for ${state.app.users.length > 0 ? state.app.users.join(', ') : 'nobody (app.users is empty)'}`}${restricted.length > 0 ? `, restrictions: ${restricted.join(', ')}` : ''}${state.managedBy ? ` (managed by ${state.managedBy})` : ''}`);
         }
+        this.notify(state);
         return state;
       })
       .finally(() => {

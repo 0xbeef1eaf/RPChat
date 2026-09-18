@@ -41,8 +41,6 @@ const START_HIDDEN = process.argv.includes('--hidden');
 let tray: Tray | undefined;
 /** Set by the tray's Quit (and before-quit) so the close-to-tray handler lets the window close. */
 let quitting = false;
-/** How often the policy file is re-checked for `app.allowQuit` while the app idles (a stat; the watcher caches on mtime). */
-const QUIT_POLICY_REFRESH_MS = 60_000;
 
 /** `app.getVersion()` is Electron's own version when launched as `electron out/main/index.js`; prefer our package.json. */
 function resolveAppVersion(): string {
@@ -173,7 +171,8 @@ async function main(): Promise<void> {
   protocol.handle(ASSET_PROTOCOL, (request) => handleAssetRequest(request, { packRootFor: (packId) => active.packRootFor(packId), logger }));
 
   // `app.allowQuit` from the policy: applied now (before the tray exists so its menu is right from
-  // the start), on every window show/close, and periodically so an edited policy file is noticed.
+  // the start), on every window show/close, and whenever the watcher sees the policy change — an
+  // edited file included, since the watcher polls for one.
   const refreshQuitPolicy = (): Promise<void> =>
     active.policy
       .current()
@@ -182,7 +181,7 @@ async function main(): Promise<void> {
       })
       .catch(() => undefined);
   await refreshQuitPolicy();
-  setInterval(() => void refreshQuitPolicy(), QUIT_POLICY_REFRESH_MS).unref();
+  active.policy.onChange((state) => active.quitGuard.apply(state.policy));
   // Tell the daemon how to bring this launch back (Linux only: that is where rpchatd runs). The
   // daemon acts on it only while the policy says `app.allowQuit: false` for this user.
   if (process.platform === 'linux') active.keepalive.start();

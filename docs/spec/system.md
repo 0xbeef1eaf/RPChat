@@ -358,7 +358,11 @@ with `pkexec` for the current user.
   below, ignores unknown `app` keys. `SettingsService` results
   and every `settings.get()` go through `applyPolicy`; `settings.update` ignores managed paths and
   the response carries the forced values. Policy file is re-read when its mtime changes
-  (`PolicyWatcher.invalidate()` forces the next read). `parseGuard` mirrors the daemon's
+  (`PolicyWatcher.invalidate()` forces the next read). `PolicyWatcher.start()` (called by
+  `createEngine`, stopped with it) re-stats the sources every `POLICY_POLL_INTERVAL_MS` (2 s) so a
+  policy written outside the app is noticed with nothing calling `current()`, and `onChange(fn)`
+  reports every load whose `restrictions`/`managed`/`managedBy`/`app`/`policyHash`/`present` differ
+  from the last one a subscriber was told about — the first load is not a change. `parseGuard` mirrors the daemon's
   validation of the `guard` block (enums, path lists, `mode` other than off needs `app.users`);
   `guardMode(policy)` → the effective mode.
 - `InputHandler` is daemon-only: `lock/unlock/status/type/key/click/moveMouse` go through rpchatd
@@ -487,6 +491,16 @@ handler, throwing `PERMISSION_DENIED` with the reason. A channel may match both 
 and its own and is refused when either forbids it. `isRestrictable` resolves the guarded set once
 at registration so unguarded channels never read the policy. The renderer hides the matching
 controls (nav entries, Uninstall, Clear history, Forget, Remove, Delete session) — cosmetic only.
+
+A policy that changes under a running app takes effect at once, without a restart. Enforcement
+always did (the dispatch loop re-reads the policy per call); the UI now follows: `registerIpc`
+subscribes to `PolicyWatcher.onChange` and pushes a `PolicySnapshot`
+(`{ restrictions, managed, managedBy? }`) to the main window on `app:policyChanged`, delivered as
+`app.onPolicyChange(fn)`. The renderer's `applyPolicySnapshot` adopts the restrictions and managed
+paths, re-reads `settings.get()` (main resolves the forced values into it), leaves a view the
+policy just withdrew (`ROUTE_NEEDS`: editor, sandbox → back to the chat), runs
+`enterRequiredSession()` and toasts once when the restrictions actually changed. Settings → System
+re-reads `system.status()` on the same event.
 
 `allowStopGeneration` needs one thing a channel table cannot express: whether a turn is in flight.
 `TURN_STOPPING_CHANNELS` names the channels that abort the running turn on their way to what they

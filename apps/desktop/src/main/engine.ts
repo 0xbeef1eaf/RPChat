@@ -567,6 +567,10 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   // Start fetching once the engine is up; the service finds out for itself whether this machine
   // has a remote source, and keeps the pinned packs in step either way.
   remoteConfig?.start();
+  // Notice a policy written, edited or removed outside the app (root editing the file, the
+  // installer, another machine's chain) so the UI follows it without a restart. The daemon's
+  // `policy-changed` push above covers its own writes sooner; this is the fallback for the rest.
+  policy.start();
   /** An update restart is an authorised quit: let it through and make sure the daemon does not race the updater's relaunch. */
   const beforeRestart = async (): Promise<void> => {
     quitGuard.allowQuitOnce();
@@ -705,6 +709,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       stopped = true;
       updates.stop();
       remoteConfig?.stop();
+      policy.stop();
       permissionPrompts.rejectAll();
       uiPrompts.rejectAll();
       await senses.dispose().catch((err: unknown) => logger.warn('[senses] dispose failed', err));

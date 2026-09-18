@@ -16,6 +16,7 @@ import type {
   MemoryEntry,
   MemoryImportance,
   PermissionDecision,
+  PolicySnapshot,
   ProviderConfig,
   Session,
   UiPromptAnswer,
@@ -431,12 +432,20 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
   const offBrowser = services.browser.onStatus((status) => {
     windows.sendToMain(IPC_EVENT_CHANNELS.browserStatus, status);
   });
+  // A policy that changed under a running app: the UI hides (or brings back) the controls it names
+  // straight away, instead of showing a withdrawn pack editor until the next restart.
+  const offPolicy = services.policy.onChange((state) => {
+    const snapshot: PolicySnapshot = { restrictions: state.restrictions, managed: state.managed, ...(state.managedBy ? { managedBy: state.managedBy } : {}) };
+    logger.info(`[policy] pushing the new policy to the UI: ${state.managed.length} managed setting(s)`);
+    windows.sendToMain(IPC_EVENT_CHANNELS.policyChanged, snapshot);
+  });
 
   logger.info(`[ipc] ${channels.length} channels registered (app ${opts.version})`);
   return () => {
     offChat();
     offUpdates();
     offBrowser();
+    offPolicy();
     for (const channel of channels) ipcMain.removeHandler(channel);
   };
 }

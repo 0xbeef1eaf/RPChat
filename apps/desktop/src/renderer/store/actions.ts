@@ -3,7 +3,7 @@
  * store through the pure reducers. Components call these; they never call the
  * API directly except for one-off reads that do not touch shared state.
  */
-import type { AppRestrictions, CharacterRef, PackInspection, PermissionDecision, Session, SessionId, UiPromptAnswer } from '@rp/shared';
+import type { AppRestrictions, CharacterRef, PackInspection, PermissionDecision, PolicySnapshot, Session, SessionId, UiPromptAnswer } from '@rp/shared';
 import { clampChatZoom } from '@rp/shared';
 import { api, errorMessage } from '../api';
 import { truncate } from '../lib/format';
@@ -95,6 +95,26 @@ export async function refreshRestrictions(): Promise<void> {
   if (restrictions) update((s) => ({ ...s, restrictions }));
 }
 
+/**
+ * A policy that changed while the app was running (`app.onPolicyChange`): adopt what it now
+ * forbids, leave a view it withdrew, and re-read the settings — main resolves the forced values
+ * into them, so the managed fields and their values arrive together.
+ */
+export function applyPolicySnapshot(snapshot: PolicySnapshot): void {
+  const before = appStore.getState().restrictions;
+  update((s) => {
+    const needs = ROUTE_NEEDS[s.route];
+    // The view the policy just withheld is open: step back to the chat rather than sit on a
+    // screen whose every action main would now refuse.
+    const route: RouteName = needs && !snapshot.restrictions[needs] ? 'chat' : s.route;
+    return { ...s, restrictions: snapshot.restrictions, managed: snapshot.managed, route };
+  });
+  const changed = (Object.keys(snapshot.restrictions) as Array<keyof AppRestrictions>).some((k) => snapshot.restrictions[k] !== before[k]);
+  if (changed) toast('info', `The system policy changed${snapshot.managedBy ? ` (managed by ${snapshot.managedBy})` : ''}: what this app allows was updated.`, 6000);
+  void refreshSettings().catch((err: unknown) => console.warn('settings refresh after a policy change failed', err));
+  void enterRequiredSession().catch((err: unknown) => console.warn('entering the required session after a policy change failed', err));
+}
+
 export async function refreshCapabilities(): Promise<void> {
   const capabilities = await api().capabilities.list();
   update((s) => ({ ...s, capabilities }));
@@ -160,6 +180,8 @@ export async function bootstrap(): Promise<void> {
   });
   // A notification about a character's unprompted message opens that conversation.
   rp.app.onShowSession((sessionId) => void openSession(sessionId));
+  // A policy written, replaced or removed while the app runs, so its restrictions do not wait for a restart.
+  rp.app.onPolicyChange((snapshot) => applyPolicySnapshot(snapshot));
   watchVisibleSession();
   rp.permissions.onRequest((request) => update((s) => enqueuePermissionRequest(s, request)));
   rp.ui.onPrompt((request) => update((s) => enqueueUiPrompt(s, request)));

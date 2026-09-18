@@ -11,6 +11,15 @@ import { GuardAttemptLog, SystemIntegration, autostartDesktopEntry, guardStatusO
 import { KeepaliveLink, reconnectDelay } from './keepalive-link.js';
 import { PolicyWatcher, appPolicy, applyPolicy, guardMode, loadPolicy, managedPaths, parsePolicy, stripManagedPatch } from './policy.js';
 
+/**
+ * Keep a watcher inside the test's temp directory: with the default sources it would read the
+ * machine's own `/run/rpchat/policy/policy.json` and `/etc/rpchat/policy.sealed`, so the test
+ * would pass or fail depending on whether the developer's machine is under a policy.
+ */
+function sandboxedSources(tmp: string): { runtime: string; marker: string } {
+  return { runtime: path.join(tmp, 'runtime-policy.json'), marker: path.join(tmp, 'policy.sealed') };
+}
+
 /** Fake rpchatd: answers the protocol from an in-memory lock state. */
 function fakeDaemon(socketPath: string, opts: { hang?: boolean; policyPath?: string; install?: InstallInfo; applyDelayMs?: number; restartDaemon?: boolean; guard?: GuardInfo; noSubscribe?: boolean } = {}) {
   let locked: { until: string; reason?: string; devices: 'keyboard' | 'mouse' | 'both' } | null = null;
@@ -564,9 +573,9 @@ describe('policy', () => {
   it('loads from disk and re-reads when the mtime changes', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-policy-'));
     const file = path.join(tmp, 'policy.json');
-    const watcher = new PolicyWatcher(file);
+    const watcher = new PolicyWatcher(file, undefined, sandboxedSources(tmp));
     expect(await watcher.current()).toMatchObject({ present: false, policy: null, managed: [], app: { allowQuit: true, users: [] } });
-    expect((await loadPolicy(file)).present).toBe(false);
+    expect((await loadPolicy(file, sandboxedSources(tmp))).present).toBe(false);
     fs.writeFileSync(file, JSON.stringify({ version: 1, managedBy: 'IT', settings: { maxInputLockMs: 5000 } }));
     fs.utimesSync(file, new Date(Date.now() - 10_000), new Date(Date.now() - 10_000));
     expect(await watcher.current()).toMatchObject({ present: true, managedBy: 'IT', managed: ['maxInputLockMs'] });
@@ -646,7 +655,7 @@ describe('guard status and attempt log', () => {
     const integration = new SystemIntegration({
       platform: 'linux',
       daemon: new DaemonClient({ socketPath: sock, timeoutMs: 1000 }),
-      policy: new PolicyWatcher(policyPath),
+      policy: new PolicyWatcher(policyPath, undefined, sandboxedSources(tmp)),
       resourcesDirs: [resources],
       homeDir: path.join(tmp, 'home'),
       appBin: '/opt/rpchat/current/rpchat',
@@ -707,7 +716,7 @@ describe('SystemIntegration.createPolicy', () => {
     const integration = new SystemIntegration({
       platform: 'linux',
       daemon: client,
-      policy: new PolicyWatcher(policyPath),
+      policy: new PolicyWatcher(policyPath, undefined, sandboxedSources(tmp)),
       resourcesDirs: [],
       homeDir: path.join(tmp, 'home'),
       appBin: '/opt/rpchat',
@@ -765,7 +774,7 @@ describe('SystemIntegration', () => {
     const integration = new SystemIntegration({
       platform: 'linux',
       daemon: new DaemonClient({ socketPath: path.join(tmp, 'none.sock'), timeoutMs: 300 }),
-      policy: new PolicyWatcher(path.join(tmp, 'policy.json')),
+      policy: new PolicyWatcher(path.join(tmp, 'policy.json'), undefined, sandboxedSources(tmp)),
       resourcesDirs: [path.join(tmp, 'nope'), resources],
       homeDir: path.join(tmp, 'home'),
       appBin: '/opt/rp chat/rpchat',
