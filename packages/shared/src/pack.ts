@@ -214,10 +214,12 @@ export interface LoadedCharacter {
 /**
  * One `lib` function as shipped in (or saved into) the pack. The file is
  * `characters/<id>/lib/<name>.ts`: an optional first-line `// <description>`
- * comment followed by exactly one function expression.
+ * comment followed by exactly one function expression — or by a module with
+ * helpers of its own and one exported function, which is the one the character
+ * calls (docs/spec/pack.md "Function library").
  */
 export interface CharacterLibraryEntry {
-  /** The function expression (everything after the description comment). */
+  /** Everything after the description comment: the function expression, or the module around it. */
   source: string;
   /** From the file's leading `// …` comment, when present. */
   description?: string;

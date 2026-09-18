@@ -215,6 +215,15 @@ describe('EditorService scripts (lib/<name>.ts)', () => {
     expect(p.characters[0]!.library.find((f) => f.name === 'pick')!.internal).toBeUndefined();
     p = await s.removeScript(key, mia.dir, 'pick');
 
+    // a file may keep helpers of its own beside the one function it exports
+    const withHelpers = 'const MARK = "!";\nfunction shout(t: string) { return t.toUpperCase() + MARK; }\nexport default (name: string) => shout(name);';
+    p = await s.saveScript(key, { dir: mia.dir, name: 'greet', source: withHelpers, description: 'greet someone' });
+    const greet = p.characters[0]!.library.find((f) => f.name === 'greet')!;
+    expect(greet).toMatchObject({ description: 'greet someone', source: withHelpers });
+    expect(greet.problem).toBeUndefined();
+    expect(p.validation).toMatchObject({ ok: true, warnings: [] });
+    p = await s.removeScript(key, mia.dir, 'greet');
+
     // a broken function is saved (the author is mid-edit) but reported the way the loader reports it
     p = await s.saveScript(key, { dir: mia.dir, name: 'half', source: 'async ( => 1' });
     const half = p.characters[0]!.library.find((f) => f.name === 'half')!;
@@ -247,6 +256,13 @@ describe('EditorService scripts (lib/<name>.ts)', () => {
     expect(broken?.message).toMatch(/does not parse/);
     expect(broken?.line).toBe(2);
     expect(broken?.lineText).toContain('return a +;');
+    // the module form passes the same check, and its problems are named against its own lines
+    expect(await s.checkScript('function shout(t: string) { return t + "!"; }\nexport default (t: string) => shout(t);', 'function')).toEqual([]);
+    const [twice] = await s.checkScript('export const a = () => 1;\nexport const b = () => 2;', 'function');
+    expect(twice?.message).toMatch(/exports more than one thing/);
+    const [unparsed] = await s.checkScript('const n = 1;\nexport default (t: string) => {', 'function');
+    expect(unparsed?.message).toMatch(/the file does not parse/);
+    expect(unparsed?.line).toBe(2);
     // the default kind still compiles a hook body
     expect(await s.checkScript('return 1;')).toEqual([]);
   });

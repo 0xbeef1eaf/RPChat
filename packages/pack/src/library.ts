@@ -1,14 +1,14 @@
 /**
  * The character's function library on disk (the `lib` global, `sdk.lib`): one file
  * per function, `characters/<id>/lib/<name>.ts`, holding an optional first-line
- * `// <description>` comment followed by exactly one function expression, verbatim
- * as `lib.register` received it. Pack authors ship functions here; what a character
- * registers itself is written here too (docs/spec/pack.md "Function library").
+ * `// <description>` comment followed by the function the character calls — a bare
+ * function expression, or a module with helpers of its own and exactly one export
+ * (`library-source.ts`) — verbatim as `lib.register` received it. Pack authors ship
+ * functions here; what a character registers itself is written here too
+ * (docs/spec/pack.md "Function library").
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { transformSync } from 'esbuild';
-import type { Message } from 'esbuild';
 import type { CharacterLibraryEntry } from '@rp/shared';
 import {
   LIB_DIR_NAME,
@@ -20,6 +20,7 @@ import {
   LIB_NAME_PATTERN,
   RpError,
 } from '@rp/shared';
+import { functionSourceProblem, isLibraryModule } from './library-source.js';
 import { joinRelative, normalizeRelativePath, resolveAssetPath } from './paths.js';
 import { writeFileAtomic } from './write-file.js';
 
@@ -49,81 +50,6 @@ export function libraryNameProblem(name: unknown): string | undefined {
   if (LIB_RESERVED_NAMES.has(name)) return `"${name}" is a reserved word and cannot be a function name`;
   if (LIB_STATIC_NAMES.has(name)) return `"${name}" is a method of the library itself (lib.${name}); choose another name`;
   return undefined;
-}
-
-/** `return await (<fn>)(input);` — how the sandbox serialises a function argument (docs/spec/sandbox.md §4). */
-const HANDLER_WRAPPER_RE = /^return await \(([\s\S]*)\)\(input\);$/;
-/** What a function expression looks like once esbuild has normalised it: comments gone, whitespace minimal, outer parentheses kept. */
-const FUNCTION_EXPRESSION_RE = /^\(?\s*(async\s+)?(function\b|\([\s\S]*?\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/;
-
-/**
- * The function expression behind what `lib.register` received: a function
- * argument arrives as the action body that calls it (see the sandbox
- * bootstrap); a string is taken as the expression itself.
- */
-export function unwrapFunctionSource(raw: string): string {
-  const text = raw.trim();
-  const wrapped = HANDLER_WRAPPER_RE.exec(text);
-  return (wrapped ? wrapped[1]! : text).trim();
-}
-
-/**
- * `source` with the comments in front of the function removed, so a `// note`
- * line above it does not stand in for the `async` behind it. Only the head is
- * scanned, where `//` and `/*` can only open a comment; comments further in
- * (inside the parameter list, in the body) are left alone. A source that is
- * nothing but comments gives an empty string.
- */
-export function stripLeadingComments(source: string): string {
-  let i = 0;
-  for (;;) {
-    while (i < source.length && /\s/.test(source[i]!)) i += 1;
-    if (source.startsWith('//', i)) {
-      const end = source.indexOf('\n', i + 2);
-      if (end < 0) return '';
-      i = end + 1;
-    } else if (source.startsWith('/*', i)) {
-      const end = source.indexOf('*/', i + 2);
-      if (end < 0) return '';
-      i = end + 2;
-    } else {
-      return source.slice(i);
-    }
-  }
-}
-
-/**
- * Check that `source` is exactly one function expression, using esbuild as the
- * parser (character code is never evaluated on the host). Returns the problem,
- * or undefined when the source is fine.
- */
-export function functionSourceProblem(source: string): string | undefined {
-  if (source.length === 0) return 'fn must be a function';
-  let normalised: string;
-  try {
-    // `minifyWhitespace` drops every comment: esbuild otherwise hoists the ones in front of the
-    // function to the top of its output, where they would hide the function from the shape check below.
-    normalised = transformSync(`(${source})`, { loader: 'ts', target: 'es2020', logLevel: 'silent', legalComments: 'none', minifyWhitespace: true }).code.trim();
-  } catch (err) {
-    return `fn does not parse: ${esbuildMessage(err)}`;
-  }
-  // esbuild ends every statement with `;`. One expression re-wrapped in parentheses still parses;
-  // a source that closed our parenthesis and smuggled in more statements no longer does.
-  const expression = normalised.endsWith(';') ? normalised.slice(0, -1) : normalised;
-  try {
-    transformSync(`(${expression})`, { loader: 'js', target: 'es2020', logLevel: 'silent', legalComments: 'none' });
-  } catch {
-    return 'fn must be a single function expression (arrow function or `async function`)';
-  }
-  if (!FUNCTION_EXPRESSION_RE.test(expression)) return 'fn must be a function expression (arrow function or `async function`), not a call or a value';
-  return undefined;
-}
-
-function esbuildMessage(err: unknown): string {
-  const errors = (err as { errors?: Message[] } | undefined)?.errors;
-  const first = errors?.[0];
-  if (first) return first.location ? `${first.text} (line ${first.location.line}, column ${first.location.column + 1})` : first.text;
-  return err instanceof Error ? err.message : String(err);
 }
 
 /* ------------------------------------------------------------ file format */
@@ -258,7 +184,8 @@ export async function readCharacterLibrary(rootAbs: string, charDir: string, opt
     const known = options.previous?.[name];
     const problem = known !== undefined && known.source === parsed.source ? undefined : functionSourceProblem(parsed.source);
     if (problem !== undefined) {
-      const skipped: LibraryFileProblem = { file, name, message: `not a single function expression: ${problem}`, source: parsed.source };
+      const shape = isLibraryModule(parsed.source) ? 'not one exported function' : 'not a single function expression';
+      const skipped: LibraryFileProblem = { file, name, message: `${shape}: ${problem}`, source: parsed.source };
       if (parsed.description !== undefined) skipped.description = parsed.description;
       if (parsed.internal === true) skipped.internal = true;
       out.skipped.push(skipped);

@@ -1,4 +1,13 @@
-import { functionSourceProblem, libraryNameProblem, removeLibraryFunction, stripLeadingComments, unwrapFunctionSource, writeLibraryFunction } from '@rp/pack';
+import {
+  exportedFunctionSource,
+  functionSourceProblem,
+  libraryNameProblem,
+  libraryValueExpression,
+  removeLibraryFunction,
+  stripLeadingComments,
+  unwrapFunctionSource,
+  writeLibraryFunction,
+} from '@rp/pack';
 import type { CharacterLibraryEntry, LibFunction, LibFunctionInfo, LoadedCharacter, LoadedPack } from '@rp/shared';
 import { LIB_MAX_FUNCTIONS, LIB_MAX_TOTAL_BYTES, RpError } from '@rp/shared';
 
@@ -36,10 +45,11 @@ export interface LibraryPacks {
  * its matching `)`, whitespace collapsed (`async (mood: string) => …` gives
  * `mood: string`); a parenthesis-free arrow (`x => …`) gives its one parameter.
  * Comments in front of the function are skipped, so one holding a `(` or a `=>`
- * cannot pass itself off as the parameter list.
+ * cannot pass itself off as the parameter list. A source written as a module is
+ * read from its exported function, not from the first helper in the file.
  */
 export function functionParams(source: string): string {
-  const text = stripLeadingComments(source).trim();
+  const text = stripLeadingComments(exportedFunctionSource(source)).trim();
   const open = text.indexOf('(');
   const arrow = text.indexOf('=>');
   if (open < 0 || (arrow >= 0 && arrow < open)) {
@@ -82,10 +92,14 @@ export function functionParams(source: string): string {
  * sandbox refuses them to the action body of an LLM-authored run (`trigger.kind === 'llm'`)
  * while the library's own functions keep calling each other. `<library>` in the prompt
  * lists the rest (`prompt.ts`, `visibleLibrary`).
+ *
+ * A function written as a module (helpers in the file, one export) contributes an arrow
+ * that runs those statements and hands back the export — `libraryValueExpression` in
+ * `@rp/pack` builds it, and the helpers stay private to that one entry.
  */
 export function buildPrelude(functions: LibFunction[]): string {
   if (functions.length === 0) return EMPTY_PRELUDE;
-  const entries = functions.map((f) => `  ${JSON.stringify(f.name)}: (${f.source}),`).join('\n');
+  const entries = functions.map((f) => `  ${JSON.stringify(f.name)}: ${libraryValueExpression(f.source)},`).join('\n');
   const internal = functions.filter((f) => f.internal === true).map((f) => f.name);
   const hidden = internal.length > 0 ? `, ${JSON.stringify(internal)}` : '';
   return `const lib = __rp_lib({\n${entries}\n}${hidden});`;

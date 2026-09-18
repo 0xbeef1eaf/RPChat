@@ -193,6 +193,35 @@ A function may use \`sdk\` and its sibling \`lib\` functions but closes over
 nothing else. Limits: 50 files, 128 KiB in total (no per-file cap).
 This README and anything that is not a \`.ts\` file are ignored.
 
+A file may also be written as a module: helpers, constants and types of its
+own, and one \`export\` — the function the character calls. Everything else in
+the file is private to it, so a long function can be broken up without
+spending a library name on each piece:
+
+\`\`\`ts
+// show a picture for a mood
+type Mood = "happy" | "sad";
+
+function query(mood: Mood) {
+  return { anyTags: [mood], kind: "image" } as const;
+}
+
+export default async (mood: Mood) => {
+  const pic = (await sdk.pack.findAssets(query(mood)))[0];
+  if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
+  return Boolean(pic);
+};
+\`\`\`
+
+\`export default <function>\`, \`export const <name> = <function>\` and
+\`export function <name>() {…}\` all mark the one function; the file name is
+still what the character calls it, whatever the export is named. The other
+statements run once at the start of every run, before the code that calls it,
+so keep them cheap and free of side effects — and a handler such a function
+hands to \`sdk.events.on\` is stored as its own source alone, so let it call
+\`lib.<name>(...)\` rather than reach for a helper beside it. There is no
+\`import\`: a file cannot pull in another.
+
 Start the first line with \`// @internal\` (optionally followed by a
 description) to keep a function as your own plumbing:
 

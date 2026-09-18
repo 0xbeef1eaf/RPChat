@@ -322,6 +322,44 @@ describe('validatePack / loadPack problems', () => {
     expect(Object.keys(pack.character.library)).toEqual(['good']);
   });
 
+  it('reads a library file that keeps helpers beside its one exported function', async () => {
+    const withHelpers = [
+      'const MARK = "!";',
+      '',
+      '/** not the description: that is the first line of the file */',
+      'function shout(text: string): string {',
+      '  return `${text.toUpperCase()}${MARK}`;',
+      '}',
+      '',
+      'export default async (name: string) => shout(`hi ${name}`);',
+    ].join('\n');
+    const dir = await packWith({
+      ...minimalPackFiles(),
+      'characters/a/lib/greet.ts': `// greet someone loudly\n${withHelpers}\n`,
+      'characters/a/lib/named.ts': 'const n = 1;\nexport function add(x: number) { return x + n; }\n',
+      'characters/a/lib/typed.ts': 'export type Mood = "up";\nexport const mood = (m: Mood) => m;\n',
+      // the same file without the export: which of the two the character would call is not said
+      'characters/a/lib/unmarked.ts': 'function shout(text: string) { return text; }\nasync (name: string) => shout(name)\n',
+      'characters/a/lib/twice.ts': 'export const a = () => 1;\nexport const b = () => 2;\n',
+      'characters/a/lib/value.ts': 'export default 42;\n',
+    });
+    const result = await validatePack(dir);
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([
+      expect.stringMatching(/^warning: characters\/a\/lib\/twice\.ts: not one exported function: the file exports more than one thing/),
+      expect.stringMatching(/^warning: characters\/a\/lib\/unmarked\.ts: not a single function expression: the source is more than one statement: export the function to call/),
+      expect.stringMatching(/^warning: characters\/a\/lib\/value\.ts: not one exported function: the export must be a function/),
+    ]);
+    const lib = (await loadPack(dir)).character.library;
+    expect(Object.keys(lib)).toEqual(['greet', 'named', 'typed']);
+    // the file is kept whole — helpers included — and its first line is still the description
+    expect(lib['greet']).toMatchObject({ description: 'greet someone loudly', source: withHelpers, bytes: Buffer.byteLength(withHelpers) });
+    // the file name is the name the character calls, whatever the export is called
+    expect(lib['named']!.source).toContain('export function add');
+    expect(lib['typed']!.source).toContain('export type Mood');
+    expect(lib['mood']).toBeUndefined();
+  });
+
   it('enforces the library caps as problems', async () => {
     // One file has no size cap of its own, however large.
     const big = `() => "${'b'.repeat(20 * 1024)}"`;

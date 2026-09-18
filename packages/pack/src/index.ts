@@ -68,17 +68,25 @@ export {
   LIB_RESERVED_NAMES,
   LIB_STATIC_NAMES,
   formatLibraryFile,
-  functionSourceProblem,
   libraryFilePath,
   libraryNameProblem,
   parseLibraryFile,
   readCharacterLibrary,
   removeLibraryFunction,
-  stripLeadingComments,
-  unwrapFunctionSource,
   writeLibraryFunction,
 } from './library.js';
 export type { CharacterLibraryScan, LibraryFileProblem, ReadLibraryOptions } from './library.js';
+
+export {
+  exportedFunctionSource,
+  functionSourceProblem,
+  isLibraryModule,
+  libraryFunctionShape,
+  libraryValueExpression,
+  stripLeadingComments,
+  unwrapFunctionSource,
+} from './library-source.js';
+export type { LibraryFunctionShape, LibraryModule } from './library-source.js';
 
 export {
   addAssetFile,

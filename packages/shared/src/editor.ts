@@ -24,12 +24,12 @@ export interface EditorScript {
   description?: string;
   /** Marked `// @internal`: the character's other functions and its behaviour hooks may call it, the character itself may not. */
   internal?: boolean;
-  /** The function expression (without the description comment). */
+  /** The file without its description comment: one function expression, or a module exporting one. */
   source: string;
   bytes: number;
   /** Path relative to the pack root, e.g. `characters/luna/lib/cheer.ts`. */
   file: string;
-  /** Why the loader skips this file (not a single function expression, bad name); absent when it loads. */
+  /** Why the loader skips this file (no single function to call, bad name); absent when it loads. */
   problem?: string;
 }
 
@@ -97,7 +97,7 @@ export interface SaveScriptInput {
   /** Character directory relative to the pack root. */
   dir: string;
   name: string;
-  /** The function expression (arrow or `async function`); saved as is, so a broken one is reported rather than refused. */
+  /** The function expression (arrow or `async function`), or a module exporting one; saved as is, so a broken one is reported rather than refused. */
   source: string;
   description?: string;
   /** Write it as an internal helper (`// @internal` first line): hidden from the character, callable from its other functions and hooks. */
@@ -106,7 +106,7 @@ export interface SaveScriptInput {
   previousName?: string;
 }
 
-/** Which compiler check `editor.checkScript` runs: a hook script (an async function body) or a library function (one function expression). */
+/** Which compiler check `editor.checkScript` runs: a hook script (an async function body) or a library function (one function for the character to call). */
 export type ScriptKind = 'behaviour' | 'function';
 
 /**

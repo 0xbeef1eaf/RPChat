@@ -15,11 +15,11 @@ export const LIB_DIR_NAME = 'lib';
 /** Extension of a library file (`characters/<id>/lib/<name>.ts`). */
 export const LIB_FILE_EXTENSION = '.ts';
 
-/** One library function as the service reports it. `source` is a single function expression (arrow or `function`). */
+/** One library function as the service reports it. `source` is one function expression (arrow or `function`), or a module exporting one. */
 export interface LibFunction {
   /** Identifier the function is called by: `lib.<name>(...)`. */
   name: string;
-  /** The function expression as the character wrote it (already plain JavaScript when it came from an action). */
+  /** The source as the character or the author wrote it — the function, with any helpers of its file (already plain JavaScript when it came from an action). */
   source: string;
   /** What the function is for, shown in the prompt's `<library>` section. */
   description?: string;
