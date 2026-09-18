@@ -3,6 +3,7 @@ import type { PolicyFile, SystemIntegrationStatus } from '@rp/shared';
 import { GUARD_SHELLS, functionKey, isAlwaysAvailableModule, parseFunctionKey } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { prettyJson } from '../../lib/format';
+import { CodeEditor } from '../common/CodeEditor';
 import type { PackSource } from '@rp/shared';
 import type { PolicyDraft, PolicySettingSpec, PolicyValue } from '../../lib/policy';
 import {
@@ -261,6 +262,8 @@ export function CreatePolicyDialog({
   const [writing, setWriting] = useState(false);
   const [refused, setRefused] = useState<string[] | null>(null);
   const [pasted, setPasted] = useState('');
+  /** The paste box is only built once its disclosure is open; a hidden editor is wasted work. */
+  const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteError, setPasteError] = useState<string | null>(null);
 
   const reset = useCallback(async () => {
@@ -682,13 +685,15 @@ export function CreatePolicyDialog({
               </button>
             </div>
             <pre className="code policy-json">{prettyJson(file)}</pre>
-            <details>
+            <details onToggle={(e) => setPasteOpen(e.currentTarget.open)}>
               <summary className="small">Load a policy from JSON</summary>
               <div className="stack" style={{ gap: 6, marginTop: 8 }}>
                 <p className="field-hint" style={{ margin: 0 }}>
                   Paste a policy you prepared elsewhere to fill the form in from it. Keys this app does not understand are dropped.
                 </p>
-                <textarea className="code" rows={8} spellCheck={false} value={pasted} disabled={busy} aria-label="Policy JSON to load" onChange={(e) => setPasted(e.target.value)} />
+                {pasteOpen ? (
+                  <CodeEditor language="json" path="policy-paste" value={pasted} onChange={setPasted} readOnly={busy} height={180} ariaLabel="Policy JSON to load" />
+                ) : null}
                 {pasteError ? <span className="field-hint msg-error">{pasteError}</span> : null}
                 <div>
                   <button type="button" className="btn btn-sm" disabled={busy || pasted.trim().length === 0} onClick={loadPasted}>

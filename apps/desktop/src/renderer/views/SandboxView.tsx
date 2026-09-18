@@ -1,24 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SandboxRunRequest, SandboxRunResult } from '@rp/shared';
 import { api, errorMessage } from '../api';
+import { CodeEditor } from '../components/common/CodeEditor';
 import { compactJson, formatDuration, prettyJson } from '../lib/format';
 import { newId } from '../lib/ids';
-import {
-  DEFAULT_SNIPPET,
-  errorLocation,
-  indentSelection,
-  lineCount,
-  loadInput,
-  loadLastCharacter,
-  loadSnippet,
-  newlineKeepingIndent,
-  parseInputJson,
-  saveInput,
-  saveLastCharacter,
-  saveSnippet,
-} from '../lib/sandbox';
-import type { TextEdit } from '../lib/sandbox';
+import { DEFAULT_SNIPPET, errorLocation, lineCount, loadInput, loadLastCharacter, loadSnippet, parseInputJson, saveInput, saveLastCharacter, saveSnippet } from '../lib/sandbox';
 import { openSession, toast } from '../store/actions';
 import { useAppState } from '../store/store';
 
@@ -43,9 +29,6 @@ export function SandboxView() {
   /** The script and input being edited, tied to the character they belong to (so a switch never saves one character's code under another's key). */
   const [doc, setDoc] = useState<SandboxDoc | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
-  const [pendingSelection, setPendingSelection] = useState<TextEdit | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const gutterRef = useRef<HTMLPreElement>(null);
 
   const character = useMemo(() => characters.find((c) => c.ref === characterRef), [characters, characterRef]);
   const code = doc?.code ?? '';
@@ -77,13 +60,6 @@ export function SandboxView() {
     }, SAVE_DELAY_MS);
     return () => window.clearTimeout(handle);
   }, [doc]);
-
-  // Editor edits that move the caret (Tab, Enter) apply once React has rendered the new value.
-  useLayoutEffect(() => {
-    if (!pendingSelection || !textareaRef.current) return;
-    textareaRef.current.setSelectionRange(pendingSelection.selectionStart, pendingSelection.selectionEnd);
-    setPendingSelection(null);
-  }, [pendingSelection]);
 
   const parsedInput = useMemo(() => parseInputJson(inputText), [inputText]);
   const running = phase.kind === 'running';
@@ -120,33 +96,6 @@ export function SandboxView() {
       toast('error', `Could not stop the script: ${errorMessage(err)}`);
     }
   }, [phase]);
-
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    const el = e.currentTarget;
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      void run();
-      return;
-    }
-    if (e.altKey || e.ctrlKey || e.metaKey) return;
-    if (e.key === 'Tab') {
-      e.preventDefault();
-      const edit = indentSelection(el.value, el.selectionStart, el.selectionEnd, e.shiftKey);
-      setCode(edit.value);
-      setPendingSelection(edit);
-    } else if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      const edit = newlineKeepingIndent(el.value, el.selectionStart, el.selectionEnd);
-      setCode(edit.value);
-      setPendingSelection(edit);
-    }
-  };
-
-  const syncGutter = () => {
-    if (gutterRef.current && textareaRef.current) gutterRef.current.scrollTop = textareaRef.current.scrollTop;
-  };
-
-  const lineNumbers = useMemo(() => Array.from({ length: lineCount(code) }, (_, i) => i + 1).join('\n'), [code]);
 
   return (
     <div className="view">
@@ -190,25 +139,7 @@ export function SandboxView() {
 
       <div className="sandbox-body">
         <div className="sandbox-editor-column">
-          <div className="sandbox-editor">
-            <pre className="sandbox-gutter" ref={gutterRef} aria-hidden="true">
-              {lineNumbers}
-            </pre>
-            <textarea
-              ref={textareaRef}
-              className="code"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              onKeyDown={onKeyDown}
-              onScroll={syncGutter}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              wrap="off"
-              aria-label="Script"
-              disabled={!doc}
-            />
-          </div>
+          <CodeEditor language="typescript" path="sandbox" value={code} onChange={setCode} onSubmit={() => void run()} readOnly={!doc} height="56vh" ariaLabel="Script" />
           <div className="row" style={{ marginTop: 8 }}>
             <span className="muted small grow">
               {lineCount(code)} line{lineCount(code) === 1 ? '' : 's'} · TypeScript
@@ -218,17 +149,20 @@ export function SandboxView() {
             </button>
           </div>
           <div className="field" style={{ marginTop: 12 }}>
-            <label htmlFor="sandbox-input">
+            <span className="field-label">
               Input (JSON, optional) — bound as <code>input</code>
-            </label>
-            <textarea
-              id="sandbox-input"
-              className={`code sandbox-input${parsedInput.ok ? '' : ' invalid'}`}
+            </span>
+            <CodeEditor
+              language="json"
+              path="sandbox-input"
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              onChange={setInputText}
+              onSubmit={() => void run()}
+              readOnly={!doc}
+              invalid={!parsedInput.ok}
+              height={110}
+              ariaLabel="Input JSON"
               placeholder='{"greeting": "hi"}'
-              spellCheck={false}
-              disabled={!doc}
             />
             {!parsedInput.ok ? <span className="field-hint sandbox-invalid">Not valid JSON: {parsedInput.error}</span> : null}
           </div>

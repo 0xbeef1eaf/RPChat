@@ -44,11 +44,38 @@ Main UI (React, one small store with `useSyncExternalStore` or plain context; no
 - Chat text size: `settings.chatZoom` (1 = 100%, clamped to `CHAT_ZOOM_MIN`..`CHAT_ZOOM_MAX` in `mergeSettings`) scales the transcript and the composer, and widens the reading column with them (`--chat-zoom` / `--chat-column` on `.chat`); the header and drawers keep the base size. Set from the chat header's `A− 100% A+` group, <kbd>Ctrl</kbd> `+`/`-`/`0` in the chat, or Settings → Appearance.
 - Prompt fallback modals: `PermissionModal` / `UiPromptModal` render the same `components/prompt/` views inside the main window, and are reached only when no prompt window could be opened (`permissions.onRequest` / `ui.onPrompt`).
 - Action log: table of audit entries with filter by session.
-- Sandbox (`views/SandboxView.tsx`, sidebar entry **Sandbox**, <kbd>Ctrl</kbd>+<kbd>7</kbd>): try the SDK by hand. A "Run as" picker over the installed characters, a script editor (a plain `<textarea>` with a line-number gutter: <kbd>Tab</kbd>/<kbd>Shift</kbd>+<kbd>Tab</kbd> indent and outdent, <kbd>Enter</kbd> keeps the indentation, <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Enter</kbd> runs; no editor dependency), an optional JSON **Input** field, Run/Stop, and an output panel with the ok/error badge and duration, the return value as pretty JSON, the error with its code, mapped line/column, code frame and stack, the console lines, the SDK calls made (module.method, arguments, outcome, duration) and the compiled JavaScript; **Open chat** jumps to the session the script ran in. The script is the body of an async function compiled and run like one of the character's own actions (`sdk`, `lib`, `input`, `console` in scope, `return` gives the value; same surface, permissions, limits and prompts; queued behind a running turn in the character's session) — see `docs/spec/core.md` **SandboxService**. `run` goes through `IpcApi.sandbox.run({ packId, characterId, code, input?, runId })` → `SandboxRunResult { runId, sessionId, result: CodeRunResult }`, Stop through `sandbox.cancel(runId)`. The last snippet and input are remembered per character in `localStorage` (`rp.sandbox.snippet:<ref>` / `rp.sandbox.input:<ref>`, plus `rp.sandbox.character`), every access wrapped so a blocked storage only forgets. Pure helpers (indent/outdent, newline, JSON parsing, storage, error location) live in `lib/sandbox.ts` with tests.
+- Sandbox (`views/SandboxView.tsx`, sidebar entry **Sandbox**, <kbd>Ctrl</kbd>+<kbd>7</kbd>): try the SDK by hand. A "Run as" picker over the installed characters, a script editor (`components/common/CodeEditor.tsx`: Monaco with the character SDK's own typings, so completion, hovers and type errors are the ones `sdk` really has; <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Enter</kbd> runs), an optional JSON **Input** field (the same box in JSON mode), Run/Stop, and an output panel with the ok/error badge and duration, the return value as pretty JSON, the error with its code, mapped line/column, code frame and stack, the console lines, the SDK calls made (module.method, arguments, outcome, duration) and the compiled JavaScript; **Open chat** jumps to the session the script ran in. The script is the body of an async function compiled and run like one of the character's own actions (`sdk`, `lib`, `input`, `console` in scope, `return` gives the value; same surface, permissions, limits and prompts; queued behind a running turn in the character's session) — see `docs/spec/core.md` **SandboxService**. `run` goes through `IpcApi.sandbox.run({ packId, characterId, code, input?, runId })` → `SandboxRunResult { runId, sessionId, result: CodeRunResult }`, Stop through `sandbox.cancel(runId)`. The last snippet and input are remembered per character in `localStorage` (`rp.sandbox.snippet:<ref>` / `rp.sandbox.input:<ref>`, plus `rp.sandbox.character`), every access wrapped so a blocked storage only forgets. Pure helpers (line count, JSON parsing, storage, error location) live in `lib/sandbox.ts` with tests.
 
 Prompt window (`prompt.html`): one question per window, opened by main, centred, `alwaysOnTop`, shown and focused on `ready-to-show`. The page pulls its question with `prompts.pending()` (keyed by the sender's webContents, so it cannot miss a push that arrived before React mounted) and answers on `permissions.respond` / `ui.respondPrompt`; main closes the window when the question settles (answered, timed out, or rejected on quit), and closing the window instead answers it with its fallback (deny / no answer). Closing the main window no longer cancels questions that have a window of their own.
 
 Media window: full-viewport React page listening to `media.onCommand`; renders items (image with caption + fade; `<video>`/`<audio>` with autoplay, volume, loop; reports `ended`/`error` via `media.report`); `close`/`close-all` remove items; when no items remain the page reports `closed` for each and main hides the window. Click on an image closes it.
+
+### Code boxes (`components/common/CodeEditor.tsx`)
+
+Every box in the app that holds code is this component: the Sandbox script and its JSON input,
+a library function (Pack editor → Scripts), each behaviour hook (Pack editor → Character), and
+the two policy JSON boxes under Settings → System. It is Monaco, configured once in
+`lib/monaco.ts`:
+
+- **The typings are the character's own.** `capabilities.typings()` — the generated `sdk.d.ts`
+  the model is shown and the SDK reference tab prints — is loaded as an extra lib, so completion,
+  hovers and errors describe the modules *this* install has, plugins included, and follow the
+  registry when it changes. `input` is declared alongside it (the host binds it, so no generated
+  typing mentions it).
+- **The code is a fragment.** A script is the body of an async function and a library file is one
+  function expression, so `return` outside a function and top-level `await` are not reported, and
+  suggestion diagnostics are off (the value a top-level `return` uses reads as unused).
+  `moduleDetection: force` makes every box its own module, so two hooks may both declare `const
+  session` without either being a redeclaration.
+- **Workers.** The language services run in web workers and the renderer is a `file://` page:
+  Chromium refuses a `blob:`/`data:` worker under the app's CSP (`script-src 'self'`) but accepts
+  a sibling `file://` script, which is what Vite's `?worker` import emits. Monaco and those
+  workers are several megabytes, so the whole module is behind an `import()` and nothing is
+  fetched until a code box is on screen. If that import fails the component falls back to the
+  plain `textarea` these boxes used to be.
+- The headful smoke run proves all of this in the built app: `verifyCodeEditor` (dev-mode.ts)
+  opens the Sandbox tab and asks Monaco's TypeScript worker what follows `sdk.`, which only
+  answers if the chunk loaded, the worker started and the typings arrived.
 
 ### Media limits and the queue
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BehaviourHook, BehaviourTemplate, CharacterDefinition, EditorCharacter, ExampleDialogueTurn, ScriptProblem } from '@rp/shared';
 import { api } from '../../api';
+import { CodeEditor } from '../../components/common/CodeEditor';
 import { Markdown } from '../../components/common/Markdown';
 import { isValidCharacterId, wordCount } from '../../lib/editor';
 import { reportError, toast } from '../../store/actions';
@@ -285,13 +286,18 @@ export function CharacterSection({ dir }: CharacterSectionProps) {
                 </div>
                 {enabled ? (
                   <>
-                    <textarea
-                      className={`code${problem ? ' invalid' : ''}`}
-                      value={draft.behaviours[hook] ?? ''}
-                      spellCheck={false}
-                      onChange={(e) => setHook(hook, e.target.value)}
-                      style={{ marginTop: 8 }}
-                    />
+                    <div style={{ marginTop: 8 }}>
+                      <CodeEditor
+                        language="typescript"
+                        path={`hook-${hook}`}
+                        value={draft.behaviours[hook] ?? ''}
+                        onChange={(next) => setHook(hook, next)}
+                        invalid={Boolean(problem)}
+                        problems={problem ? [problem] : undefined}
+                        height={220}
+                        ariaLabel={`${label} script`}
+                      />
+                    </div>
                     {problem ? (
                       <div className="script-problem">
                         <strong>{problem.line !== undefined ? `Line ${problem.line}${problem.column !== undefined ? `, column ${problem.column}` : ''}: ` : ''}</strong>

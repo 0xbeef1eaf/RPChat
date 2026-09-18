@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ChainAuthorStatus, PolicyFile, SystemIntegrationStatus } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { formatDateTime, prettyJson } from '../../lib/format';
+import { CodeEditor } from '../common/CodeEditor';
 import { toast } from '../../store/actions';
 import { Modal } from '../common/Modal';
 import { QrCode } from '../common/QrCode';
@@ -329,7 +330,7 @@ function PublishDialog({ onClose }: { onClose(): void }) {
           <span className="field-hint">
             Paste the policy JSON — the <em>Review</em> tab of the policy form produces exactly this — and it becomes the next link, hash-linked to the last one you signed.
           </span>
-          <textarea className="code" rows={6} spellCheck={false} aria-label="Policy JSON to sign" value={policyText} disabled={busy} onChange={(e) => setPolicyText(e.target.value)} />
+          <CodeEditor language="json" path="policy-sign" value={policyText} onChange={setPolicyText} readOnly={busy} height={150} ariaLabel="Policy JSON to sign" />
           <div className="row" style={{ gap: 8, marginTop: 6 }}>
             <button
               type="button"

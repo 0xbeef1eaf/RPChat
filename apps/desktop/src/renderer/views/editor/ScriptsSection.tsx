@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EditorScript, ScriptProblem } from '@rp/shared';
 import { api } from '../../api';
+import { CodeEditor } from '../../components/common/CodeEditor';
 import { ConfirmDialog } from '../../components/common/Modal';
 import { reportError, toast } from '../../store/actions';
 import { useDraft, useEditor } from './context';
@@ -224,15 +225,22 @@ export function ScriptsSection() {
           </div>
           <div className="field" style={{ marginTop: 12 }}>
             <div className="row">
-              <label htmlFor="sc-source" className="field-label grow">
-                Function
-              </label>
+              <span className="field-label grow">Function</span>
               <span className="muted small">{bytes} bytes</span>
               <button type="button" className="btn btn-sm" onClick={() => setSource(draft.source.trim() ? `${draft.source.trimEnd()}\n\n${template}` : template)} disabled={!template}>
                 Insert template
               </button>
             </div>
-            <textarea id="sc-source" className={`code${problem || current?.problem ? ' invalid' : ''}`} value={draft.source} spellCheck={false} onChange={(e) => setSource(e.target.value)} style={{ minHeight: 260 }} />
+            <CodeEditor
+              language="typescript"
+              path={`lib-${draft.previousName ?? 'new'}`}
+              value={draft.source}
+              onChange={setSource}
+              invalid={Boolean(problem || current?.problem)}
+              problems={problem ? [problem] : undefined}
+              height={320}
+              ariaLabel="Function source"
+            />
             {problem ? (
               <div className="script-problem">
                 <strong>{problem.line !== undefined ? `Line ${problem.line}${problem.column !== undefined ? `, column ${problem.column}` : ''}: ` : ''}</strong>

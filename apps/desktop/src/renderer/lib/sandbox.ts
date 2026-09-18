@@ -1,4 +1,4 @@
-/** Pure helpers behind the Sandbox tab (editor keystrokes, the `input` field, the remembered snippet). */
+/** Pure helpers behind the Sandbox tab (the `input` field, the remembered snippet, error positions). */
 import type { Json, SerializedError } from '@rp/shared';
 
 export const DEFAULT_SNIPPET = `// Runs as the selected character, exactly like one of its actions.
@@ -6,62 +6,6 @@ const images = await sdk.pack.findAssets({ kind: "image", limit: 3 });
 console.log("found", images.length, "image(s)");
 return images.map((a) => a.path);
 `;
-
-export const INDENT = '  ';
-
-export interface TextEdit {
-  value: string;
-  selectionStart: number;
-  selectionEnd: number;
-}
-
-/**
- * What Tab does in the editor: with no selection it inserts two spaces at the caret; with a
- * selection it indents every line the selection touches. `outdent` (Shift+Tab) removes up to
- * two leading spaces from those lines instead. The returned selection keeps covering the same text.
- */
-export function indentSelection(value: string, selectionStart: number, selectionEnd: number, outdent = false): TextEdit {
-  const start = Math.max(0, Math.min(selectionStart, selectionEnd));
-  const end = Math.min(value.length, Math.max(selectionStart, selectionEnd));
-  if (!outdent && start === end) {
-    return { value: `${value.slice(0, start)}${INDENT}${value.slice(end)}`, selectionStart: start + INDENT.length, selectionEnd: start + INDENT.length };
-  }
-  const lineStart = value.lastIndexOf('\n', start - 1) + 1;
-  const afterEnd = value.indexOf('\n', end === start ? end : end - 1);
-  const lineEnd = afterEnd === -1 ? value.length : afterEnd;
-  const block = value.slice(lineStart, lineEnd);
-  let firstDelta = 0;
-  let totalDelta = 0;
-  const lines = block.split('\n').map((line, i) => {
-    let next: string;
-    if (outdent) {
-      const removed = line.startsWith(INDENT) ? INDENT.length : line.startsWith(' ') ? 1 : 0;
-      next = line.slice(removed);
-      if (i === 0) firstDelta = -removed;
-      totalDelta -= removed;
-    } else {
-      next = `${INDENT}${line}`;
-      if (i === 0) firstDelta = INDENT.length;
-      totalDelta += INDENT.length;
-    }
-    return next;
-  });
-  const nextValue = `${value.slice(0, lineStart)}${lines.join('\n')}${value.slice(lineEnd)}`;
-  const nextStart = Math.max(lineStart, start + firstDelta);
-  const nextEnd = Math.max(nextStart, end + totalDelta);
-  return { value: nextValue, selectionStart: nextStart, selectionEnd: nextEnd };
-}
-
-/** Enter keeps the current line's indentation on the new line. */
-export function newlineKeepingIndent(value: string, selectionStart: number, selectionEnd: number): TextEdit {
-  const start = Math.min(selectionStart, selectionEnd);
-  const end = Math.max(selectionStart, selectionEnd);
-  const lineStart = value.lastIndexOf('\n', start - 1) + 1;
-  const indent = /^[ \t]*/.exec(value.slice(lineStart, start))?.[0] ?? '';
-  const inserted = `\n${indent}`;
-  const caret = start + inserted.length;
-  return { value: `${value.slice(0, start)}${inserted}${value.slice(end)}`, selectionStart: caret, selectionEnd: caret };
-}
 
 export function lineCount(text: string): number {
   let n = 1;

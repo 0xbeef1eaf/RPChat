@@ -78,8 +78,10 @@ everything  <-  desktop                   (desktop wires core + sandbox + host c
 
 Tooling: pnpm workspaces, TypeScript 5.9 (ESM, `NodeNext`), vitest 3, zod 4,
 esbuild (transpile only), quickjs-emscripten 0.32, Electron 44 + electron-vite
-5 + React 19, fflate for zip. No native Node modules anywhere (the sandbox is
-wasm), so no `electron-rebuild` step is needed.
+5 + React 19, fflate for zip, Monaco 0.56 for the app's code boxes (loaded on
+demand, its language workers served as `file://` chunks — see
+`apps/desktop/src/renderer/lib/monaco.ts`). No native Node modules anywhere
+(the sandbox is wasm), so no `electron-rebuild` step is needed.
 
 Every package: `src/index.ts` public entry, `pnpm build` = `tsc -p tsconfig.json`
 to `dist/`, `pnpm test` = vitest, `pnpm typecheck` = `tsc --noEmit`.
