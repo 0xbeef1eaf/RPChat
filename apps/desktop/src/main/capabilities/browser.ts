@@ -6,7 +6,8 @@
  * JavaScript injection and history access are switchable in Settings → Browser
  * (`settings.browser.allowBlocking` / `allowEval` / `allowHistory`). A block without durationMs lasts
  * until it is lifted, and names either the pages that may not open (a denylist, the default) or the
- * only ones that may (`{ allow }`) — top-level pages either way, never the assets one loads.
+ * only ones that may (`{ allow }`) — top-level pages either way, never the assets one loads. A new
+ * allowlist replaces the one in place (`replacedAllowlist` names it).
  */
 import { randomUUID } from 'node:crypto';
 import { shell } from 'electron';
@@ -271,7 +272,9 @@ export class BrowserHandler implements CapabilityHandler {
     const id = `blk-${randomUUID().slice(0, 8)}`;
     const by = this.deps.characterName ? this.deps.characterName(context) : context.characterId;
     const result = record(await this.bridged('rules.block', { id, mode, patterns, ...(expiresAt ? { expiresAt } : {}), by, ...(redirect ? { redirect } : {}), ...(reason ? { reason } : {}) }));
-    return { id, mode, expiresAt, patterns, ...(redirect ? { redirect } : {}), redirectedTabs: result['redirectedTabs'] ?? 0 };
+    // `replacedAllowlist` names the allowlist this one lifted, so the character can say what it did to the last.
+    const replaced = typeof result['replacedAllowlist'] === 'string' ? result['replacedAllowlist'] : undefined;
+    return { id, mode, expiresAt, patterns, ...(redirect ? { redirect } : {}), ...(replaced ? { replacedAllowlist: replaced } : {}), redirectedTabs: result['redirectedTabs'] ?? 0 };
   }
 
   // ---- image effects -----------------------------------------------------------------------

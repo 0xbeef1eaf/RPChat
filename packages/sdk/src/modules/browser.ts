@@ -124,7 +124,8 @@ interface BrowserApi {
    * "*.example.com" or "example.com/path*", and name either the pages to keep shut (an array, or { deny })
    * or — with { allow } — the only pages that may open, everything else being shut. Either way only the page
    * the user opens is checked, never what it loads: allowing "google.com" allows every image, script and
-   * frame google.com pulls in. Only one allowlist can be in place at a time (lift it to set another).
+   * frame google.com pulls in. Only one allowlist can be in place at a time: setting one lifts the last,
+   * whose id comes back as replacedAllowlist, so a second call widens or narrows rather than adding.
    * Blocked navigations land on a page that names you and the end time (or on redirect); tabs already there are
    * moved. Without durationMs the block stays until unblock()/clearBlocks() or the user clears it in
    * Settings → Browser; with it, expiresAt says when it lifts. The app's own pages and browser pages can never
@@ -135,7 +136,7 @@ interface BrowserApi {
   block(
     patterns: string[] | { allow: string[] } | { deny: string[] },
     options?: { durationMs?: number; redirect?: string; reason?: string },
-  ): Promise<{ id: string; mode: "deny" | "allow"; expiresAt: string | null; patterns: string[] }>;
+  ): Promise<{ id: string; mode: "deny" | "allow"; expiresAt: string | null; patterns: string[]; replacedAllowlist?: string }>;
   /** Lift one block early. */
   unblock(id: string): Promise<{ removed: boolean }>;
   /** Blocks currently in place. */
@@ -189,7 +190,7 @@ interface BrowserApi {
 - Read before you act: \`read()\` for the text, \`query()\` for the links/buttons/fields you need, then \`click()\` / \`type()\`. Keep to one page and a couple of interactions per action; return what you learned, not whole pages.
 - Clicks and typing land in the user's real browser session (logged in accounts, forms). Do not submit forms or buy, post or send anything without the user asking for it in this conversation.
 - Internal pages (chrome://, the web store) cannot be read or controlled. \`browser-navigated\` (sdk.events) fires when a tab finishes loading a page.
-- \`block()\` keeps pages from opening for a while — a denylist (\`["*.social.test"]\`) or an allowlist (\`{ allow: ["wikipedia.org"] }\`, which shuts everything else; only one at a time). It judges the page the user opens, not what that page loads. Say so when you use it and lift it with \`unblock()\` when asked. \`imageEffect()\` styles or swaps a page's pictures until navigation. \`setHomePage()\` changes what new tabs open. Bookmarks and history are the user's own — read them for what they asked, do not recite them. \`eval()\` runs code in a page: prefer the fixed helpers, keep scripts small and return plain data. Each of these can be switched off in Settings → Browser; then the call fails with CAPABILITY_FAILED and the message says so.
+- \`block()\` keeps pages from opening for a while — a denylist (\`["*.social.test"]\`) or an allowlist (\`{ allow: ["wikipedia.org"] }\`, which shuts everything else; a second allowlist replaces the first, so change one by setting it again with the full list). It judges the page the user opens, not what that page loads. Say so when you use it and lift it with \`unblock()\` when asked. \`imageEffect()\` styles or swaps a page's pictures until navigation. \`setHomePage()\` changes what new tabs open. Bookmarks and history are the user's own — read them for what they asked, do not recite them. \`eval()\` runs code in a page: prefer the fixed helpers, keep scripts small and return plain data. Each of these can be switched off in Settings → Browser; then the call fails with CAPABILITY_FAILED and the message says so.
 
 \`\`\`ts
 const block = await sdk.browser.block(["*.example-social.com"], { durationMs: 45 * 60_000, reason: "the focus hour you asked for" });

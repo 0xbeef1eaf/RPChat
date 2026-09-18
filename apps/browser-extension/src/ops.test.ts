@@ -353,15 +353,24 @@ describe('BridgeOps: blocking, effects, eval, home, bookmarks, history', () => {
     expect(f.calls).toContain('update 1 {"url":"chrome-extension://abcdefghijklmnopabcdefghijklmnop/blocked.html?rule=r1"}');
     // The allowed page and the app's own loopback page stay where they are.
     expect(f.calls.some((c) => c.startsWith('update 2') || c.startsWith('update 3'))).toBe(false);
-    // A second allowlist would widen the first instead of narrowing it.
+    // A second allowlist would widen the first rather than narrow it, so it takes its place instead.
     expect(await dispatch({ id: 'b', op: 'rules.block', args: { id: 'r2', mode: 'allow', patterns: ['docs.test'] } }, h)).toMatchObject({
-      ok: false,
-      error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining('r1') },
+      ok: true,
+      value: { id: 'r2', mode: 'allow', replacedAllowlist: 'r1' },
     });
-    // Replacing the allowlist under its own id is how it is widened; a denylist alongside it is fine.
-    expect(await dispatch({ id: 'c', op: 'rules.block', args: { id: 'r1', mode: 'allow', patterns: ['wiki.test', 'docs.test'] } }, h)).toMatchObject({ ok: true });
+    expect((await ops.listBlocks()).map((r) => r.id)).toEqual(['r2']);
+    // Nothing of the lifted allowlist is left in the browser: only r2's rules are installed.
+    expect([...f.dynamicRules.values()].every((r) => r.id >= 6)).toBe(true);
+    expect(await ops.unblock('r1')).toEqual({ removed: false });
+    // Re-using an id replaces that block as ever — its own allowlist is not one it "replaced".
+    const widened = await dispatch({ id: 'c', op: 'rules.block', args: { id: 'r2', mode: 'allow', patterns: ['docs.test', 'wiki.test'] } }, h);
+    expect(widened).toMatchObject({ ok: true });
+    expect((widened as { value: Record<string, unknown> }).value['replacedAllowlist']).toBeUndefined();
+    // A denylist alongside an allowlist is untouched by the next allowlist.
+
     expect(await dispatch({ id: 'd', op: 'rules.block', args: { id: 'r3', patterns: ['docs.test/secret*'] } }, h)).toMatchObject({ ok: true });
-    expect((await ops.listBlocks()).map((r) => `${r.id}:${r.mode}`)).toEqual(['r1:allow', 'r3:deny']);
+    expect(await dispatch({ id: 'e', op: 'rules.block', args: { id: 'r4', mode: 'allow', patterns: ['news.test'] } }, h)).toMatchObject({ ok: true, value: { replacedAllowlist: 'r2' } });
+    expect((await ops.listBlocks()).map((r) => `${r.id}:${r.mode}`)).toEqual(['r3:deny', 'r4:allow']);
   });
 
   it('refuses an allowlist whose redirect is not itself allowed, and takes the app\'s own pages on one', async () => {

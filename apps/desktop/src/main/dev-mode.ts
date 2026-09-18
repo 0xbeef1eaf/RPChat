@@ -86,7 +86,8 @@ return { status, tab: tab.id, url: page.url, title: page.title, text: page.text.
 /**
  * The browser smoke's second turn: "exercise <smoke url> <blocked url> <home url>" runs the
  * capabilities added in `sdk.browser` 2.1: block a pattern and try to open it, unblock and open it
- * again, put up an allowlist and check what it does and does not shut (2.2), apply an image effect
+ * again, put up an allowlist and check what it does and does not shut and that a second replaces it
+ * (2.2), apply an image effect
  * with a pack-asset replacement and read the style back, set the home page, add/search/remove a
  * bookmark, eval in both worlds, and read the history.
  */
@@ -122,7 +123,12 @@ const allowTab = await sdk.browser.openTab(${JSON.stringify(blockUrl)});
 out.allowBlockedUrl = allowTab.url;
 out.allowedUrl = (await sdk.browser.navigate(allowTab.id, ${JSON.stringify(smokeUrl)})).url;
 out.allowedAsset = (await sdk.browser.eval(allowTab.id, ${JSON.stringify(assetProbe)})).value;
-out.allowLifted = await sdk.browser.unblock(allow.id);
+// A second allowlist takes the place of the first rather than joining it.
+const allow2 = await sdk.browser.block({ allow: ["nothing.invalid", ${JSON.stringify(SMOKE_BLOCK_HOST)}] }, { durationMs: 120000, reason: "smoke allowlist, widened" });
+out.allowReplaced = allow2.replacedAllowlist;
+out.allowsInPlace = (await sdk.browser.blocks()).length;
+out.allowWidenedUrl = (await sdk.browser.navigate(allowTab.id, ${JSON.stringify(blockUrl)})).url;
+out.allowLifted = await sdk.browser.unblock(allow2.id);
 out.allowReopenedUrl = (await sdk.browser.navigate(allowTab.id, ${JSON.stringify(blockUrl)})).url;
 await sdk.browser.close(allowTab.id);
 const tab = await sdk.browser.openTab(${JSON.stringify(smokeUrl)});
@@ -445,8 +451,8 @@ export async function runBrowserSmoke(services: BrowserSmokeServices, logger: Lo
       const allowReopened = String(ex['allowReopenedUrl'] ?? '');
       check(
         'allowlist',
-        obj(ex['allow'])['mode'] === 'allow' && allowBlocked !== blockUrl && (allowBlocked.startsWith('chrome-extension://') || allowBlocked === '') && ex['allowedUrl'] === url && ex['allowedAsset'] === 'loaded' && obj(ex['allowLifted'])['removed'] === true && allowReopened === blockUrl,
-        `off-list ${blockUrl} landed on ${JSON.stringify(allowBlocked) || 'the blocked page'}, the app's own page opened (${String(ex['allowedUrl'])}) and loaded an off-list asset (${String(ex['allowedAsset'])}), reopened ${allowReopened === blockUrl ? 'fine' : JSON.stringify(allowReopened)} after lifting`,
+        obj(ex['allow'])['mode'] === 'allow' && allowBlocked !== blockUrl && (allowBlocked.startsWith('chrome-extension://') || allowBlocked === '') && ex['allowedUrl'] === url && ex['allowedAsset'] === 'loaded' && ex['allowReplaced'] === obj(ex['allow'])['id'] && ex['allowsInPlace'] === 1 && ex['allowWidenedUrl'] === blockUrl && obj(ex['allowLifted'])['removed'] === true && allowReopened === blockUrl,
+        `off-list ${blockUrl} landed on ${JSON.stringify(allowBlocked) || 'the blocked page'}, the app's own page opened (${String(ex['allowedUrl'])}) and loaded an off-list asset (${String(ex['allowedAsset'])}), a wider allowlist replaced ${String(ex['allowReplaced'])} leaving ${String(ex['allowsInPlace'])} in place and opened it (${String(ex['allowWidenedUrl'])}), reopened ${allowReopened === blockUrl ? 'fine' : JSON.stringify(allowReopened)} after lifting`,
       );
       const styled = obj(ex['styled']);
       const restored = obj(ex['restored']);
