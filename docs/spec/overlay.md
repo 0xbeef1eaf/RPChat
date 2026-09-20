@@ -139,6 +139,16 @@ Electron under Wayland: in `main/index.ts` before `app.ready`: `app.commandLine.
 
 Because no Hyprland session exists in CI, the backend must be built so that all command construction is pure and unit-tested (`buildCommands(opts, address) → string[]`), with the IPC transport injected (fake transport in tests that records commands and answers `j/clients`, `j/monitors`, `j/cursorpos` from fixtures). Include a fixture from real `hyprctl -j monitors`/`clients` output shapes.
 
+#### 1.2.3 Floating the windows `sdk.ui` opens (`display/hypr-float.ts`)
+
+A question (`sdk.ui.confirm`/`choose`/`ask`, and a permission request) is asked in a window of its own — a dialog, sized by its content and gone as soon as it is answered. Hyprland would tile it, reflowing everything the user has open around a box that lives for a few seconds, so each prompt window gets a float rule of its own: unlike an overlay it wears the character's name in its title bar, so it cannot share the `rp-overlay:` matcher. `HyprFloater.floatWindow(title)` is called with the title the window is about to open with and the window is only shown once it resolves, so the rule is in place before the surface maps and the dialog is never tiled, not even for a frame.
+
+| purpose | legacy | Lua |
+| --- | --- | --- |
+| float one prompt window | `keyword windowrule float,title:^(<title>)$` | `hl.window_rule({ name = "rpchat-prompt-<n>", match = { title = "^(<title>)$" }, float = true })`, its handle appended to `__rp_float_rules` |
+
+The title is a regex to Hyprland: escape its specials, and match a comma (which separates the fields of a rule and cannot be escaped) with `.`. One rule per distinct title, registered at most once — `configreloaded` drops the dynamic rules, so it also clears that memory. The dialect is learned exactly as in §1.2.2 (a `keyword` refusal switches this session to `eval` for good) and `dispose()` disables the Lua handles. Nothing here may hold a question up: a transport that fails or never answers is a debug line and the window is shown regardless after `DEFAULT_RULE_TIMEOUT_MS`. Built only under `HYPRLAND_INSTANCE_SIGNATURE`, and independent of which of the two tiers above drives the overlays — a prompt window is an ordinary Electron window either way.
+
 ## 2. Command templates (`wallpaper`, `browser`, `input`)
 
 `apps/desktop/src/main/commands.ts`:

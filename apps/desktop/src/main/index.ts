@@ -106,6 +106,7 @@ async function main(): Promise<void> {
       services?.permissionPrompts.rejectAll(inMainWindow);
       services?.uiPrompts.rejectAll(inMainWindow);
     },
+    prepareWindow: (title) => services?.prepareWindow(title) ?? Promise.resolve(),
     onPromptDismissed: (id) => {
       // Closing the window is a dismissal: deny the permission, cancel the question.
       services?.permissionPrompts.respond(id, 'deny');
