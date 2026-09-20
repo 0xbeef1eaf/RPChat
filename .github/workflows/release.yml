@@ -77,6 +77,21 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # electron-builder downloads two things the build cannot proceed without: the Electron
+      # binary itself, fetched by electron's postinstall into ~/.cache/electron, and the
+      # app-builder/AppImage/fpm tooling it pulls into ~/.cache/electron-builder while packaging.
+      # Both are keyed on the lockfile, which pins the Electron version, and both are restored
+      # before `pnpm install` so even the postinstall fetch is a cache hit. As with the Rust cache
+      # below, `main` is what writes the entry pull requests restore.
+      - name: Cache Electron and electron-builder downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
