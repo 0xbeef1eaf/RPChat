@@ -1,17 +1,21 @@
 /**
- * `sdk.voice`: TTS through a neural voice model (sherpa-onnx), the `tts` template, or the hidden
- * window's speechSynthesis; STT through `stt`.
+ * `sdk.voice`: TTS through a neural voice model, the `tts` template, or the hidden window's
+ * speechSynthesis; STT through `stt`.
  *
  * `speak()` picks the first of these that is available, in order:
  *  1. a `tts` command template the **user** set — the explicit escape hatch, so it always wins;
- *  2. a voice model installed under `<userData>/voices/` driven by `sherpa-onnx-offline-tts`;
+ *  2. a voice model installed under `<userData>/voices/`;
  *  3. the platform's default `tts` command (espeak-ng, `say`, SAPI);
  *  4. the hidden audio window's `speechSynthesis`.
  *
- * Step 2 is what makes a character sound like itself: a cloning model (Pocket TTS) takes its voice
- * from the wav named by that character's `voice.reference`. Once a model is installed, a missing
- * binary or an unknown model name is an error rather than a silent drop back to step 3 — installing
- * a model is deliberate, and a character quietly speaking in espeak's robot voice hides the problem.
+ * Step 2 is what makes a character sound like itself, and there are two engines behind it. A sherpa
+ * model (Pocket TTS and the speaker banks) runs through the in-process addon, taking its voice from
+ * the wav named by that character's `voice.reference`. Qwen3-TTS is its own binary and runs as a
+ * subprocess (see `qwen-engine.ts` for why), taking its voice from a `.qvoice` profile.
+ *
+ * Once a model is installed, a missing binary or an unknown model name is an error rather than a
+ * silent drop back to step 3 — installing a model is deliberate, and a character quietly speaking
+ * in espeak's robot voice hides the problem.
  */
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
@@ -26,7 +30,11 @@ import type { OverlayWindowLike } from '../display/backend.js';
 import type { VoiceModel } from './voice-models.js';
 import type { SynthResult, VoiceEngine } from './voice-engine.js';
 import { joinAudio, splitForSynthesis, writeWavFile } from './voice-engine.js';
+import type { QwenRunner } from './qwen-engine.js';
+import { qwenProfileFor } from './qwen-engine.js';
 import {
+  QWEN_TTS_BINARY,
+  QWEN_TTS_ENV,
   SAMPLE_DIRNAME,
   SHERPA_TTS_BINARY,
   SHERPA_TTS_ENV,
@@ -35,6 +43,7 @@ import {
   buildSherpaArgs,
   detectVoiceModel,
   referenceFor,
+  usesSherpa,
 } from './voice-models.js';
 
 /** Synthetic pack id under which generated speech files are served to the audio window. */
@@ -63,6 +72,8 @@ export interface VoiceHandlerDeps {
   voicesDir?: string;
   /** Locates `sherpa-onnx-offline-tts` (env override, bundled resources, PATH). */
   findSherpa?: () => string | undefined;
+  /** Drives Qwen models, which are their own binary. Absent leaves them installed but unusable. */
+  qwen?: QwenRunner;
   /** The speaking character's pack, for its `voice` block. */
   packs?: { getLoaded(packId: string): LoadedPack };
   /** App-level voice settings (default model, thread count, kill switch). */
@@ -220,6 +231,11 @@ export class VoiceHandler implements CapabilityHandler {
     await fs.mkdir(this.deps.ttsDir, { recursive: true });
     const file = path.join(this.deps.ttsDir, `${randomUUID()}.wav`);
 
+    if (!usesSherpa(voice.model.engine)) {
+      await this.speakWithQwen(voice, text, file, wait, abort);
+      return;
+    }
+
     // In process when the addon is usable: the model stays loaded, and `seed`/`temperature` are
     // reachable at all — the CLI forwards neither, so a character cannot sound the same twice.
     const engine = this.deps.engine;
@@ -288,6 +304,39 @@ export class VoiceHandler implements CapabilityHandler {
     await this.play(file, wait, abort);
   }
 
+  /**
+   * Qwen3-TTS: one `qwen_tts` process per line.
+   *
+   * The binary exits 0 and writes a perfectly valid wav even when generation collapsed after a
+   * syllable or two, so the result is measured rather than trusted and a collapse is re-rolled
+   * once. `rate` is not forwarded: this engine has no speed control, and silently ignoring a
+   * character's setting is better than failing the line over it.
+   */
+  private async speakWithQwen(voice: NeuralVoice, text: string, file: string, wait: boolean, abort: AbortController): Promise<void> {
+    const runner = this.deps.qwen;
+    if (!runner) {
+      throw new RpError('CAPABILITY_FAILED', `Voice model "${voice.model.name}" cannot be used: ${QWEN_TTS_BINARY} is not available (${QWEN_TTS_ENV}, the app's resources/bin, or PATH)`, {
+        model: voice.model.name,
+      });
+    }
+    const started = Date.now();
+    await runner.render(
+      voice.model,
+      {
+        text,
+        outFile: file,
+        ...(voice.reference ? { profile: voice.reference } : {}),
+        ...(voice.seed !== undefined ? { seed: voice.seed } : {}),
+        ...(voice.temperature !== undefined ? { temperature: voice.temperature } : {}),
+        numThreads: voice.numThreads,
+      },
+      abort.signal,
+    );
+    if (abort.signal.aborted) return;
+    this.deps.logger.debug?.(`[voice] ${voice.model.name} spoke ${text.length} chars in ${Date.now() - started} ms`);
+    await this.play(file, wait, abort);
+  }
+
   /** Every recognised model under `voicesDir`, re-scanned at most every `MODEL_CACHE_MS`. */
   private async models(): Promise<VoiceModel[]> {
     const dir = this.deps.voicesDir;
@@ -305,7 +354,7 @@ export class VoiceHandler implements CapabilityHandler {
    * app default; with none of those and exactly one model installed, that one is used.
    */
   private async resolveNeural(context: ActionContext, requested?: string): Promise<NeuralVoice | undefined> {
-    if (!this.deps.voicesDir || !this.deps.findSherpa) return undefined;
+    if (!this.deps.voicesDir || !(this.deps.findSherpa || this.deps.qwen)) return undefined;
     const settings = this.deps.voiceSettings ? await this.deps.voiceSettings() : undefined;
     if (settings?.disabled) return undefined;
     const models = await this.models();
@@ -323,18 +372,26 @@ export class VoiceHandler implements CapabilityHandler {
     }
     if (!model) return undefined;
 
-    const binary = this.deps.findSherpa();
-    const inProcess = this.deps.engine?.available() === true;
+    // Qwen is its own binary, so the sherpa addon and the sherpa CLI are both irrelevant to it.
+    const qwen = !usesSherpa(model.engine);
+    const binary = qwen ? (this.deps.qwen?.available() === true ? QWEN_TTS_BINARY : undefined) : this.deps.findSherpa?.();
+    const inProcess = !qwen && this.deps.engine?.available() === true;
     if (!binary && !inProcess) {
+      const [name, env] = qwen ? [QWEN_TTS_BINARY, QWEN_TTS_ENV] : [SHERPA_TTS_BINARY, SHERPA_TTS_ENV];
       throw new RpError(
         'CAPABILITY_FAILED',
-        `Voice model "${model.name}" is installed but no speech engine is available: the bundled one failed to load and ${SHERPA_TTS_BINARY} was not found (${SHERPA_TTS_ENV}, the app's resources/bin, or PATH)`,
-        { model: model.name, binary: SHERPA_TTS_BINARY },
+        `Voice model "${model.name}" is installed but no speech engine is available: ${name} was not found (${env}, the app's resources/bin, or PATH)`,
+        { model: model.name, binary: name },
       );
     }
 
-    const reference = referenceFor(model, this.referencePath(context, character?.reference));
-    if (model.clones && !reference) {
+    const reference = qwen
+      ? qwenProfileFor(this.referencePath(context, character?.reference))
+      : referenceFor(model, this.referencePath(context, character?.reference));
+    // Qwen needs no reference: without a profile it speaks in one of its own voices, which is a
+    // usable result rather than a failure. Every other cloning engine has nothing to say without
+    // one, so the absence stays an error there.
+    if (model.clones && !reference && !qwen) {
       throw new RpError(
         'CAPABILITY_FAILED',
         `Voice model "${model.name}" (${model.label}) clones a voice from reference audio, but neither the character's voice.reference nor a sample in the model's ${SAMPLE_DIRNAME}/ was found`,

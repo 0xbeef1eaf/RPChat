@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { DirListing } from './voice-models.js';
-import { buildSherpaArgs, detectVoiceModel, findSherpaTts, referenceFor, supportedEngines } from './voice-models.js';
+import { buildSherpaArgs, detectVoiceModel, findQwenTts, findSherpaTts, referenceFor, supportedEngines, usesSherpa } from './voice-models.js';
 
 const POCKET: DirListing = {
   files: ['lm_flow.int8.onnx', 'lm_main.int8.onnx', 'encoder.onnx', 'decoder.int8.onnx', 'text_conditioner.onnx', 'vocab.json', 'token_scores.json', 'README.md'],
@@ -14,6 +14,10 @@ const POCKET: DirListing = {
 };
 const KOKORO: DirListing = { files: ['model.onnx', 'voices.bin', 'tokens.txt'], dirs: ['espeak-ng-data', 'dict'] };
 const VITS: DirListing = { files: ['en_GB-alba-medium.onnx', 'tokens.txt'], dirs: ['espeak-ng-data'] };
+const QWEN: DirListing = {
+  files: ['config.json', 'model.safetensors', 'generation_config.json', 'vocab.json', 'merges.txt'],
+  dirs: ['speech_tokenizer'],
+};
 
 const flags = (args: string[]): Record<string, string> => {
   const out: Record<string, string> = {};
@@ -146,9 +150,50 @@ describe('findSherpaTts', () => {
 });
 
 describe('supportedEngines', () => {
-  it('reports Pocket TTS as the cloning engine', () => {
-    const pocket = supportedEngines().find((e) => e.id === 'pocket');
-    expect(pocket).toMatchObject({ label: 'Pocket TTS', clones: true });
-    expect(supportedEngines().filter((e) => e.clones)).toHaveLength(1);
+  it('reports the cloning engines', () => {
+    expect(supportedEngines().find((e) => e.id === 'pocket')).toMatchObject({ label: 'Pocket TTS', clones: true });
+    expect(supportedEngines().find((e) => e.id === 'qwen')).toMatchObject({ label: 'Qwen3-TTS', clones: true });
+    // The speaker-bank engines are the rest; a new cloning engine should have to say so here.
+    expect(supportedEngines().filter((e) => e.clones).map((e) => e.id).sort()).toEqual(['pocket', 'qwen']);
+  });
+});
+
+describe('Qwen3-TTS', () => {
+  it('recognises a model directory by its weights and speech tokenizer', () => {
+    const model = detectVoiceModel('/v/qwen3-tts-0.6b', QWEN);
+    expect(model?.engine).toBe('qwen');
+    expect(model?.clones).toBe(true);
+    expect(model?.dir).toBe('/v/qwen3-tts-0.6b');
+  });
+
+  it('is not matched by a bare safetensors directory with no speech tokenizer', () => {
+    // Required rules cover directories as well as files, so a plain transformer checkout dropped
+    // into voices/ is rejected rather than driven as a TTS model.
+    expect(detectVoiceModel('/v/some-llm', { files: ['config.json', 'model.safetensors'], dirs: [] })).toBeUndefined();
+  });
+
+  it('does not swallow the sherpa engines, nor they it', () => {
+    expect(detectVoiceModel('/v/pocket', POCKET)?.engine).toBe('pocket');
+    expect(detectVoiceModel('/v/kokoro', KOKORO)?.engine).toBe('kokoro');
+    expect(detectVoiceModel('/v/alba', VITS)?.engine).toBe('vits');
+  });
+
+  it('is the one engine that is not driven through sherpa', () => {
+    expect(usesSherpa('qwen')).toBe(false);
+    for (const e of supportedEngines().filter((s) => s.id !== 'qwen')) expect(usesSherpa(e.id)).toBe(true);
+  });
+
+  it('finds its binary by env override first, then PATH', () => {
+    const opts = { resourcesDirs: [], exists: (f: string) => f === '/opt/qwen_tts', onPath: (n: string) => n === 'qwen_tts' };
+    expect(findQwenTts({ ...opts, env: { RP_QWEN_TTS: '/opt/qwen_tts' } })).toBe('/opt/qwen_tts');
+    expect(findQwenTts({ ...opts, env: {} })).toBe('qwen_tts');
+    // An override pointing at nothing falls through rather than failing the lookup outright.
+    expect(findQwenTts({ ...opts, env: { RP_QWEN_TTS: '/nope' } })).toBe('qwen_tts');
+  });
+
+  it('does not answer with the sherpa binary, or the other way round', () => {
+    const opts = { env: { RP_QWEN_TTS: '/opt/qwen_tts' }, resourcesDirs: [], exists: (f: string) => f === '/opt/qwen_tts', onPath: () => false };
+    expect(findQwenTts(opts)).toBe('/opt/qwen_tts');
+    expect(findSherpaTts(opts)).toBeUndefined();
   });
 });
