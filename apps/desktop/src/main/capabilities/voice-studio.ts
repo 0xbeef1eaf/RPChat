@@ -5,7 +5,12 @@
  * `seed` is the reason this exists. The model samples, so an unseeded character says the same line
  * with different pacing every time; pinning a seed makes it consistent. That is only tunable if the
  * author can audition seeds, which needs synthesis on demand from the editor rather than at chat
- * time. Previews therefore always run in process — the command-line engine cannot pass a seed.
+ * time.
+ *
+ * A sherpa model is therefore previewed in process: its command line forwards no seed, so it is the
+ * addon or nothing. Qwen is the opposite — it is a binary whose CLI takes every sampling knob — so
+ * it previews through `QwenRunner`, and an addon that will not load on this machine no longer
+ * blocks the panel when a Qwen model is installed.
  */
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';

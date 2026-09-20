@@ -1,17 +1,21 @@
 /**
- * `sdk.voice`: TTS through a neural voice model (sherpa-onnx), the `tts` template, or the hidden
- * window's speechSynthesis; STT through `stt`.
+ * `sdk.voice`: TTS through a neural voice model, the `tts` template, or the hidden window's
+ * speechSynthesis; STT through `stt`.
  *
  * `speak()` picks the first of these that is available, in order:
  *  1. a `tts` command template the **user** set — the explicit escape hatch, so it always wins;
- *  2. a voice model installed under `<userData>/voices/` driven by `sherpa-onnx-offline-tts`;
+ *  2. a voice model installed under `<userData>/voices/`;
  *  3. the platform's default `tts` command (espeak-ng, `say`, SAPI);
  *  4. the hidden audio window's `speechSynthesis`.
  *
- * Step 2 is what makes a character sound like itself: a cloning model (Pocket TTS) takes its voice
- * from the wav named by that character's `voice.reference`. Once a model is installed, a missing
- * binary or an unknown model name is an error rather than a silent drop back to step 3 — installing
- * a model is deliberate, and a character quietly speaking in espeak's robot voice hides the problem.
+ * Step 2 is what makes a character sound like itself, and there are two engines behind it. A sherpa
+ * model (Pocket TTS and the speaker banks) runs through the in-process addon, taking its voice from
+ * the wav named by that character's `voice.reference`. Qwen3-TTS is its own binary and runs as a
+ * subprocess (see `qwen-engine.ts` for why), taking its voice from a `.qvoice` profile.
+ *
+ * Once a model is installed, a missing binary or an unknown model name is an error rather than a
+ * silent drop back to step 3 — installing a model is deliberate, and a character quietly speaking
+ * in espeak's robot voice hides the problem.
  */
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
