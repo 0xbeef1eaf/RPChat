@@ -4,7 +4,7 @@ import { RpError, parseCharacterRef, serializeError } from '@rp/shared';
 import type { ActionLoop } from '../action-loop.js';
 import type { MemoryService } from './memory.js';
 import type { BehaviourRunner } from '../behaviours.js';
-import { PromptBuilder, SELF_WAKE_PREFIX } from '../prompt.js';
+import { ESTIMATED_SYSTEM_TOKENS, MIN_TRANSCRIPT_BUDGET, PromptBuilder, SELF_WAKE_PREFIX } from '../prompt.js';
 import type { AuditService } from './audit.js';
 import type { HistoryService } from './history.js';
 import type { PackService } from './packs.js';
@@ -54,6 +54,8 @@ export type SelfWakeSource = 'immediate' | 'timer' | 'wake-timer';
 const AUTONOMY_TIMESTAMPS_KEY = 'autonomy.wakeTimestamps';
 const AUTONOMY_CONSECUTIVE_KEY = 'autonomy.consecutive';
 const HOUR_MS = 60 * 60 * 1000;
+/** How many of the latest messages the memory ranker matches against (`memoryFocus`). */
+const MEMORY_FOCUS_MESSAGES = 6;
 
 /** Serialises turns per session, runs behaviours around the LLM turn, handles timer wake-ups. */
 export class ChatService {
@@ -63,6 +65,8 @@ export class ChatService {
   private readonly promptBuilder: PromptBuilder;
   private readonly turnCounts = new Map<string, number>();
   private readonly pendingWakes = new Map<string, string>();
+  /** What the last prompt of a session actually measured, for the background jobs after the turn. */
+  private readonly lastPrompt = new Map<string, { transcriptBudgetTokens: number; droppedMessages: number }>();
 
   constructor(private readonly o: ChatServiceOptions) {
     this.promptBuilder = o.promptBuilder ?? new PromptBuilder();
@@ -145,8 +149,9 @@ export class ChatService {
     await this.abort(sessionId);
     await this.runExclusive(sessionId, async () => {
       await this.o.sessions.clearMessages(sessionId);
-      // The summary describes messages that no longer exist.
+      // The summary describes messages that no longer exist, and so do the prompt's measurements.
       await this.o.history?.clear(sessionId);
+      this.lastPrompt.delete(sessionId);
     });
   }
 
@@ -320,8 +325,8 @@ export class ChatService {
 
   /**
    * After `turn-finished`: run a queued immediate self-wake, count turns, then kick off the two
-   * background jobs — memory consolidation and, once the transcript outgrows
-   * `settings.history.compressAboveTokens`, history compression. Both run off the turn.
+   * background jobs — memory consolidation and, once the transcript outgrows its share of the room
+   * the last prompt measured for it, history compression. Both run off the turn.
    */
   private async afterTurn(sessionId: string): Promise<void> {
     this.finishTurn(sessionId);
@@ -340,10 +345,24 @@ export class ChatService {
     const history = this.o.history;
     if (history && !history.isCompressing(sessionId)) {
       const transcript = await this.o.sessions.messages(sessionId);
-      if (history.shouldCompress(transcript, settings.history)) {
+      const last = this.lastPrompt.get(sessionId);
+      // Messages the window dropped are covered by neither the summary nor the prompt — they fell
+      // out of the conversation entirely. Summarise now so the next turn keeps them.
+      const dropped = (last?.droppedMessages ?? 0) > 0;
+      if (dropped || history.shouldCompress(transcript, settings.history, this.transcriptBudget(sessionId, settings))) {
         void history.compress(sessionId, { auto: true }).catch((err) => this.o.logger.warn('[chat] history compression failed', err));
       }
     }
+  }
+
+  /**
+   * The room the transcript has, as the last prompt of this session measured it; before there is
+   * one, the budget less an estimate of the system prompt.
+   */
+  private transcriptBudget(sessionId: string, settings: { contextTokenBudget: number }): number {
+    const measured = this.lastPrompt.get(sessionId)?.transcriptBudgetTokens;
+    if (measured !== undefined) return measured;
+    return Math.max(MIN_TRANSCRIPT_BUDGET, settings.contextTokenBudget - ESTIMATED_SYSTEM_TOKENS);
   }
 
   /** Called when a turn's work is complete: an immediate wake queued during the turn runs next. */
@@ -437,9 +456,7 @@ export class ChatService {
     const transcript = await this.o.sessions.messages(session.id);
     let memories: import('@rp/shared').MemoryEntry[] = [];
     if (this.o.memories && settings.memory.enabled) {
-      const lastUser = [...transcript].reverse().find((m) => m.role === 'user')?.content ?? '';
-      const lastAssistant = [...transcript].reverse().find((m) => m.role === 'assistant' && m.content.trim().length > 0)?.content ?? '';
-      memories = await this.o.memories.forPrompt(session.characterRef, `${lastUser}\n${lastAssistant}`, settings.memory.promptBudgetTokens);
+      memories = await this.o.memories.forPrompt(session.characterRef, memoryFocus(transcript), settings.memory.promptBudgetTokens);
     }
 
     const summary = this.o.history ? await this.o.history.summaryFor(session.id) : undefined;
@@ -474,6 +491,7 @@ export class ChatService {
     if (this.o.mood) promptInput.mood = await this.o.mood.get(session.characterRef);
     if (this.o.routine) promptInput.routine = await this.o.routine.status(session.characterRef);
     const { system, messages, stats, stablePrefixLength } = this.promptBuilder.build(promptInput);
+    this.lastPrompt.set(session.id, { transcriptBudgetTokens: stats.transcriptBudgetTokens, droppedMessages: stats.droppedMessages });
     if (stats.systemTokens * 2 > stats.budgetTokens || stats.droppedMessages > 0) {
       this.o.logger.warn(
         `[chat] prompt budget: system ~${stats.systemTokens} tokens (sdk reference ~${stats.sdkReferenceTokens}) of ${stats.budgetTokens}; ` +
@@ -513,6 +531,19 @@ export class ChatService {
       if (this.controllers.get(session.id) === controller) this.controllers.delete(session.id);
     }
   }
+}
+
+/**
+ * What the memory ranker matches against: the last few things either of them said, newest last.
+ * The latest message alone is too narrow a handle — a thread picked up a few messages ago should
+ * still pull its memories into the prompt.
+ */
+export function memoryFocus(transcript: ChatMessage[], count = MEMORY_FOCUS_MESSAGES): string {
+  const said = transcript.filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim().length > 0);
+  return said
+    .slice(-Math.max(1, count))
+    .map((m) => m.content)
+    .join('\n');
 }
 
 /**

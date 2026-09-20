@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { MockProvider } from '@rp/llm';
 import { estimateTokens } from '@rp/llm';
-import type { ChatEvent, LlmChatRequest, MemoryEntry } from '@rp/shared';
+import type { ChatEvent, ChatMessage, LlmChatRequest, MemoryEntry } from '@rp/shared';
 import { TypedEmitter } from '../emitter.js';
 import { MemoryStorage } from '../storage/memory.js';
 import { FakeClock, MOCK_PROVIDER } from '../test/helpers.js';
 import type { EngineEvents } from '../types.js';
 import { NOOP_LOGGER } from '../types.js';
+import { memoryFocus } from './chat.js';
 import { MemoryService, memoryLine, parseJsonArray } from './memory.js';
 import { SettingsService } from './settings.js';
 
@@ -178,5 +179,36 @@ describe('MemoryService', () => {
     expect(parseJsonArray('[1, 2] and [3]')).toEqual([1, 2]);
     expect(parseJsonArray('nothing')).toBeUndefined();
     expect(parseJsonArray('{"a": [1]}')).toEqual([1]);
+  });
+});
+
+describe('memoryFocus', () => {
+  const said = (i: number, role: ChatMessage['role'], content: string): ChatMessage => ({ id: `m${i}`, sessionId: 's1', role, content, createdAt: 't' });
+
+  it('matches against the last few messages, not only the latest one', () => {
+    const transcript = [
+      said(1, 'user', 'my sister is called Nell'),
+      said(2, 'assistant', 'noted'),
+      said(3, 'user', 'she is a vet'),
+      said(4, 'assistant', 'nice'),
+      said(5, 'user', 'anyway'),
+      said(6, 'assistant', 'mm'),
+    ];
+    const focus = memoryFocus(transcript);
+    expect(focus).toContain('Nell'); // three messages back, and still part of the handle
+    expect(focus).toContain('mm');
+    expect(focus.split('\n')).toHaveLength(6);
+  });
+
+  it('keeps only the newest `count`, skips blanks and system messages', () => {
+    const transcript = [
+      said(1, 'user', 'oldest'),
+      said(2, 'system', 'a wake note'),
+      said(3, 'assistant', '   '),
+      said(4, 'user', 'newest'),
+    ];
+    expect(memoryFocus(transcript, 2)).toBe('oldest\nnewest');
+    expect(memoryFocus(transcript, 1)).toBe('newest');
+    expect(memoryFocus([], 4)).toBe('');
   });
 });

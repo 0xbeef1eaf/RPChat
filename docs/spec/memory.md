@@ -16,8 +16,10 @@ and edit everything. Contracts: `@rp/shared/memory.ts`, `Storage.memories`,
   strip punctuation, drop stop-words), score = tag hits ×2 + token overlap (Jaccard-ish on text tokens)
   + importance × 0.15 + recency bonus (created within 7 days: +0.2; recalled within 7 days: +0.1);
   ties by `updatedAt` desc. Recalled entries get `lastRecalledAt`/`recallCount` bumped (batched write).
-- `forPrompt(characterRef, focusText, budgetTokens)`: top matches for `focusText` (the latest user message
-  plus the last assistant message), always including the top-3 by importance and the 3 newest, deduped,
+- `forPrompt(characterRef, focusText, budgetTokens)`: top matches for `focusText` (`ChatService.memoryFocus`:
+  the last `MEMORY_FOCUS_MESSAGES` non-empty user/assistant messages, newest last — the latest message alone
+  is too narrow a handle for a thread picked up a few messages ago), always including the top-3 by importance
+  and the 3 newest, deduped,
   trimmed to the token budget with `estimateTokens`; returns entries in stable order (importance desc,
   createdAt asc) for the `<memory>` section.
 - `consolidate(sessionId)`: takes messages since the last consolidation marker (`session` state key

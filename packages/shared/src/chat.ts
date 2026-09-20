@@ -26,13 +26,28 @@ export interface ChatMessage {
 }
 
 /**
+ * One span of the conversation, recapped in a single pass. Segments are written once and then
+ * kept verbatim, so the earliest parts of a session stop being re-worded on every compression.
+ */
+export interface HistorySummarySegment {
+  text: string;
+  /** How many messages this segment stands for. */
+  messageCount: number;
+}
+
+/**
  * Rolling summary of the oldest messages of a session, written by the model in the background.
  * Every message up to and including `throughMessageId` is replaced by `text` in the prompt, so a
  * long conversation keeps its past without sending it in full.
  */
 export interface HistorySummary {
-  /** Prose recap of everything the summary covers.*/
+  /** Prose recap of everything the summary covers: `segments` joined, and what the prompt shows. */
   text: string;
+  /**
+   * The spans `text` is made of, oldest first. A compression appends one; only when the whole
+   * summary outgrows its budget are the older ones folded together (`HistoryService`).
+   */
+  segments: HistorySummarySegment[];
   /** Last message covered. When it is no longer in the transcript the summary is ignored. */
   throughMessageId: MessageId;
   /** How many messages `text` stands for. */
