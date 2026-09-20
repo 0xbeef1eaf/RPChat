@@ -99,6 +99,12 @@ async function main(): Promise<void> {
     ...(env.ELECTRON_RENDERER_URL ? { rendererUrl: env.ELECTRON_RENDERER_URL } : {}),
     devTools: devGuard.rules.devTools,
     logger,
+    // Every main window gets the close handler, not just the one opened at startup: the window
+    // is recreated whenever it is gone (a second `rpchat`, the tray, a notification click), and
+    // one without it would close for real the next time — ending an app the policy keeps alive.
+    onMainCreated: (win) => {
+      if (services) installCloseToTray(win, services);
+    },
     onMainClosed: () => {
       // Questions asked in windows of their own outlive the chat window; only those that fell
       // back to its in-app modal go away with it.
@@ -200,7 +206,6 @@ async function main(): Promise<void> {
     void shutdown().finally(() => app.quit());
   });
   const win = windows.createMainWindow({ hidden: START_HIDDEN });
-  installCloseToTray(win, active);
   win.once('ready-to-show', () => {
     logger.info(`[main] window ${START_HIDDEN ? 'ready (hidden, tray)' : 'opened'} (userData: ${app.getPath('userData')})`);
     active.updates.start();
@@ -329,7 +334,8 @@ let closeToTray = true;
  * Closing the main window hides it to the tray when `settings.closeToTray` is on and a tray
  * exists; the tray menu's Quit (or any app quit) really closes it. While the policy forbids
  * quitting the window always hides — with or without a tray, whatever `closeToTray` says —
- * because letting it close would end the app. Applied to every main window.
+ * because letting it close would end the app. Installed from `onMainCreated`, so every main
+ * window has it, including one reopened after the first was destroyed.
  */
 function installCloseToTray(win: BrowserWindow, services: AppServices): void {
   const refresh = (): void => {
@@ -371,9 +377,7 @@ function createTray(windows: WindowManager, services: AppServices, quit: () => v
     const t = new Tray(icon.isEmpty() ? icon : icon.resize({ width: 22, height: 22 }));
     t.setToolTip('rpchat');
     const show = (): void => {
-      const existing = windows.getMainWindow();
-      const w = existing ?? windows.createMainWindow();
-      if (!existing) installCloseToTray(w, services);
+      const w = windows.getMainWindow() ?? windows.createMainWindow();
       w.show();
       w.focus();
     };
