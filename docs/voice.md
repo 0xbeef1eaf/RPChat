@@ -135,6 +135,76 @@ generation.
 Neither model failed on long input. A 676-character paragraph renders in one call; chunking exists
 for latency and for joins that land where a reader breathes, not because long text breaks.
 
+## Qwen3-TTS
+
+A second engine, opt-in per character, driven by its own `qwen_tts` binary rather than sherpa. It
+sounds considerably better than Pocket TTS on cloned voices, which is the only reason it is here —
+everything below is the price of that.
+
+### It is a subprocess, and that is deliberate
+
+The binary holds **~3 GB resident** while it runs. Keeping that alive beside a local LLM for a voice
+that speaks a few seconds a minute is a bad trade, so `QwenRunner` spawns one process per line and
+lets the memory go. Model load is ~0.5 s, which a chat turn absorbs.
+
+Do not "optimise" this into the binary's `--serve` mode without re-reading the next section.
+
+### Server mode clamps temperature; the command line does not
+
+`qwen_tts_server.c` runs every request through `clampf(…, 0.0f, 2.0f)`. The CLI's `-T` has no such
+clamp. This is silent: a fixed-seed sweep returns **one bit-identical output for every value from
+2.25 to 8.00**, and only 1.00 and 0.50 differ.
+
+The tuned default is T 2.5, *above* that clamp, so the CLI path is not a stylistic preference — it
+is the only path on which the configured temperature is the one actually used.
+
+### `/v1/health` lies
+
+The server answers `503 {"status":"unavailable","scheduler":"down"}` on an engine that renders
+perfectly. Treat any HTTP answer as "up"; a connection failure is the only real signal.
+
+### Sampling
+
+Chosen by ear across the full range, not taken from upstream:
+
+| knob | value | why |
+| --- | --- | --- |
+| temperature | 2.5 | below ~1.2 nothing changes audibly; above ~6 it degenerates (8.0 returns ~1 s) |
+| top-k | 10 | rank-based, so temperature never changes *which* tokens survive it |
+| top-p | 0.4 | computed on temperature-softened probabilities, so this is the knob that counteracts a high temperature |
+| rep penalty | 2.0 | the server's clamp ceiling; speech is legitimately repetitive, so higher would fight the signal |
+
+A high temperature with both filters open is the least constrained setting available and is what
+produced collapsed takes. Tighten the nucleus before lowering the temperature.
+
+### Generation collapses silently
+
+The binary exits **0** and writes a valid wav that simply stops after a syllable or two. Measured at
+2 renders in 5 on long input before the nucleus was tightened. Nothing else catches this, so
+`QwenRunner` measures every take against ~15 characters/second and re-rolls once below 45% of that.
+
+### Coherence runs out around 20 s of audio
+
+Not a buffer: the codec runs at 12.5 Hz and the talker's KV cache starts at 2048 slots, which is
+~163 s of headroom. It is the model losing the thread. Character lines run 10–30 s, inside that, and
+a whole take reads better than a stitched one — so unlike the sherpa path, nothing is chunked here.
+If long-form narration is ever wanted, split on sentence boundaries and expect the joins to cost
+some flow.
+
+### Voices are `.qvoice` profiles, not wavs
+
+The playback model cannot clone from audio directly. A character's `voice.reference` must point at a
+`.qvoice` (16–25 MB); anything else is ignored and the model speaks in one of its own voices, which
+is a usable result rather than an error. Building a profile needs the **Base** model — a second
+2.4 GB download — and is therefore fetched only when an author actually builds one.
+
+### Distribution
+
+Upstream (`gabriele-mastrapasqua/qwen3-tts`, MIT) publishes **no releases or tags** — source only.
+There is nothing for the app to download, so the binary is found through `RP_QWEN_TTS`, a build in
+`resources/bin`, or PATH, and the engine is Linux-only for now. The model directory is 2.4 GB
+against Pocket's 98 MB; `--int8` quantises at load, so there is no smaller on-disk form.
+
 ## Changing dependencies
 
 CI installs with `--frozen-lockfile`, so adding a dependency to a `package.json` without

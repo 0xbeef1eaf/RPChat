@@ -13,7 +13,7 @@ import type { AppSettings, DevRules, LoadedPack, PermissionDecision, PermissionR
 import { SYSTEM_INSTALL_DIR } from '@rp/shared';
 import { IPC_EVENT_CHANNELS, RpError, assetUrl, parseCharacterRef } from '@rp/shared';
 import { defaultSettings, mergeSettings } from '@rp/core';
-import { hasExecutable } from './commands.js';
+import { hasExecutable, spawnCapture } from './commands.js';
 import { AvatarHandler } from './capabilities/avatar.js';
 import { BrowserHandler } from './capabilities/browser.js';
 import { CalendarHandler } from './capabilities/calendar.js';
@@ -24,12 +24,13 @@ import { WebcamHandler } from './capabilities/webcam.js';
 import { MessagingHandler } from './capabilities/messaging.js';
 import { PresenceHandler } from './capabilities/presence.js';
 import { ScreenHandler } from './capabilities/screen.js';
-import { TTS_PACK_ID, VOICES_DIRNAME, VoiceHandler, readVoiceModels } from './capabilities/voice.js';
-import { findSherpaTts } from './capabilities/voice-models.js';
+import { SYNTH_TIMEOUT_MS, TTS_PACK_ID, VOICES_DIRNAME, VoiceHandler, readVoiceModels } from './capabilities/voice.js';
+import { findQwenTts, findSherpaTts } from './capabilities/voice-models.js';
 import { VOICE_PREVIEW_DIRNAME, VOICE_PREVIEW_PACK_ID, VoiceStudio } from './capabilities/voice-studio.js';
 import { SHERPA_INSTALL_DIRNAME, SherpaInstaller } from './capabilities/sherpa-install.js';
 import { VoiceModelInstaller } from './capabilities/voice-model-install.js';
 import { VoiceEngine } from './capabilities/voice-engine.js';
+import { QwenRunner } from './capabilities/qwen-engine.js';
 import { WebHandler } from './capabilities/web.js';
 import { WidgetsHandler } from './capabilities/widgets.js';
 import { electronCapturer } from './capture.js';
@@ -352,6 +353,26 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       },
       onPath: (name) => hasExecutable(name, env),
     });
+  // Qwen ships no upstream builds, so there is nothing for the app to fetch yet: it is found
+  // through RP_QWEN_TTS, a build bundled into resources, or PATH.
+  const qwenRunner = new QwenRunner({
+    findBinary: () =>
+      findQwenTts({
+        env,
+        resourcesDirs,
+        exists: (file) => {
+          try {
+            return fs.statSync(file).isFile();
+          } catch {
+            return false;
+          }
+        },
+        onPath: (name) => hasExecutable(name, env),
+      }),
+    spawn: (file, args, o) => spawnCapture(file, args, o),
+    timeoutMs: SYNTH_TIMEOUT_MS,
+    logger,
+  });
   const voiceEngine = new VoiceEngine({ logger });
   const voice = new VoiceHandler({
     commands,
@@ -361,6 +382,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     packs,
     voiceSettings: async () => (await settingsOf()).voice,
     findSherpa,
+    qwen: qwenRunner,
     engine: voiceEngine,
     logger,
   });
@@ -369,6 +391,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     dir: voicePreviewDir,
     models: () => readVoiceModels(voicesDir),
     engine: voiceEngine,
+    qwen: qwenRunner,
     engineStatus: () => sherpa.status(),
     modelStatus: () => voiceModel.status(),
     numThreads: async () => (await settingsOf()).voice.numThreads,

@@ -15,6 +15,9 @@ import { RpError, VOICE_PREVIEW_MAX, VOICE_PREVIEW_SENTENCE, assetUrl } from '@r
 import type { VoiceEngine } from './voice-engine.js';
 import { writeWavFile } from './voice-engine.js';
 import type { VoiceModel } from './voice-models.js';
+import { usesSherpa } from './voice-models.js';
+import type { QwenRunner } from './qwen-engine.js';
+import { qwenProfileFor } from './qwen-engine.js';
 
 /** Synthetic pack id under which rendered previews are served to the editor. */
 export const VOICE_PREVIEW_PACK_ID = 'app.rpchat.voice-preview';
@@ -41,6 +44,8 @@ export interface VoiceStudioDeps {
   dir: string;
   models(): Promise<VoiceModel[]>;
   engine: VoiceEngine;
+  /** Drives Qwen models; absent leaves them listed but not previewable. */
+  qwen?: QwenRunner;
   engineStatus?(): AssetInstallStatus;
   modelStatus?(): AssetInstallStatus;
   numThreads(): Promise<number>;
@@ -65,7 +70,9 @@ export class VoiceStudio {
   }
 
   private unavailable(models: VoiceModel[]): string | undefined {
-    if (!this.deps.engine.available()) {
+    // A Qwen model needs neither the addon nor sherpa, so the addon failing to load only blocks
+    // previews when there is nothing else installed that could render one.
+    if (!this.deps.engine.available() && !(this.deps.qwen?.available() && models.some((m) => !usesSherpa(m.engine)))) {
       return 'The bundled speech engine could not be loaded on this machine, so voices cannot be previewed here.';
     }
     if (models.length === 0) {
@@ -100,20 +107,23 @@ export class VoiceStudio {
 
   /** Render one line and return its asset URL. Nothing is saved to the pack. */
   async preview(req: VoicePreviewRequest): Promise<VoicePreview> {
-    if (!this.deps.engine.available()) {
-      throw new RpError('CAPABILITY_FAILED', 'The bundled speech engine is not available, so previews cannot be generated');
-    }
     const raw = (req.text ?? '').trim();
     const text = (raw.length > 0 ? raw : VOICE_PREVIEW_SENTENCE).slice(0, VOICE_PREVIEW_MAX);
     const models = await this.deps.models();
     const model = this.pick(models, req.model);
 
+    // An unseeded take cannot be recovered once it plays, so pick the seed here and report it back.
+    const seed = req.seed !== undefined && req.seed >= 0 ? Math.round(req.seed) : Math.floor(Math.random() * 2_147_483_647);
+
+    if (!usesSherpa(model.engine)) return this.previewQwen(model, text, seed, req);
+
+    if (!this.deps.engine.available()) {
+      throw new RpError('CAPABILITY_FAILED', 'The bundled speech engine is not available, so previews cannot be generated');
+    }
     const reference = req.reference ?? model.sampleReference;
     if (model.clones && !reference) {
       throw new RpError('CAPABILITY_FAILED', `${model.label} speaks in the voice of a reference clip; add one to the character first`, { model: model.name });
     }
-    // An unseeded take cannot be recovered once it plays, so pick the seed here and report it back.
-    const seed = req.seed !== undefined && req.seed >= 0 ? Math.round(req.seed) : Math.floor(Math.random() * 2_147_483_647);
 
     const audio = await this.deps.engine.synthesize(model, {
       text,
@@ -132,6 +142,31 @@ export class VoiceStudio {
     await writeWavFile(path.join(this.deps.dir, name), audio);
     void this.prune();
     return { url: assetUrl(VOICE_PREVIEW_PACK_ID, name), duration: audio.samples.length / audio.sampleRate, seed };
+  }
+
+  /**
+   * The same audition for a Qwen model, which renders straight to the preview file rather than
+   * handing back samples. A character with no `.qvoice` still previews — in one of the model's own
+   * voices — because hearing the model is the point of the button.
+   */
+  private async previewQwen(model: VoiceModel, text: string, seed: number, req: VoicePreviewRequest): Promise<VoicePreview> {
+    const runner = this.deps.qwen;
+    if (!runner?.available()) {
+      throw new RpError('CAPABILITY_FAILED', `${model.label} needs the qwen_tts binary, which was not found`, { model: model.name });
+    }
+    await fs.mkdir(this.deps.dir, { recursive: true });
+    const name = `${randomUUID()}.wav`;
+    const file = path.join(this.deps.dir, name);
+    const seconds = await runner.render(model, {
+      text,
+      outFile: file,
+      seed,
+      ...(qwenProfileFor(req.reference) ? { profile: qwenProfileFor(req.reference) as string } : {}),
+      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+      numThreads: await this.deps.numThreads(),
+    });
+    void this.prune();
+    return { url: assetUrl(VOICE_PREVIEW_PACK_ID, name), duration: seconds, seed };
   }
 
   /** Keep the preview directory bounded; auditioning seeds writes a file every time. */

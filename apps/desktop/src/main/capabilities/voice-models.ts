@@ -25,7 +25,18 @@ export const VOICE_MODEL_MARKER = 'rp-voice.json';
 /** Sample wavs shipped inside the k2-fsa model archives, used when a character supplies no reference. */
 export const SAMPLE_DIRNAME = 'test_wavs';
 
-export type VoiceEngineId = 'pocket' | 'kokoro' | 'kitten' | 'vits';
+export type VoiceEngineId = 'pocket' | 'kokoro' | 'kitten' | 'vits' | 'qwen';
+
+/** Executable for the Qwen3-TTS engine, which is its own binary rather than a sherpa model. */
+export const QWEN_TTS_BINARY = 'qwen_tts';
+
+/** Environment override for the Qwen binary's location. */
+export const QWEN_TTS_ENV = 'RP_QWEN_TTS';
+
+/** Engines driven by sherpa-onnx, as opposed to their own binary. */
+export function usesSherpa(engine: VoiceEngineId): boolean {
+  return engine !== 'qwen';
+}
 
 interface FileRule {
   /** sherpa flag this file is passed as, without the leading `--`. */
@@ -43,7 +54,7 @@ interface EngineSpec {
   id: VoiceEngineId;
   label: string;
   /** Every one of these must resolve or the directory is not this engine. */
-  required: FileRule[];
+  required: Array<FileRule | DirRule>;
   /** Passed when present; absent ones are simply left off. */
   optional: Array<FileRule | DirRule>;
   /** True when the engine takes its voice from reference audio rather than a speaker bank. */
@@ -100,6 +111,21 @@ const ENGINES: EngineSpec[] = [
       { flag: 'kitten-tokens', match: /^tokens\.txt$/i },
     ],
     optional: [{ flag: 'kitten-data-dir', match: /^espeak-ng-data$/i, dir: true }],
+  },
+  {
+    // Not a sherpa model at all: safetensors weights driven by the `qwen_tts` binary. Detection
+    // still lives here so a marker, the engine listing and the directory scan all work the same
+    // way; the argv is built in `qwen-engine.ts`, which takes the directory rather than the files.
+    id: 'qwen',
+    label: 'Qwen3-TTS',
+    clones: true,
+    nameHint: /qwen/i,
+    required: [
+      { flag: 'qwen-config', match: /^config\.json$/i },
+      { flag: 'qwen-weights', match: /^model.*\.safetensors$/i },
+      { flag: 'qwen-speech-tokenizer', match: /^speech_tokenizer$/i, dir: true },
+    ],
+    optional: [],
   },
   {
     id: 'vits',
@@ -161,7 +187,7 @@ function pickFile(names: string[], match: RegExp): string | undefined {
 function resolveEngine(spec: EngineSpec, dir: string, listing: DirListing): VoiceModel | undefined {
   const files: Record<string, string> = {};
   for (const rule of spec.required) {
-    const hit = pickFile(listing.files, rule.match);
+    const hit = pickFile('dir' in rule ? listing.dirs : listing.files, rule.match);
     if (!hit) return undefined;
     files[rule.flag] = joinPath(dir, hit);
   }
@@ -259,24 +285,39 @@ export function referenceFor(model: VoiceModel, characterReference?: string): st
  * the fetched build is pinned to a version whose flags are known to match. Anyone who wants their
  * own build used regardless can point `RP_SHERPA_TTS` at it.
  */
-export function findSherpaTts(opts: {
+export interface FindBinaryOpts {
   env: NodeJS.ProcessEnv;
   resourcesDirs: string[];
   exists(file: string): boolean;
   onPath(name: string): boolean;
   /** Absolute path of the app-managed install, when one has been unpacked. */
   managed?: string;
-}): string | undefined {
-  const override = opts.env[SHERPA_TTS_ENV];
+}
+
+function findEngineBinary(binary: string, envVar: string, opts: FindBinaryOpts): string | undefined {
+  const override = opts.env[envVar];
   if (override && opts.exists(override)) return override;
   for (const dir of opts.resourcesDirs) {
     for (const suffix of ['', '.exe']) {
-      const candidate = `${dir}/bin/${SHERPA_TTS_BINARY}${suffix}`;
+      const candidate = `${dir}/bin/${binary}${suffix}`;
       if (opts.exists(candidate)) return candidate;
     }
   }
   if (opts.managed && opts.exists(opts.managed)) return opts.managed;
-  return opts.onPath(SHERPA_TTS_BINARY) ? SHERPA_TTS_BINARY : undefined;
+  return opts.onPath(binary) ? binary : undefined;
+}
+
+export function findSherpaTts(opts: FindBinaryOpts): string | undefined {
+  return findEngineBinary(SHERPA_TTS_BINARY, SHERPA_TTS_ENV, opts);
+}
+
+/**
+ * Where the Qwen binary may live. Same order as sherpa's, and for the same reason: upstream ships
+ * no releases at all, so a `qwen_tts` on PATH is whatever the user built themselves and is ranked
+ * below the build the app fetched, whose flags are known. `RP_QWEN_TTS` overrides everything.
+ */
+export function findQwenTts(opts: FindBinaryOpts): string | undefined {
+  return findEngineBinary(QWEN_TTS_BINARY, QWEN_TTS_ENV, opts);
 }
 
 /** Engines the app knows how to drive, for settings help and error messages. */
