@@ -42,6 +42,13 @@ export interface WindowManagerOptions {
    */
   devTools?: boolean;
   logger: Logger;
+  /**
+   * Runs once on every main window this manager creates: the first one and every one that
+   * replaces a window that is gone — closed to nothing because `closeToTray` is off, or
+   * destroyed with the session when the user logged out while the app kept running. Handlers
+   * that belong to the window itself go here, so no path that reopens it can forget them.
+   */
+  onMainCreated?: (win: BrowserWindow) => void;
   /** Runs in the main window when it is about to close (reject pending prompts, …). */
   onMainClosed?: () => void;
   /**
@@ -242,6 +249,7 @@ export class WindowManager {
     });
     this.main = win;
     this.track(win, 'main');
+    this.opts.onMainCreated?.(win);
     if (!options.hidden) win.once('ready-to-show', () => win.show());
     win.on('closed', () => {
       if (this.main === win) this.main = undefined;
