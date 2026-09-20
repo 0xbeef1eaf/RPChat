@@ -413,9 +413,9 @@ export function SettingsView() {
             label="Summarise above (tokens)"
             path="history.compressAboveTokens"
             value={settings.history.compressAboveTokens}
-            min={500}
+            min={0}
             step={500}
-            hint="Transcript size that triggers a summary. Keep it well under the context token budget."
+            hint="Transcript size that triggers a summary. 0 (default) derives it from the context token budget, so it follows the model you use; a number here pins it instead."
             onCommit={(v) => patchSettings({ history: { ...settings.history, compressAboveTokens: Math.round(v) } })}
           />
           <NumberField

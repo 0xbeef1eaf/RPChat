@@ -10,7 +10,12 @@ import { DEFAULT_MEMORY_SETTINGS, type MemorySettings } from './memory.js';
 export interface HistorySettings {
   /** Master switch for background summarisation. Default true. */
   compress: boolean;
-  /** Start summarising once the transcript is estimated above this many tokens. Default 6000. */
+  /**
+   * Start summarising once the transcript is estimated above this many tokens. Default 0: derive
+   * it from the room the transcript actually has (`contextTokenBudget` minus the system prompt),
+   * so raising the budget or switching to a larger model moves the threshold with it. A fixed
+   * number here overrides that.
+   */
   compressAboveTokens: number;
   /** Messages at the end of the transcript that are never summarised. Default 16. */
   keepRecentMessages: number;
@@ -26,7 +31,7 @@ export interface HistorySettings {
 
 export const DEFAULT_HISTORY_SETTINGS: HistorySettings = {
   compress: true,
-  compressAboveTokens: 6_000,
+  compressAboveTokens: 0,
   keepRecentMessages: 16,
   summaryBudgetTokens: 700,
   keepActionDetailFor: 0,

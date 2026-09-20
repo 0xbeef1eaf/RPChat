@@ -55,6 +55,12 @@ describe('mergeSettings budget migration', () => {
     expect(mergeSettings({ history: { keepActionDetailFor: 2 } as never }).history.keepActionDetailFor).toBe(0);
     expect(mergeSettings({ history: { keepActionDetailFor: 3 } as never }).history.keepActionDetailFor).toBe(3);
   });
+
+  it('moves the legacy fixed compression threshold back to auto and keeps a chosen one', async () => {
+    const { LEGACY_COMPRESS_ABOVE_TOKENS, mergeSettings } = await import('./defaults.js');
+    expect(mergeSettings({ history: { compressAboveTokens: LEGACY_COMPRESS_ABOVE_TOKENS } as never }).history.compressAboveTokens).toBe(0);
+    expect(mergeSettings({ history: { compressAboveTokens: 20_000 } as never }).history.compressAboveTokens).toBe(20_000);
+  });
 });
 
 describe('mergeSettings chatZoom', () => {

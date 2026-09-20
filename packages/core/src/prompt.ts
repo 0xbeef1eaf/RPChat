@@ -106,7 +106,14 @@ export interface BuiltPrompt {
 
 export { SELF_WAKE_PREFIX } from '@rp/shared';
 export const STATE_JSON_CAP = 4 * 1024;
-const MIN_TRANSCRIPT_BUDGET = 1024;
+export const MIN_TRANSCRIPT_BUDGET = 1024;
+/**
+ * What the system prompt costs, near enough, before one has been built for a session — the SDK
+ * reference with every module plus the engine rules, persona and the dynamic sections around them.
+ * Only used to size the transcript's room before the first prompt of a session; after that the
+ * measured `PromptStats.transcriptBudgetTokens` is what counts.
+ */
+export const ESTIMATED_SYSTEM_TOKENS = 12_000;
 
 function section(tag: string, body: string): string {
   return `<${tag}>\n${body.trim()}\n</${tag}>`;
@@ -257,7 +264,7 @@ export interface TranscriptOptions {
 }
 
 /** Ids of the assistant messages that may keep their action detail, newest first up to `keep`. */
-function actionDetailIds(transcript: ChatMessage[], keep: number | undefined): Set<string> | undefined {
+export function actionDetailIds(transcript: ChatMessage[], keep: number | undefined): Set<string> | undefined {
   if (keep === undefined) return undefined;
   const ids = new Set<string>();
   if (keep <= 0) return ids;

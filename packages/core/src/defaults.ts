@@ -17,6 +17,8 @@ export function defaultSettings(): AppSettings {
 export const LEGACY_CONTEXT_TOKEN_BUDGET = 24_000;
 /** `history.keepActionDetailFor` default before it became 0; migrated on load. */
 export const LEGACY_KEEP_ACTION_DETAIL_FOR = 2;
+/** `history.compressAboveTokens` default before it was derived from the budget; migrated on load. */
+export const LEGACY_COMPRESS_ABOVE_TOKENS = 6_000;
 
 export function mergeSettings(stored: Partial<AppSettings> | undefined, base: AppSettings = defaultSettings()): AppSettings {
   if (!stored) return base;
@@ -45,6 +47,8 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined, base: Ap
     merged.history = { ...base.history, ...stored.history };
     // Early builds defaulted to re-sending the last two turns' tool calls; that overloads smaller models.
     if (stored.history.keepActionDetailFor === LEGACY_KEEP_ACTION_DETAIL_FOR) merged.history.keepActionDetailFor = base.history.keepActionDetailFor;
+    // 6000 was an absolute threshold that fired at a fraction of a 64k budget; move it back to auto.
+    if (stored.history.compressAboveTokens === LEGACY_COMPRESS_ABOVE_TOKENS) merged.history.compressAboveTokens = base.history.compressAboveTokens;
   }
   if (stored.autonomy && typeof stored.autonomy === 'object') {
     merged.autonomy = { ...base.autonomy, ...stored.autonomy };
