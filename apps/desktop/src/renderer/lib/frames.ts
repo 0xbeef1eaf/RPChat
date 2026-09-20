@@ -6,10 +6,28 @@
  */
 
 import type { EditorAsset } from '@rp/shared';
+import { api } from '../api';
 import { needsRendererFrame } from './tagging';
 
 /** How long to wait for a frame before giving up on a file. */
 export const FRAME_TIMEOUT_MS = 15_000;
+
+/**
+ * A same-origin `blob:` URL for an asset, and the call that releases it.
+ *
+ * The canvas below has to *read* what it drew (`toDataURL`), which an asset served over
+ * `rp-asset://` never allows: the scheme is not one Chromium does CORS for, so `crossOrigin`
+ * makes the load fail outright ("Cross origin requests are only supported for protocol schemes:
+ * …") and leaving it off taints the canvas instead. Both end in no frame at all. Fetching the
+ * bytes through main and wrapping them in a blob gives the element a URL of this page's own
+ * origin, so the drawing is readable and no CORS is involved.
+ */
+async function blobUrlFor(url: string): Promise<{ url: string; release: () => void } | undefined> {
+  const asset = await api().app.readAsset(url);
+  if (!asset) return undefined;
+  const blobUrl = URL.createObjectURL(new Blob([asset.data], { type: asset.mime }));
+  return { url: blobUrl, release: () => URL.revokeObjectURL(blobUrl) };
+}
 
 /**
  * The still to send with an asset, or `undefined` when main can read the file itself (PNG/JPEG)
@@ -26,11 +44,12 @@ export async function frameFor(asset: EditorAsset, maxPx = 768): Promise<string 
  * Resolves `undefined` when the file cannot be decoded in time — the caller then tags by name.
  */
 export async function captureVideoFrame(url: string, maxPx = 768): Promise<string | undefined> {
+  const source = await blobUrlFor(url);
+  if (!source) return undefined;
   const video = document.createElement('video');
   video.muted = true;
-  video.crossOrigin = 'anonymous';
   video.preload = 'auto';
-  video.src = url;
+  video.src = source.url;
   try {
     return await new Promise<string | undefined>((resolve) => {
       const timer = window.setTimeout(() => done(undefined), FRAME_TIMEOUT_MS);
@@ -63,6 +82,8 @@ export async function captureVideoFrame(url: string, maxPx = 768): Promise<strin
     });
   } catch {
     return undefined;
+  } finally {
+    source.release();
   }
 }
 
@@ -72,14 +93,15 @@ export async function captureVideoFrame(url: string, maxPx = 768): Promise<strin
  * browser cannot decode the file either.
  */
 export async function renderImageFrame(url: string, maxPx = 768): Promise<string | undefined> {
+  const source = await blobUrlFor(url);
+  if (!source) return undefined;
   const image = new Image();
-  image.crossOrigin = 'anonymous';
   try {
     const loaded = await new Promise<boolean>((resolve) => {
       const timer = window.setTimeout(() => resolve(false), FRAME_TIMEOUT_MS);
       image.onload = () => (window.clearTimeout(timer), resolve(true));
       image.onerror = () => (window.clearTimeout(timer), resolve(false));
-      image.src = url;
+      image.src = source.url;
     });
     const w = image.naturalWidth;
     const h = image.naturalHeight;
@@ -95,6 +117,8 @@ export async function renderImageFrame(url: string, maxPx = 768): Promise<string
     return dataUrl.slice(dataUrl.indexOf(',') + 1) || undefined;
   } catch {
     return undefined;
+  } finally {
+    source.release();
   }
 }
 
