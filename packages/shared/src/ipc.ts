@@ -115,6 +115,16 @@ export interface IpcApi {
      */
     restrictions(): Promise<AppRestrictions>;
     /**
+     * The bytes behind an `rp-asset://` URL the page may already display, resolved through the
+     * same root guard as the protocol itself. The renderer needs them for the work a canvas has
+     * to do on an asset (the frame grabs auto-tagging sends to a vision model): `rp-asset:` is
+     * not a CORS-enabled scheme, so a media element pointed straight at it either refuses to
+     * load with `crossOrigin` set or taints the canvas without it — reading the bytes here and
+     * turning them into a same-origin `blob:` URL sidesteps both. Null when the URL is not a
+     * well-formed asset URL or resolves to no file.
+     */
+    readAsset(url: string): Promise<{ mime: string; data: ArrayBuffer } | null>;
+    /**
      * The policy changed while the app was running (written, replaced, removed, or pushed by the
      * daemon): the restrictions and managed settings as they are now. The UI applies them at once,
      * so withdrawing e.g. the pack editor takes the view away without a restart.

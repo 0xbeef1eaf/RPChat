@@ -5,6 +5,8 @@
  */
 import { dialog, ipcMain, shell } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
+import * as fs from 'node:fs';
+import { mimeFor } from '@rp/pack';
 import type {
   BrowserBlock,
   AppSettings,
@@ -23,6 +25,7 @@ import type {
 } from '@rp/shared';
 import { IPC_EVENT_CHANNELS, RpError } from '@rp/shared';
 import type { Engine, Logger } from '@rp/core';
+import { resolveAssetUrl } from './asset-protocol.js';
 import { notConfigured } from './commands.js';
 import { fetchTelegramChats } from './capabilities/messaging.js';
 import type { AppServices } from './engine.js';
@@ -82,6 +85,23 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
         opts.setVisibleSession?.(typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null);
       },
       restrictions: async () => (await services.policy.current()).restrictions,
+      readAsset: async (_e, url) => {
+        let target: { file: string; relativePath: string } | undefined;
+        try {
+          target = resolveAssetUrl(requireString(url, 'url'), { packRootFor: services.packRootFor });
+        } catch {
+          // PATH_ESCAPE and friends: the same answer as a URL that names nothing.
+          return null;
+        }
+        if (!target) return null;
+        try {
+          const data = await fs.promises.readFile(target.file);
+          // `readFile` hands back a Buffer over a pooled ArrayBuffer: copy out just this file's bytes.
+          return { mime: mimeFor(target.relativePath), data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer };
+        } catch {
+          return null;
+        }
+      },
     },
     packs: {
       list: () => engine.packs.list(),
