@@ -53,6 +53,7 @@ import { SystemInstallUpdater } from './updates/system-updater.js';
 import { isSystemInstallExec } from './system/integration.js';
 import { createHyprTransport } from './display/hyprland.js';
 import type { HyprTransport } from './display/hyprland.js';
+import { HyprFloater } from './display/hypr-float.js';
 import { detectWindowSystem, isHyprland } from './display/layers.js';
 import { phase2, unavailable } from './phase2.js';
 import { createSenses } from './senses/index.js';
@@ -94,6 +95,12 @@ export interface AppServices {
   permissionPrompts: PendingPrompts<PermissionDecision>;
   uiPrompts: PendingPrompts<UiPromptAnswer>;
   backend(): DisplayBackend;
+  /**
+   * Prepare the compositor for a window about to open with this title: under Hyprland the prompt
+   * windows sdk.ui and permission requests open are floated rather than tiled (hypr-float.ts).
+   * Resolves when the compositor knows, or when waiting for it stopped being worth it.
+   */
+  prepareWindow(title: string): Promise<void>;
   /** Re-select the display backend after the setting changed. */
   selectBackend(setting: AppSettings['displayBackend']): Promise<void>;
   /** Always started: it carries the browser-extension bridge as well as the overlay media pages. */
@@ -196,7 +203,9 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
 
   // ---- prompts ------------------------------------------------------------
   // Every question gets a focused window of its own; the in-app modal is the fallback for when
-  // one cannot be opened. Answering (or timing out) closes the window it was asked in.
+  // one cannot be opened. Answering (or timing out) closes the window it was asked in. A tiling
+  // compositor is told to float such a window before it is shown (docs/spec/overlay.md §1.2.3).
+  const floater = hypr ? new HyprFloater({ transport: hypr, logger }) : undefined;
   const closePromptWindow = (id: string): void => windows.closePromptWindow(id);
   const permissionPrompts = new PendingPrompts<PermissionDecision>({ fallback: 'deny', onSettled: closePromptWindow });
   const uiPrompts = new PendingPrompts<UiPromptAnswer>({ fallback: null, onSettled: closePromptWindow });
@@ -695,6 +704,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       logger.info(`[browser] bridge port set to ${port} (listening on ${loopback.listeningPort})`);
     },
     backend: () => backend,
+    prepareWindow: (title) => floater?.floatWindow(title) ?? Promise.resolve(),
     async selectBackend(setting) {
       if (setting === backendSetting) return;
       const previous = backend;
@@ -722,6 +732,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       daemon.close();
       browser.close();
       await engine.stop().catch((err: unknown) => logger.warn('[engine] stop failed', err));
+      await floater?.dispose().catch((err: unknown) => logger.warn('[display] dropping the prompt float rules failed', err));
       await backend.dispose().catch((err: unknown) => logger.warn('[display] dispose failed', err));
       await loopback.close().catch(() => undefined);
     },

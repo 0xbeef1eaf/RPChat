@@ -49,6 +49,12 @@ export interface WindowManagerOptions {
    * window's close button). The question must be answered with its fallback.
    */
   onPromptDismissed?: (promptId: string) => void;
+  /**
+   * Tell the compositor how to treat the prompt window about to open with this title, before it
+   * is shown (Hyprland floats it instead of tiling a dialog into the layout — hypr-float.ts).
+   * The window is shown as soon as the promise settles, so it must settle promptly.
+   */
+  prepareWindow?: (title: string) => Promise<void>;
 }
 
 /** Wraps a BrowserWindow hosting media.html as an `OverlayWindowLike`. */
@@ -265,6 +271,10 @@ export class WindowManager {
     const id = promptIdOf(payload);
     if (this.prompts.has(id)) return true;
     const { title, width, height } = promptWindowChrome(payload);
+    // Sent before the window exists, so the rule is in place by the time it maps.
+    const prepared = (this.opts.prepareWindow?.(title) ?? Promise.resolve()).catch((err: unknown) => {
+      this.opts.logger.debug('[windows] preparing the prompt window failed', err);
+    });
     let win: BrowserWindow;
     try {
       win = new BrowserWindow({
@@ -296,10 +306,13 @@ export class WindowManager {
     this.prompts.set(id, { win, payload });
     this.promptSenders.set(contentsId, id);
     win.once('ready-to-show', () => {
-      // A question the user has not seen is worth interrupting for: show it in front, focused.
-      win.show();
-      win.moveTop();
-      win.focus();
+      void prepared.then(() => {
+        if (win.isDestroyed()) return;
+        // A question the user has not seen is worth interrupting for: show it in front, focused.
+        win.show();
+        win.moveTop();
+        win.focus();
+      });
     });
     win.once('closed', () => {
       this.promptSenders.delete(contentsId);
