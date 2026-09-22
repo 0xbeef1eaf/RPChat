@@ -94,6 +94,32 @@ describe('QwenModelInstaller', () => {
     expect(await installer.installed()).toBeUndefined();
   });
 
+  it('sees a model an earlier run left behind, without being asked to fetch it', async () => {
+    const first = server(sizeOf);
+    await make(first.fetchImpl).ensure();
+
+    // A fresh installer, as after a restart: nothing has called ensure(), so its in-memory status
+    // is 'absent' and only a look at the disk can tell the truth.
+    const fresh = make(server(sizeOf).fetchImpl);
+    expect(fresh.status().state).toBe('absent');
+    expect((await fresh.currentStatus()).state).toBe('ready');
+  });
+
+  it('reports a download as under way before any file is touched', () => {
+    const installer = make(server(sizeOf).fetchImpl);
+    expect(installer.status().state).toBe('absent');
+    installer.begin();
+    // Synchronous on purpose: the caller returns to the UI long before ensure() can say anything.
+    expect(installer.status()).toMatchObject({ state: 'downloading', received: 0 });
+  });
+
+  it('does not re-open a finished install by marking it started', async () => {
+    const installer = make(server(sizeOf).fetchImpl);
+    await installer.ensure();
+    installer.begin();
+    expect(installer.status().state).toBe('ready');
+  });
+
   it('shares one download between concurrent callers', async () => {
     const { asked, fetchImpl } = server(sizeOf);
     const installer = make(fetchImpl);
