@@ -19,6 +19,12 @@ const nativeDir = resolve(appDir, '../../native');
 const require = process.env.RP_REQUIRE_NATIVE === '1';
 let failed = false;
 
+/**
+ * Note what `RP_REQUIRE_NATIVE=1` means before adding a part here: the release workflow sets it, so
+ * a skip that is merely a notice on a developer's machine **fails the release build**. Anything
+ * added below therefore needs its toolchain in *both* ci.yml and release.yml, not just the one that
+ * runs on pull requests.
+ */
 function skip(what, reason) {
   console.log(`[build-native] skipping ${what}: ${reason}`);
   if (require) failed = true;
