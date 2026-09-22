@@ -1,5 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist", "lib": ["ES2022", "DOM"] },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests are run by vitest (which transpiles them) and reach for node:fs to read the example
+  // packs; the package itself stays environment-agnostic, so they are not part of the build.
+  "exclude": ["src/**/*.test.ts"]
 }
