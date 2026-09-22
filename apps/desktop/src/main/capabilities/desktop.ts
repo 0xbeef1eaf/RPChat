@@ -5,6 +5,7 @@ import { RpError } from '@rp/shared';
 import { expandHome, isMissingExecutable } from '../commands.js';
 import type { HyprClientJson, HyprMonitorJson, HyprTransport } from '../display/hyprland.js';
 import { normalizeAddress } from '../display/hyprland.js';
+import { OVERLAY_TITLE_PREFIX } from '../display/layers.js';
 import { isLaunchAllowed } from './allowlist.js';
 import type { CommandRunner } from './commands-runner.js';
 
@@ -61,6 +62,24 @@ export function hyprFocusCommand(address: string): string {
   return `dispatch focuswindow address:${normalizeAddress(address)}`;
 }
 
+/** A close *request* (what the close button sends): the app may still ask to save, or refuse. */
+export function hyprCloseCommand(address: string): string {
+  return `dispatch closewindow address:${normalizeAddress(address)}`;
+}
+
+/**
+ * Addresses of the windows this app owns — its own process's (chat, prompts, audio) and the
+ * overlays it drew. A character may see them in `listWindows()` but may never close them.
+ */
+export function ownWindowIds(clients: HyprClientJson[], ownPid: number): Set<string> {
+  const out = new Set<string>();
+  for (const c of clients) {
+    if (typeof c.address !== 'string') continue;
+    if (c.pid === ownPid || (c.title ?? '').startsWith(OVERLAY_TITLE_PREFIX)) out.add(normalizeAddress(c.address));
+  }
+  return out;
+}
+
 export function hyprMoveWindowCommands(address: string, to: MoveTarget, monitorName?: string): string[] {
   const a = normalizeAddress(address);
   const out: string[] = [];
@@ -98,13 +117,18 @@ export function clampLevel(v: unknown): number {
 
 /** Window/workspace methods have no backend outside Hyprland (no template covers them). */
 export const HYPRLAND_REQUIRED_MESSAGE =
-  'Window and workspace control (sdk.desktop.listWindows/focusWindow/moveWindow/workspace/currentWorkspace) is only available when the app runs under Hyprland; this desktop session is not Hyprland, so there is nothing to configure';
+  'Window and workspace control (sdk.desktop.listWindows/focusWindow/moveWindow/closeWindow/workspace/currentWorkspace) is only available when the app runs under Hyprland; this desktop session is not Hyprland, so there is nothing to configure';
+
+/** Refusing to close one of our own windows: a character may not shut the app it lives in. */
+export const OWN_WINDOW_MESSAGE = 'That window belongs to rpchat itself; a character cannot close the app it lives in';
 
 export interface DesktopHandlerDeps {
   commands: CommandRunner;
   hypr?: HyprTransport;
   launchAllowlist(): Promise<string[]>;
   spawnImpl?: (file: string, args: string[]) => { pid?: number | undefined; unref(): void; on(event: 'error', cb: (err: Error) => void): unknown };
+  /** This app's process id, used to recognise its own windows (defaults to `process.pid`). */
+  ownPid?: number;
   logger: Pick<Console, 'warn' | 'debug'>;
 }
 
@@ -145,6 +169,14 @@ export class DesktopHandler implements CapabilityHandler {
           monitorName = m.name;
         }
         for (const cmd of hyprMoveWindowCommands(w.id, to, monitorName)) await this.hyprOk(cmd);
+        return true;
+      }
+      case 'closeWindow': {
+        const { windows, own } = await this.windowSnapshot();
+        const w = matchWindow(windows, asMatch(args[0]));
+        if (!w) return false;
+        if (own.has(w.id)) throw new RpError('PERMISSION_DENIED', OWN_WINDOW_MESSAGE, { id: w.id, title: w.title, app: w.app });
+        await this.hyprOk(hyprCloseCommand(w.id));
         return true;
       }
       case 'workspace':
@@ -201,13 +233,22 @@ export class DesktopHandler implements CapabilityHandler {
   }
 
   async listWindows(): Promise<DesktopWindow[]> {
+    return (await this.windowSnapshot()).windows;
+  }
+
+  /** One round of Hyprland queries: the list a character sees, plus the addresses it may not close. */
+  private async windowSnapshot(): Promise<{ windows: DesktopWindow[]; own: Set<string> }> {
     if (!this.deps.hypr) throw new RpError('CAPABILITY_FAILED', HYPRLAND_REQUIRED_MESSAGE);
     const [clients, monitors, active] = await Promise.all([
       this.hyprJson<HyprClientJson[]>('j/clients'),
       this.hyprJson<HyprMonitorJson[]>('j/monitors'),
       this.hyprJson<{ address?: string }>('j/activewindow').catch(() => ({}) as { address?: string }),
     ]);
-    return windowsFromHyprClients(Array.isArray(clients) ? clients : [], Array.isArray(monitors) ? monitors : [], active.address);
+    const list = Array.isArray(clients) ? clients : [];
+    return {
+      windows: windowsFromHyprClients(list, Array.isArray(monitors) ? monitors : [], active.address),
+      own: ownWindowIds(list, this.deps.ownPid ?? process.pid),
+    };
   }
 
   private async hyprJson<T>(command: string): Promise<T> {
