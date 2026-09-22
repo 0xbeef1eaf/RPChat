@@ -297,6 +297,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       revealInFolder: (_e, key) => services.editor.revealInFolder(requireString(key, 'key')),
       behaviourTemplates: async () => services.editor.behaviourTemplates(),
       voiceStudio: () => services.editor.voiceStudio(),
+      installVoiceModel: () => services.editor.installVoiceModel(),
       pickVoice: (_e, key, dir) => services.editor.pickVoice(requireString(key, 'key'), requireString(dir, 'dir')),
       previewVoice: (_e, key, dir, opts) => services.editor.previewVoice(requireString(key, 'key'), requireString(dir, 'dir'), opts ?? {}),
     },

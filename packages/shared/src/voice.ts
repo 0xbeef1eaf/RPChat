@@ -58,6 +58,11 @@ export interface VoiceStudioState {
   engine?: AssetInstallStatus;
   /** State of the default voice model, fetched the same way. */
   model?: AssetInstallStatus;
+  /**
+   * State of the Qwen3-TTS model, which is ~2.5 GB and so is fetched only when asked for rather
+   * than on first start. Absent when that engine cannot be used here at all.
+   */
+  qwen?: AssetInstallStatus;
   /** Why previews cannot be generated right now; absent when they can. */
   unavailable?: string;
 }

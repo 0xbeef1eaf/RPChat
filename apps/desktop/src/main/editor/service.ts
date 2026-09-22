@@ -28,6 +28,7 @@ import { CHARACTER_MANIFEST_FILENAME, MEDIA_MANIFEST_FILENAME, PACK_MANIFEST_FIL
 import type { VoicePreview, VoicePreviewOptions, VoiceStudioState } from '@rp/shared';
 import type { VoicePreviewRequest } from '../capabilities/voice-studio.js';
 import { readWavFile } from '../capabilities/voice-engine.js';
+import { QVOICE_VERSIONS, QWEN_PROFILE_EXT, readQvoiceVersion } from '../capabilities/qwen-engine.js';
 import {
   ASSET_KIND_BY_EXTENSION,
   CHARACTER_ID_PATTERN,
@@ -91,10 +92,32 @@ export interface EditorServiceDeps {
 export interface VoiceStudioLike {
   state(): Promise<VoiceStudioState>;
   preview(req: VoicePreviewRequest): Promise<VoicePreview>;
+  installQwenModel(): Promise<void>;
 }
 
 /** Assets asked for in one `suggestMediaTags` call, so a stray loop cannot hammer the model. */
 export const MAX_TAG_BATCH = 25;
+
+/**
+ * What the voice picker offers, by engine.
+ *
+ * Qwen cannot clone from audio at all — it speaks from a `.qvoice` profile built by a separate
+ * model — so offering a wav there would let an author pick a file the engine silently ignores.
+ * The sherpa engines are the other way round. With no model chosen yet, both are offered.
+ */
+export function voicePickFilters(engine?: string): Array<{ name: string; extensions: string[] }> {
+  if (engine === 'qwen') return [{ name: 'Voice profiles', extensions: ['qvoice'] }];
+  if (engine) return [{ name: 'Audio', extensions: ['wav'] }];
+  return [
+    { name: 'Voice reference', extensions: ['wav', 'qvoice'] },
+    { name: 'Audio', extensions: ['wav'] },
+    { name: 'Voice profiles', extensions: ['qvoice'] },
+  ];
+}
+
+export function voicePickTitle(engine?: string): string {
+  return engine === 'qwen' ? 'Choose a voice profile' : 'Choose a voice recording';
+}
 
 const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'apng'];
 const EXPRESSION_EXT = [...IMAGE_EXT, 'webm', 'mp4'];
@@ -544,6 +567,49 @@ export class EditorService {
   // The character's voice is a recording the author supplies and that lives in the pack, so a
   // published pack carries the voice it speaks with (docs/spec/living.md §4a).
 
+  /**
+   * The engine behind the character's chosen model, so the picker can offer the right files. A
+   * model that is not installed, or no studio at all, leaves it undecided rather than guessing —
+   * the picker then offers both kinds.
+   */
+  private async voiceEngineOf(model?: string): Promise<string | undefined> {
+    try {
+      const models = (await this.deps.voiceStudio?.state())?.models ?? [];
+      if (model) return models.find((m) => m.name === model)?.engine;
+      return models.length === 1 ? models[0]?.engine : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Reject a file that cannot be a voice reference before it is copied into the pack.
+   *
+   * A `.qvoice` is an opaque profile — nothing to decode or measure — so it is checked by its
+   * header. A recording is read in full, because a model can only use 16-bit PCM and failing here
+   * with a clear message beats failing later inside the engine.
+   */
+  private async checkVoiceReference(file: string): Promise<void> {
+    if (file.toLowerCase().endsWith(QWEN_PROFILE_EXT)) {
+      const version = await readQvoiceVersion(file);
+      if (version === undefined) {
+        throw new RpError('INVALID_ARGUMENT', 'That file is not a voice profile; a .qvoice starts with QVCE');
+      }
+      if (!QVOICE_VERSIONS.includes(version)) {
+        throw new RpError('INVALID_ARGUMENT', `That voice profile is version ${version}; this build reads ${QVOICE_VERSIONS.join(', ')}`);
+      }
+      return;
+    }
+    let seconds: number;
+    try {
+      const audio = await readWavFile(file);
+      seconds = audio.samples.length / audio.sampleRate;
+    } catch (err) {
+      throw new RpError('INVALID_ARGUMENT', `That file cannot be used as a voice reference: ${(err as Error).message}`);
+    }
+    if (seconds < 1) throw new RpError('INVALID_ARGUMENT', `That recording is ${seconds.toFixed(1)}s; a voice reference needs at least a second of speech`);
+  }
+
   private studio(): VoiceStudioLike {
     const studio = this.deps.voiceStudio;
     if (!studio) throw new RpError('CAPABILITY_FAILED', 'Voice previews are not available in this build');
@@ -551,6 +617,12 @@ export class EditorService {
   }
 
   async voiceStudio(): Promise<VoiceStudioState> {
+    return this.studio().state();
+  }
+
+  /** Start the Qwen model download. Returns as soon as it is under way, not when it finishes. */
+  async installVoiceModel(): Promise<VoiceStudioState> {
+    await this.studio().installQwenModel();
     return this.studio().state();
   }
 
@@ -562,16 +634,10 @@ export class EditorService {
   async pickVoice(key: string, charDir: string): Promise<EditorProject> {
     const { dir } = this.entry(key);
     const ch = await this.characterOf(dir, charDir, key);
-    const [file] = await this.deps.dialogs.openFiles('Choose a voice recording', [{ name: 'Audio', extensions: ['wav'] }], false);
+    const engine = await this.voiceEngineOf(ch.definition.voice?.model);
+    const [file] = await this.deps.dialogs.openFiles(voicePickTitle(engine), voicePickFilters(engine), false);
     if (!file) return this.read(key);
-    let seconds: number;
-    try {
-      const audio = await readWavFile(file);
-      seconds = audio.samples.length / audio.sampleRate;
-    } catch (err) {
-      throw new RpError('INVALID_ARGUMENT', `That file cannot be used as a voice reference: ${(err as Error).message}`);
-    }
-    if (seconds < 1) throw new RpError('INVALID_ARGUMENT', `That recording is ${seconds.toFixed(1)}s; a voice reference needs at least a second of speech`);
+    await this.checkVoiceReference(file);
     const rel = await this.copyIntoCharacter(dir, ch.dir, file);
     const voice = { ...(ch.definition.voice ?? {}), reference: rel };
     delete (voice as { referenceSource?: string }).referenceSource;

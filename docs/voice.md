@@ -195,15 +195,40 @@ some flow.
 
 The playback model cannot clone from audio directly. A character's `voice.reference` must point at a
 `.qvoice` (16–25 MB); anything else is ignored and the model speaks in one of its own voices, which
-is a usable result rather than an error. Building a profile needs the **Base** model — a second
+is a usable result rather than an error. The editor's picker follows the selected engine — profiles
+for Qwen, recordings for the sherpa engines — so an author cannot pick a file the engine will drop
+on the floor. A profile starts with the ASCII magic `QVCE` and a little-endian version, which is the
+only check available on an otherwise opaque file. Building a profile needs the **Base** model — a second
 2.4 GB download — and is therefore fetched only when an author actually builds one.
 
 ### Distribution
 
-Upstream (`gabriele-mastrapasqua/qwen3-tts`, MIT) publishes **no releases or tags** — source only.
-There is nothing for the app to download, so the binary is found through `RP_QWEN_TTS`, a build in
-`resources/bin`, or PATH, and the engine is Linux-only for now. The model directory is 2.4 GB
-against Pocket's 98 MB; `--int8` quantises at load, so there is no smaller on-disk form.
+Upstream (`gabriele-mastrapasqua/qwen3-tts`, MIT) publishes **no releases or tags** — source only,
+so there is no prebuilt binary to fetch the way sherpa's is.
+
+The binary is therefore built at package time. `scripts/build-native.mjs` clones the pinned commit
+into `native/qwen3-tts/` (gitignored) and runs `make blas`, copying the result to
+`resources/bin/qwen_tts`, where `findQwenTts` already looks. It is ~1.3 MB, so it costs the
+installer almost nothing. Like the other native pieces it **skips with a notice** when its
+toolchain is missing, so a machine without a compiler still gets a working app on Pocket TTS.
+
+Two traps in that Makefile, both of which produce a build that looks fine:
+
+- its Linux branch links OpenBLAS unconditionally, so without `libopenblas-dev` the build gets all
+  the way to the final link before failing — the script checks `pkg-config openblas` up front and
+  CI installs the package;
+- its SIMD detection targets the **build** host. Left alone, a CI runner with AVX-512 emits an
+  `avx512bf16` binary that is an illegal instruction on most consumer CPUs the first time a
+  character speaks. `SIMD=portable` is mandatory for anything shipped, and upstream's own build
+  banner says so in passing — it is easy to read straight past.
+
+The **weights** are a separate matter: ~2.5 GB, fetched from Hugging Face file by file (there is no
+archive) by `qwen-install.ts`, and deliberately **not** on first start the way the 98 MB Pocket
+model is. The pack editor offers the download when the engine is present and the weights are not.
+Files land in a `.incoming` directory renamed into place only once every one is the right size, so
+a half download is never visible to the model scanner, and a retry skips whatever already arrived.
+Sizes are pinned per file — the repository publishes no checksums — so changing the revision means
+re-checking every one. `--int8` quantises at load, so there is no smaller on-disk form.
 
 ## Changing dependencies
 

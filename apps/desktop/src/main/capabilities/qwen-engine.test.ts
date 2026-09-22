@@ -14,12 +14,14 @@ import type { VoiceModel } from './voice-models.js';
 import { writeWavFile } from './voice-engine.js';
 import type { QwenRunnerDeps } from './qwen-engine.js';
 import {
+  QVOICE_MAGIC,
   QWEN_DEFAULTS,
   QwenRunner,
   buildQwenArgs,
   collapsed,
   expectedSeconds,
   qwenProfileFor,
+  readQvoiceVersion,
   retrySeed,
 } from './qwen-engine.js';
 
@@ -220,5 +222,45 @@ describe('QwenRunner', () => {
     });
     expect(runner.available()).toBe(false);
     await expect(runner.render(MODEL, { text: LINE, outFile: path.join(dir, 'a.wav') })).rejects.toThrow(/qwen_tts/);
+  });
+});
+
+describe('readQvoiceVersion', () => {
+  let dir = '';
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'qvoice-'));
+  });
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  /** A profile is magic + a little-endian version; the rest is opaque weights. */
+  const write = async (name: string, head: Buffer): Promise<string> => {
+    const file = path.join(dir, name);
+    await fs.writeFile(file, Buffer.concat([head, Buffer.alloc(64)]));
+    return file;
+  };
+
+  const header = (magic: string, version: number): Buffer => {
+    const b = Buffer.alloc(8);
+    b.write(magic, 0, 'ascii');
+    b.writeUInt32LE(version, 4);
+    return b;
+  };
+
+  it('reads the version out of a profile', async () => {
+    expect(await readQvoiceVersion(await write('a.qvoice', header(QVOICE_MAGIC, 3)))).toBe(3);
+    // A newer profile still parses; it is the caller that decides what it can load.
+    expect(await readQvoiceVersion(await write('b.qvoice', header(QVOICE_MAGIC, 9)))).toBe(9);
+  });
+
+  it('rejects anything that is not one', async () => {
+    expect(await readQvoiceVersion(await write('c.qvoice', header('RIFF', 3)))).toBeUndefined();
+    // Too short to hold a header at all.
+    const stub = path.join(dir, 'd.qvoice');
+    await fs.writeFile(stub, 'QV');
+    expect(await readQvoiceVersion(stub)).toBeUndefined();
+    expect(await readQvoiceVersion(path.join(dir, 'missing.qvoice'))).toBeUndefined();
   });
 });

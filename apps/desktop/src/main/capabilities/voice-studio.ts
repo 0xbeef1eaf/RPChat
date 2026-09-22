@@ -53,6 +53,8 @@ export interface VoiceStudioDeps {
   qwen?: QwenRunner;
   engineStatus?(): AssetInstallStatus;
   modelStatus?(): AssetInstallStatus;
+  /** Status of the Qwen model, and the call that starts fetching it. Absent without that engine. */
+  qwenModel?: { status(): AssetInstallStatus; ensure(): Promise<string | undefined> };
   numThreads(): Promise<number>;
   logger: Pick<Console, 'warn' | 'debug'>;
 }
@@ -69,6 +71,9 @@ export class VoiceStudio {
     if (engine) out.engine = engine;
     const model = this.deps.modelStatus?.();
     if (model) out.model = model;
+    // Only offered where the engine could actually run: without the binary the download is 2.5 GB
+    // of weights nothing can read.
+    if (this.deps.qwenModel && this.deps.qwen?.available()) out.qwen = this.deps.qwenModel.status();
     const why = this.unavailable(models);
     if (why) out.unavailable = why;
     return out;
@@ -108,6 +113,19 @@ export class VoiceStudio {
       return hit;
     }
     return models[0] as VoiceModel;
+  }
+
+  /**
+   * Start fetching the Qwen model, and return without waiting for it.
+   *
+   * It is ~2.5 GB; holding the IPC call open for that would block the editor and time out long
+   * before the download finished. Progress arrives through `state()`, which the panel is already
+   * polling while anything is downloading.
+   */
+  async installQwenModel(): Promise<void> {
+    const qwen = this.deps.qwenModel;
+    if (!qwen) throw new RpError('CAPABILITY_FAILED', 'The Qwen3-TTS engine is not available in this build');
+    void qwen.ensure().catch(() => undefined);
   }
 
   /** Render one line and return its asset URL. Nothing is saved to the pack. */

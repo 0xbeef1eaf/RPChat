@@ -45,7 +45,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   editor: [
     'workspaceDir', 'listProjects', 'create', 'open', 'importInstalled', 'forget', 'read', 'saveManifest', 'saveCharacter', 'saveScript', 'removeScript', 'scriptTemplate',
     'pickAvatar', 'pickExpression', 'addMedia', 'addMediaFiles', 'removeMedia', 'saveMediaManifest', 'suggestMediaTags', 'saveReadme', 'validate', 'checkScript', 'exportPack', 'installToApp',
-    'revealInFolder', 'behaviourTemplates', 'voiceStudio', 'pickVoice', 'previewVoice',
+    'revealInFolder', 'behaviourTemplates', 'voiceStudio', 'installVoiceModel', 'pickVoice', 'previewVoice',
   ],
   media: ['report', 'closeAll'],
   display: ['backend', 'monitors'],

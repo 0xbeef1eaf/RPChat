@@ -41,7 +41,8 @@ export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: Voi
 
   // Keep polling only while something is still downloading, so the panel counts up on a first run.
   const fetching = studio?.engine?.state === 'downloading' || studio?.engine?.state === 'extracting'
-    || studio?.model?.state === 'downloading' || studio?.model?.state === 'extracting';
+    || studio?.model?.state === 'downloading' || studio?.model?.state === 'extracting'
+    || studio?.qwen?.state === 'downloading';
   useEffect(() => {
     if (!fetching) return;
     const t = window.setInterval(load, 2000);
@@ -62,6 +63,17 @@ export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: Voi
       onProject(await api().editor.pickVoice(projectKey, dir));
     } catch (err) {
       reportError('Could not use that recording', err);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const installQwen = async () => {
+    setBusy('install');
+    try {
+      setStudio(await api().editor.installVoiceModel());
+    } catch (err) {
+      reportError('Could not start the download', err);
     } finally {
       setBusy(null);
     }
@@ -95,6 +107,22 @@ export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: Voi
 
   const models = studio?.models ?? [];
   const blocked = studio?.unavailable;
+  /**
+   * The second engine's weights are a deliberate download rather than part of first run, so the
+   * panel has to say what it costs and how far along it is. Absent entirely where the engine
+   * cannot run, in which case there is nothing worth offering.
+   */
+  const qwen = ((): { hint: string; offer: boolean } | undefined => {
+    const st = studio?.qwen;
+    if (!st) return undefined;
+    if (st.state === 'ready' || st.state === 'present') return undefined;
+    if (st.state === 'downloading') {
+      const pct = st.total ? Math.floor(((st.received ?? 0) / st.total) * 100) : 0;
+      return { hint: `Downloading the weights — ${pct}%. This keeps going if you leave the panel.`, offer: false };
+    }
+    if (st.state === 'failed') return { hint: `Download failed: ${st.error ?? 'unknown error'}. Trying again resumes where it stopped.`, offer: true };
+    return { hint: 'A much better cloned voice, from a .qvoice profile. The weights are a separate download.', offer: true };
+  })();
   const pinned = voice?.seed !== undefined && voice.seed >= 0;
   /** The take just heard is the one saved on the character, so the lock reads as closed. */
   const locked = last !== null && voice?.seed === last.seed;
@@ -124,6 +152,20 @@ export function VoicePicker({ projectKey, dir, voice, onChange, onProject }: Voi
           </button>
         ) : null}
       </div>
+
+      {qwen ? (
+        <div className="expr-row" style={{ marginTop: 8 }}>
+          <div className="item-text">
+            <span className="item-title">Qwen3-TTS</span>
+            <span className="item-sub mono">{qwen.hint}</span>
+          </div>
+          {qwen.offer ? (
+            <button type="button" className="btn btn-sm" onClick={installQwen} disabled={busy !== null}>
+              {busy === 'install' ? 'Starting…' : 'Download (2.5 GB)'}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="field-grid" style={{ marginTop: 8 }}>
         <div className="field">

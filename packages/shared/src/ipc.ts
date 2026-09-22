@@ -433,6 +433,11 @@ export interface IpcApi {
     /** Installed voice models, plus how the engine and default model downloads are getting on. */
     voiceStudio(): Promise<VoiceStudioState>;
     /**
+     * Start fetching the Qwen3-TTS weights, returning as soon as the download is under way rather
+     * than when it completes — it is ~2.5 GB. Progress arrives through `voiceStudio()`.
+     */
+    installVoiceModel(): Promise<VoiceStudioState>;
+    /**
      * Native picker → copies the chosen recording into the character directory and points
      * `voice.reference` at it, so the pack carries the voice it speaks with. The file must be a
      * 16-bit PCM wav, which is what the models read.
