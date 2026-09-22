@@ -215,8 +215,11 @@ toolchain is missing, so a machine without a compiler still gets a working app o
 Two traps in that Makefile, both of which produce a build that looks fine:
 
 - its Linux branch links OpenBLAS unconditionally, so without `libopenblas-dev` the build gets all
-  the way to the final link before failing — the script checks `pkg-config openblas` up front and
-  CI installs the package;
+  the way to the final link before failing — the script checks `pkg-config openblas` up front, and
+  **both** `ci.yml` and `release.yml` install the package. Installing it in only one of them is a
+  live trap: `build-native.mjs` skips a part whose toolchain is missing, which is a notice on a
+  developer's machine but fatal under `RP_REQUIRE_NATIVE=1`, which the release workflow sets. That
+  combination passed CI and then failed the release, so no build shipped at all;
 - its SIMD detection targets the **build** host. Left alone, a CI runner with AVX-512 emits an
   `avx512bf16` binary that is an illegal instruction on most consumer CPUs the first time a
   character speaks. `SIMD=portable` is mandatory for anything shipped, and upstream's own build
