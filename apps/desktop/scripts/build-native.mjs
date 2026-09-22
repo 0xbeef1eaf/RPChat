@@ -121,11 +121,22 @@ function buildQwenTts() {
       execFileSync('git', ['fetch', '-q', '--depth', '1', 'origin', QWEN_COMMIT], { cwd: buildDir, stdio: 'inherit' });
       execFileSync('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: buildDir, stdio: 'inherit' });
     }
-    // `SIMD=portable` is not optional for something we ship. The Makefile otherwise detects the
-    // *build* host and compiles for it — a CI runner with AVX-512 produced an `avx512bf16` binary,
-    // which is an illegal instruction on most consumer CPUs the moment a character speaks.
-    console.log('[build-native] make blas SIMD=portable (qwen_tts)');
-    execFileSync('make', ['blas', 'SIMD=portable'], { cwd: buildDir, stdio: 'inherit' });
+    // Two overrides, both mandatory for a binary that leaves this machine.
+    //
+    // `SIMD=portable`: the Makefile otherwise detects the *build* host and compiles for it — a CI
+    // runner with AVX-512 produced an `avx512bf16` binary, which is an illegal instruction on most
+    // consumer CPUs the moment a character speaks.
+    //
+    // Static OpenBLAS: the Makefile links `-lopenblas`, which resolves on a machine with the dev
+    // package and nowhere else. A dynamically linked build ships fine and then dies at startup
+    // with `libopenblas.so.0: cannot open shared object file`. Dropping BLAS instead is not an
+    // option — measured RTF 31 without it against ~2.5 with it, i.e. three minutes for a
+    // six-second line.
+    console.log('[build-native] make blas SIMD=portable (qwen_tts, static OpenBLAS)');
+    execFileSync('make', ['blas', 'SIMD=portable', 'LDLIBS=-lm -lpthread -l:libopenblas.a -lgfortran'], {
+      cwd: buildDir,
+      stdio: 'inherit',
+    });
   } catch (err) {
     // Never fatal by default: this engine is opt-in, and a machine without the toolchain (or
     // without the network, on a clone) should still get a working app with Pocket TTS.
@@ -134,6 +145,15 @@ function buildQwenTts() {
 
   const built = join(buildDir, 'qwen_tts');
   if (!existsSync(built)) return skip('qwen_tts', `expected a binary at ${built}`);
+  // Refuse to ship one that needs a library the user will not have. This is the check that was
+  // missing when a dynamically linked build reached a machine without OpenBLAS and died at startup.
+  // Under RP_REQUIRE_NATIVE=1 — which CI and the release both set — this fails the build rather
+  // than quietly shipping something that cannot start.
+  const linked = spawnSync('ldd', [built], { encoding: 'utf8' });
+  const unshippable = /libopenblas|libgfortran|libquadmath|liblapack/.exec(linked.stdout ?? '');
+  if (linked.status === 0 && unshippable) {
+    return skip('qwen_tts', `it links ${unshippable[0]} dynamically, which most machines do not have`);
+  }
   const target = resolve(appDir, 'resources/bin/qwen_tts');
   mkdirSync(dirname(target), { recursive: true });
   copyFileSync(built, target);
