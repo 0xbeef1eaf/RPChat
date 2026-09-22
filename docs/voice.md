@@ -195,7 +195,9 @@ some flow.
 
 The playback model cannot clone from audio directly. A character's `voice.reference` must point at a
 `.qvoice` (16–25 MB); anything else is ignored and the model speaks in one of its own voices, which
-is a usable result rather than an error. The editor's picker follows the selected engine — profiles
+is a usable result rather than an error. `voice.reference` therefore accepts `.wav` **or**
+`.qvoice` in the pack schema — changing the picker without changing the schema just moves the
+failure from the dialog to the save. The editor's picker follows the selected engine — profiles
 for Qwen, recordings for the sherpa engines — so an author cannot pick a file the engine will drop
 on the floor. A profile starts with the ASCII magic `QVCE` and a little-endian version, which is the
 only check available on an otherwise opaque file. Building a profile needs the **Base** model — a second
