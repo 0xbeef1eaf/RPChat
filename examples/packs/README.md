@@ -111,6 +111,11 @@ files exist, grouped by kind. Kind is decided by extension:
 | text  | txt md json csv                             |
 | other | everything else                             |
 
+A video's extension does not promise its contents play: the overlay is Chromium, so an HEVC or
+ProRes `.mov` (what phones record and editors export) is converted to H.264 the first time it is
+played, which needs `ffmpeg` on the machine. Shipping H.264/AAC or WebM plays everywhere with no
+conversion at all.
+
 Dotfiles, `node_modules` and symlinks are not indexed and are not packed.
 
 Every indexed asset also carries **tags**. Folder names become tags

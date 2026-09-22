@@ -83,7 +83,11 @@ class FakeAudioWindow {
   }
 }
 
-function make(monitors: MonitorInfo[] = [MONITOR], media?: Partial<MediaConcurrencySettings>) {
+function make(
+  monitors: MonitorInfo[] = [MONITOR],
+  media?: Partial<MediaConcurrencySettings>,
+  video?: { playable(file: string): Promise<{ file: string; url: string } | undefined> },
+) {
   const specs: OverlaySpec[] = [];
   const handles: FakeHandle[] = [];
   const backend: DisplayBackend = {
@@ -111,6 +115,7 @@ function make(monitors: MonitorInfo[] = [MONITOR], media?: Partial<MediaConcurre
     settings: async () => ({ mediaAlwaysOnTop: true, ...(media ? { media } : {}) }) as AppSettings,
     logger: { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined },
     emit: (e) => events.push(e),
+    ...(video ? { video } : {}),
   });
   return { media: manager, specs, handles, events, audio, homes };
 }
@@ -388,5 +393,53 @@ describe('MediaManager home assets', () => {
     await media.show('image', ctx, 'media/a.png', {});
     expect(specs[0]!.assetUrl).toBe('rp-asset://com.x.p/media/a.png');
     expect(specs[0]!.file).toBe(path.join(root, 'media', 'a.png'));
+  });
+});
+
+describe('MediaManager video conversion', () => {
+  /** Stands in for `VideoCompat`: only `phone.mov` needs converting here. */
+  const compat = (asked: string[], fail = false) => ({
+    playable: async (file: string) => {
+      asked.push(file);
+      if (fail) throw new Error('ffmpeg exploded');
+      return file.endsWith('phone.mov') ? { file: '/cache/abc.mp4', url: 'rp-asset://app.rpchat.video/abc.mp4' } : undefined;
+    },
+  });
+
+  it('opens the converted stand-in, while the asset the character named stays the asset', async () => {
+    const asked: string[] = [];
+    const { media, specs } = make([MONITOR], undefined, compat(asked));
+    const handle = await media.show('video', ctx, 'media/phone.mov', {});
+    expect(asked).toEqual([path.join(root, 'media', 'phone.mov')]);
+    expect(specs[0]!.file).toBe('/cache/abc.mp4');
+    expect(specs[0]!.assetUrl).toBe('rp-asset://app.rpchat.video/abc.mp4');
+    expect(specs[0]!.asset).toBe('media/phone.mov');
+    expect(handle.asset).toBe('media/phone.mov');
+    expect(media.list()[0]?.asset).toBe('media/phone.mov');
+  });
+
+  it('converts for a full-screen overlay too, and leaves a playable video alone', async () => {
+    const asked: string[] = [];
+    const { media, specs } = make([MONITOR], undefined, compat(asked));
+    await media.overlay(ctx, 'media/phone.mov', {});
+    expect(specs[0]!.assetUrl).toBe('rp-asset://app.rpchat.video/abc.mp4');
+    await media.show('video', ctx, 'media/v.webm', {});
+    expect(specs[1]!.assetUrl).toBe('rp-asset://com.x.p/media/v.webm');
+    expect(specs[1]!.file).toBe(path.join(root, 'media', 'v.webm'));
+  });
+
+  it('never asks about an image or a sound', async () => {
+    const asked: string[] = [];
+    const { media } = make([MONITOR], undefined, compat(asked));
+    await media.show('image', ctx, 'media/a.png', {});
+    await media.playAudio(ctx, 'home:hum.mp3', {});
+    expect(asked).toEqual([]);
+  });
+
+  it('plays the original when the converter itself fails', async () => {
+    const asked: string[] = [];
+    const { media, specs } = make([MONITOR], undefined, compat(asked, true));
+    await media.show('video', ctx, 'media/phone.mov', {});
+    expect(specs[0]!.assetUrl).toBe('rp-asset://com.x.p/media/phone.mov');
   });
 });

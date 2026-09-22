@@ -66,6 +66,7 @@ import { InputHandler } from './capabilities/input.js';
 import { MediaHandler, MediaManager } from './capabilities/media.js';
 import { SystemHandler } from './capabilities/system.js';
 import { UiHandler } from './capabilities/ui.js';
+import { VIDEO_CACHE_DIRNAME, VIDEO_CACHE_PACK_ID, VideoCompat } from './capabilities/video-compat.js';
 import { WallpaperHandler } from './capabilities/wallpaper.js';
 import type { DisplayBackend } from './display/backend.js';
 import { selectBackend } from './display/backend.js';
@@ -154,7 +155,13 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const voicesDir = path.join(opts.userData, VOICES_DIRNAME);
   /** Voice previews rendered for the pack editor. */
   const voicePreviewDir = path.join(opts.userData, VOICE_PREVIEW_DIRNAME);
-  const extraRoots: Record<string, string> = { [TTS_PACK_ID]: ttsDir, [VOICE_PREVIEW_PACK_ID]: voicePreviewDir };
+  /** Playable copies of videos Chromium cannot decode (video-compat.ts). */
+  const videoCacheDir = path.join(opts.userData, VIDEO_CACHE_DIRNAME);
+  const extraRoots: Record<string, string> = {
+    [TTS_PACK_ID]: ttsDir,
+    [VOICE_PREVIEW_PACK_ID]: voicePreviewDir,
+    [VIDEO_CACHE_PACK_ID]: videoCacheDir,
+  };
   const registry = new ProjectRegistry(path.join(dataDir, 'editor-projects.json'));
   /** Character home directories, served like pack roots once `sdk.media` shows a file from one. */
   const homes = new HomeAssetRoots(opts.userData);
@@ -231,7 +238,8 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   // ---- phase 2 senses (created early: media clicks/closes are host events too) ----------
   const senses = createSenses({ settings: settingsOf, commands, env, ...(hypr ? { hypr } : {}), logger });
   const emit = (event: Parameters<typeof senses.provider.push>[0]): void => senses.provider.push(event);
-  const media = new MediaManager({ backend: () => backend, audioWindow: () => windows.audioWindow(), packs, homes, settings: settingsOf, logger, emit });
+  const video = new VideoCompat({ cacheDir: videoCacheDir, logger });
+  const media = new MediaManager({ backend: () => backend, audioWindow: () => windows.audioWindow(), packs, homes, settings: settingsOf, logger, emit, video });
   const ui = new UiHandler({
     prompts: uiPrompts,
     deliver: (request: UiPromptRequest) => windows.openPromptWindow({ kind: 'ui', prompt: request }) || windows.sendToMain(IPC_EVENT_CHANNELS.uiPrompt, request),
