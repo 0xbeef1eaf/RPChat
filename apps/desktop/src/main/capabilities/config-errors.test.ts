@@ -210,6 +210,7 @@ describe('desktop', () => {
       await expect(desktop.invoke(method, [], ctx)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: HYPRLAND_REQUIRED_MESSAGE });
     }
     await expect(desktop.invoke('workspace', [2], ctx)).rejects.toMatchObject({ message: HYPRLAND_REQUIRED_MESSAGE });
+    await expect(desktop.invoke('closeWindow', [{ app: 'mpv' }], ctx)).rejects.toMatchObject({ message: HYPRLAND_REQUIRED_MESSAGE });
     expect(HYPRLAND_REQUIRED_MESSAGE).toContain('nothing to configure');
   });
 });

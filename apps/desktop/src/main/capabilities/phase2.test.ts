@@ -2,10 +2,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { MonitorInfo } from '@rp/shared';
+import type { ActionContext, MonitorInfo } from '@rp/shared';
 import { executableName, hostMatches, isAllowlisted, isLaunchAllowed } from './allowlist.js';
 import { avatarPlacement, clampSize, expressionMap, fitToMonitor } from './avatar.js';
-import { clampLevel, hyprFocusCommand, hyprMoveWindowCommands, hyprWorkspaceCommand, matchWindow, parseVolumeOutput, windowsFromHyprClients } from './desktop.js';
+import { DesktopHandler, OWN_WINDOW_MESSAGE, clampLevel, hyprCloseCommand, hyprFocusCommand, hyprMoveWindowCommands, hyprWorkspaceCommand, matchWindow, ownWindowIds, parseVolumeOutput, windowsFromHyprClients } from './desktop.js';
 import { FilesHandler, characterHomeDir, resolveHomePath } from './files.js';
 import { expandEvents, occurrences, parseDateValue, parseIcs, parseProperty, unfoldLines } from './ics.js';
 import { buildMessageRequest, telegramChatsFromUpdates } from './messaging.js';
@@ -220,9 +220,20 @@ describe('desktop Hyprland builders', () => {
       'dispatch resizewindowpixel exact 800 600,address:0x2',
       'dispatch movewindowpixel exact 10 20,address:0x2',
     ]);
+    expect(hyprCloseCommand('2')).toBe('dispatch closewindow address:0x2');
     expect(hyprWorkspaceCommand(2)).toBe('dispatch workspace 2');
     expect(hyprWorkspaceCommand('name:mail')).toBe('dispatch workspace name:mail');
     expect(() => hyprWorkspaceCommand('rm -rf /')).toThrow(/workspace/);
+  });
+
+  it('recognises our own windows by pid and by overlay title', () => {
+    const clients = [
+      { address: '0x1', class: 'kitty', title: 'zsh', pid: 4242 },
+      { address: '0x2', class: 'rpchat', title: 'rpchat', pid: 99 },
+      { address: '0X3', class: 'rpchat', title: 'rp-overlay:media-1', pid: 4242 },
+      { class: 'ghost', title: 'no address', pid: 99 },
+    ] as unknown as Parameters<typeof ownWindowIds>[0];
+    expect([...ownWindowIds(clients, 99)]).toEqual(['0x2', '0x3']);
   });
 
   it('parses volume output and clamps levels', () => {
@@ -232,6 +243,55 @@ describe('desktop Hyprland builders', () => {
     expect(parseVolumeOutput('nope')).toBeNull();
     expect(clampLevel(150)).toBe(100);
     expect(() => clampLevel('x')).toThrow(/level/);
+  });
+});
+
+describe('desktop closeWindow', () => {
+  const ctx: ActionContext = { packId: 'com.x.p', characterId: 'luna', sessionId: 's', packRoot: '/nowhere', trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } };
+  const logger = { debug: () => undefined, warn: () => undefined };
+  /** Hyprland with one foreign window and one of ours (same pid as the app). */
+  const handler = (sent: string[]) =>
+    new DesktopHandler({
+      commands: {} as never,
+      launchAllowlist: async () => [],
+      logger,
+      ownPid: 99,
+      hypr: {
+        request: async (command: string) => {
+          if (command === 'j/clients') {
+            return JSON.stringify([
+              { address: '0x1', mapped: true, hidden: false, monitor: 0, class: 'mpv', title: 'rain.mp4', pid: 4242 },
+              { address: '0x2', mapped: true, hidden: false, monitor: 0, class: 'rpchat', title: 'rpchat', pid: 99 },
+            ]);
+          }
+          if (command === 'j/monitors') return JSON.stringify([{ id: 0, name: 'DP-1', width: 1, height: 1, x: 0, y: 0, scale: 1 }]);
+          if (command === 'j/activewindow') return JSON.stringify({ address: '0x1' });
+          sent.push(command);
+          return 'ok';
+        },
+      },
+    });
+
+  it('asks the compositor to close a matched window', async () => {
+    const sent: string[] = [];
+    expect(await handler(sent).invoke('closeWindow', [{ app: 'mpv' }], ctx)).toBe(true);
+    expect(sent).toEqual(['dispatch closewindow address:0x1']);
+  });
+
+  it('returns false when nothing matches, without dispatching', async () => {
+    const sent: string[] = [];
+    expect(await handler(sent).invoke('closeWindow', [{ app: 'inkscape' }], ctx)).toBe(false);
+    expect(sent).toEqual([]);
+  });
+
+  it('refuses rpchat\'s own windows so a character cannot shut the app it lives in', async () => {
+    const sent: string[] = [];
+    await expect(handler(sent).invoke('closeWindow', [{ app: 'rpchat' }], ctx)).rejects.toMatchObject({
+      code: 'PERMISSION_DENIED',
+      message: OWN_WINDOW_MESSAGE,
+      details: { id: '0x2' },
+    });
+    expect(sent).toEqual([]);
   });
 });
 

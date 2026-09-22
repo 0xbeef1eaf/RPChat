@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const desktopModule: CapabilityModuleSpec = {
   id: 'desktop',
-  version: '1.0.0',
+  version: '1.1.0',
   title: 'Desktop control',
   summary: 'Launch apps, manage windows and workspaces, set volume and brightness.',
   permission: 'pack',
@@ -59,6 +59,15 @@ interface DesktopApi {
    */
   moveWindow(match: WindowMatch, to: { monitor?: MonitorSelector; x?: number; y?: number; width?: number; height?: number; workspace?: string | number }): Promise<boolean>;
   /**
+   * Ask a window to close, exactly as clicking its close button does: the app may still put up a
+   * "save your work?" dialog, or refuse outright. Nothing is force-killed.
+   * @param match By id, or substring of title/app. The first match wins, so prefer an id from listWindows().
+   * @returns false if nothing matched; true only means the request was delivered, not that the window went away.
+   * @throws PERMISSION_DENIED when the match is one of rpchat's own windows.
+   * @example await sdk.desktop.closeWindow({ id: stale.id });
+   */
+  closeWindow(match: WindowMatch): Promise<boolean>;
+  /**
    * Switch to a workspace/virtual desktop.
    * @param target Workspace number or name.
    */
@@ -82,7 +91,8 @@ interface DesktopApi {
 
 - Make changes the user asked for or will obviously welcome (dim the screen for a movie, focus their editor when they say "back to work"). Restore what you changed when the moment passes.
 - Volume and brightness run the user's commands: when one is missing the call throws CAPABILITY_FAILED naming the command and Settings → Commands — tell the user. \`launch()\` throws PERMISSION_DENIED for an app outside their allowlist (Settings → Integrations).
-- \`listWindows()\` first, then match by \`id\` — titles change. Never close windows or touch volume/brightness abruptly (step gently).
+- \`listWindows()\` first, then match by \`id\` — titles change. Never touch volume/brightness abruptly (step gently).
+- \`closeWindow()\` only asks, so an app with unsaved work can still stop it, and rpchat's own windows are refused. Close what the user asked you to close, or clutter you opened yourself — never something they are working in.
 
 \`\`\`ts
 await sdk.desktop.setBrightness(40);
@@ -94,6 +104,7 @@ return { movieMode: true };
     listWindows: { description: 'List open windows.' },
     focusWindow: { description: 'Focus a window.' },
     moveWindow: { description: 'Move/resize a window or send it to a monitor/workspace.' },
+    closeWindow: { description: 'Ask a window to close.', dangerous: true },
     workspace: { description: 'Switch workspace.' },
     currentWorkspace: { description: 'Read the active workspace.' },
     setVolume: { description: 'Set output volume.' },

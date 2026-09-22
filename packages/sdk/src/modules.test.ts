@@ -36,7 +36,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   voice: { permission: 'pack', methods: ['speak', 'stop', 'listen'] },
   desktop: {
     permission: 'pack',
-    methods: ['launch', 'listWindows', 'focusWindow', 'moveWindow', 'workspace', 'currentWorkspace', 'setVolume', 'getVolume', 'setBrightness'],
+    methods: ['launch', 'listWindows', 'focusWindow', 'moveWindow', 'closeWindow', 'workspace', 'currentWorkspace', 'setVolume', 'getVolume', 'setBrightness'],
   },
   files: { permission: 'pack', methods: ['write', 'append', 'read', 'list', 'delete', 'open', 'homePath'] },
   mood: { permission: 'trusted', methods: ['get', 'nudge', 'set'] },
@@ -54,7 +54,7 @@ const OVERRIDES: Record<string, { prompt?: string[]; dangerous?: string[] }> = {
   screen: { dangerous: ['look'] },
   web: { dangerous: ['fetch'] },
   voice: { dangerous: ['listen'] },
-  desktop: { dangerous: ['launch'] },
+  desktop: { dangerous: ['launch', 'closeWindow'] },
   files: { dangerous: ['open'] },
   messaging: { dangerous: ['send'] },
   input: { dangerous: ['lock', 'unlock', 'type', 'key', 'click', 'moveMouse'] },
