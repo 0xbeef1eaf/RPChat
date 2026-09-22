@@ -141,12 +141,24 @@ export const packManifestSchema: z.ZodType<PackManifest> = packManifestObject.tr
 /** Directory name of an installed voice model: one path segment, no separators or `..`. */
 export const VOICE_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** Extensions accepted for cloning reference audio (what sherpa-onnx can read). */
-export const REFERENCE_AUDIO_EXTENSIONS = ['wav'] as const;
+/**
+ * What `voice.reference` may point at.
+ *
+ * `wav` is reference audio for the sherpa engines, which clone from a recording. `qvoice` is a
+ * Qwen3-TTS speaker profile — not audio at all, but a graft built from a recording by a separate
+ * model, because that engine cannot clone from a wav directly. Which of the two is usable depends
+ * on the engine behind `voice.model`; the schema accepts either, and the engine ignores the one it
+ * cannot read rather than failing the line.
+ */
+export const VOICE_REFERENCE_EXTENSIONS = ['wav', 'qvoice'] as const;
 
 const referencePathSchema = relativePathSchema.check((ctx) => {
-  if (!(REFERENCE_AUDIO_EXTENSIONS as readonly string[]).includes(extensionOf(ctx.value))) {
-    ctx.issues.push({ code: 'custom', message: `voice.reference "${ctx.value}" must be a .wav file`, input: ctx.value });
+  if (!(VOICE_REFERENCE_EXTENSIONS as readonly string[]).includes(extensionOf(ctx.value))) {
+    ctx.issues.push({
+      code: 'custom',
+      message: `voice.reference "${ctx.value}" must be a .wav recording or a .qvoice profile`,
+      input: ctx.value,
+    });
   }
 });
 
@@ -162,7 +174,10 @@ const voiceSchema = z
     steps: z.number().int().min(1).max(64).optional(),
     // -1 is the model's own "random each time"; anything below that is meaningless.
     seed: z.number().int().min(-1).optional(),
-    temperature: z.number().min(0).max(2).optional(),
+    // Up to 10 because Qwen3-TTS is usable well above 2 — its tuned default is 2.5 — and capping
+    // here would silently re-impose the clamp that made its own server mode useless. Pocket's own
+    // default is 0.7, so the wider range costs it nothing.
+    temperature: z.number().min(0).max(10).optional(),
   })
   .check((ctx) => {
     if (ctx.value.referenceText !== undefined && ctx.value.reference === undefined) {

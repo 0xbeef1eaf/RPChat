@@ -146,7 +146,7 @@ describe('characterDefinitionSchema', () => {
     // A model name is a directory under the voices folder, never a path.
     expect(bad({ model: '../escape' })).toBe(false);
     expect(bad({ model: 'nested/dir' })).toBe(false);
-    // Reference audio must be a wav inside the character directory.
+    // A reference stays inside the character directory, whichever kind it is.
     expect(bad({ reference: '../../etc/passwd' })).toBe(false);
     expect(bad({ reference: 'voice/luna.mp3' })).toBe(false);
     // Out-of-range knobs are rejected rather than clamped silently.
@@ -155,6 +155,29 @@ describe('characterDefinitionSchema', () => {
     // A transcript with nothing to transcribe is a mistake worth naming.
     expect(bad({ referenceText: 'hello' })).toBe(false);
     expect(characterDefinitionSchema.safeParse({ ...goodCharacter(), voice: {} }).success).toBe(true);
+  });
+
+  it('takes a .qvoice profile as a reference, not only a recording', () => {
+    // Qwen3-TTS cannot clone from a wav: its voice is a profile built by a separate model, so the
+    // editor writes one here and the schema has to accept it.
+    const voice = { model: 'qwen3-tts-0.6b', reference: 'voice/nyx.qvoice' };
+    const parsed = characterDefinitionSchema.parse({ ...goodCharacter(), voice });
+    expect(parsed.voice?.reference).toBe('voice/nyx.qvoice');
+
+    const bad = (v: unknown) => characterDefinitionSchema.safeParse({ ...goodCharacter(), voice: v }).success;
+    expect(bad({ reference: 'voice/nyx.qvoice2' })).toBe(false);
+    expect(bad({ reference: '../nyx.qvoice' })).toBe(false);
+  });
+
+  it('allows a voice temperature above 2, which Qwen3-TTS needs', () => {
+    const ok = (t: number) => characterDefinitionSchema.safeParse({ ...goodCharacter(), voice: { temperature: t } }).success;
+    // 2.5 is the tuned default; capping at 2 would re-impose the clamp that made the engine's own
+    // server mode useless.
+    expect(ok(2.5)).toBe(true);
+    expect(ok(10)).toBe(true);
+    expect(ok(0)).toBe(true);
+    expect(ok(10.5)).toBe(false);
+    expect(ok(-1)).toBe(false);
   });
 
   it('validates avatarSet and mood', () => {
