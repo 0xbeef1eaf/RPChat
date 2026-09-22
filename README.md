@@ -47,6 +47,10 @@ Characters, their behaviours and their media are distributed as shareable
   `sdk.media.overlay` covers every monitor (or one) with a click-through image or
   video on the overlay layer — faint by default, tiled rather than stretched when
   the shape does not match, one handle closing it everywhere at once.
+- **Plays the video you actually have**: a `.mov` off a phone is HEVC and one out of an
+  editor is ProRes, neither of which the overlay's Chromium can decode — so the app converts
+  such a file to H.264 the first time it is played (with `ffmpeg`, if it is installed) and
+  keeps the copy, instead of opening a black window. Files it can already play are untouched.
 - **A limit on how busy the screen gets**: Settings → General caps how many images,
   videos and sounds a character may have running at once, each kind counted on its
   own, and the policy can pin those numbers. Nothing is dropped or blocked when a

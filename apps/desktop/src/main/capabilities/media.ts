@@ -79,6 +79,12 @@ export interface MediaManagerDeps {
   logger: Logger;
   /** Host events for `sdk.events`: `media-clicked` and `media-closed` (see `docs/spec/living.md`). */
   emit?: (event: HostEvent) => void;
+  /**
+   * Converts videos the media pages cannot decode (an HEVC or ProRes QuickTime file, AC-3 sound)
+   * into a copy they can, returning the stand-in to play; `undefined` plays the file itself.
+   * Absent leaves every video to the page, which is what it was before conversion existed.
+   */
+  video?: { playable(file: string): Promise<{ file: string; url: string } | undefined> };
 }
 
 interface Managed {
@@ -207,7 +213,7 @@ export class MediaManager {
     const { id, context, asset } = pending;
     const kind = pending.kind as 'image' | 'video';
     const options = pending.options as ShowImageOptions & PlayVideoOptions;
-    const { file, url } = this.locate(context, asset);
+    const { file, url } = await this.playable(kind, this.locate(context, asset));
     const backend = this.deps.backend();
     const settings = await this.deps.settings();
     const monitors = await backend.monitors();
@@ -304,7 +310,7 @@ export class MediaManager {
     const { id, context, asset } = pending;
     const kind = pending.kind as 'image' | 'video';
     const options = pending.options as MediaOverlayOptions;
-    const { file, url } = this.locate(context, asset);
+    const { file, url } = await this.playable(kind, this.locate(context, asset));
     const backend = this.deps.backend();
     const screens = overlayScreens(options.monitor, await backend.monitors());
     const opacity = clampOpacity(options.opacity, FULLSCREEN_DEFAULT_OPACITY);
@@ -409,6 +415,24 @@ export class MediaManager {
     if (options.loop !== undefined) page.loop = Boolean(options.loop);
     win.send({ type: 'play-audio', id, url: this.locate(context, asset).url, options: page });
     return toHandle(item);
+  }
+
+  /**
+   * What a video item actually opens. A pack may ship any of the video formats `docs/spec/pack.md`
+   * lists, but the page behind an overlay is Chromium, which decodes a narrower set than those
+   * containers can hold: a QuickTime file holding HEVC or ProRes is converted once (see
+   * `video-compat.ts`) and played from the cache. Images and sounds, and videos that play as they
+   * are, are opened where they lie. A converter that fails changes nothing: the page gets the
+   * original and reports the error it would have reported anyway.
+   */
+  private async playable(kind: MediaKind, located: { file: string; url: string }): Promise<{ file: string; url: string }> {
+    if (kind !== 'video' || !this.deps.video) return located;
+    try {
+      return (await this.deps.video.playable(located.file)) ?? located;
+    } catch (err) {
+      this.deps.logger.warn(`[media] could not check whether ${located.file} is playable: ${String(err)}`);
+      return located;
+    }
   }
 
   /**
