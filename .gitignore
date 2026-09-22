@@ -19,3 +19,6 @@ apps/desktop/resources/bin/
 apps/desktop/resources/system/
 apps/desktop/resources/extension/
 !apps/desktop/build/
+
+# Third-party voice engine source, cloned at build time by scripts/build-native.mjs
+native/qwen3-tts/

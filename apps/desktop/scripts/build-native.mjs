@@ -85,12 +85,64 @@ function buildDaemon() {
   console.log(`[build-native] copied ${files.length} installer file(s) to ${systemDir}`);
 }
 
+/**
+ * Qwen3-TTS, the second voice engine. Upstream publishes no releases or tags — only source — so
+ * there is nothing to download at runtime and the binary is built here and shipped in
+ * resources/bin, where `findQwenTts` already looks. It is ~1.3 MB, so it costs the installer
+ * almost nothing whether or not the user ever turns the engine on.
+ *
+ * Pinned to a commit rather than a branch: the flag names in `qwen-engine.ts` are this build's,
+ * and a silent upstream rename would surface as a non-zero exit when a character tries to speak.
+ */
+const QWEN_REPO = 'https://github.com/gabriele-mastrapasqua/qwen3-tts.git';
+const QWEN_COMMIT = 'e56ec7e6eabbed608b13bfbd3fba431708b2077f';
+
+function buildQwenTts() {
+  const buildDir = resolve(nativeDir, 'qwen3-tts');
+  if (!has('git', ['--version'])) return skip('qwen_tts', 'git is not on PATH');
+  if (!has('make', ['--version'])) return skip('qwen_tts', 'make is not on PATH');
+  if (!has('cc', ['--version'])) return skip('qwen_tts', 'no C compiler on PATH');
+  // The upstream Makefile's Linux branch links OpenBLAS unconditionally, so without it the build
+  // gets all the way to the final link and fails there. Checked up front so the reason is legible.
+  if (!has('pkg-config', ['--exists', 'openblas'])) return skip('qwen_tts', 'openblas development files not found (pkg-config)');
+
+  try {
+    if (!existsSync(join(buildDir, 'Makefile'))) {
+      console.log(`[build-native] cloning qwen3-tts at ${QWEN_COMMIT}`);
+      mkdirSync(buildDir, { recursive: true });
+      execFileSync('git', ['init', '-q'], { cwd: buildDir, stdio: 'inherit' });
+      execFileSync('git', ['remote', 'add', 'origin', QWEN_REPO], { cwd: buildDir, stdio: 'inherit' });
+      execFileSync('git', ['fetch', '-q', '--depth', '1', 'origin', QWEN_COMMIT], { cwd: buildDir, stdio: 'inherit' });
+      execFileSync('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: buildDir, stdio: 'inherit' });
+    }
+    // `blas` is the documented CPU target; it links OpenBLAS when the headers are there and falls
+    // back to the built-in kernels when they are not, so it is the right target either way.
+    console.log('[build-native] make blas (qwen_tts)');
+    execFileSync('make', ['blas'], { cwd: buildDir, stdio: 'inherit' });
+  } catch (err) {
+    // Never fatal by default: this engine is opt-in, and a machine without the toolchain (or
+    // without the network, on a clone) should still get a working app with Pocket TTS.
+    return skip('qwen_tts', err.message);
+  }
+
+  const built = join(buildDir, 'qwen_tts');
+  if (!existsSync(built)) return skip('qwen_tts', `expected a binary at ${built}`);
+  const target = resolve(appDir, 'resources/bin/qwen_tts');
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(built, target);
+  chmodSync(target, 0o755);
+  console.log(`[build-native] copied to ${target}`);
+}
+
 if (process.platform !== 'linux') {
-  skip('rp-overlay-wlr and rpchatd', `only built on Linux (this is ${process.platform})`);
-} else if (!has('cargo', ['--version'])) {
-  skip('rp-overlay-wlr and rpchatd', 'cargo is not on PATH (install Rust to build the native helpers)');
+  skip('rp-overlay-wlr, rpchatd and qwen_tts', `only built on Linux (this is ${process.platform})`);
 } else {
-  buildOverlayHelper();
-  buildDaemon();
+  if (!has('cargo', ['--version'])) {
+    skip('rp-overlay-wlr and rpchatd', 'cargo is not on PATH (install Rust to build the native helpers)');
+  } else {
+    buildOverlayHelper();
+    buildDaemon();
+  }
+  buildQwenTts();
 }
 process.exit(failed ? 1 : 0);

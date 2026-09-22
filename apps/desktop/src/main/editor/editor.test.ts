@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ProjectRegistry, editorAssetHost, isProjectKey, keyFromAssetHost, projectKey } from './registry.js';
 import type { TagMediaOptions } from '@rp/shared';
-import { EditorService, MAX_TAG_BATCH, extensionsFor, mediaFilters, normalizeSubfolder } from './service.js';
+import { EditorService, MAX_TAG_BATCH, extensionsFor, mediaFilters, normalizeSubfolder, voicePickFilters, voicePickTitle } from './service.js';
 import type { MediaTagger, TagAsset, TagPackContext } from './tagger.js';
 import { parseAssetUrl } from '../asset-protocol.js';
 
@@ -388,5 +388,30 @@ describe('EditorService.suggestMediaTags', () => {
     });
     const project = await svc.create({ packId: 'com.test.notagger', name: 'No tagger', characterId: 'mia', characterName: 'Mia' });
     await expect(svc.suggestMediaTags(project.summary.key, ['media/images/x.png'])).rejects.toThrow(/not available in this build/);
+  });
+});
+
+describe('voice reference picker', () => {
+  const exts = (engine?: string) => voicePickFilters(engine).flatMap((f) => f.extensions);
+
+  it('offers profiles, and only profiles, for Qwen', () => {
+    // A wav is useless to this engine: it speaks from a .qvoice built by a separate model, so
+    // offering one would let an author pick a file that is then silently ignored.
+    expect(exts('qwen')).toEqual(['qvoice']);
+    expect(voicePickTitle('qwen')).toBe('Choose a voice profile');
+  });
+
+  it('offers recordings, and only recordings, for the sherpa engines', () => {
+    for (const engine of ['pocket', 'kokoro', 'kitten', 'vits']) {
+      expect(exts(engine)).toEqual(['wav']);
+      expect(voicePickTitle(engine)).toBe('Choose a voice recording');
+    }
+  });
+
+  it('offers both when no model has been chosen yet', () => {
+    expect(exts(undefined)).toContain('wav');
+    expect(exts(undefined)).toContain('qvoice');
+    // The combined entry comes first, so the dialog opens showing everything usable.
+    expect(voicePickFilters(undefined)[0]?.extensions).toEqual(['wav', 'qvoice']);
   });
 });

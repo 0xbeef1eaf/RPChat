@@ -31,6 +31,7 @@ import { SHERPA_INSTALL_DIRNAME, SherpaInstaller } from './capabilities/sherpa-i
 import { VoiceModelInstaller } from './capabilities/voice-model-install.js';
 import { VoiceEngine } from './capabilities/voice-engine.js';
 import { QwenRunner } from './capabilities/qwen-engine.js';
+import { QwenModelInstaller } from './capabilities/qwen-install.js';
 import { WebHandler } from './capabilities/web.js';
 import { WidgetsHandler } from './capabilities/widgets.js';
 import { electronCapturer } from './capture.js';
@@ -373,6 +374,8 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     timeoutMs: SYNTH_TIMEOUT_MS,
     logger,
   });
+  // Not fetched on start like the Pocket model: 2.5 GB is a choice, not a default.
+  const qwenModel = new QwenModelInstaller({ voicesDir, logger });
   const voiceEngine = new VoiceEngine({ logger });
   const voice = new VoiceHandler({
     commands,
@@ -392,6 +395,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     models: () => readVoiceModels(voicesDir),
     engine: voiceEngine,
     qwen: qwenRunner,
+    qwenModel,
     engineStatus: () => sherpa.status(),
     modelStatus: () => voiceModel.status(),
     numThreads: async () => (await settingsOf()).voice.numThreads,

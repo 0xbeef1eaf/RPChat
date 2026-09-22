@@ -24,6 +24,34 @@ import { QWEN_TTS_BINARY, QWEN_TTS_ENV } from './voice-models.js';
 /** Extension of a built speaker profile. */
 export const QWEN_PROFILE_EXT = '.qvoice';
 
+/** First four bytes of a profile, followed by a little-endian version. */
+export const QVOICE_MAGIC = 'QVCE';
+
+/** Profile versions this engine can load. */
+export const QVOICE_VERSIONS = [3];
+
+/**
+ * The version of the profile at `file`, or `undefined` when it is not one.
+ *
+ * A profile is opaque — there is nothing to play or measure — so this is the only check available
+ * before it reaches the binary. Worth doing: the alternative is a parse error from a subprocess at
+ * speaking time, long after the author chose the file.
+ */
+export async function readQvoiceVersion(file: string): Promise<number | undefined> {
+  let handle;
+  try {
+    handle = await fs.open(file, 'r');
+    const buf = Buffer.alloc(8);
+    const { bytesRead } = await handle.read(buf, 0, 8, 0);
+    if (bytesRead < 8 || buf.toString('ascii', 0, 4) !== QVOICE_MAGIC) return undefined;
+    return buf.readUInt32LE(4);
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 /**
  * Sampling defaults, chosen by ear over the full range rather than taken from upstream.
  *
