@@ -68,6 +68,13 @@ jobs:
         run: pnpm build
         env:
           RP_REQUIRE_NATIVE: '1'
+      - name: The shipped voice engine must actually start
+        run: |
+          bin=apps/desktop/resources/bin/qwen_tts
+          test -x "$bin"
+          ldd "$bin"
+          "$bin" --help > /dev/null
+          echo "qwen_tts starts and carries no unshippable library dependency"
       - run: pnpm typecheck
       - run: pnpm test
       - name: Helper unit tests

@@ -216,7 +216,12 @@ toolchain is missing, so a machine without a compiler still gets a working app o
 
 Two traps in that Makefile, both of which produce a build that looks fine:
 
-- its Linux branch links OpenBLAS unconditionally, so without `libopenblas-dev` the build gets all
+- its Linux branch links OpenBLAS **dynamically**, so the binary ships happily and then dies on a
+  user's machine with `libopenblas.so.0: cannot open shared object file`. It is linked statically
+  instead, and `build-native.mjs` rejects a build whose `ldd` mentions openblas, gfortran, quadmath
+  or lapack. Dropping BLAS is not the alternative: measured **RTF 31** without it against ~2.5
+  with it — three minutes for a six-second line;
+- without `libopenblas-dev` the build gets all
   the way to the final link before failing — the script checks `pkg-config openblas` up front, and
   **both** `ci.yml` and `release.yml` install the package. Installing it in only one of them is a
   live trap: `build-native.mjs` skips a part whose toolchain is missing, which is a notice on a
