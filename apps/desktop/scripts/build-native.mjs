@@ -115,10 +115,11 @@ function buildQwenTts() {
       execFileSync('git', ['fetch', '-q', '--depth', '1', 'origin', QWEN_COMMIT], { cwd: buildDir, stdio: 'inherit' });
       execFileSync('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: buildDir, stdio: 'inherit' });
     }
-    // `blas` is the documented CPU target; it links OpenBLAS when the headers are there and falls
-    // back to the built-in kernels when they are not, so it is the right target either way.
-    console.log('[build-native] make blas (qwen_tts)');
-    execFileSync('make', ['blas'], { cwd: buildDir, stdio: 'inherit' });
+    // `SIMD=portable` is not optional for something we ship. The Makefile otherwise detects the
+    // *build* host and compiles for it — a CI runner with AVX-512 produced an `avx512bf16` binary,
+    // which is an illegal instruction on most consumer CPUs the moment a character speaks.
+    console.log('[build-native] make blas SIMD=portable (qwen_tts)');
+    execFileSync('make', ['blas', 'SIMD=portable'], { cwd: buildDir, stdio: 'inherit' });
   } catch (err) {
     // Never fatal by default: this engine is opt-in, and a machine without the toolchain (or
     // without the network, on a clone) should still get a working app with Pocket TTS.

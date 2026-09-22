@@ -212,9 +212,15 @@ into `native/qwen3-tts/` (gitignored) and runs `make blas`, copying the result t
 installer almost nothing. Like the other native pieces it **skips with a notice** when its
 toolchain is missing, so a machine without a compiler still gets a working app on Pocket TTS.
 
-The Linux branch of that Makefile links OpenBLAS unconditionally, so without `libopenblas-dev` the
-build gets all the way to the final link before failing — the script checks `pkg-config openblas`
-up front and CI installs the package.
+Two traps in that Makefile, both of which produce a build that looks fine:
+
+- its Linux branch links OpenBLAS unconditionally, so without `libopenblas-dev` the build gets all
+  the way to the final link before failing — the script checks `pkg-config openblas` up front and
+  CI installs the package;
+- its SIMD detection targets the **build** host. Left alone, a CI runner with AVX-512 emits an
+  `avx512bf16` binary that is an illegal instruction on most consumer CPUs the first time a
+  character speaks. `SIMD=portable` is mandatory for anything shipped, and upstream's own build
+  banner says so in passing — it is easy to read straight past.
 
 The **weights** are a separate matter: ~2.5 GB, fetched from Hugging Face file by file (there is no
 archive) by `qwen-install.ts`, and deliberately **not** on first start the way the 98 MB Pocket
