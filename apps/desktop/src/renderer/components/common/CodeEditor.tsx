@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { findFloatingPromises } from '@rp/shared';
 import type { ScriptProblem } from '@rp/shared';
 import type { CodeEditorInstance, CodeModel, MonacoApi } from '../../lib/monaco';
 import { useAppState } from '../../store/store';
@@ -28,6 +29,33 @@ export interface CodeEditorProps {
    * ones the editor's own compiler found.
    */
   problems?: readonly ScriptProblem[];
+}
+
+/** Markers of our own, kept apart from the compiler's and from the host check's `rp-check`. */
+const PROMISE_MARKERS = 'rp-promises';
+
+/**
+ * Underline the promises the script drops (see packages/shared/src/promises.ts). TypeScript
+ * itself has nothing to say about them — `sdk.messaging.send(...)` without an `await` is a
+ * perfectly typed expression statement — and neither does the run: it ends, the pending call is
+ * disposed, and the result says ok. A warning while it is typed is the only honest moment.
+ */
+function markFloatingPromises(monaco: MonacoApi, model: CodeModel, language: 'typescript' | 'json'): void {
+  if (language !== 'typescript') return;
+  monaco.editor.setModelMarkers(
+    model,
+    PROMISE_MARKERS,
+    findFloatingPromises(model.getValue()).map((problem) => ({
+      message: problem.message,
+      severity: monaco.MarkerSeverity.Warning,
+      startLineNumber: problem.line,
+      startColumn: problem.column,
+      // A statement with a callback body runs over several lines; underlining all of them buries
+      // the code in squiggles, so the mark stops at the end of the line it starts on.
+      endLineNumber: problem.line,
+      endColumn: problem.endLine === problem.line ? problem.endColumn : model.getLineMaxColumn(Math.min(problem.line, model.getLineCount())),
+    })),
+  );
 }
 
 /**
@@ -66,8 +94,10 @@ export function CodeEditor({ value, onChange, language, path, height = 260, read
         model = monaco.editor.createModel(latest.current.value, language, uri);
         editor = monaco.editor.create(host.current, { ...editorOptions(), model, readOnly, placeholder, ariaLabel });
         editorRef.current = editor;
+        markFloatingPromises(monaco, model, language);
         model.onDidChangeContent(() => {
           const next = model?.getValue() ?? '';
+          if (model) markFloatingPromises(monaco, model, language);
           if (next !== latest.current.value) latest.current.onChange(next);
         });
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => latest.current.onSubmit?.());

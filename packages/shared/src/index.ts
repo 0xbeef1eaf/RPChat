@@ -3,6 +3,7 @@ export * from './errors.js';
 export * from './capability.js';
 export * from './action.js';
 export * from './sandbox.js';
+export * from './promises.js';
 export * from './pack.js';
 export * from './chat.js';
 export * from './llm.js';
