@@ -87,6 +87,39 @@ export class QwenModelInstaller {
     return { ...this.state };
   }
 
+  /**
+   * Status reconciled with the disk.
+   *
+   * `status()` only knows what *this process* has done, so a model left by an earlier run — or
+   * unpacked by hand — reads as `absent` and the panel offers to download something that is
+   * already there. A download in flight, or one that failed, is this process's own business and
+   * wins over whatever a half-written staging tree looks like.
+   */
+  async currentStatus(): Promise<AssetInstallStatus> {
+    if (this.state.state === 'downloading' || this.state.state === 'failed') return { ...this.state };
+    const dir = await this.installed();
+    if (dir) this.state = { state: 'ready', version: QWEN_MODEL.name, path: dir };
+    return { ...this.state };
+  }
+
+  /**
+   * Mark a download as under way, before any I/O.
+   *
+   * `ensure()` cannot report anything until it has stat'd eleven files, and the caller returns to
+   * the UI long before that — so without this the click is answered with the state from *before*
+   * it, the panel shows no change, and the poll that would have caught up never starts because it
+   * only runs while something is downloading.
+   */
+  begin(): void {
+    if (this.state.state === 'ready' || this.state.state === 'downloading') return;
+    this.state = {
+      state: 'downloading',
+      version: QWEN_MODEL.name,
+      received: 0,
+      total: this.files.reduce((n, f) => n + f.bytes, 0),
+    };
+  }
+
   /** The model directory, if every file is present at the size it should be. */
   async installed(): Promise<string | undefined> {
     const dir = this.modelDir();

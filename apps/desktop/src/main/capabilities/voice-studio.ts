@@ -53,8 +53,8 @@ export interface VoiceStudioDeps {
   qwen?: QwenRunner;
   engineStatus?(): AssetInstallStatus;
   modelStatus?(): AssetInstallStatus;
-  /** Status of the Qwen model, and the call that starts fetching it. Absent without that engine. */
-  qwenModel?: { status(): AssetInstallStatus; ensure(): Promise<string | undefined> };
+  /** Status of the Qwen model, and the calls that start fetching it. Absent without that engine. */
+  qwenModel?: { currentStatus(): Promise<AssetInstallStatus>; begin(): void; ensure(): Promise<string | undefined> };
   numThreads(): Promise<number>;
   logger: Pick<Console, 'warn' | 'debug'>;
 }
@@ -73,7 +73,7 @@ export class VoiceStudio {
     if (model) out.model = model;
     // Only offered where the engine could actually run: without the binary the download is 2.5 GB
     // of weights nothing can read.
-    if (this.deps.qwenModel && this.deps.qwen?.available()) out.qwen = this.deps.qwenModel.status();
+    if (this.deps.qwenModel && this.deps.qwen?.available()) out.qwen = await this.deps.qwenModel.currentStatus();
     const why = this.unavailable(models);
     if (why) out.unavailable = why;
     return out;
@@ -125,6 +125,9 @@ export class VoiceStudio {
   async installQwenModel(): Promise<void> {
     const qwen = this.deps.qwenModel;
     if (!qwen) throw new RpError('CAPABILITY_FAILED', 'The Qwen3-TTS engine is not available in this build');
+    // Marked before the fetch starts, so the state this call's caller reads back already says
+    // something is happening; otherwise the panel answers a click with the state from before it.
+    qwen.begin();
     void qwen.ensure().catch(() => undefined);
   }
 
