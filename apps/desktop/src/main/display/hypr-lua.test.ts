@@ -6,10 +6,14 @@ import {
   escapeLua,
   evalCommand,
   isLuaParserResponse,
+  luaCloseWindowCommand,
   luaDisableRulesCommand,
+  luaFocusWindowCommand,
+  luaMoveWindowCommand,
   luaPlacementCommand,
   luaRulesCommand,
   luaWantsPin,
+  luaWorkspaceCommand,
 } from './hypr-lua.js';
 
 /** Verbatim answers from Hyprland 0.56.2 running a Lua config. */
@@ -89,5 +93,39 @@ describe('luaPlacementCommand', () => {
     expect([luaWantsPin('overlay'), luaWantsPin('top'), luaWantsPin('background'), luaWantsPin('bottom')]).toEqual([true, true, true, false]);
     expect(escapeLua('DP-"1"\\x')).toBe('DP-\\"1\\"\\\\x');
     expect(evalCommand('a\n  b')).toBe('eval a b');
+  });
+});
+
+describe('sdk.desktop window commands in Lua', () => {
+  it('looks the window up before focusing or closing it', () => {
+    // A dispatcher whose `window` does not resolve acts on the *active* window, so
+    // both snippets have to bail out when the address is gone.
+    for (const cmd of [luaFocusWindowCommand('0xabc'), luaCloseWindowCommand('0xabc')]) {
+      expect(cmd.startsWith('eval local w for _, x in ipairs(hl.get_windows())')).toBe(true);
+      expect(cmd).toContain('if x.address == "0xabc" then w = x end');
+      expect(cmd.indexOf('if not w then return end')).toBeLessThan(cmd.indexOf('hl.dispatch'));
+    }
+    expect(luaFocusWindowCommand('0xabc')).toContain('hl.dispatch(hl.dsp.focus({ window = w }))');
+    expect(luaCloseWindowCommand('0xabc')).toContain('hl.dispatch(hl.dsp.window.close({ window = w }))');
+  });
+
+  it('carries a whole move in one eval, in the order the legacy commands go out', () => {
+    const cmd = luaMoveWindowCommand('0x2', { x: 10, y: 20, width: 800, height: 600, workspace: 3 }, 'DP-1');
+    expect(cmd).toBe(
+      'eval local w for _, x in ipairs(hl.get_windows()) do if x.address == "0x2" then w = x end end if not w then return end ' +
+        'hl.dispatch(hl.dsp.window.move({ workspace = "3", follow = false, window = w })) ' +
+        'hl.dispatch(hl.dsp.window.move({ monitor = "DP-1", window = w })) ' +
+        'hl.dispatch(hl.dsp.window.resize({ x = 800, y = 600, window = w })) ' +
+        'hl.dispatch(hl.dsp.window.move({ x = 10, y = 20, window = w }))',
+    );
+    // `follow = false` is what keeps `movetoworkspacesilent`'s promise: the user stays put.
+    expect(luaMoveWindowCommand('0x2', { workspace: 'mail' })).toContain('move({ workspace = "mail", follow = false, window = w })');
+    expect(luaMoveWindowCommand('0x2', { x: 40 })).toContain('move({ x = 40, y = 0, window = w })');
+    expect(luaMoveWindowCommand('0x2', {})).toBeUndefined();
+  });
+
+  it('switches the view with focus, not the workspace namespace', () => {
+    expect(luaWorkspaceCommand(2)).toBe('eval hl.dispatch(hl.dsp.focus({ workspace = "2" }))');
+    expect(luaWorkspaceCommand('name:mail')).toBe('eval hl.dispatch(hl.dsp.focus({ workspace = "name:mail" }))');
   });
 });

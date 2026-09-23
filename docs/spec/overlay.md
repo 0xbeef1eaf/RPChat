@@ -131,6 +131,17 @@ From 0.5x a Hyprland whose config is Lua (`hyprland.lua`) refuses the legacy com
 
 One `eval` carries the whole placement (window lookup by `x.address`, then the dispatches), so a placement is one round trip and Lua reports each failed line in the answer. Rule handles are kept in the Lua global `__rp_overlay_rules`: re-registering disables the previous ones (no duplicates after a reload) and `dispose()` disables them, so an IPC-only session leaves nothing behind. Z-order among overlays follows `pin` (a pinned window draws above unpinned floating ones); `bring_to_top` is sent for `top`/`overlay` as a best effort and `bottom`/`background` stay emulated, as `info()` already reports.
 
+The window commands of `sdk.desktop` (`capabilities/desktop.ts`) speak the same two dialects and learn theirs the same way: the first legacy `dispatch …` answered with a Lua syntax error switches that handler to `eval` for good, and the operation is re-sent whole — the answer comes from the parser, so nothing had been applied.
+
+| purpose | legacy | Lua |
+| --- | --- | --- |
+| `focusWindow` | `dispatch focuswindow address:0x…` | `hl.dsp.focus({ window = w })` — focus is a top-level dispatcher |
+| `closeWindow` | `dispatch closewindow address:0x…` | `hl.dsp.window.close({ window = w })` |
+| `moveWindow` | `movetoworkspacesilent`, `movewindow mon:`, `resizewindowpixel exact`, `movewindowpixel exact` | one `eval`: `window.move({ workspace, follow = false })` (`follow = false` *is* the silent move), `move({ monitor })`, `resize({ x = w, y = h })`, `move({ x, y })` |
+| `workspace` | `dispatch workspace <target>` | `hl.dsp.focus({ workspace = "<target>" })` — the `hl.dsp.workspace` namespace moves and renames workspaces, it does not switch to one |
+
+Each of those snippets resolves the address into `w` first and returns when it is gone, exactly as the placement does — a dispatcher whose `window` does not resolve falls back to the **active** window, so a stale address would close or move whatever the user is looking at.
+
 monitors: `j/monitors` → `MonitorInfo` (name, id, `x`,`y`,`width/scale`,`height/scale` minus `reserved`, `focused` → `hasCursor`, primary = index 0 / `focused` if none is marked), `j/cursorpos` for the cursor.
 
 `info()`: `{ name: 'hyprland', platform: 'linux', windowSystem: 'wayland', supports: { layers: ['background','bottom','top','overlay'], opacity: true, clickThrough: true, monitorSelection: true, exactPosition: true } }`.

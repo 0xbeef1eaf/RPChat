@@ -8,9 +8,10 @@
  * dispatchers take one named-argument table (`hl.dsp.window.move{ x, y, window }`)
  * and window properties use their Lua names (`opacity`, not `alpha`).
  *
- * This module builds those snippets. Everything here is pure: the backend
- * sends the strings and decides, from Hyprland's answer, which dialect the
- * running session speaks.
+ * This module builds those snippets, for the overlays and for the window
+ * commands of `sdk.desktop`. Everything here is pure: the caller sends the
+ * strings and decides, from Hyprland's answer, which dialect the running
+ * session speaks.
  */
 import type { OverlayLayer } from '@rp/shared';
 import { OVERLAY_TITLE_PREFIX, clampOpacity } from './layers.js';
@@ -103,8 +104,12 @@ function lookupLua(address: string): string {
   return `local w for _, x in ipairs(hl.get_windows()) do if x.address == "${escapeLua(address)}" then w = x end end if not w then return end`;
 }
 
+function dispatchDsp(call: string): string {
+  return `hl.dispatch(hl.dsp.${call})`;
+}
+
 function dispatch(call: string): string {
-  return `hl.dispatch(hl.dsp.window.${call})`;
+  return dispatchDsp(`window.${call}`);
 }
 
 export interface LuaPlacement {
@@ -155,4 +160,48 @@ function propLines(opacity?: number, clickThrough?: boolean): string[] {
   }
   if (clickThrough !== undefined) out.push(dispatch(`set_prop({ window = w, prop = "no_focus", value = ${propValue(clickThrough)} })`));
   return out;
+}
+
+// ---- `sdk.desktop` window control (capabilities/desktop.ts) --------------------
+//
+// Addresses are the normalised `0x…` form `listWindows()` hands out, as in `luaPlacementCommand`.
+
+/** Where `sdk.desktop.moveWindow` wants a window; `monitor` is already resolved to a name. */
+export interface LuaWindowMove {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  workspace?: string | number;
+}
+
+/** `focusWindow`: focus is a top-level dispatcher, and takes the window like every other one. */
+export function luaFocusWindowCommand(address: string): string {
+  return evalCommand(`${lookupLua(address)} ${dispatchDsp('focus({ window = w })')}`);
+}
+
+/**
+ * `closeWindow`. The lookup has to stay in front of it: a dispatcher whose `window`
+ * does not resolve falls back to the *active* window, and closing whatever the user
+ * happens to be looking at is the one thing this must never do.
+ */
+export function luaCloseWindowCommand(address: string): string {
+  return evalCommand(`${lookupLua(address)} ${dispatch('close({ window = w })')}`);
+}
+
+/** `moveWindow` as a single `eval` — the legacy commands in the same order, one window lookup. */
+export function luaMoveWindowCommand(address: string, to: LuaWindowMove, monitorName?: string): string | undefined {
+  const lines: string[] = [];
+  // `follow = false` is `movetoworkspacesilent`: the window moves, the user stays where they are.
+  if (to.workspace !== undefined) lines.push(dispatch(`move({ workspace = "${escapeLua(String(to.workspace))}", follow = false, window = w })`));
+  if (monitorName !== undefined) lines.push(dispatch(`move({ monitor = "${escapeLua(monitorName)}", window = w })`));
+  if (to.width !== undefined || to.height !== undefined) lines.push(dispatch(`resize({ x = ${Math.round(to.width ?? 0)}, y = ${Math.round(to.height ?? 0)}, window = w })`));
+  if (to.x !== undefined || to.y !== undefined) lines.push(dispatch(`move({ x = ${Math.round(to.x ?? 0)}, y = ${Math.round(to.y ?? 0)}, window = w })`));
+  if (lines.length === 0) return undefined;
+  return evalCommand([lookupLua(address), ...lines].join(' '));
+}
+
+/** `workspace(target)`: switching the view is `focus`, not the `workspace` namespace (which moves and renames them). */
+export function luaWorkspaceCommand(target: string | number): string {
+  return evalCommand(dispatchDsp(`focus({ workspace = "${escapeLua(String(target))}" })`));
 }
