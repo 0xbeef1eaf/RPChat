@@ -168,7 +168,7 @@ export class ActionLoop {
     const emit = (event: import('@rp/shared').ChatEvent): void => this.emitter.emit('chat', event);
 
     emit({ type: 'turn-started', sessionId, turnId });
-    const message = await this.messages.add({ sessionId, role: 'assistant', content: '', origin: input.origin ?? 'llm', actions: [] });
+    const message = await this.messages.add({ sessionId, role: 'assistant', content: '', origin: input.origin ?? 'llm', turnId, actions: [] });
     const actions: ActionRecord[] = message.actions ?? (message.actions = []);
     const usage = { inputTokens: 0, outputTokens: 0 };
     const conversation: LlmMessage[] = [...input.messages];
@@ -262,7 +262,7 @@ export class ActionLoop {
           };
           actions.push(action);
           emit({ type: 'action-started', sessionId, messageId: message.id, action });
-          action.result = await this.runAction(input, action, message.id);
+          action.result = await this.runAction(input, action, message.id, turnId);
           emit({ type: 'action-finished', sessionId, messageId: message.id, action });
           ran.push({ action, pending: p });
         }
@@ -314,13 +314,13 @@ export class ActionLoop {
     return message;
   }
 
-  private async runAction(input: TurnInput, action: ActionRecord, messageId: string): Promise<CodeRunResult> {
+  private async runAction(input: TurnInput, action: ActionRecord, messageId: string, turnId: string): Promise<CodeRunResult> {
     const context: ActionContext = {
       packId: input.actor.packId,
       characterId: input.actor.characterId,
       sessionId: input.session.id,
       packRoot: input.actor.packRoot,
-      trigger: { kind: 'llm', actionId: action.id, messageId },
+      trigger: { kind: 'llm', actionId: action.id, messageId, turnId },
     };
     const started = this.now().getTime();
     try {

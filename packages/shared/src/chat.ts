@@ -20,6 +20,13 @@ export interface ChatMessage {
   origin?: 'llm' | 'behaviour' | 'timer' | 'event' | 'routine' | 'greeting';
   /** Emotes (`sdk.chat.emote`) are rendered in italics. */
   kind?: 'text' | 'emote';
+  /**
+   * The turn that produced this message — the same id the `turn-started`/`turn-finished` events
+   * carry. Assistant text written by the character's background code (a timer, an event handler)
+   * has none, which is how a retry tells the reply it should replace from whatever ran alongside
+   * it and should survive.
+   */
+  turnId?: string;
   /** Provider usage for the turn that produced this message. */
   usage?: { inputTokens: number; outputTokens: number };
   error?: SerializedError;

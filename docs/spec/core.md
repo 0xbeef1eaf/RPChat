@@ -101,6 +101,12 @@ Model traffic: with `TurnInput.captureExchanges` (ChatService passes `settings.d
 
 **ChatService**: `send(sessionId, text)` → persist user message, run `onUserMessage` behaviours (may return `{ skipLlm: true }`), run `ActionLoop.runTurn`. Serialise turns per session (a queue); `send` while a turn runs waits for it. `abort(sessionId)`.
 
+Two queues, both `KeyedQueue` (`keyed-queue.ts` — the one place the engine's per-key serialisation lives; `FileStorage`, `EventService` and `TimerService` use it too). `turns`, keyed by session, is the conversation: user messages, self-wakes, the LLM turns they run and the edits (retry, reset, clear) that must not race with one. `background`, keyed `<sessionId>\0<trigger>`, is the character's own code: a `code` timer and an `onTimer` behaviour run there, off the turn queue, so a reply in progress does not have to finish first — the way event-subscription handlers have always run (docs/spec/living.md §3.3). `isBusy`/`isRunning` and the Stop button describe turns only; background work is not something the user is waiting on. `idle(sessionId?)` drains both, and `abortBackground(sessionId?)` cuts the background runs short (`Engine.stop` calls it before `timers.stop()`, because a fire waits for its run and a run can sit in a host call for minutes).
+
+`TimerService` serialises fires **per timer** rather than globally: a repeating timer never overlaps itself and is re-armed only when its run is done, while two different timers fire alongside each other. `fireDue()` stays sequential — it is the deterministic test path.
+
+What this gives up is ordering between a background run and a turn. Two runs may interleave their `sdk.state` writes, so a read-modify-write spread across both can lose an update; a single `set` is safe (`FileStorage` keeps one mutable map per scope and serialises the writes to its file), a `get` then `set` in two overlapping runs is not. This is the tradeoff the event handlers already accepted.
+
 **SessionService**: CRUD; `create` writes the greeting as first assistant message (origin greeting) and runs `onSessionStart` behaviours; `remove` deletes messages, session state and timers.
 
 **SettingsService**: `get()`, `update(patch)` with `DEFAULT_SETTINGS` + `DEFAULT_RUN_LIMITS` merge, provider CRUD by array replace, `testProvider`, `listModels`.

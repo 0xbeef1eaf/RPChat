@@ -14,6 +14,7 @@ import type { SessionService } from './sessions.js';
 import type { ProviderFactory, SettingsService } from './settings.js';
 import type { TimerService } from './timers.js';
 import type { Clock, EngineEmitter, Logger } from '../types.js';
+import { KeyedQueue } from '../keyed-queue.js';
 import { characterScope } from '../handlers/state.js';
 import { providerLabel } from './exchanges.js';
 import { LIB_STATE_KEY } from './library.js';
@@ -57,10 +58,29 @@ const HOUR_MS = 60 * 60 * 1000;
 /** How many of the latest messages the memory ranker matches against (`memoryFocus`). */
 const MEMORY_FOCUS_MESSAGES = 6;
 
-/** Serialises turns per session, runs behaviours around the LLM turn, handles timer wake-ups. */
+/**
+ * Serialises turns per session, runs behaviours around the LLM turn, handles timer wake-ups.
+ *
+ * Two queues, deliberately separate. `turns` is the session's conversation: the user's messages,
+ * self-wakes, the LLM turns they run, and the edits (retry, reset, clear) that must not race with
+ * one. `background` is the character's own code — a `code` timer, an `onTimer` behaviour — keyed by
+ * what triggered it, so a repeating timer never overlaps itself but nothing it does holds up a
+ * reply. Event handlers already worked this way (`EventService.fire`); timers now match them.
+ *
+ * The tradeoff is the one the event handlers already accepted: a background run and a turn can
+ * interleave their writes, so a read-modify-write split across the two — `sdk.state.get` in one and
+ * `sdk.state.set` in the other — can lose an update. A single call is safe (`FileStorage` holds one
+ * mutable map per scope and serialises the writes to its file); a pair of them is not, and nothing
+ * on the host side can make it so. Character code that needs the pair to be atomic needs an atomic
+ * primitive in the SDK, which this does not add.
+ */
 export class ChatService {
-  private readonly queues = new Map<string, Promise<unknown>>();
+  private readonly turns = new KeyedQueue();
+  private readonly background = new KeyedQueue();
+  /** The in-flight LLM turn of a session: what Stop aborts and what `isRunning` reports. */
   private readonly controllers = new Map<string, AbortController>();
+  /** In-flight background runs, keyed like `background`, so shutdown can cut them short. */
+  private readonly backgroundControllers = new Map<string, AbortController>();
   private readonly providers = new Map<string, LlmProvider>();
   private readonly promptBuilder: PromptBuilder;
   private readonly turnCounts = new Map<string, number>();
@@ -155,22 +175,47 @@ export class ChatService {
     });
   }
 
-  /** Run `task` serialised with the session's turns (used for `code` timers and Sandbox runs; event handlers run on their own, see EventService.fire). */
+  /**
+   * Run `task` serialised with the session's turns. Only the Sandbox tab uses this now: the user is
+   * sitting in front of that run, so it is meant to have the session to itself. The character's own
+   * background code (`code` timers, `onTimer`, event handlers) runs off the turn queue instead.
+   */
   runExclusive<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
     const result = this.enqueue(sessionId, task);
     void result.then(() => this.flushImmediateWake(sessionId), () => this.flushImmediateWake(sessionId));
     return result;
   }
 
-  /** `true` while a turn is running or queued for the session. */
+  /**
+   * `true` while a turn is running or queued for the session. Background code (timers, event
+   * handlers) is deliberately not counted: it does not stop the character from being spoken to.
+   */
   isBusy(sessionId: string): boolean {
-    return this.queues.has(sessionId);
+    return this.turns.has(sessionId);
   }
 
-  /** Wait for everything queued on the session to finish. */
+  /**
+   * Wait for everything queued on the session to finish — its turns and the background runs
+   * they may have started. A background run can queue a turn (an immediate self-wake) and a turn
+   * can start a background run, so this keeps draining until both are quiet.
+   */
   async idle(sessionId?: string): Promise<void> {
-    const pending = sessionId === undefined ? [...this.queues.values()] : [this.queues.get(sessionId)];
-    await Promise.all(pending.map((p) => p?.catch(() => undefined)));
+    for (let pass = 0; pass < 100; pass++) {
+      await this.turns.idle(sessionId);
+      await this.backgroundIdle(sessionId);
+      const turnsQuiet = sessionId === undefined ? this.turns.size === 0 : !this.turns.has(sessionId);
+      if (turnsQuiet && this.backgroundKeys(sessionId).length === 0) return;
+    }
+  }
+
+  /** Background keys are `<sessionId>\0<what triggered the run>`, so they can be drained per session. */
+  private backgroundKeys(sessionId?: string): string[] {
+    const keys = this.background.keys();
+    return sessionId === undefined ? keys : keys.filter((key) => key.startsWith(`${sessionId}\u0000`));
+  }
+
+  private async backgroundIdle(sessionId?: string): Promise<void> {
+    await Promise.all(this.backgroundKeys(sessionId).map((key) => this.background.idle(key)));
   }
 
   /**
@@ -267,17 +312,22 @@ export class ChatService {
       return;
     }
     if (timer.kind === 'code') {
-      await this.enqueue(session.id, () => this.runCodeTimer(session, timer));
-      this.flushImmediateWake(session.id);
+      // Off the session's turn queue: the timer's code is the character's own background work,
+      // and a reply it lands in the middle of should not have to wait for it. Still awaited here,
+      // so `TimerService` re-arms a repeating timer only once this run is done.
+      await this.runInBackground(session.id, `timer:${timer.id}`, (signal) => this.runCodeTimer(session, timer, signal));
       return;
     }
+    if (this.o.behaviours.has(session, 'onTimer')) {
+      const info: Record<string, import('@rp/shared').Json> = { id: timer.id, payload: (timer.payload ?? null) as import('@rp/shared').Json };
+      if (timer.label !== undefined) info.label = timer.label;
+      await this.runInBackground(session.id, `timer:${timer.id}`, (signal) =>
+        this.runBehaviour(session, 'onTimer', { timer: info }, { kind: 'timer', timerId: timer.id }, signal),
+      );
+      return;
+    }
+    // No script to run: this one is a turn, and turns stay on the session's queue.
     await this.enqueue(session.id, async () => {
-      if (this.o.behaviours.has(session, 'onTimer')) {
-        const info: Record<string, import('@rp/shared').Json> = { id: timer.id, payload: (timer.payload ?? null) as import('@rp/shared').Json };
-        if (timer.label !== undefined) info.label = timer.label;
-        await this.runBehaviour(session, 'onTimer', { timer: info }, { kind: 'timer', timerId: timer.id });
-        return;
-      }
       if (!(await this.consumeSelfWake(session, 'wake-timer', JSON.stringify(timer.payload ?? null)))) return;
       const label = timer.label ? `${timer.label} ` : '';
       await this.o.sessions.addMessage({
@@ -293,20 +343,46 @@ export class ChatService {
 
   // ---- internals ----------------------------------------------------------
 
+  /**
+   * Run a background task off the session's turn queue, serialised against anything else queued
+   * under the same `key` (a repeating timer, the same subscription). Its abort signal is registered
+   * so `abortBackground` can cut it short at shutdown; the session's Stop button does not reach it,
+   * because stopping a reply is not meant to cancel the character's standing work.
+   */
+  private async runInBackground(sessionId: string, key: string, task: (signal: AbortSignal) => Promise<unknown>): Promise<void> {
+    const full = `${sessionId}\u0000${key}`;
+    await this.background.run(full, async () => {
+      const controller = new AbortController();
+      this.backgroundControllers.set(full, controller);
+      try {
+        await task(controller.signal);
+      } catch (err) {
+        this.o.logger.warn(`[chat] background run ${key} in session ${sessionId} failed`, err);
+      } finally {
+        if (this.backgroundControllers.get(full) === controller) this.backgroundControllers.delete(full);
+      }
+    });
+    this.flushImmediateWake(sessionId);
+  }
+
+  /** Cut short every background run, or only a session's. Used when the engine stops. */
+  abortBackground(sessionId?: string): void {
+    for (const [key, controller] of this.backgroundControllers) {
+      if (sessionId !== undefined && !key.startsWith(`${sessionId}\u0000`)) continue;
+      controller.abort();
+    }
+  }
+
   /** Run a `code` timer through the behaviour path (character surface + permissions) and audit it. */
-  private async runCodeTimer(session: Session, timer: ScheduledTimer): Promise<void> {
+  private async runCodeTimer(session: Session, timer: ScheduledTimer, signal: AbortSignal): Promise<void> {
     const { packId, characterId } = parseCharacterRef(session.characterRef);
     const started = this.o.now().getTime();
-    const controller = new AbortController();
-    this.controllers.set(session.id, controller);
     let result: import('@rp/shared').CodeRunResult | undefined;
     let failure: unknown;
     try {
-      result = await this.o.behaviours.runScript(packId, characterId, session.id, timer.code ?? '', (timer.input ?? null) as import('@rp/shared').Json, { kind: 'timer', timerId: timer.id }, { signal: controller.signal });
+      result = await this.o.behaviours.runScript(packId, characterId, session.id, timer.code ?? '', (timer.input ?? null) as import('@rp/shared').Json, { kind: 'timer', timerId: timer.id }, { signal });
     } catch (err) {
       failure = err;
-    } finally {
-      if (this.controllers.get(session.id) === controller) this.controllers.delete(session.id);
     }
     const error = failure ? serializeError(failure) : result && !result.ok ? result.error : undefined;
     if (error) this.o.logger.warn(`[chat] code timer ${timer.id} failed: ${error.message}`);
@@ -371,32 +447,30 @@ export class ChatService {
   }
 
   private enqueue<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
-    const prev = this.queues.get(sessionId) ?? Promise.resolve();
-    const next = prev.then(task, task);
-    this.queues.set(sessionId, next);
-    next
-      .finally(() => {
-        if (this.queues.get(sessionId) === next) this.queues.delete(sessionId);
-      })
-      .catch(() => undefined);
-    return next;
+    return this.turns.run(sessionId, task);
   }
 
   private requireCharacter(session: Session): ReturnType<PackService['getCharacter']> {
     return this.o.packs.getCharacter(session.characterRef);
   }
 
+  /**
+   * Run a behaviour hook. With no `signal` it is part of the turn (`onUserMessage`, which runs
+   * before the LLM call and which Stop must reach), so it registers as the session's running
+   * controller; with one it is a background run that brought its own.
+   */
   private async runBehaviour(
     session: Session,
     hook: 'onUserMessage' | 'onTimer',
     input: import('@rp/shared').Json,
     trigger?: import('@rp/shared').ActionTrigger,
+    signal?: AbortSignal,
   ): Promise<import('@rp/shared').CodeRunResult | undefined> {
     if (!this.o.behaviours.has(session, hook)) return undefined;
-    const controller = new AbortController();
-    this.controllers.set(session.id, controller);
+    const controller = signal ? undefined : new AbortController();
+    if (controller) this.controllers.set(session.id, controller);
     try {
-      const options: import('../behaviours.js').BehaviourRunOptions = { signal: controller.signal };
+      const options: import('../behaviours.js').BehaviourRunOptions = { signal: signal ?? controller!.signal };
       if (trigger) options.trigger = trigger;
       return await this.o.behaviours.run(session, hook, input, options);
     } catch (err) {
@@ -404,7 +478,7 @@ export class ChatService {
       this.o.emitter.emit('chat', { type: 'error', sessionId: session.id, error: serializeError(err) });
       return undefined;
     } finally {
-      if (this.controllers.get(session.id) === controller) this.controllers.delete(session.id);
+      if (controller && this.controllers.get(session.id) === controller) this.controllers.delete(session.id);
     }
   }
 
@@ -550,11 +624,20 @@ export function memoryFocus(transcript: ChatMessage[], count = MEMORY_FOCUS_MESS
  * The messages the last turn produced: the run of assistant messages at the end of the
  * transcript (a turn can add several — an `sdk.chat.emote`, then the reply). Everything
  * before them is the turn's input and stays.
+ *
+ * Within that run, only the messages of the last turn are its own. Background code runs
+ * alongside a turn now, so an event handler or a timer may have said something in the middle of
+ * the reply; those messages carry no `turnId` and are not the turn's to take back. Messages from
+ * before `turnId` existed have none either, so a run with no turn in it at all is treated the old
+ * way — the whole run is the reply.
  */
 export function trailingReply(transcript: ChatMessage[]): ChatMessage[] {
   let start = transcript.length;
   while (start > 0 && transcript[start - 1]?.role === 'assistant') start--;
-  return transcript.slice(start);
+  const run = transcript.slice(start);
+  const last = [...run].reverse().find((m) => m.turnId !== undefined)?.turnId;
+  if (last === undefined) return run;
+  return run.filter((m) => m.turnId === last);
 }
 
 export function dayPartOf(hour: number): import('@rp/shared').PresenceSnapshot['dayPart'] {

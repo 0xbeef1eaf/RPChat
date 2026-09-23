@@ -6,7 +6,7 @@ Depends on: `@rp/shared`, `@rp/sdk` (only for `describeSurface` in tests), `quic
 
 ```ts
 export class QuickJsRunner implements CodeRunner {
-  constructor(options?: { limits?: Partial<RunLimits>; moduleLoader?: undefined })
+  constructor(options?: { limits?: Partial<RunLimits>; maxConcurrentRuns?: number; moduleLoader?: undefined })
   run(request: CodeRunRequest): Promise<CodeRunResult>;
   dispose(): Promise<void>;
 }
@@ -17,7 +17,9 @@ export function wrapAsAsyncFunctionBody(js: string): string;   // `(async () => 
 ## Execution model
 
 1. `transpile` with esbuild (`target: 'es2020'`, `format: 'esm'` is wrong for a body — use `loader: 'ts'` on `async function __rp_main(){ <code> }` then extract; simplest: transform the string `async function __rp_main() {\n${code}\n}` and append `__rp_main()` in the isolate).
-2. Create a fresh `QuickJSAsyncContext` per run from a shared runtime (`newQuickJSAsyncWASMModule()` cached at first use; one `QuickJSAsyncRuntime` per runner, `setMemoryLimit`, `setMaxStackSize(1 MB)`).
+2. Create a fresh `QuickJSAsyncContext` per run from the runtime of a **lane** (`setMemoryLimit`, `setMaxStackSize`). A lane is one `newQuickJSAsyncWASMModule()` and one `QuickJSAsyncRuntime`, used by one run at a time and reused afterwards; `maxConcurrentRuns` (default 4) of them are built lazily, and a run beyond that waits for one in arrival order. A module per lane rather than one shared by all of them is what bounds a crash: when an exception escapes wasm the lane is poisoned and dropped for the GC, and no other run was executing inside it. `1` restores strict serialisation.
+
+   Concurrency is what lets the character's background code — event handlers, `code` timers — run while it is replying (docs/spec/core.md, ChatService). It is safe here because nothing is shared between two runs and because `__rp_host_call` never suspends the wasm stack (§4 below): every entry into wasm is synchronous, and the lanes only interleave at the `await` points between them. `RunClock` already excludes time spent waiting on a host call from both budgets, so a run that is parked does not burn its own `timeoutMs` while another lane works.
 3. Interrupt handler: `shouldInterruptAfterDeadline(start + cpuMs)` and also honour `signal`. Wall-clock timeout via `Promise.race` in the host + interrupting; ensure the context is disposed either way.
 4. Install globals in the isolate:
    - `__rp_host_call(module, method, argsJson) : Promise<string>` — `newAsyncifiedFunction`; host parses args, enforces `maxHostCalls` (throw SANDBOX_CALL_BUDGET), calls `request.invoker.invoke(...)`, records a `CallRecord`, returns `JSON.stringify(CapabilityResult)`. In the isolate, a small bootstrap script builds `sdk` from the `SdkSurface` JSON: for each module, an object with each method as `(...args) => __rp_host_call(mod, name, JSON.stringify(args)).then(r => { const x = JSON.parse(r); if (x.ok) return x.value; throw Object.assign(new Error(x.error.message), { code: x.error.code, details: x.error.details }) })`. Support one level of nesting for dotted method names (`session.get` → `sdk.state.session.get`). The `lib` module is the one exception: it gets no namespace of its own. Its methods (`register`, `unregister`) are kept aside and `__rp_lib(functions, internalNames?)` — a global the prelude calls (§5) — builds the character's library object out of the saved functions plus those two methods, freezes it and makes it the value `sdk.lib` reads back. `sdk.lib` is therefore the `lib` const itself (`sdk.lib === lib`), so `sdk.lib.<name>(...)` calls a saved function without crossing to the host. Without a prelude, or without the module on the surface, the object still exists with whatever half applies.

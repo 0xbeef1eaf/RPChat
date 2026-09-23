@@ -4,6 +4,7 @@ import { RpError, parseCharacterRef, serializeError } from '@rp/shared';
 import type { BehaviourRunner } from '../behaviours.js';
 import type { AuditService } from './audit.js';
 import type { Clock, EngineEmitter, Logger } from '../types.js';
+import { KeyedQueue } from '../keyed-queue.js';
 
 export const HOST_EVENT_NAMES: readonly HostEventName[] = [
   'user-idle', 'user-back', 'window-changed', 'app-launched', 'file-added', 'battery-low', 'screen-locked',
@@ -137,11 +138,11 @@ export class EventService {
   private readonly behaviourRanFor = new Set<string>();
   private readonly lastFired = new Map<string, number>();
   /**
-   * One queue per subscription: its events are handled in order and never overlap, while a different
-   * subscription — and the character's own turns — run alongside. The map holds each queue's tail, so
-   * awaiting the tails (`idle()`) awaits everything still in flight.
+   * One queue per subscription (and one per session for the `onEvent` behaviour): its events are
+   * handled in order and never overlap, while a different subscription — and the character's own
+   * turns — run alongside.
    */
-  private readonly chains = new Map<string, Promise<unknown>>();
+  private readonly chains = new KeyedQueue();
   private lastTimeTick: string | undefined;
   private inFlight: Promise<unknown> = Promise.resolve();
 
@@ -265,7 +266,7 @@ export class EventService {
     for (let i = 0; i < 100; i++) {
       await this.inFlight.catch(() => undefined);
       if (this.chains.size === 0) return;
-      await Promise.all([...this.chains.values()]).catch(() => undefined);
+      await this.chains.idle();
     }
   }
 
@@ -328,7 +329,10 @@ export class EventService {
       if (handledSessions.has(session.id)) continue;
       if (!this.o.packs.tryGetLoaded(parseCharacterRef(session.characterRef).packId)) continue;
       if (!this.o.behaviours.has(session, 'onEvent')) continue;
-      await this.runOnEvent(session, event);
+      // Queued per session and not awaited, for the same reason a subscription handler is not:
+      // an `onEvent` behaviour that takes its time must not hold up the next host event — which,
+      // on this one global dispatch chain, would mean holding it up for every character.
+      void this.chains.run(`onEvent:${session.id}`, () => this.runOnEvent(session, event));
     }
   }
 
@@ -387,16 +391,11 @@ export class EventService {
    * for every chain.
    */
   private fire(session: Session, sub: EventSubscription, event: HostEvent): void {
-    const prev = this.chains.get(sub.id) ?? Promise.resolve();
-    const next = prev.then(() =>
+    void this.chains.run(sub.id, () =>
       this.runHandler(session, sub, event).catch((err) => {
         this.o.logger.warn(`[events] subscription ${sub.id} (${event.name}) failed`, err);
       }),
     );
-    this.chains.set(sub.id, next);
-    void next.finally(() => {
-      if (this.chains.get(sub.id) === next) this.chains.delete(sub.id);
-    });
   }
 
   private async runHandler(session: Session, sub: EventSubscription, event: HostEvent): Promise<void> {

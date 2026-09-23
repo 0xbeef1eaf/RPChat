@@ -15,30 +15,11 @@ import type {
 } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import { defaultSettings, mergeSettings } from '../defaults.js';
+import { KeyedQueue } from '../keyed-queue.js';
 
 export interface FileStorageOptions {
   /** Maximum number of audit entries kept in `audit.jsonl`. Default 5000. */
   auditCap?: number;
-}
-
-/**
- * Serialises asynchronous work per key so two writers never race on the same
- * file (the second write waits for the first rename to complete).
- */
-class KeyedQueue {
-  private readonly tails = new Map<string, Promise<unknown>>();
-
-  run<T>(key: string, task: () => Promise<T>): Promise<T> {
-    const prev = this.tails.get(key) ?? Promise.resolve();
-    const next = prev.then(task, task);
-    this.tails.set(key, next);
-    next
-      .finally(() => {
-        if (this.tails.get(key) === next) this.tails.delete(key);
-      })
-      .catch(() => undefined);
-    return next;
-  }
 }
 
 async function readJsonFile<T>(file: string): Promise<T | undefined> {

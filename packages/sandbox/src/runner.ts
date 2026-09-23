@@ -45,29 +45,33 @@ export interface QuickJsRunnerOptions {
   maxStackBytes?: number;
   /** Reserved; ES module loading is intentionally unsupported. */
   moduleLoader?: undefined;
+  /**
+   * How many runs may be in flight at once. A character's background code —
+   * event handlers, timers — no longer has to wait for its reply to finish, so
+   * the runner has to be able to hold several runs open at the same time.
+   * Each one gets its own lane. Default 4; `1` restores strict serialisation.
+   */
+  maxConcurrentRuns?: number;
 }
 
 export const DEFAULT_HOST_CALL_TIMEOUT_MS = 10 * 60 * 1000;
 export const DEFAULT_MAX_STACK_BYTES = 64 * 1024;
+export const DEFAULT_MAX_CONCURRENT_RUNS = 4;
 
 /**
- * The single cached WebAssembly module. When an exception escapes the module
- * (host stack overflow, wasm trap, emscripten abort) its internal state is no
- * longer trustworthy, so the slot is poisoned and the next run creates a fresh
- * module; the old one is simply dropped for the GC.
+ * One execution lane: its own WebAssembly module, its own QuickJS runtime, one
+ * run at a time. When an exception escapes the module (host stack overflow,
+ * wasm trap, emscripten abort) its internal state is no longer trustworthy, so
+ * the lane is poisoned and dropped for the GC, and the next run builds a fresh
+ * one. A module per lane rather than one shared by all of them is what keeps
+ * that blast radius to the run that caused it: concurrent runs elsewhere are
+ * not executing inside the module that just died.
  */
-interface ModuleSlot {
+interface Lane {
   module: Promise<QuickJSAsyncWASMModule>;
+  runtime: QuickJSAsyncRuntime | undefined;
   poisoned: boolean;
-}
-
-let currentSlot: ModuleSlot | undefined;
-
-function acquireModuleSlot(): ModuleSlot {
-  if (!currentSlot || currentSlot.poisoned) {
-    currentSlot = { module: newQuickJSAsyncWASMModule(), poisoned: false };
-  }
-  return currentSlot;
+  busy: boolean;
 }
 
 const LOG_LEVELS: ReadonlySet<string> = new Set<LogLevel>(['debug', 'info', 'warn', 'error']);
@@ -76,14 +80,19 @@ const TRUNCATED_MARKER = '…[truncated]';
 /**
  * Executes character code in a QuickJS WebAssembly isolate.
  *
- * One runtime per runner (reused across runs), one fresh context per run.
- * Runs on the same runner are serialised.
+ * Up to `maxConcurrentRuns` runs at a time, each in a lane of its own (its own
+ * wasm module and runtime, a fresh context per run); beyond that they queue.
+ * Nothing is shared between two runs, and host calls never suspend the wasm
+ * stack (see `onHostCall`), so a run that is waiting on the host is off the
+ * interpreter entirely and the lanes interleave at those await points only.
  */
 export class QuickJsRunner implements CodeRunner {
   private readonly options: QuickJsRunnerOptions;
-  private slot: ModuleSlot | undefined;
-  private runtime: QuickJSAsyncRuntime | undefined;
-  private queue: Promise<unknown> = Promise.resolve();
+  private readonly lanes: Lane[] = [];
+  /** Runs waiting for a free lane, woken one per release, in arrival order. */
+  private readonly waiting: Array<() => void> = [];
+  /** In-flight runs, so `dispose` can wait for them. */
+  private readonly active = new Set<Promise<unknown>>();
   private disposed = false;
 
   constructor(options: QuickJsRunnerOptions = {}) {
@@ -92,6 +101,21 @@ export class QuickJsRunner implements CodeRunner {
 
   async run(request: CodeRunRequest): Promise<CodeRunResult> {
     if (this.disposed) throw new RpError('INTERNAL', 'QuickJsRunner has been disposed');
+    const task = this.perform(request);
+    this.active.add(task);
+    try {
+      return await task;
+    } finally {
+      this.active.delete(task);
+    }
+  }
+
+  /** How many runs are in flight. */
+  get running(): number {
+    return this.active.size;
+  }
+
+  private async perform(request: CodeRunRequest): Promise<CodeRunResult> {
     const started = performance.now();
     const limits: RunLimits = { ...DEFAULT_RUN_LIMITS, ...this.options.limits, ...request.limits };
     const hostCallTimeoutMs = this.options.hostCallTimeoutMs ?? DEFAULT_HOST_CALL_TIMEOUT_MS;
@@ -117,8 +141,8 @@ export class QuickJsRunner implements CodeRunner {
       };
     }
 
-    return this.withLock(async () => {
-      if (this.disposed) throw new RpError('INTERNAL', 'QuickJsRunner has been disposed');
+    const lane = await this.acquireLane();
+    try {
       const baseResult = { logs: [] as LogEntry[], calls: [] as CallRecord[], compiledCode };
       if (request.signal?.aborted) {
         return {
@@ -129,8 +153,7 @@ export class QuickJsRunner implements CodeRunner {
         };
       }
 
-      const slot = acquireModuleSlot();
-      const runtime = await this.getRuntime(slot);
+      const runtime = await this.runtimeFor(lane);
       const session = new RunSession(runtime, request, limits, hostCallTimeoutMs);
       let outcome: Outcome;
       try {
@@ -139,8 +162,8 @@ export class QuickJsRunner implements CodeRunner {
         if (session.crashed === undefined) session.cleanup();
         if (session.crashed !== undefined) {
           // The wasm module is in an undefined state: do not touch it again.
-          slot.poisoned = true;
-          this.runtime = undefined;
+          lane.poisoned = true;
+          lane.runtime = undefined;
         }
       }
 
@@ -154,49 +177,72 @@ export class QuickJsRunner implements CodeRunner {
       if (outcome.ok) result.returnValue = outcome.value;
       else result.error = withSourceContext(outcome.error, request.code, mapper);
       return result;
-    });
+    } finally {
+      this.releaseLane(lane);
+    }
   }
 
   async dispose(): Promise<void> {
-    await this.withLock(async () => {
-      this.disposed = true;
-      const runtime = this.runtime;
-      const slot = this.slot;
-      this.runtime = undefined;
-      this.slot = undefined;
-      if (runtime && slot && !slot.poisoned && runtime.alive) {
-        try {
-          runtime.dispose();
-        } catch {
-          // QuickJS asserts when objects leaked; the module is unusable from here on.
-          slot.poisoned = true;
-        }
-      }
-    });
+    this.disposed = true;
+    for (const wake of this.waiting.splice(0)) wake();
+    await Promise.allSettled([...this.active]);
+    for (const lane of this.lanes.splice(0)) this.disposeLane(lane);
   }
 
-  private async getRuntime(slot: ModuleSlot): Promise<QuickJSAsyncRuntime> {
-    if (this.runtime && this.slot === slot && !slot.poisoned && this.runtime.alive) return this.runtime;
-    if (this.runtime && this.slot && !this.slot.poisoned && this.runtime.alive) {
-      try {
-        this.runtime.dispose();
-      } catch {
-        this.slot.poisoned = true;
+  /**
+   * A free lane, a new one while under the cap, otherwise a place in the queue.
+   * The waiter that is woken always makes progress — it is woken by a release,
+   * which either frees a lane or takes a poisoned one out of the pool — so this
+   * loops at most once per wake-up.
+   */
+  private async acquireLane(): Promise<Lane> {
+    for (;;) {
+      if (this.disposed) throw new RpError('INTERNAL', 'QuickJsRunner has been disposed');
+      const free = this.lanes.find((lane) => !lane.busy && !lane.poisoned);
+      if (free) {
+        free.busy = true;
+        return free;
       }
+      const max = Math.max(1, this.options.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS);
+      if (this.lanes.length < max) {
+        const lane: Lane = { module: newQuickJSAsyncWASMModule(), runtime: undefined, poisoned: false, busy: true };
+        this.lanes.push(lane);
+        return lane;
+      }
+      await new Promise<void>((resolve) => this.waiting.push(resolve));
     }
-    this.runtime = undefined;
-    const module = await slot.module;
+  }
+
+  private releaseLane(lane: Lane): void {
+    if (lane.poisoned) {
+      const at = this.lanes.indexOf(lane);
+      if (at >= 0) this.lanes.splice(at, 1);
+    } else {
+      lane.busy = false;
+    }
+    this.waiting.shift()?.();
+  }
+
+  private async runtimeFor(lane: Lane): Promise<QuickJSAsyncRuntime> {
+    if (lane.runtime?.alive) return lane.runtime;
+    lane.runtime = undefined;
+    const module = await lane.module;
     const runtime = module.newRuntime();
     runtime.setMaxStackSize(this.options.maxStackBytes ?? DEFAULT_MAX_STACK_BYTES);
-    this.runtime = runtime;
-    this.slot = slot;
+    lane.runtime = runtime;
     return runtime;
   }
 
-  private withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const next = this.queue.then(fn, fn);
-    this.queue = next.catch(() => undefined);
-    return next;
+  private disposeLane(lane: Lane): void {
+    const runtime = lane.runtime;
+    lane.runtime = undefined;
+    if (lane.poisoned || !runtime?.alive) return;
+    try {
+      runtime.dispose();
+    } catch {
+      // QuickJS asserts when objects leaked; the module is unusable from here on.
+      lane.poisoned = true;
+    }
   }
 }
 

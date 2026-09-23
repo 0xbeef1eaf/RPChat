@@ -69,7 +69,7 @@ export interface ActionContext {
 }
 
 export type ActionTrigger =
-  | { kind: 'llm'; actionId: string; messageId: string }
+  | { kind: 'llm'; actionId: string; messageId: string; turnId?: string }
   | { kind: 'behaviour'; hook: BehaviourHook }
   | { kind: 'timer'; timerId: string }
   | { kind: 'event'; subscriptionId: string; event: string }
