@@ -1636,6 +1636,31 @@ table.table {
 .event-marker-text {
   white-space: nowrap;
 }
+.event-marker-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.event-marker-toggle {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.event-marker-toggle:hover {
+  color: var(--fg);
+}
+.event-marker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-self: center;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  text-align: center;
+}
 .list-row {
   padding: 3px 6px;
   border: 1px solid var(--border);
