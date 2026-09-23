@@ -21,6 +21,9 @@ interface MessageListProps {
 
 type Row = { kind: 'message'; at: string; message: ChatMessage } | { kind: 'marker'; at: string; marker: EventMarker };
 
+/** A row as drawn: markers that arrived together share one divider line. */
+type DisplayRow = { kind: 'message'; at: string; message: ChatMessage } | { kind: 'markers'; at: string; markers: EventMarker[] };
+
 /** Merge messages and markers by time (stable: messages first on ties). */
 /** Self-wake notes are for the model only; showing them would reveal that the character was prompted. */
 export function isWakeNote(m: ChatMessage): boolean {
@@ -33,6 +36,42 @@ export function mergeRows(messages: ChatMessage[], markers: EventMarker[]): Row[
     ...markers.map((k): Row => ({ kind: 'marker', at: k.at, marker: k })),
   ];
   return rows.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.kind === b.kind ? 0 : a.kind === 'message' ? -1 : 1));
+}
+
+/** How long a collapsed run may span; a marker further than this from the run's start opens a new row. */
+export const MARKER_GROUP_WINDOW_MS = 60_000;
+
+/**
+ * Fold a run of markers into one row. A timer and a sense firing together used to draw a divider
+ * line each, pushing the conversation off screen for something the reader skims past.
+ */
+export function groupMarkers(rows: Row[]): DisplayRow[] {
+  const out: DisplayRow[] = [];
+  for (const row of rows) {
+    if (row.kind === 'message') {
+      out.push(row);
+      continue;
+    }
+    const last = out.at(-1);
+    // Measured from the run's start, so a slow drip of events cannot chain into one endless row.
+    // `out`'s groups are ours, so extending one in place is safe.
+    if (last?.kind === 'markers' && withinWindow(last.at, row.at)) last.markers.push(row.marker);
+    else out.push({ kind: 'markers', at: row.at, markers: [row.marker] });
+  }
+  return out;
+}
+
+function withinWindow(a: string, b: string): boolean {
+  const gap = new Date(b).getTime() - new Date(a).getTime();
+  return Number.isFinite(gap) && gap <= MARKER_GROUP_WINDOW_MS;
+}
+
+/** "user-idle ×2, time" — the names behind a collapsed row, short enough to stay on one line. */
+export function summarizeMarkers(markers: EventMarker[]): string {
+  const counts = new Map<string, number>();
+  for (const m of markers) counts.set(m.event, (counts.get(m.event) ?? 0) + 1);
+  const names = [...counts].map(([event, n]) => (n > 1 ? `${event} ×${n}` : event));
+  return names.length > 3 ? `${names.slice(0, 2).join(', ')} +${names.length - 2} more` : names.join(', ');
 }
 
 /** Scrollable transcript that sticks to the bottom while the user has not scrolled up. */
@@ -70,7 +109,7 @@ export function MessageList({ messages, characterName, avatarUrl, userName, turn
   }, [messages === undefined]);
 
   const streamingId = turnRunning && messages ? messages.at(-1)?.id : undefined;
-  const rows = useMemo(() => (messages ? mergeRows(messages, markers) : []), [messages, markers]);
+  const rows = useMemo(() => (messages ? groupMarkers(mergeRows(messages, markers)) : []), [messages, markers]);
   // One retry, on the newest reply: the engine regenerates the whole run of messages the last
   // turn added, so a button per assistant message would promise something finer than it does.
   const retryable = onRetry && !turnRunning && canRetry(messages);
@@ -102,13 +141,7 @@ export function MessageList({ messages, characterName, avatarUrl, userName, turn
                 {...(row.message.id === retryMessageId ? { onRetry } : {})}
               />
             ) : (
-              <div key={`marker-${row.marker.id}`} className="event-marker" title={`subscription ${row.marker.subscriptionId}`}>
-                <span className="event-marker-line" />
-                <span className="event-marker-text">
-                  ⚡ {row.marker.event} · {formatTime(row.marker.at)}
-                </span>
-                <span className="event-marker-line" />
-              </div>
+              <EventMarkerRow key={`marker-${row.markers[0]?.id}`} markers={row.markers} />
             ),
           )
         )}
@@ -126,6 +159,44 @@ export function MessageList({ messages, characterName, avatarUrl, userName, turn
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** One divider line for a run of events; a collapsed run expands to the individual firings. */
+function EventMarkerRow({ markers }: { markers: EventMarker[] }) {
+  const [open, setOpen] = useState(false);
+  const first = markers[0];
+  if (!first) return null;
+  if (markers.length === 1) {
+    return (
+      <div className="event-marker" title={`subscription ${first.subscriptionId}`}>
+        <span className="event-marker-line" />
+        <span className="event-marker-text">
+          ⚡ {first.event} · {formatTime(first.at)}
+        </span>
+        <span className="event-marker-line" />
+      </div>
+    );
+  }
+  return (
+    <div className="event-marker-group">
+      <div className="event-marker">
+        <span className="event-marker-line" />
+        <button type="button" className="event-marker-text event-marker-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+          ⚡ {markers.length} events · {summarizeMarkers(markers)} · {formatTime(first.at)} {open ? '▴' : '▾'}
+        </button>
+        <span className="event-marker-line" />
+      </div>
+      {open ? (
+        <div className="event-marker-list">
+          {markers.map((m) => (
+            <span key={m.id} title={`subscription ${m.subscriptionId}`}>
+              {m.event} · {formatTime(m.at)}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
