@@ -42,13 +42,17 @@ export class ChatHandler implements CapabilityHandler {
       case 'emote': {
         const text = requireText(args[0], 'text');
         await this.sessions.require(context.sessionId);
-        await this.sessions.addMessage({
+        const message: Parameters<SessionService['addMessage']>[0] = {
           sessionId: context.sessionId,
           role: 'assistant',
           content: text,
           origin: originOf(context),
           kind: 'emote',
-        });
+        };
+        // Said as part of a reply, so a retry of that reply takes it with it. Code running in the
+        // background (a timer, an event handler) has no turn, and what it says outlives one.
+        if (context.trigger.kind === 'llm' && context.trigger.turnId !== undefined) message.turnId = context.trigger.turnId;
+        await this.sessions.addMessage(message);
         return;
       }
       case 'history': {

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ActionContext, Json, ScheduledTimer, Storage, TimerKind } from '@rp/shared';
 import { DEFAULT_SETTINGS, RpError, characterRef } from '@rp/shared';
 import type { Clock, Logger } from '../types.js';
+import { KeyedQueue } from '../keyed-queue.js';
 
 export type TimerFireHandler = (timer: ScheduledTimer) => Promise<void>;
 
@@ -67,12 +68,17 @@ export function normalizeTimer(timer: ScheduledTimer): ScheduledTimer {
  * once `start()` was called, arms a real (unref'd) `setTimeout`. `fireDue(now)` fires
  * everything due for deterministic tests. Firing removes the timer from storage
  * *before* the handler runs; repeating timers are re-armed afterwards.
+ *
+ * Fires are serialised **per timer**, not globally: a repeating timer never overlaps itself and is
+ * re-armed only once its run is done, while two different timers — in the same session or not —
+ * fire alongside each other. A `wake` timer that ends in a long LLM turn therefore no longer keeps
+ * every other timer in the app waiting for it.
  */
 export class TimerService {
   private readonly handles = new Map<string, NodeJS.Timeout>();
   private started = false;
   private onFire: TimerFireHandler = async () => undefined;
-  private firing: Promise<void> = Promise.resolve();
+  private readonly firing = new KeyedQueue();
 
   constructor(
     private readonly storage: Storage,
@@ -211,7 +217,7 @@ export class TimerService {
     this.started = false;
     for (const handle of this.handles.values()) clearTimeout(handle);
     this.handles.clear();
-    await this.firing.catch(() => undefined);
+    await this.firing.idle();
   }
 
   /** Fire every timer due at `at` (default: the injected clock), oldest first. Returns how many fired. */
@@ -226,7 +232,7 @@ export class TimerService {
 
   /** Wait until every fire currently in flight has finished. */
   async idle(): Promise<void> {
-    await this.firing.catch(() => undefined);
+    await this.firing.idle();
   }
 
   // ---- internals ----------------------------------------------------------
@@ -279,11 +285,12 @@ export class TimerService {
     }
   }
 
-  /** Serialise fires so two timers never run their handlers concurrently. */
+  /** Serialise a timer's own fires so it never overlaps itself; other timers are unaffected. */
   private enqueueFire(id: string): void {
-    this.firing = this.firing.then(() => this.fire(id)).then(() => undefined, (err) => {
-      this.logger.error('[timers] fire failed', err);
-    });
+    void this.firing.run(id, () => this.fire(id)).then(
+      () => undefined,
+      (err) => this.logger.error('[timers] fire failed', err),
+    );
   }
 
   private async fire(id: string): Promise<boolean> {

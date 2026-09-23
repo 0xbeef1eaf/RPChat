@@ -236,6 +236,17 @@ per-run call budgets, writes the audit log, then invokes the host handler.
    appended to the transcript as assistant text immediately, so a character can
    speak while acting.
 
+The actions of one message run in order, but a turn does not own the runtime.
+The character's **background code** — event handlers, `code` timers, `onTimer`
+behaviours — runs off the session's turn queue and alongside it, so an event
+does not have to wait for the reply it arrived in the middle of (`@rp/sandbox`
+holds up to `maxConcurrentRuns` isolates open at once; `ChatService` keeps a
+background queue next to the turn queue). Two runs can therefore interleave
+their `sdk.state` writes: a read-modify-write split across a handler and a turn
+can lose an update. Assistant text a background run wrote carries no `turnId`,
+which is how a retry replaces the reply without taking back what a timer said
+in the middle of it.
+
 Everything the user sees is a `ChatMessage`. Action runs are attached to the
 assistant message (`message.actions[]`) and shown collapsed in the UI.
 

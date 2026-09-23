@@ -39,6 +39,15 @@ function req(code: string, extra: Partial<CodeRunRequest> = {}): CodeRunRequest 
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Poll until `ready()` holds. Lanes boot a wasm module, so a fixed sleep would be a guess. */
+async function until(ready: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!ready()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for the runner');
+    await sleep(10);
+  }
+}
+
 describe('QuickJsRunner', () => {
   let runner: QuickJsRunner;
   beforeAll(() => {
@@ -689,12 +698,86 @@ describe('QuickJsRunner', () => {
     expect(result.returnValue).toEqual(['undefined', 'undefined', 'undefined', 'undefined', 'undefined', 'undefined']);
   });
 
-  it('refuses host calls after dispose and serialises concurrent runs', async () => {
+  it('refuses runs after dispose and keeps concurrent runs apart', async () => {
     const local = new QuickJsRunner();
     const results = await Promise.all([1, 2, 3].map((n) => local.run(req(`await sdk.state.get("k"); return ${n};`))));
     expect(results.map((r) => r.returnValue)).toEqual([1, 2, 3]);
     await local.dispose();
     await expect(local.run(req(`return 1;`))).rejects.toThrow(/disposed/);
+  });
+
+  it('runs up to maxConcurrentRuns at a time and queues the rest', async () => {
+    const local = new QuickJsRunner({ maxConcurrentRuns: 2 });
+    let inside = 0;
+    let peak = 0;
+    const waiting: Array<() => void> = [];
+    const invoker = makeInvoker(async () => {
+      inside++;
+      peak = Math.max(peak, inside);
+      await new Promise<void>((resolve) => waiting.push(resolve));
+      inside--;
+      return { ok: true, value: null };
+    });
+    try {
+      const runs = [1, 2, 3, 4].map((n) => local.run(req(`await sdk.state.get("k"); return ${n};`, { invoker })));
+      await until(() => waiting.length === 2);
+      expect(peak).toBe(2); // the other two are still queued for a lane
+      for (const resolve of waiting.splice(0)) resolve();
+      await until(() => waiting.length === 2);
+      for (const resolve of waiting.splice(0)) resolve();
+      const results = await Promise.all(runs);
+      expect(results.map((r) => r.returnValue)).toEqual([1, 2, 3, 4]);
+      expect(peak).toBe(2);
+    } finally {
+      await local.dispose();
+    }
+  });
+
+  it('lets a run that is waiting on the host give the interpreter to another run', async () => {
+    const local = new QuickJsRunner({ maxConcurrentRuns: 2 });
+    let releaseSlow: (() => void) | undefined;
+    let started = false;
+    const invoker = makeInvoker(async () => {
+      started = true;
+      await new Promise<void>((resolve) => {
+        releaseSlow = resolve;
+      });
+      return { ok: true, value: null };
+    });
+    try {
+      const slow = local.run(req(`await sdk.state.get("k"); return "slow";`, { invoker }));
+      await until(() => started);
+      // The slow run still holds its lane mid-host-call; a second run must not wait for it.
+      const quick = await local.run(req(`return "quick";`));
+      expect(quick.returnValue).toBe('quick');
+      releaseSlow?.();
+      expect((await slow).returnValue).toBe('slow');
+    } finally {
+      await local.dispose();
+    }
+  });
+
+  it('keeps overlapping runs in separate isolates', async () => {
+    const local = new QuickJsRunner({ maxConcurrentRuns: 2 });
+    let releaseWriter: (() => void) | undefined;
+    let written = false;
+    const invoker = makeInvoker(async () => {
+      written = true;
+      await new Promise<void>((resolve) => {
+        releaseWriter = resolve;
+      });
+      return { ok: true, value: null };
+    });
+    try {
+      const writer = local.run(req(`(globalThis as any).leaked = "yes"; await sdk.state.get("k"); return "writer";`, { invoker }));
+      await until(() => written);
+      const reader = await local.run(req(`return typeof (globalThis as any).leaked;`));
+      expect(reader.returnValue).toBe('undefined');
+      releaseWriter?.();
+      expect((await writer).returnValue).toBe('writer');
+    } finally {
+      await local.dispose();
+    }
   });
 
   it('survives 200 sequential runs without leaking or throwing', async () => {

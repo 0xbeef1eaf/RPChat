@@ -391,6 +391,9 @@ export class Engine {
     this.tickHandle = undefined;
     this.unsubscribeSenses?.();
     this.unsubscribeSenses = undefined;
+    // Before `timers.stop()`: a timer fire waits for its run, and a run can be parked in a host
+    // call for minutes. Cutting the runs short first is what keeps shutdown bounded.
+    this.chat.abortBackground();
     await this.timers.stop();
     this.sandbox.cancelAll();
     await this.eventService.idle();

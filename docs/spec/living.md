@@ -126,11 +126,16 @@ manifest, characters, README and asset summary (no permission information).
   always fires. One that arrives while the same subscription's handler is still running is queued
   behind it, so a subscription handles its own events in order, one at a time.
 - Handlers run **outside** the session's turn queue (`EventService.fire` starts the run and does not
-  await it; `idle()` waits for the per-subscription chains). A slow handler therefore no longer keeps
+  await it; `idle()` waits for the per-subscription chains). The `onEvent` behaviour fallback is
+  queued the same way, per session, rather than awaited inside the dispatch — on one global dispatch
+  chain, awaiting it held up the next host event for every character. `code` timers and `onTimer`
+  behaviours now run off the turn queue too (docs/spec/core.md, ChatService), so this is the normal
+  way the character's own code runs, not an exception for events. A slow handler therefore no longer keeps
   the character from replying, handlers for different subscriptions overlap, and a handler that raises
   a custom event of its own does not wait for a run queued behind itself — which used to deadlock the
-  session until the run limit aborted the handler. `code` timers and Sandbox runs still take
-  `ChatService.runExclusive`. What this gives up is ordering between a handler and a turn: two runs may
+  session until the run limit aborted the handler. Sandbox-tab runs still take
+  `ChatService.runExclusive` — the user is sitting there waiting for that one, and it is meant to
+  have the session to itself. What this gives up is ordering between a handler and a turn: two runs may
   now interleave their state writes, so a read-modify-write spread across both can lose an update.
 - `setInterest` is called whenever the subscription set changes (union of event names + always `time`
   handled in core).
