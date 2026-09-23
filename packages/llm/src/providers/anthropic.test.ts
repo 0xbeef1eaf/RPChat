@@ -327,6 +327,16 @@ describe('AnthropicProvider.chat (fake client)', () => {
     expect(sent.messages[0]?.content).toEqual([{ type: 'text', text: IMAGE_OMITTED_TEXT }]);
   });
 
+  it('applies config.reasoningEffort, and lets the request override it', async () => {
+    const { client, received } = fakeClient({ throws: new Error('stop here') });
+    const provider = new AnthropicProvider({ ...config, reasoningEffort: 'max' }, client);
+    await expect(provider.chat(request)).rejects.toBeInstanceOf(RpError);
+    expect((received[0]!.params as { output_config?: unknown }).output_config).toEqual({ effort: 'max' });
+
+    await expect(provider.chat({ ...request, reasoningEffort: 'low' })).rejects.toBeInstanceOf(RpError);
+    expect((received[1]!.params as { output_config?: unknown }).output_config).toEqual({ effort: 'low' });
+  });
+
   it('omits tools when supportsTools is false', async () => {
     const { client, received } = fakeClient({ throws: new Error('stop here') });
     const provider = new AnthropicProvider({ ...config, supportsTools: false }, client);
@@ -349,6 +359,27 @@ describe('AnthropicProvider.chat (fake client)', () => {
     expect(err).toBeInstanceOf(RpError);
     expect((err as RpError).code).toBe('LLM_PROVIDER');
     expect((err as RpError).details).toEqual({ status: 429, body: { type: 'rate_limit_error' } });
+  });
+});
+
+describe('reasoning effort', () => {
+  const base: LlmChatRequest = { model: 'm', system: 's', messages: transcript };
+
+  it('sends nothing when the request does not ask', () => {
+    const params = toAnthropicParams(base, true);
+    expect(params.output_config).toBeUndefined();
+    expect(params.thinking).toBeUndefined();
+  });
+
+  it('maps the levels Anthropic has to output_config.effort', () => {
+    expect(toAnthropicParams({ ...base, reasoningEffort: 'low' }, true).output_config).toEqual({ effort: 'low' });
+    expect(toAnthropicParams({ ...base, reasoningEffort: 'max' }, true).output_config).toEqual({ effort: 'max' });
+  });
+
+  it('turns thinking off for "none", which is not an effort level Anthropic has', () => {
+    const params = toAnthropicParams({ ...base, reasoningEffort: 'none' }, true);
+    expect(params.thinking).toEqual({ type: 'disabled' });
+    expect(params.output_config).toBeUndefined();
   });
 });
 

@@ -16,6 +16,12 @@ export interface ProviderConfig {
   supportsTools?: boolean;
   /** Whether the model accepts image content parts. Default true for Anthropic, false otherwise. */
   supportsVision?: boolean;
+  /**
+   * How hard the model thinks on every call through this provider. A request that asks for its
+   * own effort (the pack editor's auto-tagger) still wins. Unset sends nothing and leaves the
+   * provider at its own default.
+   */
+  reasoningEffort?: LlmReasoningEffort;
   extraHeaders?: Record<string, string>;
 }
 
@@ -58,9 +64,10 @@ export interface LlmChatRequest {
    */
   responseFormat?: LlmResponseFormat;
   /**
-   * How much the model may think before answering (OpenAI-compatible servers only). `none` is
-   * worth a lot on a local thinking model — it answers in tens of tokens instead of thousands —
-   * but a model whose template has no thinking switch ignores it and thinks anyway.
+   * How much the model may think before answering; falls back to the provider config's
+   * `reasoningEffort`. `none` is worth a lot on a local thinking model — it answers in tens of
+   * tokens instead of thousands — but a model whose template has no thinking switch ignores it
+   * and thinks anyway.
    */
   reasoningEffort?: LlmReasoningEffort;
   signal?: AbortSignal;
@@ -70,8 +77,14 @@ export type LlmResponseFormat =
   | { type: 'json_object' }
   | { type: 'json_schema'; name: string; schema: Record<string, unknown> };
 
-/** `none` and `max` are Ollama extensions; the rest are OpenAI's own values. */
+/**
+ * `none` and `max` are Ollama extensions; the rest are OpenAI's own values. Anthropic sends
+ * `low`–`max` as `output_config.effort` and turns thinking off for `none`.
+ */
 export type LlmReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'max';
+
+/** Every level, weakest first — what the settings and auto-tag dialogs offer. */
+export const REASONING_EFFORTS: ReadonlyArray<LlmReasoningEffort> = ['none', 'low', 'medium', 'high', 'max'];
 
 export type StopReason = 'end' | 'tool_use' | 'max_tokens' | 'aborted';
 
