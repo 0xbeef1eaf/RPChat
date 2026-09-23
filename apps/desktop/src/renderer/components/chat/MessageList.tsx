@@ -21,7 +21,7 @@ interface MessageListProps {
 
 type Row = { kind: 'message'; at: string; message: ChatMessage } | { kind: 'marker'; at: string; marker: EventMarker };
 
-/** A row as drawn: markers that arrived together share one divider line. */
+/** A row as drawn: a run of markers with no message between them shares one divider line. */
 type DisplayRow = { kind: 'message'; at: string; message: ChatMessage } | { kind: 'markers'; at: string; markers: EventMarker[] };
 
 /** Merge messages and markers by time (stable: messages first on ties). */
@@ -38,12 +38,11 @@ export function mergeRows(messages: ChatMessage[], markers: EventMarker[]): Row[
   return rows.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.kind === b.kind ? 0 : a.kind === 'message' ? -1 : 1));
 }
 
-/** How long a collapsed run may span; a marker further than this from the run's start opens a new row. */
-export const MARKER_GROUP_WINDOW_MS = 60_000;
-
 /**
- * Fold a run of markers into one row. A timer and a sense firing together used to draw a divider
- * line each, pushing the conversation off screen for something the reader skims past.
+ * Fold a run of markers into one row. Events firing while nobody is talking — a media widget
+ * clicked a dozen times, a timer ticking — drew a divider line each, pushing the conversation off
+ * screen for something the reader skims past. Only a message breaks a run, so however long the
+ * quiet stretch is, it stays one line.
  */
 export function groupMarkers(rows: Row[]): DisplayRow[] {
   const out: DisplayRow[] = [];
@@ -53,17 +52,21 @@ export function groupMarkers(rows: Row[]): DisplayRow[] {
       continue;
     }
     const last = out.at(-1);
-    // Measured from the run's start, so a slow drip of events cannot chain into one endless row.
     // `out`'s groups are ours, so extending one in place is safe.
-    if (last?.kind === 'markers' && withinWindow(last.at, row.at)) last.markers.push(row.marker);
+    if (last?.kind === 'markers') last.markers.push(row.marker);
     else out.push({ kind: 'markers', at: row.at, markers: [row.marker] });
   }
   return out;
 }
 
-function withinWindow(a: string, b: string): boolean {
-  const gap = new Date(b).getTime() - new Date(a).getTime();
-  return Number.isFinite(gap) && gap <= MARKER_GROUP_WINDOW_MS;
+/** "10:15" for a run that fired at one time, "10:15–10:19" for one that spread out. */
+export function markerRunTime(markers: EventMarker[]): string {
+  const first = markers[0];
+  const last = markers.at(-1);
+  if (!first || !last) return '';
+  const from = formatTime(first.at);
+  const to = formatTime(last.at);
+  return from === to ? from : `${from}–${to}`;
 }
 
 /** "user-idle ×2, time" — the names behind a collapsed row, short enough to stay on one line. */
@@ -184,7 +187,7 @@ function EventMarkerRow({ markers }: { markers: EventMarker[] }) {
       <div className="event-marker">
         <span className="event-marker-line" />
         <button type="button" className="event-marker-text event-marker-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-          ⚡ {markers.length} events · {summarizeMarkers(markers)} · {formatTime(first.at)} {open ? '▴' : '▾'}
+          ⚡ {markers.length} events · {summarizeMarkers(markers)} · {markerRunTime(markers)} {open ? '▴' : '▾'}
         </button>
         <span className="event-marker-line" />
       </div>

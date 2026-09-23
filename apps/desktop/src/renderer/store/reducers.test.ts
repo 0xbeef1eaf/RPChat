@@ -14,6 +14,7 @@ import {
   upsertSession,
 } from './reducers';
 import { initialState, runtimeFor, type AppState } from './state';
+import { formatTime } from '../lib/format';
 
 const S = 'session-1';
 
@@ -302,26 +303,30 @@ describe('mergeRows', () => {
 describe('groupMarkers', () => {
   const marker = (id: string, event: string, at: string) => ({ id, event, at, subscriptionId: `sub-${id}` });
 
-  it('folds markers that fired together into one row, and splits on a message or a gap', async () => {
-    const { mergeRows, groupMarkers, MARKER_GROUP_WINDOW_MS } = await import('../components/chat/MessageList');
+  it('folds every run of markers into one row, however long the quiet stretch', async () => {
+    const { mergeRows, groupMarkers } = await import('../components/chat/MessageList');
     const reply = msg('r', 'Hey.', { createdAt: '2026-01-01T00:05:00.000Z' });
-    const far = new Date(Date.parse('2026-01-01T00:00:00Z') + MARKER_GROUP_WINDOW_MS + 1).toISOString();
     const markers = [
       marker('k1', 'time', '2026-01-01T00:00:00.000Z'),
       marker('k2', 'user-idle', '2026-01-01T00:00:00.400Z'),
-      marker('k3', 'time', far),
+      // Four minutes later, still before the reply: a gap does not start a new row, only a message does.
+      marker('k3', 'time', '2026-01-01T00:04:00.000Z'),
       marker('k4', 'battery', '2026-01-01T00:06:00.000Z'),
     ];
     const rows = groupMarkers(mergeRows([reply], markers));
-    expect(rows.map((row) => (row.kind === 'message' ? row.message.id : row.markers.map((m) => m.id)))).toEqual([['k1', 'k2'], ['k3'], 'r', ['k4']]);
+    expect(rows.map((row) => (row.kind === 'message' ? row.message.id : row.markers.map((m) => m.id)))).toEqual([['k1', 'k2', 'k3'], 'r', ['k4']]);
   });
 
-  it('names the events behind a collapsed row', async () => {
-    const { summarizeMarkers } = await import('../components/chat/MessageList');
+  it('names the events behind a collapsed row, and the span they cover', async () => {
+    const { summarizeMarkers, markerRunTime } = await import('../components/chat/MessageList');
     const at = '2026-01-01T00:00:00.000Z';
     expect(summarizeMarkers([marker('k1', 'time', at)])).toBe('time');
     expect(summarizeMarkers([marker('k1', 'time', at), marker('k2', 'time', at), marker('k3', 'user-idle', at)])).toBe('time ×2, user-idle');
     const many = ['a', 'b', 'c', 'd'].map((e, i) => marker(`k${i}`, e, at));
     expect(summarizeMarkers(many)).toBe('a, b +2 more');
+
+    const later = '2026-01-01T00:04:00.000Z';
+    expect(markerRunTime([marker('k1', 'time', at), marker('k2', 'time', at)])).toBe(formatTime(at));
+    expect(markerRunTime([marker('k1', 'time', at), marker('k2', 'time', later)])).toBe(`${formatTime(at)}–${formatTime(later)}`);
   });
 });
