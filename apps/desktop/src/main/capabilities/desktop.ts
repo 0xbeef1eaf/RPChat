@@ -3,6 +3,8 @@ import { spawn } from 'node:child_process';
 import type { ActionContext, CapabilityHandler, Json } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import { expandHome, isMissingExecutable } from '../commands.js';
+import type { HyprParser } from '../display/hypr-lua.js';
+import { isLuaParserResponse, luaCloseWindowCommand, luaFocusWindowCommand, luaMoveWindowCommand, luaWorkspaceCommand } from '../display/hypr-lua.js';
 import type { HyprClientJson, HyprMonitorJson, HyprTransport } from '../display/hyprland.js';
 import { normalizeAddress } from '../display/hyprland.js';
 import { OVERLAY_TITLE_PREFIX } from '../display/layers.js';
@@ -132,8 +134,16 @@ export interface DesktopHandlerDeps {
   logger: Pick<Console, 'warn' | 'debug'>;
 }
 
+/** One window operation in both Hyprland config dialects; the handler learns which one to speak. */
+interface HyprCommands {
+  legacy: string[];
+  lua: string[];
+}
+
 export class DesktopHandler implements CapabilityHandler {
   readonly moduleId = 'desktop';
+  /** Which config dialect this session speaks; learned from Hyprland's first answer, never guessed. */
+  private parser: HyprParser | undefined;
 
   constructor(private readonly deps: DesktopHandlerDeps) {}
 
@@ -154,7 +164,7 @@ export class DesktopHandler implements CapabilityHandler {
       case 'focusWindow': {
         const w = matchWindow(await this.listWindows(), asMatch(args[0]));
         if (!w) return false;
-        await this.hyprOk(hyprFocusCommand(w.id));
+        await this.hyprDispatch({ legacy: [hyprFocusCommand(w.id)], lua: [luaFocusWindowCommand(w.id)] });
         return true;
       }
       case 'moveWindow': {
@@ -168,7 +178,8 @@ export class DesktopHandler implements CapabilityHandler {
           if (!m) throw new RpError('NOT_FOUND', `Unknown monitor ${String(to.monitor)}`);
           monitorName = m.name;
         }
-        for (const cmd of hyprMoveWindowCommands(w.id, to, monitorName)) await this.hyprOk(cmd);
+        const lua = luaMoveWindowCommand(w.id, to, monitorName);
+        await this.hyprDispatch({ legacy: hyprMoveWindowCommands(w.id, to, monitorName), lua: lua ? [lua] : [] });
         return true;
       }
       case 'closeWindow': {
@@ -176,12 +187,12 @@ export class DesktopHandler implements CapabilityHandler {
         const w = matchWindow(windows, asMatch(args[0]));
         if (!w) return false;
         if (own.has(w.id)) throw new RpError('PERMISSION_DENIED', OWN_WINDOW_MESSAGE, { id: w.id, title: w.title, app: w.app });
-        await this.hyprOk(hyprCloseCommand(w.id));
+        await this.hyprDispatch({ legacy: [hyprCloseCommand(w.id)], lua: [luaCloseWindowCommand(w.id)] });
         return true;
       }
       case 'workspace':
         if (typeof args[0] !== 'string' && typeof args[0] !== 'number') throw new RpError('INVALID_ARGUMENT', 'target must be a workspace name or number');
-        await this.hyprOk(hyprWorkspaceCommand(args[0]));
+        await this.hyprDispatch({ legacy: [hyprWorkspaceCommand(args[0])], lua: [luaWorkspaceCommand(args[0])] });
         return;
       case 'currentWorkspace': {
         const ws = await this.hyprJson<{ id?: number; name?: string }>('j/activeworkspace');
@@ -261,10 +272,38 @@ export class DesktopHandler implements CapabilityHandler {
     }
   }
 
-  private async hyprOk(command: string): Promise<void> {
+  /**
+   * Send one operation, learning the session's config dialect from the answer
+   * (docs/spec/overlay.md §1.2.2): a Lua-config Hyprland rejects a legacy
+   * `dispatch …` with a Lua syntax error. That answer comes from the parser, so
+   * nothing was applied and the whole operation is re-sent as `eval`.
+   */
+  private async hyprDispatch(commands: HyprCommands): Promise<void> {
     if (!this.deps.hypr) throw new RpError('CAPABILITY_FAILED', HYPRLAND_REQUIRED_MESSAGE);
-    const res = await this.deps.hypr.request(command);
-    if (res.trim().toLowerCase() !== 'ok') throw new RpError('CAPABILITY_FAILED', `Hyprland answered "${res.trim()}" to ${command}`);
+    if (this.parser !== 'lua') {
+      for (const command of commands.legacy) {
+        const res = await this.request(command);
+        if (isLuaParserResponse(res)) {
+          this.parser = 'lua';
+          this.deps.logger.debug('[desktop] Hyprland runs a Lua config: window commands go through `eval` from here on');
+          break;
+        }
+        this.parser = 'legacy';
+        this.expectOk(res, command);
+      }
+      if (this.parser !== 'lua') return;
+    }
+    for (const command of commands.lua) this.expectOk(await this.request(command), command);
+  }
+
+  private async request(command: string): Promise<string> {
+    if (!this.deps.hypr) throw new RpError('CAPABILITY_FAILED', HYPRLAND_REQUIRED_MESSAGE);
+    return (await this.deps.hypr.request(command)).trim();
+  }
+
+  /** Hyprland answers `ok` or the reason it refused; a failed line of an `eval` is reported the same way. */
+  private expectOk(res: string, command: string): void {
+    if (res.toLowerCase() !== 'ok') throw new RpError('CAPABILITY_FAILED', `Hyprland answered "${res}" to ${command}`);
   }
 }
 

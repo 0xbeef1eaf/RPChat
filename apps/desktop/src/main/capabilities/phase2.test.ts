@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ActionContext, MonitorInfo } from '@rp/shared';
 import { executableName, hostMatches, isAllowlisted, isLaunchAllowed } from './allowlist.js';
 import { avatarPlacement, clampSize, expressionMap, fitToMonitor } from './avatar.js';
+import { luaCloseWindowCommand, luaWorkspaceCommand } from '../display/hypr-lua.js';
 import { DesktopHandler, OWN_WINDOW_MESSAGE, clampLevel, hyprCloseCommand, hyprFocusCommand, hyprMoveWindowCommands, hyprWorkspaceCommand, matchWindow, ownWindowIds, parseVolumeOutput, windowsFromHyprClients } from './desktop.js';
 import { FilesHandler, characterHomeDir, resolveHomePath } from './files.js';
 import { expandEvents, occurrences, parseDateValue, parseIcs, parseProperty, unfoldLines } from './ics.js';
@@ -250,6 +251,16 @@ describe('desktop closeWindow', () => {
   const ctx: ActionContext = { packId: 'com.x.p', characterId: 'luna', sessionId: 's', packRoot: '/nowhere', trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } };
   const logger = { debug: () => undefined, warn: () => undefined };
   /** Hyprland with one foreign window and one of ours (same pid as the app). */
+  const clientsJson = (command: string): string => {
+    if (command === 'j/clients') {
+      return JSON.stringify([
+        { address: '0x1', mapped: true, hidden: false, monitor: 0, class: 'mpv', title: 'rain.mp4', pid: 4242 },
+        { address: '0x2', mapped: true, hidden: false, monitor: 0, class: 'rpchat', title: 'rpchat', pid: 99 },
+      ]);
+    }
+    if (command === 'j/monitors') return JSON.stringify([{ id: 0, name: 'DP-1', width: 1, height: 1, x: 0, y: 0, scale: 1 }]);
+    return JSON.stringify({ address: '0x1' });
+  };
   const handler = (sent: string[]) =>
     new DesktopHandler({
       commands: {} as never,
@@ -258,14 +269,7 @@ describe('desktop closeWindow', () => {
       ownPid: 99,
       hypr: {
         request: async (command: string) => {
-          if (command === 'j/clients') {
-            return JSON.stringify([
-              { address: '0x1', mapped: true, hidden: false, monitor: 0, class: 'mpv', title: 'rain.mp4', pid: 4242 },
-              { address: '0x2', mapped: true, hidden: false, monitor: 0, class: 'rpchat', title: 'rpchat', pid: 99 },
-            ]);
-          }
-          if (command === 'j/monitors') return JSON.stringify([{ id: 0, name: 'DP-1', width: 1, height: 1, x: 0, y: 0, scale: 1 }]);
-          if (command === 'j/activewindow') return JSON.stringify({ address: '0x1' });
+          if (command.startsWith('j/')) return clientsJson(command);
           sent.push(command);
           return 'ok';
         },
@@ -282,6 +286,31 @@ describe('desktop closeWindow', () => {
     const sent: string[] = [];
     expect(await handler(sent).invoke('closeWindow', [{ app: 'inkscape' }], ctx)).toBe(false);
     expect(sent).toEqual([]);
+  });
+
+  it('talks Lua to a Lua-config session, for this and every command after it', async () => {
+    // Verbatim answer from Hyprland 0.56.2 with a `hyprland.lua` config.
+    const sent: string[] = [];
+    const luaHandler = new DesktopHandler({
+      commands: {} as never,
+      launchAllowlist: async () => [],
+      logger,
+      ownPid: 99,
+      hypr: {
+        request: async (command: string) => {
+          if (command.startsWith('j/')) return clientsJson(command);
+          sent.push(command);
+          if (command.startsWith('dispatch ')) return `error: [string "return hl.dispatch(${command.slice(9)}..."]:1: ')' expected near 'address'`;
+          return 'ok';
+        },
+      },
+    });
+    expect(await luaHandler.invoke('closeWindow', [{ app: 'mpv' }], ctx)).toBe(true);
+    expect(sent).toEqual(['dispatch closewindow address:0x1', luaCloseWindowCommand('0x1')]);
+    // The dialect is learned once: the refused legacy form is not tried again.
+    sent.length = 0;
+    await luaHandler.invoke('workspace', ['3'], ctx);
+    expect(sent).toEqual([luaWorkspaceCommand('3')]);
   });
 
   it('refuses rpchat\'s own windows so a character cannot shut the app it lives in', async () => {
