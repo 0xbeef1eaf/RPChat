@@ -14,7 +14,14 @@ import type {
   StopReason,
   ToolDefinition,
 } from '@rp/shared';
-import { parseToolInput, resolveSupportsVision, stringifyToolInput, stripImages, toProviderError } from './common.js';
+import {
+  parseToolInput,
+  resolveSupportsVision,
+  stringifyToolInput,
+  stripImages,
+  toProviderError,
+  withConfiguredEffort,
+} from './common.js';
 
 type ChatMessageParam = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 type ChatTool = OpenAI.Chat.Completions.ChatCompletionTool;
@@ -359,7 +366,11 @@ export class OpenAiCompatibleProvider implements LlmProvider {
   }
 
   async chat(request: LlmChatRequest, handlers: LlmStreamHandlers = {}): Promise<LlmChatResponse> {
-    const params = toOpenAiParams(request, this.config.supportsTools !== false, resolveSupportsVision(this.config));
+    const params = toOpenAiParams(
+      withConfiguredEffort(request, this.config),
+      this.config.supportsTools !== false,
+      resolveSupportsVision(this.config),
+    );
     const reducer = new OpenAiStreamReducer(handlers);
     try {
       const stream = await this.client.chat.completions.create(params, { signal: request.signal ?? null });

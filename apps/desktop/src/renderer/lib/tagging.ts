@@ -24,9 +24,6 @@ export interface TagRunSettings {
   scope: TagScope;
 }
 
-/** Levels offered in the dialog. `none` and `max` are Ollama's; OpenAI itself takes neither. */
-export const REASONING_EFFORTS: ReadonlyArray<LlmReasoningEffort> = ['none', 'low', 'medium', 'high', 'max'];
-
 export type TagScope = 'untagged' | 'all';
 
 export const DEFAULT_TAG_SETTINGS: TagRunSettings = {

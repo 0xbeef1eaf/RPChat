@@ -13,7 +13,7 @@ import type {
   StopReason,
   ToolDefinition,
 } from '@rp/shared';
-import { parseToolInput, resolveSupportsVision, stripImages, toProviderError } from './common.js';
+import { parseToolInput, resolveSupportsVision, stripImages, toProviderError, withConfiguredEffort } from './common.js';
 
 type MessageParam = Anthropic.Messages.MessageParam;
 type ContentBlockParam = Anthropic.Messages.ContentBlockParam;
@@ -166,6 +166,12 @@ export function toAnthropicParams(request: LlmChatRequest, supportsTools: boolea
     }
   }
   if (request.temperature !== undefined) params.temperature = request.temperature;
+  if (request.reasoningEffort === 'none') {
+    // Anthropic has no "none" effort level — the way to not think is to turn thinking off.
+    params.thinking = { type: 'disabled' };
+  } else if (request.reasoningEffort) {
+    params.output_config = { effort: request.reasoningEffort };
+  }
   if (supportsTools && request.tools && request.tools.length > 0) params.tools = toAnthropicTools(request.tools);
   return params;
 }
@@ -302,7 +308,11 @@ export class AnthropicProvider implements LlmProvider {
   }
 
   async chat(request: LlmChatRequest, handlers: LlmStreamHandlers = {}): Promise<LlmChatResponse> {
-    const params = toAnthropicParams(request, this.config.supportsTools !== false, resolveSupportsVision(this.config));
+    const params = toAnthropicParams(
+      withConfiguredEffort(request, this.config),
+      this.config.supportsTools !== false,
+      resolveSupportsVision(this.config),
+    );
     const reducer = new AnthropicStreamReducer(handlers);
     try {
       const stream = this.client.messages.stream(params, { signal: request.signal ?? null });

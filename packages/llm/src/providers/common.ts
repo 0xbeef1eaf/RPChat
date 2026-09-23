@@ -1,5 +1,5 @@
 import { RpError } from '@rp/shared';
-import type { ContentPart, LlmMessage } from '@rp/shared';
+import type { ContentPart, LlmChatRequest, LlmMessage, ProviderConfig } from '@rp/shared';
 
 /** Duck-typed view of the SDKs' `APIError` (both SDKs share this shape). */
 interface ApiErrorLike {
@@ -54,6 +54,15 @@ export function stringifyToolInput(input: unknown): string {
 
 /** Text substituted for an image part when the configured model has no vision. */
 export const IMAGE_OMITTED_TEXT = '[image omitted: model has no vision]';
+
+/**
+ * Apply the config's `reasoningEffort` as the default for a request that does not ask for one
+ * itself. Returns the request untouched when there is nothing to fill in.
+ */
+export function withConfiguredEffort(request: LlmChatRequest, config: Pick<ProviderConfig, 'reasoningEffort'>): LlmChatRequest {
+  if (request.reasoningEffort !== undefined || config.reasoningEffort === undefined) return request;
+  return { ...request, reasoningEffort: config.reasoningEffort };
+}
 
 /** Resolve `supportsVision` for a provider kind: Anthropic defaults to true, everything else to false. */
 export function resolveSupportsVision(config: { kind: string; supportsVision?: boolean }): boolean {

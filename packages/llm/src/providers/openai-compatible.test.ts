@@ -292,6 +292,16 @@ describe('OpenAiCompatibleProvider.chat (fake client)', () => {
     expect(sent.messages[0]).toEqual({ role: 'system', content: 'sys' });
   });
 
+  it('applies config.reasoningEffort, and lets the request override it', async () => {
+    const { client, received } = fakeClient({ chunks: [chunk({ content: 'x' }, 'stop')] });
+    const provider = new OpenAiCompatibleProvider({ ...config, reasoningEffort: 'none' }, client);
+    await provider.chat(request);
+    expect((received[0]!.params as { reasoning_effort?: string }).reasoning_effort).toBe('none');
+
+    await provider.chat({ ...request, reasoningEffort: 'high' });
+    expect((received[1]!.params as { reasoning_effort?: string }).reasoning_effort).toBe('high');
+  });
+
   it('honours config.supportsVision at the provider level', async () => {
     const withImage: LlmChatRequest = {
       ...request,

@@ -40,6 +40,7 @@ export {
   stringifyToolInput,
   stripImages,
   toProviderError,
+  withConfiguredEffort,
 } from './providers/common.js';
 export { estimateMessageTokens, estimateTokens, groupToolPairs, windowMessages } from './tokens.js';
 export { stripCodeComments } from './comments.js';

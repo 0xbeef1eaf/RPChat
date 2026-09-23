@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { ModelInfo, ProviderConfig, ProviderKind } from '@rp/shared';
+import { REASONING_EFFORTS } from '@rp/shared';
+import type { LlmReasoningEffort, ModelInfo, ProviderConfig, ProviderKind } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 
 const KINDS: Array<{ value: ProviderKind; label: string; hint: string }> = [
@@ -7,6 +8,13 @@ const KINDS: Array<{ value: ProviderKind; label: string; hint: string }> = [
   { value: 'openai-compatible', label: 'OpenAI-compatible', hint: 'OpenAI, OpenRouter, Ollama, LM Studio, vLLM… anything with /v1/chat/completions.' },
   { value: 'mock', label: 'Mock (testing)', hint: 'Scripted replies; no network.' },
 ];
+
+/** What the chosen effort means for the kind being edited — the wire field differs per provider. */
+const EFFORT_HINTS: Record<ProviderKind, string> = {
+  anthropic: 'Sent as output_config.effort; "none" turns extended thinking off instead.',
+  'openai-compatible': '"none" and "max" are Ollama\u2019s own levels — OpenAI itself takes neither, and a model whose template has no thinking switch thinks anyway.',
+  mock: 'The mock provider ignores it.',
+};
 
 interface ProviderEditorProps {
   initial: ProviderConfig;
@@ -133,6 +141,24 @@ export function ProviderEditor({ initial, isNew, onSave, onCancel }: ProviderEdi
             Model supports native tool calling
           </label>
           <span className="field-hint">Untick for models that only work with fenced ```action blocks.</span>
+        </div>
+        <div className="field">
+          <label htmlFor="p-effort">Reasoning effort</label>
+          <select
+            id="p-effort"
+            value={cfg.reasoningEffort ?? ''}
+            onChange={(e) => patch({ reasoningEffort: (e.target.value || undefined) as LlmReasoningEffort | undefined })}
+          >
+            <option value="">Leave it to the model</option>
+            {REASONING_EFFORTS.map((effort) => (
+              <option key={effort} value={effort}>
+                {effort}
+              </option>
+            ))}
+          </select>
+          <span className="field-hint">
+            How hard the model thinks on every call through this provider. {kindInfo ? EFFORT_HINTS[kindInfo.value] : ''}
+          </span>
         </div>
         <div className="field">
           <span className="field-label">Vision</span>

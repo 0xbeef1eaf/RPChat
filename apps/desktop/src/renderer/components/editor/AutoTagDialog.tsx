@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { REASONING_EFFORTS } from '@rp/shared';
 import type { AppSettings, EditorAsset, MediaTagSuggestion, ModelInfo, ProviderConfig } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { Modal } from '../common/Modal';
@@ -6,7 +7,6 @@ import type { MediaEditModel } from '../../lib/editor';
 import { frameFor } from '../../lib/frames';
 import {
   DEFAULT_TAG_SETTINGS,
-  REASONING_EFFORTS,
   initialProviderId,
   learnedFrom,
   summarise,
