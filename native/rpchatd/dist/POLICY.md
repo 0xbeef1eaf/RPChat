@@ -237,21 +237,23 @@ about the person at the machine, not about the policy.
 
 ## `settings` — forced app settings
 
-Only these keys are accepted; each maps to a dotted settings path shown in the UI.
+Only these keys are accepted; each maps to a dotted settings path shown in the UI. Any number
+that caps something (every `max*` below, and the memory budgets) also takes `-1` for "unlimited";
+on a floor (`minRepeatIntervalMs`, `minDelayMs`) `-1` means no floor.
 
 | Key | Type | Effect |
 |---|---|---|
-| `maxInputLockMs` | number ≥ 0 | Hard cap the app applies to `sdk.input.lock` requests (the daemon applies `inputLock.maxDurationMs` on top; the lower wins). |
-| `autonomy` | object | Any of `maxSelfWakesPerHour`, `maxConsecutiveSelfWakes`, `maxTimersPerSession`, `minRepeatIntervalMs`, `minDelayMs` (numbers). Limits how much a character may act without the user. |
+| `maxInputLockMs` | number ≥ 1000, or `-1` | Hard cap the app applies to `sdk.input.lock` requests (the daemon applies `inputLock.maxDurationMs` on top; the lower wins). |
+| `autonomy` | object | Any of `maxSelfWakesPerHour`, `maxConsecutiveSelfWakes`, `maxTimersPerSession`, `minRepeatIntervalMs`, `minDelayMs` (numbers, `-1` = unlimited). Limits how much a character may act without the user. |
 | `permissions` | `{ "moduleAllow": { "<module>": boolean } }` | Global allow/deny per SDK module (`input`, `desktop`, `web`, …). `false` makes the module unavailable to every pack. |
 | `web` | `{ "allowlist": string[] }` | Hostname patterns (`example.com`, `*.example.com`) `sdk.web` may fetch. Empty = any host. |
 | `desktop` | `{ "launchAllowlist": string[] }` | Executables `sdk.desktop.launch` may start. Empty = any. |
-| `memory` | object | Any field of the app's memory settings. |
+| `memory` | object | Any field of the app's memory settings. `maxEntriesPerCharacter` and `promptBudgetTokens` take `-1` for no limit. |
 | `senses` | object | `includeInPrompt` (boolean), `watchDirs` (string[]), `calendarSources` (string[]). |
 | `displayBackend` | `"auto"` \| `"electron"` \| `"hyprland"` | Which overlay backend the app uses. |
 | `updates` | `{ "automatic": boolean, "enabled": boolean, "allowDowngrade": boolean }` | In-place app updates. `enabled: false` switches update checks off entirely (the Updates tab shows "disabled by policy" and hides the token field); `automatic` pins the "check automatically" toggle. `allowDowngrade: true` lets the daemon's `apply-update` (system install) install a version older than the current one; by default such requests are refused. All optional. |
 | `browser` | `{ "allowBlocking": boolean, "allowEval": boolean, "allowHistory": boolean }` | What characters may do through the browser extension: block pages for a while, run JavaScript in pages, read the browser history. All optional. The home page the extension opens in new tabs is not here — only a character sets it, with `sdk.browser.setHomePage`. |
-| `media` | `{ "maxConcurrent": { "image": n, "video": n, "audio": n }, "maxQueued": { … } }` | How much of `sdk.media` may run at once, counted per kind. `maxConcurrent` is the cap (`0` = no cap, the default); `maxQueued` is how many further calls may wait behind it (`0` refuses an over-cap call instead of queueing it). A queued call is not blocked or failed: it returns a handle straight away and opens by itself when one of its kind closes. Every number is optional and pinned on its own. |
+| `media` | `{ "maxConcurrent": { "image": n, "video": n, "audio": n }, "maxQueued": { … } }` | How much of `sdk.media` may run at once, counted per kind. `maxConcurrent` is the cap (`0` or `-1` = no cap, the default); `maxQueued` is how many further calls may wait behind it (`0` refuses an over-cap call instead of queueing it, `-1` lets any number wait). A queued call is not blocked or failed: it returns a handle straight away and opens by itself when one of its kind closes. Every number is optional and pinned on its own. |
 
 The daemon only validates that these are objects/numbers/strings of the right kind; the app
 validates the inner values against its settings schema and ignores what it cannot apply.
@@ -261,7 +263,7 @@ validates the inner values against its settings schema and ignores what it canno
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `enabled` | boolean | `true` | `false` refuses every `lock` request with `code: "POLICY"`. Injection (`type`/`key`/`click`/`move`) is unaffected. |
-| `maxDurationMs` | number | `300000` (5 min) | Longest single lock. Requests above are clamped, not refused; the response's `durationMs` says what was applied. Values below 1000 are raised to 1000. |
+| `maxDurationMs` | number | `300000` (5 min) | Longest single lock. Requests above are clamped, not refused; the response's `durationMs` says what was applied. Values below 1000 are raised to 1000; `-1` means unlimited (held to a hundred years so the deadline fits a clock). |
 | `emergencyKey` | `"esc"` \| `"f1"` \| `"f12"` \| `"pause"` | `"esc"` | Key that ends a lock when held down. |
 | `emergencyHoldMs` | number | `5000` | How long the key must be held (clamped to 500 … 60000). |
 

@@ -137,6 +137,10 @@ describe('InputHandler lock devices', () => {
     await handler.invoke('unlock', [], ctx);
     expect(daemon.seen.at(-1)?.op).toBe('unlock');
     expect(await handler.invoke('status', [], ctx)).toEqual({ locked: false });
+    // -1 is no app-side cap: the request reaches the daemon as asked, and the daemon clamps it.
+    const unlimited = new InputHandler({ maxLockMs: async () => -1, logger, daemon: client });
+    await unlimited.invoke('lock', [1_200_000, {}], ctx);
+    expect(daemon.seen.filter((r) => r.op === 'lock').at(-1)).toMatchObject({ durationMs: 1_200_000 });
     const both = await handler.invoke('lock', [500, {}], ctx);
     expect(both).toMatchObject({ durationMs: 1000, devices: 'both' });
     await handler.invoke('type', ['hello'], ctx);

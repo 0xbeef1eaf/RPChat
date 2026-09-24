@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { PolicyFile, SystemIntegrationStatus } from '@rp/shared';
-import { GUARD_SHELLS, functionKey, isAlwaysAvailableModule, parseFunctionKey } from '@rp/shared';
+import { GUARD_SHELLS, UNLIMITED, functionKey, isAlwaysAvailableModule, parseFunctionKey } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { prettyJson } from '../../lib/format';
 import { CodeEditor } from '../common/CodeEditor';
@@ -91,19 +91,22 @@ function SwitchRow({ label, hint, checked, onChange, disabled }: { label: string
   );
 }
 
-/** A duration edited in seconds; the policy carries milliseconds. */
-function DurationInput({ ms, onChange, disabled, label, min }: { ms: number; onChange: (ms: number) => void; disabled?: boolean; label: string; min?: number }) {
+/** A duration edited in seconds; the policy carries milliseconds. With `unlimited`, -1 is kept as -1 rather than scaled. */
+function DurationInput({ ms, onChange, disabled, label, min, unlimited }: { ms: number; onChange: (ms: number) => void; disabled?: boolean; label: string; min?: number; unlimited?: boolean }) {
   return (
     <span className="row" style={{ gap: 6 }}>
       <input
         type="number"
         step="any"
-        min={min === undefined ? undefined : min / 1000}
+        min={unlimited ? UNLIMITED : min === undefined ? undefined : min / 1000}
         style={{ width: 96 }}
-        value={Number.isFinite(ms) ? ms / 1000 : ''}
+        value={unlimited && ms === UNLIMITED ? UNLIMITED : Number.isFinite(ms) ? ms / 1000 : ''}
         disabled={disabled}
         aria-label={label}
-        onChange={(e) => onChange(Math.round(Number(e.target.value) * 1000))}
+        onChange={(e) => {
+          const seconds = Number(e.target.value);
+          onChange(unlimited && seconds === UNLIMITED ? UNLIMITED : Math.round(seconds * 1000));
+        }}
       />
       <span className="muted small nowrap">s</span>
     </span>
@@ -202,7 +205,7 @@ function SettingRow({ spec, draft, onDraft, disabled }: { spec: PolicySettingSpe
     control = (
       <input
         type="number"
-        min={spec.min}
+        min={spec.unlimited ? UNLIMITED : spec.min}
         style={{ width: 96 }}
         value={typeof value === 'number' ? value : ''}
         disabled={!on || disabled}
@@ -210,7 +213,7 @@ function SettingRow({ spec, draft, onDraft, disabled }: { spec: PolicySettingSpe
         onChange={(e) => setValue(Math.round(Number(e.target.value)))}
       />
     );
-  } else if (spec.kind === 'duration') control = <DurationInput ms={typeof value === 'number' ? value : 0} min={spec.min} disabled={!on || disabled} label={spec.label} onChange={setValue} />;
+  } else if (spec.kind === 'duration') control = <DurationInput ms={typeof value === 'number' ? value : 0} min={spec.min} unlimited={spec.unlimited} disabled={!on || disabled} label={spec.label} onChange={setValue} />;
   else if (spec.kind === 'choice') control = <Segmented label={spec.label} value={String(value)} options={spec.choices ?? []} disabled={!on || disabled} onChange={setValue} />;
   else if (spec.kind === 'list') {
     control = (
@@ -616,8 +619,8 @@ export function CreatePolicyDialog({
             <SwitchRow label="Input locking allowed at all" hint="Off refuses every lock outright, so no character can take the keyboard or mouse." checked={draft.inputLock.enabled} disabled={busy} onChange={(enabled) => setDraft({ ...draft, inputLock: { ...draft.inputLock, enabled } })} />
             <div className="field">
               <label htmlFor="policy-lock-max">Longest single lock</label>
-              <DurationInput ms={draft.inputLock.maxDurationMs} min={1000} disabled={busy || !draft.inputLock.enabled} label="Longest single lock" onChange={(maxDurationMs) => setDraft({ ...draft, inputLock: { ...draft.inputLock, maxDurationMs } })} />
-              <span className="field-hint">At least 1 s. The lock ends on its own after this however the app behaves.</span>
+              <DurationInput ms={draft.inputLock.maxDurationMs} min={1000} unlimited disabled={busy || !draft.inputLock.enabled} label="Longest single lock" onChange={(maxDurationMs) => setDraft({ ...draft, inputLock: { ...draft.inputLock, maxDurationMs } })} />
+              <span className="field-hint">At least 1 s, or -1 for unlimited. The lock ends on its own after this however the app behaves; the emergency key still ends an unlimited one.</span>
             </div>
             <div className="field">
               <span className="field-label">Emergency unlock</span>
@@ -713,7 +716,7 @@ export function CreatePolicyDialog({
             {e.text}
           </span>
         ))}
-        {draft && draft.inputLock.enabled ? <span className="badge">locks up to {briefDuration(draft.inputLock.maxDurationMs)}</span> : null}
+        {draft && draft.inputLock.enabled ? <span className="badge">{draft.inputLock.maxDurationMs === UNLIMITED ? 'locks of any length' : `locks up to ${briefDuration(draft.inputLock.maxDurationMs)}`}</span> : null}
       </div>
 
       {problems.length > 0 ? (

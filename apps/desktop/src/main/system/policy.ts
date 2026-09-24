@@ -5,7 +5,7 @@
  */
 import * as fs from 'node:fs/promises';
 import type { AppPolicy, AppRestrictions, AppSettings, GuardPolicy, ManagedSettingsPaths, PackSource, PacksPolicy, PolicyFile, PolicyLock, RemotePolicy } from '@rp/shared';
-import { APP_ALLOW_KEYS, APP_REQUIRE_KEYS, DEFAULT_APP_RESTRICTIONS, GUARD_COMPOSITOR_IPC, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RUNTIME_POLICY_FILE, RpError, SEAL_MARKER_PATH, parseFunctionKey } from '@rp/shared';
+import { APP_ALLOW_KEYS, APP_REQUIRE_KEYS, DEFAULT_APP_RESTRICTIONS, GUARD_COMPOSITOR_IPC, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RUNTIME_POLICY_FILE, RpError, SEAL_MARKER_PATH, UNLIMITED, capOf, parseFunctionKey } from '@rp/shared';
 import type { GuardShell } from '@rp/shared';
 import { activeRestrictions } from './restrictions.js';
 import type { SealCache } from './seal-cache.js';
@@ -26,6 +26,14 @@ const BACKENDS = new Set(['auto', 'electron', 'hyprland']);
 function isNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
+
+/** A cap: a non-negative number, or `UNLIMITED` (-1) for none. */
+function isLimit(v: unknown): v is number {
+  return isNumber(v) && (v >= 0 || v === UNLIMITED);
+}
+
+/** The memory numbers that are caps; `consolidateEveryTurns` is a cadence, so -1 means nothing there. */
+const MEMORY_LIMIT_KEYS: ReadonlySet<string> = new Set(['maxEntriesPerCharacter', 'promptBudgetTokens']);
 
 function stringList(v: unknown, what: string, problems: string[]): string[] | undefined {
   if (v === undefined) return undefined;
@@ -52,14 +60,15 @@ export function parsePolicy(json: unknown): PolicyFile {
       for (const k of AUTONOMY_KEYS) {
         const v = (s.autonomy as Record<string, unknown>)[k];
         if (v === undefined) continue;
-        if (isNumber(v) && v >= 0) a[k] = Math.round(v);
-        else problems.push(`settings.autonomy.${k} must be a non-negative number`);
+        // -1 on a floor (`min*`) is "no floor", which is 0.
+        if (isLimit(v)) a[k] = v === UNLIMITED && k.startsWith('min') ? 0 : Math.round(v);
+        else problems.push(`settings.autonomy.${k} must be a non-negative number, or -1 for unlimited`);
       }
       settings.autonomy = a;
     }
     if (s.maxInputLockMs !== undefined) {
-      if (isNumber(s.maxInputLockMs) && s.maxInputLockMs >= 1000) settings.maxInputLockMs = Math.round(s.maxInputLockMs);
-      else problems.push('settings.maxInputLockMs must be a number ≥ 1000');
+      if (isNumber(s.maxInputLockMs) && (s.maxInputLockMs >= 1000 || s.maxInputLockMs === UNLIMITED)) settings.maxInputLockMs = Math.round(s.maxInputLockMs);
+      else problems.push('settings.maxInputLockMs must be a number ≥ 1000, or -1 for unlimited');
     }
     if (s.permissions && typeof s.permissions === 'object') {
       // `moduleAllow` is what `functionAllow` was called while permissions were per module; its
@@ -93,8 +102,8 @@ export function parsePolicy(json: unknown): PolicyFile {
         if (k === 'enabled') {
           if (typeof v === 'boolean') m.enabled = v;
           else problems.push('settings.memory.enabled must be a boolean');
-        } else if (isNumber(v) && v >= 0) m[k] = Math.round(v);
-        else problems.push(`settings.memory.${k} must be a non-negative number`);
+        } else if (isNumber(v) && (v >= 0 || (v === UNLIMITED && MEMORY_LIMIT_KEYS.has(k)))) m[k] = Math.round(v);
+        else problems.push(`settings.memory.${k} must be a non-negative number${MEMORY_LIMIT_KEYS.has(k) ? ', or -1 for unlimited' : ''}`);
       }
       settings.memory = m;
     }
@@ -149,8 +158,8 @@ export function parsePolicy(json: unknown): PolicyFile {
         for (const kind of MEDIA_KINDS) {
           const v = (raw4 as Record<string, unknown>)[kind];
           if (v === undefined) continue;
-          if (isNumber(v) && v >= 0) limits[kind] = Math.round(v);
-          else problems.push(`settings.media.${side}.${kind} must be a non-negative number`);
+          if (isLimit(v)) limits[kind] = Math.round(v);
+          else problems.push(`settings.media.${side}.${kind} must be a non-negative number, or -1 for unlimited`);
         }
         m[side] = limits;
       }
@@ -162,8 +171,8 @@ export function parsePolicy(json: unknown): PolicyFile {
     const il = raw.inputLock as Record<string, unknown>;
     const lock: NonNullable<PolicyFile['inputLock']> = {};
     if (il.maxDurationMs !== undefined) {
-      if (isNumber(il.maxDurationMs) && il.maxDurationMs >= 1000) lock.maxDurationMs = Math.round(il.maxDurationMs);
-      else problems.push('inputLock.maxDurationMs must be a number ≥ 1000');
+      if (isNumber(il.maxDurationMs) && (il.maxDurationMs >= 1000 || il.maxDurationMs === UNLIMITED)) lock.maxDurationMs = Math.round(il.maxDurationMs);
+      else problems.push('inputLock.maxDurationMs must be a number ≥ 1000, or -1 for unlimited');
     }
     if (il.emergencyKey !== undefined) {
       if (typeof il.emergencyKey === 'string' && ['esc', 'f1', 'f12', 'pause'].includes(il.emergencyKey)) lock.emergencyKey = il.emergencyKey as 'esc';
@@ -508,8 +517,8 @@ export function applyPolicy(settings: AppSettings, policy: PolicyFile | null | u
     };
   }
   const hardMax = policy.inputLock?.maxDurationMs;
-  if (hardMax !== undefined && next.maxInputLockMs > hardMax) next.maxInputLockMs = hardMax;
-  if (policy.inputLock?.enabled === false) next.maxInputLockMs = Math.min(next.maxInputLockMs, 1000);
+  if (hardMax !== undefined && hardMax !== UNLIMITED && capOf(next.maxInputLockMs) > hardMax) next.maxInputLockMs = hardMax;
+  if (policy.inputLock?.enabled === false) next.maxInputLockMs = Math.min(capOf(next.maxInputLockMs), 1000);
   return { settings: next, managed: managedPaths(policy) };
 }
 

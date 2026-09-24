@@ -528,7 +528,7 @@ describe('policy', () => {
     expect(managedPaths(parsePolicy({ version: 1, settings: { media: {} } }))).toEqual([]);
     // Unknown kinds inside a side are ignored, the way unknown keys are everywhere else.
     expect(parsePolicy({ version: 1, settings: { media: { maxConcurrent: { gif: 2 } } } }).settings?.media).toEqual({ maxConcurrent: {} });
-    expect(() => parsePolicy({ version: 1, settings: { media: { maxConcurrent: { image: -1 } } } })).toThrow(/media.maxConcurrent.image must be a non-negative number/);
+    expect(() => parsePolicy({ version: 1, settings: { media: { maxConcurrent: { image: -2 } } } })).toThrow(/media.maxConcurrent.image must be a non-negative number, or -1 for unlimited/);
     expect(() => parsePolicy({ version: 1, settings: { media: { maxQueued: 4 } } })).toThrow(/media.maxQueued must be an object/);
     // A pinned number replaces only itself: the other five stay the user's.
     const applied = applyPolicy(base, policy);
@@ -539,6 +539,35 @@ describe('policy', () => {
     expect(stripManagedPatch({ media: { maxConcurrent: { image: 5, video: 9, audio: 1 }, maxQueued: base.media.maxQueued } }, ['media.maxConcurrent.video'])).toEqual({
       media: { maxConcurrent: { image: 5, audio: 1 }, maxQueued: base.media.maxQueued },
     });
+  });
+
+  it('takes -1 as unlimited on every cap, and as no floor on the autonomy floors', () => {
+    const policy = parsePolicy({
+      version: 1,
+      settings: {
+        autonomy: { maxSelfWakesPerHour: -1, maxConsecutiveSelfWakes: -1, maxTimersPerSession: -1, minRepeatIntervalMs: -1, minDelayMs: -1 },
+        maxInputLockMs: -1,
+        memory: { maxEntriesPerCharacter: -1, promptBudgetTokens: -1 },
+        media: { maxConcurrent: { image: -1 }, maxQueued: { video: -1 } },
+      },
+      inputLock: { maxDurationMs: -1 },
+    });
+    expect(policy.settings?.autonomy).toEqual({ maxSelfWakesPerHour: -1, maxConsecutiveSelfWakes: -1, maxTimersPerSession: -1, minRepeatIntervalMs: 0, minDelayMs: 0 });
+    expect(policy.settings?.memory).toEqual({ maxEntriesPerCharacter: -1, promptBudgetTokens: -1 });
+    expect(policy.settings?.media).toEqual({ maxConcurrent: { image: -1 }, maxQueued: { video: -1 } });
+    expect(policy.inputLock?.maxDurationMs).toBe(-1);
+    // Neither side caps the other when both are unlimited.
+    expect(applyPolicy(base, policy).settings.maxInputLockMs).toBe(-1);
+    // An unlimited app-side cap still yields to a finite daemon one, and a disabled lock pins it to 1 s.
+    const capped = parsePolicy({ version: 1, settings: { maxInputLockMs: -1 }, inputLock: { maxDurationMs: 10_000 } });
+    expect(applyPolicy(base, capped).settings.maxInputLockMs).toBe(10_000);
+    expect(applyPolicy({ ...base, maxInputLockMs: -1 }, parsePolicy({ version: 1, inputLock: { enabled: false } })).settings.maxInputLockMs).toBe(1000);
+    expect(applyPolicy({ ...base, maxInputLockMs: 60_000 }, parsePolicy({ version: 1, inputLock: { maxDurationMs: -1 } })).settings.maxInputLockMs).toBe(60_000);
+    // Only -1: other negatives, and -1 on numbers that are not caps, are still refused.
+    expect(() => parsePolicy({ version: 1, settings: { autonomy: { maxSelfWakesPerHour: -2 } } })).toThrow(/maxSelfWakesPerHour must be a non-negative number, or -1/);
+    expect(() => parsePolicy({ version: 1, settings: { maxInputLockMs: -2 } })).toThrow(/maxInputLockMs must be a number ≥ 1000, or -1/);
+    expect(() => parsePolicy({ version: 1, settings: { memory: { consolidateEveryTurns: -1 } } })).toThrow(/consolidateEveryTurns must be a non-negative number$/);
+    expect(() => parsePolicy({ version: 1, inputLock: { emergencyHoldMs: -1 } })).toThrow(/emergencyHoldMs/);
   });
 
   it('applyPolicy pins updates.automatic and switches it off when updates are disabled', () => {
@@ -731,7 +760,7 @@ describe('SystemIntegration.createPolicy', () => {
 
     // Invalid JSON and invalid policies are rejected before the daemon is involved.
     await expect(integration.createPolicy('{oops')).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', details: { problems: [expect.stringMatching(/not valid JSON/)] } });
-    await expect(integration.createPolicy(JSON.stringify({ version: 2, settings: { maxInputLockMs: 'x' } }))).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', details: { problems: ['version must be 1', 'settings.maxInputLockMs must be a number ≥ 1000'] } });
+    await expect(integration.createPolicy(JSON.stringify({ version: 2, settings: { maxInputLockMs: 'x' } }))).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', details: { problems: ['version must be 1', 'settings.maxInputLockMs must be a number ≥ 1000, or -1 for unlimited'] } });
     expect(daemon.seen.filter((r) => r.op === 'set-policy')).toHaveLength(0);
     // The daemon's stricter validation (unknown keys) is surfaced as INVALID_ARGUMENT too.
     await expect(integration.createPolicy(JSON.stringify({ version: 1, settings: { theme: 'dark' } }))).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', message: /settings.theme/, details: { daemonCode: 'INVALID' } });

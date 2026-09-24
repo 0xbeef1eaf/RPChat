@@ -254,9 +254,14 @@ describe('MediaManager.overlay', () => {
 describe('mediaLimits', () => {
   it('defaults to no cap, and keeps only non-negative whole numbers', () => {
     expect(mediaLimits(undefined)).toEqual({ maxConcurrent: { image: 0, video: 0, audio: 0 }, maxQueued: { image: 8, video: 8, audio: 8 } });
-    expect(mediaLimits({ maxConcurrent: { image: 2.4, video: -1, audio: Number.NaN } as never, maxQueued: { video: 0 } as never })).toEqual({
+    expect(mediaLimits({ maxConcurrent: { image: 2.4, video: -2, audio: Number.NaN } as never, maxQueued: { video: 0 } as never })).toEqual({
       maxConcurrent: { image: 2, video: 0, audio: 0 },
       maxQueued: { image: 8, video: 0, audio: 8 },
+    });
+    // -1 is "unlimited" and is kept as is.
+    expect(mediaLimits({ maxConcurrent: { image: -1 } as never, maxQueued: { video: -1 } as never })).toEqual({
+      maxConcurrent: { image: -1, video: 0, audio: 0 },
+      maxQueued: { image: 8, video: -1, audio: 8 },
     });
   });
 });
@@ -294,6 +299,14 @@ describe('MediaManager media limits', () => {
     await media.show('image', ctx, 'media/a.png', {});
     await media.show('image', ctx, 'media/a.png', {}); // the one queue slot
     await expect(media.show('image', ctx, 'media/a.png', {})).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', details: { kind: 'image', maxConcurrent: 1, maxQueued: 1 } });
+  });
+
+  it('takes -1 as no cap on either side', async () => {
+    const open = make([MONITOR], { maxConcurrent: { image: -1, video: 0, audio: 0 }, maxQueued: { image: 0, video: 8, audio: 8 } });
+    for (let i = 0; i < 5; i++) expect(await open.media.show('image', ctx, 'media/a.png', {})).toMatchObject({ state: 'open' });
+    const queued = make([MONITOR], { maxConcurrent: { image: 1, video: 0, audio: 0 }, maxQueued: { image: -1, video: 8, audio: 8 } });
+    await queued.media.show('image', ctx, 'media/a.png', {});
+    for (let i = 0; i < 20; i++) expect(await queued.media.show('image', ctx, 'media/a.png', {})).toMatchObject({ state: 'queued' });
   });
 
   it('closes a queued item out of the queue without ever showing it, and update changes how it opens', async () => {

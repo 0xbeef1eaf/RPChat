@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ActionContext, Json, ScheduledTimer, Storage, TimerKind } from '@rp/shared';
-import { DEFAULT_SETTINGS, RpError, characterRef } from '@rp/shared';
+import { DEFAULT_SETTINGS, RpError, capOf, characterRef } from '@rp/shared';
 import type { Clock, Logger } from '../types.js';
 import { KeyedQueue } from '../keyed-queue.js';
 
@@ -253,7 +253,7 @@ export class TimerService {
   private async assertCapacity(sessionId: string, limits?: TimerLimits): Promise<void> {
     const max = (limits ?? (await this.limits())).maxTimersPerSession;
     const pending = await this.list({ sessionId });
-    if (pending.length >= max) {
+    if (pending.length >= capOf(max)) {
       throw new RpError('INVALID_ARGUMENT', `this session already has ${max} pending timers; cancel one first`, { limit: max });
     }
   }

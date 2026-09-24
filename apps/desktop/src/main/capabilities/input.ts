@@ -1,6 +1,6 @@
 /** `sdk.input`: bounded keyboard/mouse lock and input injection through the rpchatd system daemon. */
 import type { ActionContext, CapabilityHandler, DaemonRequest, DaemonResponse, Json, LockDevices } from '@rp/shared';
-import { RpError } from '@rp/shared';
+import { RpError, capOf } from '@rp/shared';
 import type { Logger } from '@rp/core';
 import { toRpError } from '../system/daemon-client.js';
 import type { DaemonClient } from '../system/daemon-client.js';
@@ -119,7 +119,7 @@ export class InputHandler implements CapabilityHandler {
 
   private async lock(durationArg: unknown, optionsArg: unknown): Promise<{ until: string; durationMs: number; devices: LockDevices }> {
     if (typeof durationArg !== 'number' || !Number.isFinite(durationArg)) throw new RpError('INVALID_ARGUMENT', 'durationMs must be a number');
-    const max = Math.max(INPUT_LOCK_MIN_MS, await this.deps.maxLockMs());
+    const max = Math.max(INPUT_LOCK_MIN_MS, capOf(await this.deps.maxLockMs()));
     const durationMs = Math.min(max, Math.max(INPUT_LOCK_MIN_MS, Math.round(durationArg)));
     const options = optionsArg && typeof optionsArg === 'object' ? (optionsArg as { reason?: unknown; devices?: unknown }) : {};
     const reason = typeof options.reason === 'string' ? options.reason : '';
