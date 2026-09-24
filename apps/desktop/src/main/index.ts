@@ -9,6 +9,7 @@ import { BrowserWindow, Menu, Notification, Tray, app, dialog, nativeImage, prot
 import { ASSET_PROTOCOL, IPC_EVENT_CHANNELS } from '@rp/shared';
 import type { ChatMessage, UpdateStatus } from '@rp/shared';
 import { handleAssetRequest } from './asset-protocol.js';
+import { ChatVisibility } from './chat-visibility.js';
 import { isHyprland } from './display/layers.js';
 import { createApp } from './engine.js';
 import type { AppServices } from './engine.js';
@@ -94,6 +95,17 @@ async function main(): Promise<void> {
   let stopping = false;
   configureEsbuildBinary();
 
+  /**
+   * `chat-shown` / `chat-hidden` for the characters: one tracker for the app, so a window that is
+   * closed and reopened reads as the chat going away and coming back, not as two unrelated windows.
+   * Nothing is raised while the app is shutting down — the window closing with it is not the user
+   * putting it away.
+   */
+  const chatVisibility = new ChatVisibility({
+    emit: (event) => services?.engine.hostEvents.emit(event),
+    active: () => !quitting && !stopping,
+  });
+
   const windows = new WindowManager({
     outDir: OUT_DIR,
     ...(env.ELECTRON_RENDERER_URL ? { rendererUrl: env.ELECTRON_RENDERER_URL } : {}),
@@ -104,6 +116,7 @@ async function main(): Promise<void> {
     // one without it would close for real the next time — ending an app the policy keeps alive.
     onMainCreated: (win) => {
       if (services) installCloseToTray(win, services);
+      chatVisibility.watch(win);
     },
     onMainClosed: () => {
       // Questions asked in windows of their own outlive the chat window; only those that fell

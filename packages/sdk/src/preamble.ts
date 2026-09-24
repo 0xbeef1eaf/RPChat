@@ -285,7 +285,10 @@ interface CalendarEvent {
  * 'battery-low' { percent } (crosses below filter.percent, default 20); 'screen-locked' {};
  * 'screen-unlocked' {}; 'song-changed' NowPlaying; 'time' { hour, minute, weekday, iso }
  * (filter { hour?, minute?, weekday? }, checked every minute); 'widget-message' { widgetId, message };
- * 'avatar-clicked' {}; 'routine-changed' { from, to, label? }; 'browser-navigated' { tabId, url, title }
+ * 'avatar-clicked' {}; 'chat-shown' { hiddenMs? } and 'chat-hidden' { shownMs? } (the rpchat window itself
+ * became visible or went away — the tray, close-to-tray, a notification click; the number says how long it
+ * had been away or up, and is missing for the first one after a start);
+ * 'routine-changed' { from, to, label? }; 'browser-navigated' { tabId, url, title }
  * (a browser tab finished loading; filter { url?, title? } substrings; needs the browser extension);
  * 'media-clicked' { mediaId, asset, packId, kind } (the user clicked an image/video you showed;
  * filter { mediaId? } or { asset? }); 'media-started' { mediaId, asset, packId, kind } (a call that had to
@@ -309,6 +312,8 @@ type HostEventName =
   | 'time'
   | 'widget-message'
   | 'avatar-clicked'
+  | 'chat-shown'
+  | 'chat-hidden'
   | 'routine-changed'
   | 'browser-navigated'
   | 'media-clicked'

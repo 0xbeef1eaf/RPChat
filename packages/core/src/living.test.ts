@@ -411,6 +411,37 @@ describe('event matching', () => {
     expect(matchesFilter('guard-attempt', { kind: 'config', target: '/x', command: 'vim' }, { kind: 'ipc' })).toBe(false);
   });
 
+  it('routes the chat window appearing and going away, without debouncing a quick toggle', async () => {
+    const runs: string[] = [];
+    t = await createTestEngine({
+      runnerHandler: async (request) => {
+        if (request.context.trigger.kind === 'event') runs.push(request.code.slice(0, request.code.indexOf('; ')));
+        return null;
+      },
+    });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    const ctx = ctxOf(MINIMAL_ID, 'echo', session.id);
+    expect(HOST_EVENT_NAMES).toContain('chat-shown');
+    expect(HOST_EVENT_NAMES).toContain('chat-hidden');
+    expect((await invoke(ctx, 'events', 'on', 'chat-shown', 'return "back";')).ok).toBe(true);
+    expect((await invoke(ctx, 'events', 'on', 'chat-hidden', 'return "away";')).ok).toBe(true);
+
+    const window = (name: 'chat-shown' | 'chat-hidden', data: Record<string, Json>) => t.engine.hostEvents.emit({ name, data, at: t.clock.now().toISOString() });
+    // Away and back inside the 2 s debounce window: putting the chat away twice is two events, not one.
+    window('chat-shown', {});
+    window('chat-hidden', { shownMs: 400 });
+    window('chat-shown', { hiddenMs: 300 });
+    window('chat-hidden', { shownMs: 200 });
+    await t.engine.eventService.idle();
+    expect(runs).toEqual([
+      'const input = {"event":"chat-shown","data":{}}',
+      'const input = {"event":"chat-hidden","data":{"shownMs":400}}',
+      'const input = {"event":"chat-shown","data":{"hiddenMs":300}}',
+      'const input = {"event":"chat-hidden","data":{"shownMs":200}}',
+    ]);
+  });
+
   it('runs the onEvent behaviour when no subscription handled the event, and generates time events', async () => {
     const runs: string[] = [];
     t = await createTestEngine({
