@@ -53,6 +53,8 @@ export type HostEventName =
   | 'time'               // data: { hour, minute, weekday, iso }  matches filter { hour?, minute?, weekday? } evaluated each minute
   | 'widget-message'     // data: { widgetId, message }
   | 'avatar-clicked'     // data: {}
+  | 'chat-shown'         // data: { hiddenMs? }  the rpchat window became visible (started, tray, notification click)
+  | 'chat-hidden'        // data: { shownMs? }   the rpchat window went away (tray, close to tray, closed)
   | 'routine-changed'    // data: { from, to, label? }
   | 'browser-navigated'  // data: { tabId, url, title }   a browser tab finished loading a page (needs the browser extension)
   | 'media-clicked'      // data: { mediaId, asset, packId, kind }          the user clicked a shown image/video overlay

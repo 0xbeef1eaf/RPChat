@@ -62,7 +62,7 @@ EngineOptions {
 }
 interface SensesProvider {
   snapshot(sessionId?: string): Promise<PresenceSnapshot>;     // host samples; core adds sinceLastMessageMs/localTime/dayPart if missing
-  /** Host pushes raw events (window-changed, user-idle/back, battery-low, screen-locked/unlocked, song-changed, file-added, widget-message, avatar-clicked, media-clicked, media-started, media-closed). */
+  /** Host pushes raw events (window-changed, user-idle/back, battery-low, screen-locked/unlocked, song-changed, file-added, widget-message, avatar-clicked, chat-shown/chat-hidden, media-clicked, media-started, media-closed). */
   subscribe(listener: (event: HostEvent) => void): () => void;
   /** Called with the union of event names any live subscription needs, so the host only samples what is used. */
   setInterest?(events: HostEventName[]): void;
@@ -110,7 +110,11 @@ manifest, characters, README and asset summary (no permission information).
   already resolved with `state: 'open'`) and `media-closed` (the same plus `reason: 'click' | 'timeout' | 'ended' | 'api' |
   'error'`, whenever an item goes away — including `closeAll`, app shutdown, and a queued item that was closed or could
   not start): no special keys, so `{ mediaId }`,
-  `{ asset }` or `{ reason }` match through the generic path. Generic: any other filter key must equal `data[key]`.
+  `{ asset }` or `{ reason }` match through the generic path. `chat-shown` (data `{ hiddenMs? }`) and `chat-hidden`
+  (data `{ shownMs? }`): the rpchat window itself became visible or went away — shown at startup, from the tray,
+  a notification click or a second `rpchat`; hidden to the tray, or closed for real with `closeToTray` off. No
+  filter keys; the duration says how long it had been away or up and is absent for the first transition after a
+  start. Generic: any other filter key must equal `data[key]`.
 - Firing: run `code` via `BehaviourRunner.runScript` with `input = { event, data, ...input }`, trigger
   `{ kind: 'event', subscriptionId, event }`; if the character has an `onEvent` behaviour it also runs
   (input `{ event, data }`) for events with no matching subscription; audit as `events.fire`.
@@ -122,6 +126,7 @@ manifest, characters, README and asset summary (no permission information).
   allowed/failed; `fired++`; `once` → remove. Event code runs do not count toward autonomy limits, but
   wakes they trigger do. Emit `event-fired` chat event. Debounce identical event+subscription within 2 s —
   except the interaction events (`widget-message`, `avatar-clicked`, `media-clicked`, `media-started`, `media-closed`,
+  `chat-shown`, `chat-hidden`,
   `INTERACTION_EVENTS`): each of those is a distinct user action (the next card, the next click) and
   always fires. One that arrives while the same subscription's handler is still running is queued
   behind it, so a subscription handles its own events in order, one at a time.

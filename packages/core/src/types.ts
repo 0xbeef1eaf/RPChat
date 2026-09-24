@@ -29,7 +29,7 @@ export interface BehaviourHooks {
 export interface SensesProvider {
   /** Host samples; core fills `sinceLastMessageMs`/`localTime`/`dayPart` when missing. */
   snapshot(sessionId?: string): Promise<PresenceSnapshot>;
-  /** Host pushes raw events (window-changed, user-idle/back, battery-low, screen-locked/unlocked, song-changed, file-added, widget-message, avatar-clicked). */
+  /** Host pushes raw events (window-changed, user-idle/back, battery-low, screen-locked/unlocked, song-changed, file-added, widget-message, avatar-clicked, chat-shown/chat-hidden). */
   subscribe(listener: (event: HostEvent) => void): () => void;
   /** Called with the union of event names any live subscription needs, so the host only samples what is used. */
   setInterest?(events: HostEventName[]): void;
