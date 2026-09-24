@@ -44,7 +44,7 @@ import type {
   PlayVideoOptions,
   ShowImageOptions,
 } from '@rp/shared';
-import { DEFAULT_MEDIA_SETTINGS, RpError, assetUrl, characterRef, parseAssetSource } from '@rp/shared';
+import { DEFAULT_MEDIA_SETTINGS, RpError, UNLIMITED, assetUrl, capOf, characterRef, parseAssetSource } from '@rp/shared';
 import { assetKindFor, resolveAssetPath } from '@rp/pack';
 import type { Logger } from '@rp/core';
 import type { DisplayBackend, OverlayClosedDetail, OverlayHandle, OverlaySpec, OverlayWindowLike } from '../display/backend.js';
@@ -128,14 +128,14 @@ interface EventSubject {
 
 export const MEDIA_KINDS: readonly MediaKind[] = ['image', 'video', 'audio'];
 
-/** The effective per-kind limits: non-negative whole numbers, defaults for anything missing or nonsensical. */
+/** The effective per-kind limits: non-negative whole numbers or `UNLIMITED`, defaults for anything missing or nonsensical. */
 export function mediaLimits(raw: Partial<MediaConcurrencySettings> | undefined): MediaConcurrencySettings {
   const side = (which: 'maxConcurrent' | 'maxQueued'): MediaKindLimits => {
     const from = raw?.[which];
     const out: MediaKindLimits = { ...DEFAULT_MEDIA_SETTINGS[which] };
     for (const kind of MEDIA_KINDS) {
       const v = from?.[kind];
-      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) out[kind] = Math.round(v);
+      if (typeof v === 'number' && Number.isFinite(v) && (v >= 0 || v === UNLIMITED)) out[kind] = Math.round(v);
     }
     return out;
   };
@@ -463,7 +463,7 @@ export class MediaManager {
   private async admit(pending: Pending): Promise<MediaHandle> {
     const decision = await this.serialise(async () => {
       const limits = mediaLimits((await this.deps.settings()).media);
-      const cap = limits.maxConcurrent[pending.kind];
+      const cap = capOf(limits.maxConcurrent[pending.kind]);
       // A queue that already has entries of this kind is joined even when a slot looks free, so
       // items always start in the order they were asked for.
       const waiting = this.queue.filter((q) => q.kind === pending.kind).length;
@@ -471,7 +471,7 @@ export class MediaManager {
         this.starting[pending.kind]++;
         return 'start' as const;
       }
-      if (waiting >= limits.maxQueued[pending.kind]) return { full: limits } as const;
+      if (waiting >= capOf(limits.maxQueued[pending.kind])) return { full: limits } as const;
       this.queue.push(pending);
       return 'queued' as const;
     });
@@ -533,7 +533,7 @@ export class MediaManager {
 
   /** Under the admission lock: the next queued item of `kind` that fits, with its slot already taken. */
   private async take(kind: MediaKind): Promise<Pending | undefined> {
-    const cap = mediaLimits((await this.deps.settings()).media).maxConcurrent[kind];
+    const cap = capOf(mediaLimits((await this.deps.settings()).media).maxConcurrent[kind]);
     if (cap !== 0 && this.countOf(kind) >= cap) return undefined;
     const index = this.queue.findIndex((q) => q.kind === kind);
     if (index < 0) return undefined;

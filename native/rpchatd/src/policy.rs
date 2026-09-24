@@ -23,6 +23,10 @@ pub const DEFAULT_POLICY_PATH: &str = "/etc/rpchat/policy.json";
 pub const MIN_LOCK_MS: u64 = 1000;
 /// `inputLock.maxDurationMs` default.
 pub const DEFAULT_MAX_LOCK_MS: u64 = 300_000;
+/// What a cap of `-1` ("unlimited", `UNLIMITED` in `@rp/shared`) stands for.
+pub const UNLIMITED: f64 = -1.0;
+/// The longest lock "unlimited" can still mean: a hundred years, so `until` never overflows.
+pub const UNLIMITED_LOCK_MS: u64 = 100 * 365 * 24 * 60 * 60 * 1000;
 /// `inputLock.emergencyHoldMs` default and bounds.
 pub const DEFAULT_EMERGENCY_HOLD_MS: u64 = 5000;
 pub const MIN_EMERGENCY_HOLD_MS: u64 = 500;
@@ -409,8 +413,13 @@ impl PolicyFile {
             }
             if let Some(v) = map.get("maxInputLockMs") {
                 match v.as_f64() {
-                    Some(n) if n.is_finite() && n >= 0.0 => {}
-                    _ => return Err("settings.maxInputLockMs must be a non-negative number".into()),
+                    Some(n) if is_limit(n) => {}
+                    _ => {
+                        return Err(
+                            "settings.maxInputLockMs must be a non-negative number, or -1 for unlimited"
+                                .into(),
+                        )
+                    }
                 }
             }
             for key in [
@@ -459,7 +468,7 @@ impl PolicyFile {
                     }
                 }
             }
-            // `media` holds one object per side, each with a non-negative number per media kind.
+            // `media` holds one object per side, each with a cap per media kind.
             if let Some(media) = map.get("media").and_then(Value::as_object) {
                 for (side, value) in media {
                     if !matches!(side.as_str(), "maxConcurrent" | "maxQueued") {
@@ -475,10 +484,10 @@ impl PolicyFile {
                             ));
                         }
                         match limit.as_f64() {
-                            Some(n) if n.is_finite() && n >= 0.0 => {}
+                            Some(n) if is_limit(n) => {}
                             _ => {
                                 return Err(format!(
-                                    "settings.media.{side}.{kind} must be a non-negative number"
+                                    "settings.media.{side}.{kind} must be a non-negative number, or -1 for unlimited"
                                 ))
                             }
                         }
@@ -497,14 +506,17 @@ impl PolicyFile {
             }
         }
         if let Some(lock) = &self.input_lock {
-            for (name, value) in [
-                ("maxDurationMs", lock.max_duration_ms),
-                ("emergencyHoldMs", lock.emergency_hold_ms),
-            ] {
-                if let Some(n) = value {
-                    if !n.is_finite() || n < 0.0 {
-                        return Err(format!("inputLock.{name} must be a non-negative number"));
-                    }
+            if let Some(n) = lock.max_duration_ms {
+                if !is_limit(n) {
+                    return Err(
+                        "inputLock.maxDurationMs must be a non-negative number, or -1 for unlimited"
+                            .into(),
+                    );
+                }
+            }
+            if let Some(n) = lock.emergency_hold_ms {
+                if !n.is_finite() || n < 0.0 {
+                    return Err("inputLock.emergencyHoldMs must be a non-negative number".into());
                 }
             }
         }
@@ -638,6 +650,11 @@ fn validate_guard(guard: &GuardPolicy) -> Result<(), String> {
     Ok(())
 }
 
+/// A cap in the policy file: a non-negative number, or `-1` for none.
+fn is_limit(n: f64) -> bool {
+    n.is_finite() && (n >= 0.0 || n == UNLIMITED)
+}
+
 /// Effective input-lock limits (defaults filled in, values clamped to sane ranges).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LockLimits {
@@ -666,7 +683,13 @@ impl LockLimits {
             enabled: lock.enabled.unwrap_or(d.enabled),
             max_duration_ms: lock
                 .max_duration_ms
-                .map(|n| (n.round() as u64).max(MIN_LOCK_MS))
+                .map(|n| {
+                    if n == UNLIMITED {
+                        UNLIMITED_LOCK_MS
+                    } else {
+                        (n.round() as u64).clamp(MIN_LOCK_MS, UNLIMITED_LOCK_MS)
+                    }
+                })
                 .unwrap_or(d.max_duration_ms),
             emergency_key: lock.emergency_key.unwrap_or(d.emergency_key),
             emergency_hold_ms: lock
@@ -1012,7 +1035,6 @@ mod tests {
             json!({"version": 1, "extra": true}),
             json!({"version": 1, "settings": []}),
             json!({"version": 1, "settings": {"theme": "dark"}}),
-            json!({"version": 1, "settings": {"maxInputLockMs": -1}}),
             json!({"version": 1, "settings": {"web": "x"}}),
             json!({"version": 1, "settings": {"displayBackend": "wayland"}}),
             json!({"version": 1, "settings": {"updates": true}}),
@@ -1028,10 +1050,12 @@ mod tests {
             json!({"version": 1, "settings": {"media": {"maxOpen": {"image": 1}}}}),
             json!({"version": 1, "settings": {"media": {"maxConcurrent": 2}}}),
             json!({"version": 1, "settings": {"media": {"maxConcurrent": {"gif": 1}}}}),
-            json!({"version": 1, "settings": {"media": {"maxConcurrent": {"image": -1}}}}),
+            json!({"version": 1, "settings": {"media": {"maxConcurrent": {"image": -2}}}}),
             json!({"version": 1, "settings": {"media": {"maxQueued": {"video": "two"}}}}),
             json!({"version": 1, "inputLock": {"emergencyKey": "space"}}),
             json!({"version": 1, "inputLock": {"maxDurationMs": -5}}),
+            json!({"version": 1, "inputLock": {"emergencyHoldMs": -1}}),
+            json!({"version": 1, "settings": {"maxInputLockMs": -2}}),
             json!({"version": 1, "inputLock": {"foo": 1}}),
             json!({"version": 1, "inputLock": {"enabled": "no"}}),
             json!({"version": 1, "app": "no"}),
@@ -1116,6 +1140,28 @@ mod tests {
             LockLimits::default().clamp_duration(1e12),
             Some(DEFAULT_MAX_LOCK_MS)
         );
+    }
+
+    #[test]
+    fn minus_one_means_unlimited() {
+        let p = policy(json!({
+            "version": 1,
+            "settings": {
+                "maxInputLockMs": -1,
+                "media": {"maxConcurrent": {"image": -1}, "maxQueued": {"video": -1}}
+            },
+            "inputLock": {"maxDurationMs": -1}
+        }))
+        .unwrap();
+        let limits = p.lock_limits();
+        assert_eq!(limits.max_duration_ms, UNLIMITED_LOCK_MS);
+        assert_eq!(limits.clamp_duration(1e300), Some(UNLIMITED_LOCK_MS));
+        assert_eq!(limits.clamp_duration(3_600_000.0), Some(3_600_000));
+        // A finite cap too big to add to a clock is held to the same ceiling.
+        let huge = policy(json!({"version":1,"inputLock":{"maxDurationMs":1e30}}))
+            .unwrap()
+            .lock_limits();
+        assert_eq!(huge.max_duration_ms, UNLIMITED_LOCK_MS);
     }
 
     #[test]

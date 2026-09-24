@@ -1,6 +1,6 @@
 import type { CapabilityRegistry } from '@rp/sdk';
 import type { ChatMessage, LlmProvider, ProviderConfig, ScheduledTimer, Session, Storage } from '@rp/shared';
-import { RpError, parseCharacterRef, serializeError } from '@rp/shared';
+import { RpError, capOf, parseCharacterRef, serializeError } from '@rp/shared';
 import type { ActionLoop } from '../action-loop.js';
 import type { MemoryService } from './memory.js';
 import type { BehaviourRunner } from '../behaviours.js';
@@ -266,9 +266,9 @@ export class ChatService {
     const rawConsecutive = await this.o.storage.state.get(scope, AUTONOMY_CONSECUTIVE_KEY);
     const consecutive = typeof rawConsecutive === 'number' ? rawConsecutive : 0;
     const reason =
-      stamps.length >= autonomy.maxSelfWakesPerHour
+      stamps.length >= capOf(autonomy.maxSelfWakesPerHour)
         ? `per-hour limit (${autonomy.maxSelfWakesPerHour}) reached`
-        : consecutive >= autonomy.maxConsecutiveSelfWakes
+        : consecutive >= capOf(autonomy.maxConsecutiveSelfWakes)
           ? `consecutive limit (${autonomy.maxConsecutiveSelfWakes}) reached`
           : undefined;
     if (reason) {

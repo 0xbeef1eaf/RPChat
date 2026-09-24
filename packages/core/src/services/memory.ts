@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { estimateTokens } from '@rp/llm';
 import type { ChatMessage, LlmChatRequest, LlmProvider, MemoryEntry, MemoryImportance, MemorySource, Storage } from '@rp/shared';
-import { RpError, parseCharacterRef } from '@rp/shared';
+import { RpError, capOf, parseCharacterRef } from '@rp/shared';
 import { jaccard, promptOrder, rankMemories, tokenize } from '../memory/rank.js';
 import { providerLabel, recordExchange } from './exchanges.js';
 import type { PackService } from './packs.js';
@@ -190,7 +190,8 @@ export class MemoryService {
    */
   async forPrompt(characterRef: string, focusText: string, budgetTokens: number): Promise<MemoryEntry[]> {
     const entries = await this.o.storage.memories.list(characterRef);
-    if (entries.length === 0 || budgetTokens <= 0) return [];
+    const budget = capOf(budgetTokens);
+    if (entries.length === 0 || budget <= 0) return [];
     const now = this.o.now();
     const byImportance = [...entries].sort((a, b) => b.importance - a.importance || (a.createdAt < b.createdAt ? 1 : -1)).slice(0, 3);
     const newest = [...entries].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0)).slice(0, 3);
@@ -202,7 +203,7 @@ export class MemoryService {
     for (const entry of [...byImportance, ...newest, ...ranked]) {
       if (seen.has(entry.id)) continue;
       const cost = estimateTokens(memoryLine(entry)) + 1;
-      if (used + cost > budgetTokens) {
+      if (used + cost > budget) {
         if (picked.length === 0) continue; // keep looking for something that fits
         break;
       }
@@ -315,7 +316,7 @@ export class MemoryService {
   /** Drop memories beyond `max`: lowest importance, then least recalled, then oldest; `user` ones last. */
   async prune(characterRef: string, max: number): Promise<number> {
     const entries = await this.o.storage.memories.list(characterRef);
-    if (entries.length <= max) return 0;
+    if (entries.length <= capOf(max)) return 0;
     const order = [...entries].sort(
       (a, b) =>
         Number(a.source === 'user') - Number(b.source === 'user') ||

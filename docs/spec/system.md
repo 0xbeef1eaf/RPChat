@@ -603,17 +603,17 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
 
 | Key | Managed paths | Notes |
 |---|---|---|
-| `autonomy` | `autonomy.maxSelfWakesPerHour`, `autonomy.maxConsecutiveSelfWakes`, `autonomy.maxTimersPerSession`, `autonomy.minRepeatIntervalMs`, `autonomy.minDelayMs` | non-negative numbers |
-| `maxInputLockMs` | `maxInputLockMs` | ≥ 1000; also capped by `inputLock.maxDurationMs` |
+| `autonomy` | `autonomy.maxSelfWakesPerHour`, `autonomy.maxConsecutiveSelfWakes`, `autonomy.maxTimersPerSession`, `autonomy.minRepeatIntervalMs`, `autonomy.minDelayMs` | non-negative numbers, or `-1` (`UNLIMITED`): no cap on a `max*`, no floor on a `min*` (`parsePolicy` writes `0` for those) |
+| `maxInputLockMs` | `maxInputLockMs` | ≥ 1000, or `-1` for no app-side cap; also capped by `inputLock.maxDurationMs` (itself `-1` = unlimited, which the daemon holds to `UNLIMITED_LOCK_MS`, a hundred years) |
 | `permissions` | `permissions.functionAllow.<module>`, `permissions.functionAllow.<module>.<function>` | booleans per module or per function; a function entry wins over its module's, an unlisted key stays the user's choice. `moduleAllow` is the pre-function name of the same map and is still read (module keys only), folded into `functionAllow` by `parsePolicy`. Pinning a module takes its functions with it: `applyPolicy` drops the user's `<module>.<function>` entries under a pinned module, which a function entry would otherwise outrank. |
 | `web` | `web.allowlist` | string[] |
 | `desktop` | `desktop.launchAllowlist` | string[] |
-| `memory` | `memory.enabled`, `memory.consolidateEveryTurns`, `memory.maxEntriesPerCharacter`, `memory.promptBudgetTokens` | |
+| `memory` | `memory.enabled`, `memory.consolidateEveryTurns`, `memory.maxEntriesPerCharacter`, `memory.promptBudgetTokens` | the last two take `-1` for no limit; `consolidateEveryTurns` is a cadence and does not |
 | `senses` | `senses.includeInPrompt`, `senses.watchDirs`, `senses.calendarSources` | |
 | `displayBackend` | `displayBackend` | `auto` \| `electron` \| `hyprland` |
 | `updates` | `updates.automatic`, `updates.enabled` (`allowDowngrade` accepted, never managed) | booleans. `enabled: false` switches update checks off entirely (`UpdateStatus.state === 'disabled'`, token field hidden, `automatic` forced off); `automatic` pins the background-check toggle; `allowDowngrade: true` lets the daemon's `apply-update` install an older version (daemon-enforced, default false). |
 | `browser` | `browser.allowBlocking`, `browser.allowEval`, `browser.allowHistory` | booleans. What characters may do through the browser extension (docs/browser-extension.md). The home page is not managed: only a character sets it, with `sdk.browser.setHomePage`. |
-| `media` | `media.maxConcurrent.image`, `media.maxConcurrent.video`, `media.maxConcurrent.audio`, `media.maxQueued.image`, `media.maxQueued.video`, `media.maxQueued.audio` | non-negative numbers, each pinned on its own. How many `sdk.media` items of a kind may run at once (`0` = no cap) and how many more may wait behind them (`0` = an over-cap call is refused rather than queued). Enforced by `MediaManager` (docs/spec/desktop.md "Media limits and the queue"); each kind is counted separately. |
+| `media` | `media.maxConcurrent.image`, `media.maxConcurrent.video`, `media.maxConcurrent.audio`, `media.maxQueued.image`, `media.maxQueued.video`, `media.maxQueued.audio` | non-negative numbers or `-1`, each pinned on its own. How many `sdk.media` items of a kind may run at once (`0` or `-1` = no cap) and how many more may wait behind them (`0` = an over-cap call is refused rather than queued, `-1` = no limit on the queue). Enforced by `MediaManager` (docs/spec/desktop.md "Media limits and the queue"); each kind is counted separately. |
 
 ## Renderer
 

@@ -39,6 +39,10 @@ describe('timers.runLater (code timers)', () => {
     expect((await bad(5000, 'return 1;')).error?.code).toBe('INVALID_ARGUMENT'); // cap of 2 reached
     const list = (await invoke(ctx, 'timers', 'list')) as { ok: true; value: Array<{ kind: string }> };
     expect(list.value.map((v) => v.kind)).toEqual(['code', 'wake']);
+
+    // -1 is no cap on pending timers.
+    await t.engine.settings.update({ autonomy: { maxSelfWakesPerHour: 30, maxConsecutiveSelfWakes: 10, maxTimersPerSession: -1, minRepeatIntervalMs: 60_000 } });
+    for (let i = 0; i < 5; i++) expect((await invoke(ctx, 'timers', 'runLater', 5000, 'return 1;')).ok).toBe(true);
   });
 
   it('fires the code with input on the timer trigger, can speak, repeats up to maxRuns and audits each run', async () => {
@@ -265,6 +269,11 @@ describe('self-wakes', () => {
     await t.engine.chat.idle();
     expect(t.provider.requests.length).toBe(before);
     expect((await t.engine.audit.list({ sessionId: session.id })).at(-1)).toMatchObject({ module: 'llm', method: 'wake', outcome: 'denied' });
+
+    // -1 lifts both limits, with the hour already used up.
+    await t.engine.settings.update({ autonomy: { maxSelfWakesPerHour: -1, maxConsecutiveSelfWakes: -1, maxTimersPerSession: 20, minRepeatIntervalMs: 60_000 } });
+    for (let i = 0; i < 5; i++) expect(await t.engine.chat.selfWake(session.id, `unlimited ${i}`)).toBe(true);
+    await t.engine.chat.idle();
   });
 });
 

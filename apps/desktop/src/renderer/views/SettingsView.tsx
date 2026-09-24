@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CHAT_ZOOM_MAX, CHAT_ZOOM_MIN, CHAT_ZOOM_STEP, DEFAULT_RUN_LIMITS, type AppSettings, type ProviderConfig, type RunLimits } from '@rp/shared';
+import { CHAT_ZOOM_MAX, CHAT_ZOOM_MIN, CHAT_ZOOM_STEP, DEFAULT_RUN_LIMITS, UNLIMITED, type AppSettings, type ProviderConfig, type RunLimits } from '@rp/shared';
 import { api } from '../api';
 import { BrowserSection } from '../components/settings/BrowserSection';
 import { CommandsSection } from '../components/settings/CommandsSection';
@@ -578,7 +578,7 @@ export function SettingsView() {
             id="max-input-lock"
             label="Max input lock (seconds)"
             path="maxInputLockMs"
-            value={Math.round(settings.maxInputLockMs / 1000)}
+            value={settings.maxInputLockMs === UNLIMITED ? UNLIMITED : Math.round(settings.maxInputLockMs / 1000)}
             min={1}
             hint="Hard cap for sdk.input.lock, whatever a character asks for."
             onCommit={(v) => patchSettings({ maxInputLockMs: Math.round(v) * 1000 })}

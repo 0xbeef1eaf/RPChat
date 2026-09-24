@@ -4,6 +4,7 @@
  * with no policy at all — these hold the two sides to the same rules.
  */
 import type { AppSettings, PolicyFile } from '@rp/shared';
+import { UNLIMITED } from '@rp/shared';
 import { defaultSettings } from '@rp/core';
 import { describe, expect, it } from 'vitest';
 import { POLICY_SETTINGS, packSourceProblem, policyDraftFrom, policyDraftProblems, policyDraftToFile, policyEffects, policyUrlProblem } from '../../renderer/lib/policy';
@@ -59,12 +60,21 @@ function drafts(): Array<[string, PolicyDraft]> {
   nothing.app.users = [];
   nothing.guard = { ...nothing.guard, shell: [], loginHelpers: [] };
 
+  const unlimited = policyDraftFrom(POLICY_TEMPLATE);
+  for (const spec of POLICY_SETTINGS) {
+    if (!spec.unlimited) continue;
+    unlimited.forced[spec.path] = true;
+    unlimited.values[spec.path] = UNLIMITED;
+  }
+  unlimited.inputLock = { ...unlimited.inputLock, maxDurationMs: UNLIMITED };
+
   return [
     ['the template as it arrives', seeded],
     ['a policy that forces nothing', empty],
     ['the strictest the form allows', strict],
     ['every other key forced', partial],
     ['nothing forced and every optional list empty', nothing],
+    ['every cap set to -1', unlimited],
   ];
 }
 
@@ -162,6 +172,20 @@ describe('the policy form', () => {
     draft.inputLock = { ...draft.inputLock, maxDurationMs: 999, emergencyHoldMs: 499 };
     expect(policyDraftProblems(draft)).toHaveLength(2);
     expect(() => parsePolicy(policyDraftToFile(draft))).toThrow(/maxDurationMs|emergencyHoldMs/);
+  });
+
+  it('takes -1 only on the numbers that are caps', () => {
+    const draft = policyDraftFrom(POLICY_TEMPLATE);
+    for (const spec of POLICY_SETTINGS) {
+      if (spec.kind !== 'number' && spec.kind !== 'duration') continue;
+      draft.forced[spec.path] = true;
+      draft.values[spec.path] = UNLIMITED;
+    }
+    // `consolidateEveryTurns` is a cadence, not a cap: -1 there is refused on both sides.
+    expect(policyDraftProblems(draft)).toEqual([expect.stringContaining('Consolidate every')]);
+    expect(() => parsePolicy(policyDraftToFile(draft))).toThrow(/memory\.consolidateEveryTurns must be a non-negative number$/);
+    draft.inputLock = { ...draft.inputLock, emergencyHoldMs: UNLIMITED };
+    expect(policyDraftProblems(draft)).toContainEqual(expect.stringContaining('emergency-unlock hold'));
   });
 
   it('covers every settings key the daemon is willing to force', () => {

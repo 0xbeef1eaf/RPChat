@@ -94,6 +94,8 @@ describe('MemoryService', () => {
     expect((await h.memories.get(relevant.id))?.recallCount).toBe(0);
 
     expect(await h.memories.forPrompt(REF, 'x', 0)).toEqual([]);
+    // -1 is no budget at all: every memory makes it in.
+    expect(await h.memories.forPrompt(REF, 'x', -1)).toHaveLength((await h.memories.list(REF)).length);
     expect(await h.memories.forPrompt('nobody/here', 'x', 100)).toEqual([]);
     expect((await h.memories.forPrompt(REF, 'x', 30)).length).toBeLessThanOrEqual(2);
   });
@@ -142,6 +144,7 @@ describe('MemoryService', () => {
     expect(requests).toHaveLength(1);
 
     // pruning to maxEntriesPerCharacter=3 kept the three (all ≤ cap here); lower the cap and prune again
+    expect(await h.memories.prune(REF, -1)).toBe(0); // -1 keeps everything
     expect(await h.memories.prune(REF, 1)).toBe(2);
     expect((await h.memories.list(REF)).map((m) => m.text)).toEqual(['Their cat is called Miso and sleeps on the keyboard!']);
   });

@@ -38,6 +38,18 @@ export const DEFAULT_HISTORY_SETTINGS: HistorySettings = {
 };
 
 /**
+ * A cap of `-1` means no cap: the value a policy (or a setting) writes for "unlimited" in any
+ * `max*` number, a count or a duration alike. JSON has no infinity, so the sentinel is stored as is
+ * and turned into one only where it is compared.
+ */
+export const UNLIMITED = -1;
+
+/** `limit` as something to compare against: `Infinity` for `UNLIMITED`, the number otherwise. */
+export function capOf(limit: number): number {
+  return limit === UNLIMITED ? Infinity : limit;
+}
+
+/**
  * How much of the screen a character may take at once (`sdk.media`). Each media kind is counted on
  * its own: three images on screen say nothing about whether a video may start. A call over the
  * concurrency cap does not block and does not fail — it joins that kind's queue and starts as soon
@@ -45,12 +57,13 @@ export const DEFAULT_HISTORY_SETTINGS: HistorySettings = {
  * can return a handle whose `state` is `queued`.
  */
 export interface MediaConcurrencySettings {
-  /** Items of this kind that may be on screen or playing at once. `0` = no limit. */
+  /** Items of this kind that may be on screen or playing at once. `0` or `-1` = no limit. */
   maxConcurrent: MediaKindLimits;
   /**
    * Items of this kind that may wait for a slot. `0` means nothing waits: a call over the
-   * concurrency cap is refused with `CAPABILITY_FAILED` instead of being queued. Ignored while
-   * the matching `maxConcurrent` is `0`, since nothing ever queues then.
+   * concurrency cap is refused with `CAPABILITY_FAILED` instead of being queued; `-1` lets any
+   * number wait. Ignored while the matching `maxConcurrent` is unlimited, since nothing ever
+   * queues then.
    */
   maxQueued: MediaKindLimits;
 }

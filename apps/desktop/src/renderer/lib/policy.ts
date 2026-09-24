@@ -8,7 +8,7 @@
  * `inputLock` and `guard` blocks have meaningful defaults of their own and are always written.
  */
 import type { AppRestrictions, DevRules, GuardCompositorIpc, GuardMode, GuardShell, PackSource, PolicyFile } from '@rp/shared';
-import { DEFAULT_APP_RESTRICTIONS, DEFAULT_DEV_RULES } from '@rp/shared';
+import { DEFAULT_APP_RESTRICTIONS, DEFAULT_DEV_RULES, UNLIMITED } from '@rp/shared';
 
 export type PolicyValue = number | boolean | string | string[] | Record<string, boolean>;
 export type PolicyEmergencyKey = NonNullable<NonNullable<PolicyFile['inputLock']>['emergencyKey']>;
@@ -27,6 +27,8 @@ export interface PolicySettingSpec {
   fallback: PolicyValue;
   /** `number`/`duration`: the smallest value `parsePolicy` accepts. */
   min?: number;
+  /** `number`/`duration`: `-1` (`UNLIMITED`) is accepted as well, for no cap (or no floor). */
+  unlimited?: boolean;
   /** `choice`: the accepted values. */
   choices?: readonly string[];
   /** `list`: placeholder for the add field. */
@@ -43,7 +45,7 @@ export const POLICY_GROUPS: ReadonlyArray<{ id: PolicyGroupId; title: string; hi
   { id: 'browser', title: 'Browser', hint: 'What a character with the browser capability may do in the user’s browser.' },
   { id: 'updates', title: 'Updates', hint: 'Whether this machine updates itself, and who decides.' },
   { id: 'display', title: 'Display', hint: 'How characters are drawn on screen.' },
-  { id: 'media', title: 'Media on screen', hint: 'How many images, videos and sounds a character may have running at once, and how many more may wait their turn. 0 items at once means no limit; 0 waiting means a call over the limit is refused instead of queued.' },
+  { id: 'media', title: 'Media on screen', hint: 'How many images, videos and sounds a character may have running at once, and how many more may wait their turn. 0 or -1 items at once means no limit; 0 waiting means a call over the limit is refused instead of queued.' },
 ];
 
 /**
@@ -54,18 +56,18 @@ export const POLICY_SETTINGS: readonly PolicySettingSpec[] = [
   { path: 'permissions.functionAllow', group: 'access', kind: 'functions', label: 'SDK functions', hint: 'Pin which SDK functions every character may call, whole modules or one function at a time. Anything left off the list stays the user’s choice.', fallback: {} },
   { path: 'web.allowlist', group: 'access', kind: 'list', label: 'Web allowlist', hint: 'Hosts sdk.web may fetch. An empty list allows nothing.', fallback: [], placeholder: 'example.com' },
   { path: 'desktop.launchAllowlist', group: 'access', kind: 'list', label: 'Launchable apps', hint: 'Programs sdk.desktop.launch may start. An empty list allows nothing.', fallback: [], placeholder: 'firefox' },
-  { path: 'maxInputLockMs', group: 'access', kind: 'duration', label: 'Longest input lock', hint: 'The cap the app offers for sdk.input.lock. The daemon’s own limit applies on top.', fallback: 300_000, min: 1000 },
+  { path: 'maxInputLockMs', group: 'access', kind: 'duration', label: 'Longest input lock', hint: 'The cap the app offers for sdk.input.lock. The daemon’s own limit applies on top. -1 = no app-side cap.', fallback: 300_000, min: 1000, unlimited: true },
 
-  { path: 'autonomy.maxSelfWakesPerHour', group: 'autonomy', kind: 'number', label: 'Self-wakes per hour', hint: 'Self-triggered turns a session may take in an hour.', fallback: 30, min: 0 },
-  { path: 'autonomy.maxConsecutiveSelfWakes', group: 'autonomy', kind: 'number', label: 'Consecutive self-wakes', hint: 'Self-triggered turns in a row without a word from the user.', fallback: 10, min: 0 },
-  { path: 'autonomy.maxTimersPerSession', group: 'autonomy', kind: 'number', label: 'Timers per session', hint: 'Pending timers one session may hold at once.', fallback: 20, min: 0 },
-  { path: 'autonomy.minRepeatIntervalMs', group: 'autonomy', kind: 'duration', label: 'Shortest repeat interval', hint: 'Floor for repeating timers.', fallback: 60_000, min: 0 },
-  { path: 'autonomy.minDelayMs', group: 'autonomy', kind: 'duration', label: 'Shortest timer delay', hint: 'Floor for a scheduled turn; shorter delays are raised to it rather than refused.', fallback: 30_000, min: 0 },
+  { path: 'autonomy.maxSelfWakesPerHour', group: 'autonomy', kind: 'number', label: 'Self-wakes per hour', hint: 'Self-triggered turns a session may take in an hour. -1 = unlimited.', fallback: 30, min: 0, unlimited: true },
+  { path: 'autonomy.maxConsecutiveSelfWakes', group: 'autonomy', kind: 'number', label: 'Consecutive self-wakes', hint: 'Self-triggered turns in a row without a word from the user. -1 = unlimited.', fallback: 10, min: 0, unlimited: true },
+  { path: 'autonomy.maxTimersPerSession', group: 'autonomy', kind: 'number', label: 'Timers per session', hint: 'Pending timers one session may hold at once. -1 = unlimited.', fallback: 20, min: 0, unlimited: true },
+  { path: 'autonomy.minRepeatIntervalMs', group: 'autonomy', kind: 'duration', label: 'Shortest repeat interval', hint: 'Floor for repeating timers. -1 = no floor.', fallback: 60_000, min: 0, unlimited: true },
+  { path: 'autonomy.minDelayMs', group: 'autonomy', kind: 'duration', label: 'Shortest timer delay', hint: 'Floor for a scheduled turn; shorter delays are raised to it rather than refused. -1 = no floor.', fallback: 30_000, min: 0, unlimited: true },
 
   { path: 'memory.enabled', group: 'memory', kind: 'boolean', label: 'Remember across conversations', hint: 'Off stops characters forming long-term memories at all.', fallback: true },
   { path: 'memory.consolidateEveryTurns', group: 'memory', kind: 'number', label: 'Consolidate every', hint: 'Turns between memory extraction passes.', fallback: 8, min: 0 },
-  { path: 'memory.maxEntriesPerCharacter', group: 'memory', kind: 'number', label: 'Memories per character', hint: 'How many entries one character keeps.', fallback: 300, min: 0 },
-  { path: 'memory.promptBudgetTokens', group: 'memory', kind: 'number', label: 'Memory prompt budget', hint: 'Tokens of remembered material allowed into a prompt.', fallback: 600, min: 0 },
+  { path: 'memory.maxEntriesPerCharacter', group: 'memory', kind: 'number', label: 'Memories per character', hint: 'How many entries one character keeps. -1 = unlimited.', fallback: 300, min: 0, unlimited: true },
+  { path: 'memory.promptBudgetTokens', group: 'memory', kind: 'number', label: 'Memory prompt budget', hint: 'Tokens of remembered material allowed into a prompt. -1 = unlimited.', fallback: 600, min: 0, unlimited: true },
 
   { path: 'senses.includeInPrompt', group: 'senses', kind: 'boolean', label: 'Presence line in prompts', hint: 'Off keeps idle time, the active window and now-playing out of every prompt.', fallback: true },
   { path: 'senses.watchDirs', group: 'senses', kind: 'list', label: 'Watched directories', hint: 'Folders that raise file-added events. An empty list watches nothing.', fallback: [], placeholder: '~/Downloads' },
@@ -81,12 +83,12 @@ export const POLICY_SETTINGS: readonly PolicySettingSpec[] = [
 
   { path: 'displayBackend', group: 'display', kind: 'choice', label: 'Display backend', hint: 'How character windows are drawn.', fallback: 'auto', choices: ['auto', 'electron', 'hyprland'] },
 
-  { path: 'media.maxConcurrent.image', group: 'media', kind: 'number', label: 'Images at once', hint: 'Images sdk.media may have on screen together. 0 = no limit.', fallback: 3, min: 0 },
-  { path: 'media.maxConcurrent.video', group: 'media', kind: 'number', label: 'Videos at once', hint: 'Videos playing together, whether in a window or washed over the screen. 0 = no limit.', fallback: 1, min: 0 },
-  { path: 'media.maxConcurrent.audio', group: 'media', kind: 'number', label: 'Sounds at once', hint: 'Audio tracks playing together. 0 = no limit.', fallback: 2, min: 0 },
-  { path: 'media.maxQueued.image', group: 'media', kind: 'number', label: 'Images waiting', hint: 'Images that may queue behind the limit above. 0 refuses the call instead of queueing it.', fallback: 8, min: 0 },
-  { path: 'media.maxQueued.video', group: 'media', kind: 'number', label: 'Videos waiting', hint: 'Videos that may queue behind the limit above. 0 refuses the call instead of queueing it.', fallback: 8, min: 0 },
-  { path: 'media.maxQueued.audio', group: 'media', kind: 'number', label: 'Sounds waiting', hint: 'Audio tracks that may queue behind the limit above. 0 refuses the call instead of queueing it.', fallback: 8, min: 0 },
+  { path: 'media.maxConcurrent.image', group: 'media', kind: 'number', label: 'Images at once', hint: 'Images sdk.media may have on screen together. 0 or -1 = no limit.', fallback: 3, min: 0, unlimited: true },
+  { path: 'media.maxConcurrent.video', group: 'media', kind: 'number', label: 'Videos at once', hint: 'Videos playing together, whether in a window or washed over the screen. 0 or -1 = no limit.', fallback: 1, min: 0, unlimited: true },
+  { path: 'media.maxConcurrent.audio', group: 'media', kind: 'number', label: 'Sounds at once', hint: 'Audio tracks playing together. 0 or -1 = no limit.', fallback: 2, min: 0, unlimited: true },
+  { path: 'media.maxQueued.image', group: 'media', kind: 'number', label: 'Images waiting', hint: 'Images that may queue behind the limit above. 0 refuses the call instead of queueing it; -1 = unlimited.', fallback: 8, min: 0, unlimited: true },
+  { path: 'media.maxQueued.video', group: 'media', kind: 'number', label: 'Videos waiting', hint: 'Videos that may queue behind the limit above. 0 refuses the call instead of queueing it; -1 = unlimited.', fallback: 8, min: 0, unlimited: true },
+  { path: 'media.maxQueued.audio', group: 'media', kind: 'number', label: 'Sounds waiting', hint: 'Audio tracks that may queue behind the limit above. 0 refuses the call instead of queueing it; -1 = unlimited.', fallback: 8, min: 0, unlimited: true },
 ];
 
 /** The `app` restrictions, phrased as the switches the form shows (on = the app may do it). */
@@ -385,11 +387,13 @@ export function policyDraftProblems(draft: PolicyDraft): string[] {
     const value = draft.values[spec.path];
     if (spec.kind === 'number' || spec.kind === 'duration') {
       if (typeof value !== 'number' || !Number.isFinite(value)) problems.push(`${spec.label} needs a number.`);
-      else if (spec.min !== undefined && value < spec.min) problems.push(`${spec.label} must be at least ${spec.min >= 1000 ? `${spec.min / 1000} s` : spec.min}.`);
+      else if (spec.min !== undefined && value < spec.min && !(spec.unlimited && value === UNLIMITED)) {
+        problems.push(`${spec.label} must be at least ${spec.min >= 1000 ? `${spec.min / 1000} s` : spec.min}${spec.unlimited ? ', or -1 for unlimited' : ''}.`);
+      }
     }
     if (spec.kind === 'choice' && !(spec.choices ?? []).includes(String(value))) problems.push(`${spec.label} must be one of ${(spec.choices ?? []).join(', ')}.`);
   }
-  if (draft.inputLock.maxDurationMs < 1000) problems.push('The daemon’s input-lock limit must be at least 1 s.');
+  if (draft.inputLock.maxDurationMs < 1000 && draft.inputLock.maxDurationMs !== UNLIMITED) problems.push('The daemon’s input-lock limit must be at least 1 s, or -1 for unlimited.');
   if (draft.inputLock.emergencyHoldMs < 500) problems.push('The emergency-unlock hold must be at least 0.5 s.');
   for (const user of draft.app.users) {
     const problem = userNameProblem(user);
