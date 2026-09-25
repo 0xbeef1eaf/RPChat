@@ -1,9 +1,9 @@
 /**
  * The app-enforced half of the policy's `app` block (docs/spec/system.md "Restrictions"):
  * operations a household admin can take away from this machine — the pack editor, removing or
- * rewriting packs, stopping a reply mid-generation, deleting sessions/history/memories,
- * unsubscribing event handlers, closing a character's media, the sandbox — plus
- * `requireCharacterSession`, which keeps the app inside a conversation.
+ * rewriting packs, stopping a reply mid-generation, deleting sessions/history/memories, resetting
+ * a session's runtime state, unsubscribing event handlers, closing a character's media, the
+ * sandbox — plus `requireCharacterSession`, which keeps the app inside a conversation.
  *
  * The `guard` block confines the session *around* the app with AppArmor; this confines the app
  * itself. Enforcement is one table consulted in `registerIpc`'s dispatch loop, so every guarded
@@ -37,10 +37,12 @@ export const RESTRICTED_CHANNELS: Readonly<Record<string, ChannelRule>> = {
   'editor:installToApp': { key: 'allowPackInstall', what: 'Installing a pack' },
   // 4. Stopping a reply that is already being generated.
   'chat:abort': { key: 'allowStopGeneration', what: 'Stopping a reply' },
-  // 5. Delete Session / Delete History / Delete Memories.
+  // 5. Delete Session / Delete History / Delete Memories, and Reset session state — which keeps
+  //    the messages but throws away everything the character built up around them.
   'sessions:remove': { key: 'allowDeleteSession', what: 'Deleting a session' },
   'sessions:clearMessages': { key: 'allowDeleteHistory', what: 'Deleting the chat history' },
   'sessions:removeMessage': { key: 'allowDeleteHistory', what: 'Deleting a message' },
+  'sessions:resetState': { key: 'allowResetState', what: 'Resetting the session state' },
   'memories:remove': { key: 'allowDeleteMemories', what: 'Deleting a memory' },
   // 6. Event handlers.
   'events:remove': { key: 'allowRemoveEvents', what: 'Removing an event handler' },
@@ -90,6 +92,8 @@ export function refusalFor(channel: string, restrictions: AppRestrictions, manag
  * but each aborts the turn in flight on its way to what it does do — so under a policy that says
  * a reply has to finish, each is refused while one is running, and works as usual otherwise.
  * `chat:abort` is not here: it exists only to stop, so it is refused outright by the table above.
+ * The table may refuse them for their own reasons as well (a reset under `allowResetState`, an
+ * edit under `allowDeleteHistory`); that check runs first and does not depend on a running turn.
  */
 export const TURN_STOPPING_CHANNELS: ReadonlySet<string> = new Set([
   'chat:retry',

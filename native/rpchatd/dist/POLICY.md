@@ -315,6 +315,7 @@ operation is refused whoever asks: a devtools console or a character's own scrip
 | `allowStopGeneration` | boolean | `true` | `false` makes a reply finish once it has started: *Stop* in the composer is greyed out and `chat.abort` is refused. Retrying, resetting the session and deleting a message or the history are refused too **while a reply is running** — each of those aborts it first — and work as usual the rest of the time. |
 | `allowDeleteSession` | boolean | `true` | `false` removes *Delete session* from the session panel and refuses `sessions.remove`. |
 | `allowDeleteHistory` | boolean | `true` | `false` removes *Clear history* and the per-message delete, and refuses `sessions.clearMessages` / `sessions.removeMessage`. |
+| `allowResetState` | boolean | `true` | `false` removes *Reset session state* from the session panel and refuses `sessions.resetState`, so a conversation cannot be started over from its runtime side — its `sdk.state.session.*` scratch values, timers, event subscriptions, history summary and status line stay. A reset never reached further than that: the messages, the character's own `sdk.state.*` and its memories persist across one anyway. |
 | `allowDeleteMemories` | boolean | `true` | `false` removes *Forget* from the memories panel and refuses `memories.remove`. Adding and editing memories still work. |
 | `allowRemoveEvents` | boolean | `true` | `false` removes *Remove* from the events drawer and refuses `events.remove`, so a character's `sdk.events.on` subscriptions cannot be unsubscribed by hand. |
 | `allowCloseMedia` | boolean | `true` | `false` removes *Close media* from the chat header and refuses `media.closeAll`, so a character's overlays cannot be swept off the screen by hand. The character's own `sdk.media.close` / `sdk.media.closeAll` are unaffected — this is only the by-hand button. |
@@ -340,6 +341,7 @@ it can be taken apart:
     "allowStopGeneration": false,
     "allowDeleteSession": false,
     "allowDeleteHistory": false,
+    "allowResetState": false,
     "allowDeleteMemories": false,
     "allowRemoveEvents": false,
     "allowCloseMedia": false,

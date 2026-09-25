@@ -85,8 +85,8 @@ pub struct InputLockPolicy {
 /// `users` only, and only while one of them owns the active graphical session.
 ///
 /// The `allow*`/`require*` keys below are the app-enforced restrictions (the pack editor, pack
-/// installs and removals, deleting sessions/history/memories, event handlers, the sandbox, and
-/// keeping a conversation open). The daemon does not act on them — the app refuses those
+/// installs and removals, deleting sessions/history/memories, resetting a session's runtime
+/// state, event handlers, the sandbox, and keeping a conversation open). The daemon does not act on them — the app refuses those
 /// operations on its own IPC boundary — but this struct denies unknown fields, so they are
 /// declared here to keep a policy that uses them loadable, and round-trip through `policy`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -108,6 +108,8 @@ pub struct AppPolicy {
     pub allow_delete_session: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_delete_history: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_reset_state: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_delete_memories: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1221,6 +1223,7 @@ mod tests {
             "allowPackInstall": false,
             "allowDeleteSession": false,
             "allowDeleteHistory": false,
+            "allowResetState": false,
             "allowDeleteMemories": false,
             "allowRemoveEvents": false,
             "allowCloseMedia": false,
@@ -1233,6 +1236,7 @@ mod tests {
         assert!(!rules.allow_quit && rules.keeps_alive("alice"));
         let app = loaded.app.as_ref().unwrap();
         assert_eq!(app.allow_pack_editor, Some(false));
+        assert_eq!(app.allow_reset_state, Some(false));
         assert_eq!(app.allow_close_media, Some(false));
         assert_eq!(app.allow_sandbox, Some(false));
         assert_eq!(app.require_character_session, Some(true));

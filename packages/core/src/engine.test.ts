@@ -857,6 +857,10 @@ describe('history editing', () => {
     await t.engine.chat.send(first.id, 'hello');
     const scope = `session:${first.id}`;
     await t.engine.storage.state.set(scope, 'scratch', 42);
+    // The character scope is the one that outlives a session, the same way memories do.
+    const charScope = `char:${LUNA_ID}/luna`;
+    await t.engine.storage.state.set(charScope, 'remembered', 'her name for me');
+    await t.engine.memories.add(LUNA_REF, 'we met on a Tuesday');
     await t.engine.timers.schedule({ id: 'tm-reset', sessionId: first.id, characterRef: LUNA_REF, kind: 'wake', fireAt: '2030-01-01T00:00:00.000Z', payload: null, createdAt: t.clock.now().toISOString() });
     expect(await t.engine.timers.list({ sessionId: first.id })).toHaveLength(1);
     const before = (await t.engine.sessions.messages(first.id)).length;
@@ -865,6 +869,9 @@ describe('history editing', () => {
 
     await t.engine.chat.resetState(first.id);
     expect(await t.engine.storage.state.get(scope, 'scratch')).toBeUndefined();
+    // Only the session scope goes: what the character keeps about the user persists, like memories.
+    expect(await t.engine.storage.state.get(charScope, 'remembered')).toBe('her name for me');
+    expect((await t.engine.memories.list(LUNA_REF)).map((m) => m.text)).toContain('we met on a Tuesday');
     expect(await t.engine.timers.list({ sessionId: first.id })).toHaveLength(0);
     expect((await t.engine.sessions.messages(first.id)).length).toBe(before); // messages untouched
     expect(events).toEqual(expect.arrayContaining(['status', 'session-reset']));

@@ -57,6 +57,7 @@
     "allowStopGeneration": true,
     "allowDeleteSession": true,
     "allowDeleteHistory": true,
+    "allowResetState": true,
     "allowDeleteMemories": true,
     "allowRemoveEvents": true,
     "allowCloseMedia": true,
