@@ -13,6 +13,15 @@ Stack: Rust 2021, crates `gtk` 0.18, `gdk` 0.18, `gtk-layer-shell` 0.8, `webkit2
 webkit2gtk-4.1 (Arch: `gtk3 gtk-layer-shell webkit2gtk-4.1`; Debian/Ubuntu:
 `libgtk-3-0 libgtk-layer-shell0 libwebkit2gtk-4.1-0`). All are installed in this build
 environment (pkg-config finds them), so the crate must compile here with `cargo build --release`.
+
+WebKit plays media through **GStreamer**, not Chromium, so an overlay video needs the base plugin
+set installed on the user's machine: without `gst-plugins-good` there is no MP4/Matroska demuxer
+(`isomp4`, `matroska`) and no `autodetect` sink, and a page with a `<video>` takes the whole
+WebKitWebProcess down a few seconds after it loads — the overlay shows an empty player and then
+closes. `gst-libav` supplies the H.264/AAC decoders (Arch: `gst-plugins-good gst-plugins-base
+gst-libav`; Debian/Ubuntu: `gstreamer1.0-plugins-good gstreamer1.0-plugins-base gstreamer1.0-libav`).
+Nothing in the pack format's video support (`docs/spec/pack.md`) can be played on this backend
+without them.
 No display is available here, so runtime is verified only through the protocol layer
 (pure Rust, unit-tested) and a `--self-test` flag that exercises parsing/planning without GTK.
 
@@ -54,6 +63,13 @@ Field semantics
   transparent (`WebView::set_background_color` with alpha 0), `WebSettings`: media playback without user
   gesture, no developer extras, `enable_javascript`. The `UserContentManager` registers script message
   handler `rp` and injects a user script at document start defining `window.__rpHelper = true`.
+- Playback activation: on `load-changed` (`Committed` and again on `Finished`) the helper delivers a
+  synthetic button press and release to the web view at (1, 1). WebKit will not start a `<video>` until
+  the page has seen a pointer event — `media-playback-requires-user-gesture: false` above does *not* lift
+  that, and `<audio>` is unaffected, which is why sound always worked and video did not: `play()` rejected
+  with `NotAllowedError`, the page reported it, and the app closed the overlay on the first error. The
+  events go to the widget, never the compositor, so a click-through surface stays click-through, and (1, 1)
+  is the stage's padding, so no item's click handler runs and no `media-clicked` is reported.
 - Page events: when a `message` payload is `{ type: "content-size", width, height }` and no explicit height
   was given, the helper resizes the window to that size (clamped to the monitor) and re-applies margins.
 

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import type { MediaCloseReason } from '@rp/shared';
 import { closesOnClick, effectiveOpacity, effectiveVolume, type MediaEntry, type MediaLocalEvent } from './mediaState';
 import { fitMedia, type NaturalSize } from './fit';
+import { startPlayback } from './playback';
 
 interface MediaItemViewProps {
   entry: MediaEntry;
@@ -46,7 +47,8 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry.id, durationMs]);
 
-  // Apply volume + kick off playback (autoplay attributes alone are not enough after a src swap).
+  // Apply volume + kick off playback (autoplay attributes alone are not enough after a src swap;
+  // `startPlayback` also rides out WebKit's "not without a gesture" refusal in the helper's pages).
   const volume = entry.kind === 'image' ? undefined : entry.options.volume;
   useEffect(() => {
     const el = mediaRef.current;
@@ -57,7 +59,8 @@ export function MediaItemView({ entry, onEvent }: MediaItemViewProps) {
   useEffect(() => {
     const el = mediaRef.current;
     if (!el || entry.kind === 'image') return;
-    el.play().catch((err: unknown) => onEvent({ type: 'error', id: entry.id, message: err instanceof Error ? err.message : String(err) }));
+    const attempt = startPlayback(el, (message) => onEvent({ type: 'error', id: entry.id, message }));
+    return () => attempt.cancel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry.id, entry.url]);
 

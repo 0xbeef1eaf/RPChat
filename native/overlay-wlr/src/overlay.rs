@@ -8,6 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use glib::translate::ToGlibPtr;
 use gtk::prelude::*;
 use gtk_layer_shell::{Edge, KeyboardMode, LayerShell};
 use webkit2gtk::{
@@ -26,6 +27,57 @@ const MESSAGE_HANDLER: &str = "rp";
 
 /// Injected at document start so the page can detect helper mode.
 const HELPER_MARKER_SCRIPT: &str = "window.__rpHelper = true;";
+
+/// Where the synthetic click below lands: the page's own margin, clear of the media stage.
+const ACTIVATION_POINT: f64 = 1.0;
+
+/// Hand the page the user gesture WebKit wants before it will play a video.
+///
+/// `media-playback-requires-user-gesture: false` (set on the view) does not lift that requirement:
+/// `video.play()` rejects with `NotAllowedError` until the page has seen a pointer event, while
+/// `audio.play()` is allowed either way — which is why sound has always worked and video never did.
+/// Without this the page is left showing WebKit's play-button placeholder, and its rejected `play()`
+/// is reported to the app, which closes the overlay on the first error: an empty player that
+/// vanishes a moment after it opens, whatever `loop`/`closeOnEnd` asked for.
+///
+/// The events go straight to the widget, so the compositor never sees them and a click-through
+/// surface stays click-through. They land at (1, 1) — the page's margin, outside the stage — so no
+/// item's click handler runs and no `media-clicked` is reported for a click the user never made.
+fn grant_user_activation(view: &WebView, id: &str) {
+    let Some(window) = view.window() else {
+        log_debug!("[{}] no gdk window yet; playback activation deferred", id);
+        return;
+    };
+    let device = gdk::Display::default()
+        .and_then(|display| display.default_seat())
+        .and_then(|seat| seat.pointer());
+    let time = gtk::current_event_time();
+    for (kind, state) in [
+        (gdk::EventType::ButtonPress, gdk::ModifierType::empty()),
+        (
+            gdk::EventType::ButtonRelease,
+            gdk::ModifierType::BUTTON1_MASK,
+        ),
+    ] {
+        let mut event = gdk::Event::new(kind);
+        event.set_device(device.as_ref());
+        if let Some(button) = event.downcast_mut::<gdk::EventButton>() {
+            let raw = button.as_mut();
+            // The event owns this reference and drops it when it is freed.
+            raw.window = window.to_glib_full();
+            raw.send_event = 1;
+            raw.time = time;
+            raw.x = ACTIVATION_POINT;
+            raw.y = ACTIVATION_POINT;
+            raw.x_root = ACTIVATION_POINT;
+            raw.y_root = ACTIVATION_POINT;
+            raw.button = 1;
+            raw.state = state.bits();
+        }
+        view.event(&event);
+    }
+    log_debug!("[{}] playback activation delivered", id);
+}
 
 fn shell_layer(layer: Layer) -> gtk_layer_shell::Layer {
     match layer {
@@ -196,11 +248,18 @@ impl Overlay {
                 false
             });
         let w = weak.clone();
-        self.webview.connect_load_changed(move |_, event| {
-            if event == LoadEvent::Finished {
-                if let Some(o) = w.upgrade() {
+        self.webview.connect_load_changed(move |view, event| {
+            let Some(o) = w.upgrade() else { return };
+            // Committed *and* Finished: the page calls play() as soon as React mounts, which can be
+            // either side of Finished, and an activation that arrives late is only a click on a
+            // page that already has one. See `grant_user_activation`.
+            match event {
+                LoadEvent::Committed => grant_user_activation(view, &o.id),
+                LoadEvent::Finished => {
+                    grant_user_activation(view, &o.id);
                     log_debug!("[{}] page load finished", o.id);
                 }
+                _ => {}
             }
         });
         let w = weak.clone();
