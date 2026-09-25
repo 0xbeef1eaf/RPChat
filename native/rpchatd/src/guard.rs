@@ -11,10 +11,20 @@
 //!   exec into `rpchat-session` and whose `^DEFAULT` hat lets everyone else run unconfined.
 //!   That profile must be in *enforce* mode: a hat that does not exist makes a complain-mode
 //!   `change_hat()` build a learning profile, which deadlocks the kernel (see `render`).
-//! - Filesystem-path unix sockets are mediated as files (`security/apparmor/af_unix.c`):
-//!   `bind` is the `mknod` of the socket file (`w` = create), `connect` needs
-//!   `AA_MAY_CONNECT|AA_MAY_SEND|AA_MAY_RECEIVE` = open + write + read (`rw`). A profile that
-//!   grants `w` but not `r` on a socket can serve it but not connect to it.
+//! - Filesystem-path unix sockets need **two** rules, and the file rule is the weaker half.
+//!   A file rule mediates `open()` on the socket node — `bind` is its `mknod` (`w` = create) —
+//!   and on a kernel without fine-grained AF_UNIX mediation that is also what `connect()` is
+//!   checked against (`AA_MAY_CONNECT|AA_MAY_SEND|AA_MAY_RECEIVE` = `rw`). On a kernel that
+//!   advertises `network_v9/af_unix` — which is every current one — `connect()` moves to the
+//!   `unix` class instead, and a profile carrying a blanket `unix,` allows it **however the
+//!   file rule reads**. Measured on 7.2.6 against a loaded `enforce` profile holding
+//!   `audit deny @{run}/user/[0-9]*/*-awww-daemon*.sock rw,`: `open()` on the node was EACCES
+//!   and `connect()` to it succeeded, so `awww img <path>` still set the wallpaper. The shell's
+//!   sockets therefore also carry a `unix (connect)` deny, written against the peer's **label**
+//!   — `addr=` cannot name a filesystem socket, the parser rejects one — so it reads "nothing
+//!   the shell serves", which for `rpchat-shell` is the same set. The file rules stay: they
+//!   still cover `open()` and `bind`, and on a kernel without `af_unix` they are the whole
+//!   mediation. See [`unix_connect_shell`].
 //! - Explicit `deny` rules are enforced even in complain mode, so audit mode uses
 //!   `audit <rule>` (allowed, logged as `apparmor="AUDIT"`) and enforce mode `audit deny`.
 //! - Named exec transitions take globs (`/{,**} px -> rpchat-session`), and a more specific
@@ -428,6 +438,26 @@ pub const SYSTEMD_RUN_BINARIES: [&str; 2] = ["/usr/bin/systemd-run", "/bin/syste
 pub const SYSTEM_MANAGER_TRANSPORTS: [&str; 2] =
     ["@{run}/dbus/system_bus_socket", "@{run}/systemd/private"];
 
+/// The `unix` class half of the wallpaper lock: what stops a client reaching the shell on a
+/// kernel with fine-grained AF_UNIX mediation, where the file rule no longer covers `connect()`.
+///
+/// **By label, not by address.** `addr=` cannot name a filesystem socket at all — the parser
+/// rejects one outright (`unix rule: invalid value for addr='/run/user/1000/extra.sock'`),
+/// because the conditional exists for abstract names. What is left is the peer's profile, and
+/// for these sockets that is exactly right: `rpchat-shell` serves its IPC sockets and nothing
+/// else, so "may not connect to anything the shell serves" and "may not connect to the shell's
+/// sockets" are the same sentence.
+///
+/// This is why the compositor half of the guard has no equivalent (see `render`'s residual
+/// list): `rpchat-compositor` serves the Wayland display and the X11 sockets alongside its
+/// control socket, so the same rule aimed at it would cut every graphical client in the session.
+///
+/// Only `connect` — not `send`/`receive`, which are matched against the peer of an *established*
+/// connection and would cut the shell's replies to a client it legitimately accepted.
+fn unix_connect_shell() -> String {
+    "unix (connect) peer=(label=rpchat-shell)".to_string()
+}
+
 /// `audit <rule>` in audit mode (allowed, logged), `audit deny <rule>` in enforce mode.
 fn guarded(mode: GuardMode, rule: &str) -> String {
     match mode {
@@ -586,6 +616,9 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     for s in &deny_sockets {
         guard_rules.push_str(&guarded(mode, &format!("{s} rw")));
     }
+    if shell_profile {
+        guard_rules.push_str(&guarded(mode, &unix_connect_shell()));
+    }
     for f in &deny_files {
         guard_rules.push_str(&guarded(mode, &format!("{f} wl")));
     }
@@ -605,6 +638,9 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     }
     for s in &deny_sockets {
         relay_rules.push_str(&guarded(mode, &format!("{s} rw")));
+    }
+    if shell_profile {
+        relay_rules.push_str(&guarded(mode, &unix_connect_shell()));
     }
     for f in &deny_files {
         relay_rules.push_str(&guarded(mode, &format!("{f} wl")));
@@ -665,6 +701,10 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         for s in &shell_sockets {
             shell.push_str(&guarded(mode, &format!("{s} r")));
         }
+        // The shell may serve its socket and reach none of them, its own included — `accept` is
+        // not `connect`, so this costs the server nothing and is what stops `<shell> msg` and a
+        // bar driving a wallpaper daemon.
+        shell.push_str(&guarded(mode, &unix_connect_shell()));
         if rules.compositor_ipc == CompositorIpc::Deny {
             for s in &compositor_sockets {
                 shell.push_str(&guarded(mode, &format!("{s} rw")));
@@ -695,6 +735,7 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         for s in &shell_sockets {
             comp.push_str(&guarded(mode, &format!("{s} rw")));
         }
+        comp.push_str(&guarded(mode, &unix_connect_shell()));
         for f in &deny_files {
             comp.push_str(&guarded(mode, &format!("{f} wl")));
         }
@@ -850,6 +891,8 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     }
     if compositor_profile {
         residual.push("compositor plugins run inside the compositor and are not confined; only its child processes are".to_string());
+        // Honest, because the alternative is a guard that reads stricter than it is.
+        residual.push("on a kernel with fine-grained AF_UNIX mediation the compositor's control socket is only guarded against open(), not connect(): the file rule does not cover connect there, and the unix-class rule that would cannot name a socket by path — only by the peer's profile, which for the compositor also serves the Wayland display and the X11 sockets, so the session could not run with it".to_string());
     }
     if systemd_run_profile {
         residual.push("systemd-run keeps working for --user and --scope (what uwsm app uses to start the shell); only the system manager, which PID 1 owns and no profile confines, is out of reach".to_string());
@@ -2848,6 +2891,77 @@ garbage line\n";
         assert_eq!(os.parser_calls.lock().unwrap().len(), before + 1);
     }
 
+    /// The wallpaper lock needs two rules, because neither covers the other. The file rule
+    /// stops `open()` and `bind`; only the `unix` rule stops `connect()` on a kernel with
+    /// fine-grained AF_UNIX mediation, and it has to be written against the peer's label
+    /// because `addr=` cannot name a filesystem socket.
+    #[test]
+    fn the_shell_sockets_are_denied_as_files_and_the_shell_as_a_unix_peer() {
+        let r = rules(serde_json::json!({
+            "version":1,"app":{"users":["work"]},
+            "guard":{"mode":"enforce","shell":["noctalia"],"compositorIpc":"shell-only"},
+            "lock":{}
+        }));
+        let plan = render(&r, &noctalia_hyprland_ctx(&["work"]));
+        let sock = "@{run}/user/[0-9]*/noctalia-*.sock";
+        let unix = "  audit deny unix (connect) peer=(label=rpchat-shell),\n";
+
+        // Everything that is not the shell: no opening the node, no reaching what serves it.
+        for profile in ["rpchat-session", "rpchat-compositor", "rpchat-systemd-run"] {
+            let text = text_of(&plan, profile);
+            assert!(
+                text.contains(&format!("  audit deny {sock} rw,\n")),
+                "{profile}:\n{text}"
+            );
+            assert!(text.contains(unix), "{profile}:\n{text}");
+        }
+
+        // The shell serves its socket and reaches none of them, its own included. `accept` is
+        // not `connect`, so the one rule does both jobs.
+        let shell = text_of(&plan, "rpchat-shell");
+        assert!(
+            shell.contains(&format!("  audit deny {sock} r,\n")),
+            "{shell}"
+        );
+        assert!(shell.contains(unix), "{shell}");
+        assert!(
+            !shell.contains(&format!("audit deny {sock} rw,")),
+            "{shell}"
+        );
+
+        // The app is what the characters act through, and it is not guarded here.
+        assert!(!text_of(&plan, "rpchat-app").contains("unix (connect)"));
+
+        // `guard.wallpaper: false` asks for none of it, so neither rule is written.
+        let off = rules(serde_json::json!({
+            "version":1,"app":{"users":["work"]},
+            "guard":{"mode":"enforce","wallpaper":false}
+        }));
+        let text = text_of(
+            &render(&off, &noctalia_hyprland_ctx(&["work"])),
+            "rpchat-session",
+        )
+        .to_string();
+        assert!(!text.contains("noctalia-"), "{text}");
+        assert!(!text.contains("unix (connect)"), "{text}");
+
+        // Audit mode logs the same reach without blocking it.
+        let audited = rules(serde_json::json!({
+            "version":1,"app":{"users":["work"]},
+            "guard":{"mode":"audit","shell":["noctalia"]}
+        }));
+        let text = text_of(
+            &render(&audited, &noctalia_hyprland_ctx(&["work"])),
+            "rpchat-session",
+        )
+        .to_string();
+        assert!(
+            text.contains("  audit unix (connect) peer=(label=rpchat-shell),\n"),
+            "{text}"
+        );
+        assert!(!text.contains("audit deny unix"), "{text}");
+    }
+
     /// `systemd-run` is confined, not denied: `--user` and `--scope` keep working (that is how
     /// `uwsm app` starts the shell) and only the system manager, which nothing confines, is out
     /// of reach.
@@ -2995,12 +3109,23 @@ garbage line\n";
                     println!("===== /etc/apparmor.d/{} =====\n{}", f.name, f.text);
                 }
             }
-            let out = std::process::Command::new(parser)
+            let out = match std::process::Command::new(parser)
                 .arg("-Q")
                 .arg("-K")
                 .args(&files)
                 .output()
-                .unwrap();
+            {
+                Ok(out) => out,
+                // The parser is installed and this profile may not run it: a developer box with
+                // this very guard enforcing, which denies `apparmor_parser` to the session. A
+                // red test here looks exactly like a syntax error and is not one, so say so and
+                // leave the checking to CI, which is unconfined.
+                Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+                    eprintln!("apparmor_parser is denied to this profile (the guard is enforcing); skipping");
+                    return;
+                }
+                Err(e) => panic!("cannot run {parser}: {e}"),
+            };
             assert!(
                 out.status.success(),
                 "apparmor_parser -Q failed for {mode}/{ipc}{}:\n{}\n{}",
