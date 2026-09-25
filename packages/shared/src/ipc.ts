@@ -5,7 +5,7 @@ import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo } 
 import type { CharacterSummary, InstalledPackRecord, MediaManifest, PackManifest, TagSummary } from './pack.js';
 import type { VoicePreview, VoiceStudioState } from './voice.js';
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
-import type { MemoryEntry, MemoryImportance } from './memory.js';
+import type { EmbeddingStatus, MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus, TelegramChat } from './senses.js';
 import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, SaveScriptInput, ScriptKind, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
@@ -226,8 +226,12 @@ export interface IpcApi {
     add(characterRef: string, text: string, options?: { tags?: string[]; importance?: MemoryImportance }): Promise<MemoryEntry>;
     update(entry: MemoryEntry): Promise<MemoryEntry>;
     remove(id: string): Promise<void>;
+    /** Ranked search over tags, words and meaning. Browsing is not a recall: it leaves the stats alone. */
+    search(characterRef: string, query: string, limit?: number): Promise<MemoryEntry[]>;
     /** Force a consolidation pass for a session now. */
     consolidate(sessionId: string): Promise<MemoryEntry[]>;
+    /** Whether semantic ranking is live, and what it uses; embeds one short text to find out. */
+    embeddingStatus(): Promise<EmbeddingStatus>;
   };
   /** Prompt windows: one question per window (see `PromptWindowPayload`). */
   prompts: {

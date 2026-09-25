@@ -41,14 +41,39 @@ export type { ProviderFactory } from './services/settings.js';
 export { TimerService } from './services/timers.js';
 export { MemoryService, memoryLine, parseJsonArray, normalizeTags, normalizeImportance, normalizeText, MEMORY_TEXT_MAX } from './services/memory.js';
 export type { AddMemoryOptions, ConsolidateOptions, MemoryServiceOptions } from './services/memory.js';
+export {
+  EmbeddingService,
+  cosine,
+  decodeVector,
+  embedText,
+  encodeVector,
+  EMBED_BATCH_SIZE,
+  EMBED_BACKLOG_PER_CALL,
+  SEMANTIC_DUPLICATE_FRACTION,
+  SEMANTIC_DUPLICATE_MIN_POOL,
+} from './services/embeddings.js';
+export type { Embedder, EmbeddingServiceOptions } from './services/embeddings.js';
 export { LibraryService, LIB_STATE_KEY, EMPTY_PRELUDE, buildPrelude, functionParams, functionSourceProblem, toLibFunction, unwrapFunctionSource } from './services/library.js';
 export type { LibraryPacks, LibraryTarget } from './services/library.js';
 export { LibHandler } from './handlers/lib.js';
 export { libraryLine } from './prompt.js';
 export { HistoryService, transcriptTokens, HISTORY_SUMMARY_KEY, HISTORY_STATE_SCOPE, COMPRESSION_MIN_MESSAGES } from './services/history.js';
 export type { CompressOptions, HistoryServiceOptions } from './services/history.js';
-export { rankMemories, scoreMemory, matchScore, tokenize, jaccard, promptOrder } from './memory/rank.js';
-export type { ScoredMemory } from './memory/rank.js';
+export {
+  rankMemories,
+  scoreMemory,
+  matchScore,
+  tokenize,
+  jaccard,
+  promptOrder,
+  semanticBoosts,
+  standardScores,
+  SEMANTIC_WEIGHT,
+  SEMANTIC_MATCH_Z,
+  SEMANTIC_FULL_Z,
+  SEMANTIC_MIN_POOL,
+} from './memory/rank.js';
+export type { RankContext, ScoredMemory } from './memory/rank.js';
 export { MemoryHandler, toSdkMemory, MEMORY_LIST_DEFAULT, MEMORY_LIST_MAX } from './handlers/memory.js';
 export type { TimerFireHandler } from './services/timers.js';
 

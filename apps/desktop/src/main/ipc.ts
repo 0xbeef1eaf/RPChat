@@ -13,6 +13,7 @@ import type {
   CommandTemplate,
   CommandTemplates,
   CreateSessionInput,
+  EmbeddingStatus,
   IpcApi,
   MediaWindowEvent,
   MemoryEntry,
@@ -40,7 +41,19 @@ export interface MemoryServiceLike {
   add(characterRef: string, text: string, options?: { tags?: string[]; importance?: number; source?: 'user' | 'character' | 'consolidation'; sessionId?: string }): Promise<MemoryEntry>;
   update(entry: Pick<MemoryEntry, 'id'> & Partial<Pick<MemoryEntry, 'text' | 'tags' | 'importance'>>): Promise<MemoryEntry>;
   remove(id: string): Promise<unknown>;
+  search(characterRef: string, query: string, limit?: number, options?: { touch?: boolean }): Promise<MemoryEntry[]>;
   consolidate(sessionId: string, options?: { auto?: boolean }): Promise<MemoryEntry[]>;
+}
+
+/** The embedding service surface main needs (`engine.embeddings`, added by @rp/core). */
+export interface EmbeddingServiceLike {
+  check(): Promise<EmbeddingStatus>;
+}
+
+export function embeddingsOf(engine: Engine): EmbeddingServiceLike {
+  const service = (engine as unknown as { embeddings?: EmbeddingServiceLike }).embeddings;
+  if (!service) throw new RpError('INTERNAL', 'The embedding service is not available in this build');
+  return service;
 }
 
 export function memoriesOf(engine: Engine): MemoryServiceLike {
@@ -267,7 +280,12 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       remove: async (_e, id) => {
         await memoriesOf(engine).remove(requireString(id, 'id'));
       },
+      search: (_e, characterRef, query, limit) =>
+        memoriesOf(engine).search(requireString(characterRef, 'characterRef'), requireString(query, 'query'), typeof limit === 'number' ? limit : 10, {
+          touch: false,
+        }),
       consolidate: (_e, sessionId) => memoriesOf(engine).consolidate(requireString(sessionId, 'sessionId'), { auto: false }),
+      embeddingStatus: () => embeddingsOf(engine).check(),
     },
     editor: {
       workspaceDir: async () => services.editor.workspaceDir,

@@ -1,7 +1,7 @@
 import type { AuditEntry, ChatMessage, ScheduledTimer, Session } from './chat.js';
 import type { Json, SessionId } from './ids.js';
 import type { InstalledPackRecord } from './pack.js';
-import type { MemoryEntry } from './memory.js';
+import type { MemoryEntry, MemoryVectorCache } from './memory.js';
 import type { EventSubscription } from './senses.js';
 import type { AppSettings } from './settings.js';
 
@@ -50,6 +50,12 @@ export interface Storage {
     get(id: string): Promise<MemoryEntry | undefined>;
     upsert(entry: MemoryEntry): Promise<void>;
     remove(id: string): Promise<void>;
+    removeForCharacter(characterRef: string): Promise<void>;
+  };
+  /** Cached memory embeddings, one record per character (see `MemoryVectorCache`). */
+  embeddings: {
+    get(characterRef: string): Promise<MemoryVectorCache | undefined>;
+    set(characterRef: string, cache: MemoryVectorCache): Promise<void>;
     removeForCharacter(characterRef: string): Promise<void>;
   };
   subscriptions: {

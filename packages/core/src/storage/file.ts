@@ -9,6 +9,7 @@ import type {
   InstalledPackRecord,
   Json,
   MemoryEntry,
+  MemoryVectorCache,
   ScheduledTimer,
   Session,
   Storage,
@@ -296,6 +297,18 @@ export class FileStorage implements Storage {
       }
     },
     removeForCharacter: async (characterRef) => this.unlink(this.memoriesFile(characterRef)),
+  };
+
+  // ---- memory embeddings (one file per character) -------------------------
+
+  private embeddingsFile(characterRef: string): string {
+    return path.join('embeddings', `${fileNameFor(characterRef)}.json`);
+  }
+
+  readonly embeddings: Storage['embeddings'] = {
+    get: async (characterRef) => this.load<MemoryVectorCache | undefined>(this.embeddingsFile(characterRef), () => undefined),
+    set: async (characterRef, cache) => this.save(this.embeddingsFile(characterRef), cache),
+    removeForCharacter: async (characterRef) => this.unlink(this.embeddingsFile(characterRef)),
   };
 
   // ---- event subscriptions ------------------------------------------------

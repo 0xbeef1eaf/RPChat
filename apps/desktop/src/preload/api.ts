@@ -29,7 +29,7 @@ export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] 
   settings: ['get', 'managed', 'update', 'testProvider', 'listModels', 'testCommand', 'defaultCommands', 'telegramChats'],
   audit: ['list'],
   sandbox: ['run', 'cancel'],
-  memories: ['list', 'add', 'update', 'remove', 'consolidate'],
+  memories: ['list', 'add', 'update', 'remove', 'search', 'consolidate', 'embeddingStatus'],
   prompts: ['pending'],
   ui: ['respondPrompt'],
   system: [

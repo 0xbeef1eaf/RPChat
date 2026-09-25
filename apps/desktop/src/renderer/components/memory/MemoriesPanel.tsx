@@ -7,6 +7,13 @@ import { closeMemories, reportError, toast } from '../../store/actions';
 import { useAppState } from '../../store/store';
 import { ConfirmDialog, Modal } from '../common/Modal';
 
+/** Shortest query worth asking the engine to rank; below it the local filter is the whole answer. */
+const SEMANTIC_QUERY_MIN = 3;
+
+/** How many ranked hits to offer beside the filtered list, and how long to wait for typing to settle. */
+const SEMANTIC_HITS = 5;
+const SEMANTIC_DEBOUNCE_MS = 250;
+
 const SOURCE_LABEL: Record<MemoryEntry['source'], { text: string; cls: string; hint: string }> = {
   character: { text: 'character', cls: 'badge badge-accent', hint: 'Remembered by the character during a chat' },
   consolidation: { text: 'auto', cls: 'badge', hint: 'Extracted automatically from a conversation' },
@@ -21,6 +28,7 @@ export function MemoriesPanel() {
   const [entries, setEntries] = useState<MemoryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [related, setRelated] = useState<MemoryEntry[]>([]);
   const [forgetting, setForgetting] = useState<MemoryEntry | null>(null);
   const canForget = useAppState((x) => x.restrictions.allowDeleteMemories);
   const [consolidating, setConsolidating] = useState(false);
@@ -52,10 +60,43 @@ export function MemoriesPanel() {
 
   const visible = useMemo(() => (entries ? sortMemories(filterMemories(entries, query)) : []), [entries, query]);
 
+  // The box above filters on the words that are there; this asks the engine what is *about* the
+  // same thing, which is the only way a memory that never says "sister" answers a search for one.
+  useEffect(() => {
+    const q = query.trim();
+    if (!characterRef || q.length < SEMANTIC_QUERY_MIN) {
+      setRelated([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void api()
+        .memories.search(characterRef, q, SEMANTIC_HITS)
+        .then((hits) => {
+          if (!cancelled) setRelated(hits);
+        })
+        .catch(() => {
+          if (!cancelled) setRelated([]);
+        });
+    }, SEMANTIC_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [characterRef, query, version]);
+
+  const alsoRelated = useMemo(() => {
+    const shown = new Set(visible.map((e) => e.id));
+    return related.filter((e) => !shown.has(e.id));
+  }, [related, visible]);
+
   if (!target || !characterRef) return null;
   const name = character?.name ?? characterRef.split('/').pop() ?? 'Character';
 
-  const replace = (entry: MemoryEntry) => setEntries((list) => (list ? list.map((e) => (e.id === entry.id ? entry : e)) : list));
+  const replace = (entry: MemoryEntry) => {
+    setEntries((list) => (list ? list.map((e) => (e.id === entry.id ? entry : e)) : list));
+    setRelated((list) => list.map((e) => (e.id === entry.id ? entry : e)));
+  };
 
   const save = async (entry: MemoryEntry) => {
     try {
@@ -71,6 +112,7 @@ export function MemoriesPanel() {
     try {
       await api().memories.remove(entry.id);
       setEntries((list) => (list ? list.filter((e) => e.id !== entry.id) : list));
+      setRelated((list) => list.filter((e) => e.id !== entry.id));
     } catch (err) {
       reportError('Could not forget memory', err);
     }
@@ -104,8 +146,8 @@ export function MemoriesPanel() {
   return (
     <Modal title={`${name}'s memories`} onClose={closeMemories}>
       <p className="muted small">
-        What {name} remembers about you across sessions. Memories are ranked into the prompt by importance, recency and relevance; edit
-        or forget anything here.
+        What {name} remembers about you across sessions. Memories are ranked into the prompt by importance, recency and how closely they
+        match the conversation — in wording and, with an embedder configured, in meaning. Edit or forget anything here.
       </p>
       <div className="row">
         <input
@@ -132,13 +174,21 @@ export function MemoriesPanel() {
         </div>
       ) : entries.length === 0 ? (
         <p className="muted">Nothing remembered yet. Memories form as you chat, or add one above.</p>
-      ) : visible.length === 0 ? (
+      ) : visible.length === 0 && alsoRelated.length === 0 ? (
         <p className="muted">No memories match “{query}”.</p>
       ) : (
         <div className="memory-list">
           {visible.map((e) => (
             <MemoryRow key={e.id} entry={e} onSave={save} onForget={canForget ? () => setForgetting(e) : undefined} />
           ))}
+          {alsoRelated.length > 0 ? (
+            <>
+              <p className="muted small">Not a word match, but about the same thing:</p>
+              {alsoRelated.map((e) => (
+                <MemoryRow key={e.id} entry={e} onSave={save} onForget={canForget ? () => setForgetting(e) : undefined} />
+              ))}
+            </>
+          ) : null}
           <p className="muted small">
             {visible.length} of {entries.length}
           </p>

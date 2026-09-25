@@ -8,6 +8,7 @@ import { IMAGE_OMITTED_TEXT } from './common.js';
 import {
   OpenAiCompatibleProvider,
   fromDataUrl,
+  normalizeVector,
   fromOpenAiFinishReason,
   fromOpenAiMessage,
   fromOpenAiMessages,
@@ -338,5 +339,55 @@ describe('OpenAiCompatibleProvider.chat (fake client)', () => {
     expect(err).toBeInstanceOf(RpError);
     expect((err as RpError).code).toBe('LLM_PROVIDER');
     expect((err as RpError).details).toMatchObject({ status: 401 });
+  });
+});
+
+describe('OpenAiCompatibleProvider.embed (fake client)', () => {
+  function embeddingClient(opts: { data?: Array<{ index: number; embedding: number[] }>; throws?: unknown }): {
+    client: OpenAI;
+    received: Array<{ params: unknown; options: unknown }>;
+  } {
+    const received: Array<{ params: unknown; options: unknown }> = [];
+    const client = {
+      embeddings: {
+        async create(params: unknown, options: unknown) {
+          received.push({ params, options });
+          if (opts.throws) throw opts.throws;
+          return { model: 'embed-1', data: opts.data ?? [] };
+        },
+      },
+    } as unknown as OpenAI;
+    return { client, received };
+  }
+
+  it('scales every vector to unit length', () => {
+    expect(normalizeVector([3, 4])).toEqual([0.6, 0.8]);
+    expect(normalizeVector([0, 0])).toEqual([0, 0]);
+  });
+
+  it('pairs vectors with texts by index, not by arrival order', async () => {
+    const { client, received } = embeddingClient({
+      data: [
+        { index: 1, embedding: [0, 2] },
+        { index: 0, embedding: [3, 0] },
+      ],
+    });
+    const provider = new OpenAiCompatibleProvider(config, client);
+    const response = await provider.embed({ model: 'embed-1', texts: ['first', 'second'] });
+    expect(response).toEqual({ model: 'embed-1', vectors: [[1, 0], [0, 1]] });
+    expect(received[0]!.params).toEqual({ model: 'embed-1', input: ['first', 'second'] });
+  });
+
+  it('refuses a reply that does not answer every text', async () => {
+    const provider = new OpenAiCompatibleProvider(config, embeddingClient({ data: [{ index: 0, embedding: [1] }] }).client);
+    await expect(provider.embed({ model: 'embed-1', texts: ['a', 'b'] })).rejects.toMatchObject({ code: 'LLM_PROVIDER' });
+  });
+
+  it('asks nothing for an empty batch, and maps API errors', async () => {
+    const { client, received } = embeddingClient({ throws: new APIError(404, { error: { message: 'no such model' } }, 'Not Found', undefined) });
+    const provider = new OpenAiCompatibleProvider(config, client);
+    expect(await provider.embed({ model: 'embed-1', texts: [] })).toEqual({ model: 'embed-1', vectors: [] });
+    expect(received).toHaveLength(0);
+    await expect(provider.embed({ model: 'embed-1', texts: ['a'] })).rejects.toMatchObject({ code: 'LLM_PROVIDER' });
   });
 });

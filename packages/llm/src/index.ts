@@ -6,7 +6,7 @@ import { OpenAiCompatibleProvider } from './providers/openai-compatible.js';
 
 export { AnthropicProvider, MockProvider, OpenAiCompatibleProvider };
 export type { MockProviderOptions, MockToolCall, MockTurn } from './providers/mock.js';
-export { chunkText } from './providers/mock.js';
+export { MOCK_EMBEDDING_DIMS, chunkText, mockEmbedding } from './providers/mock.js';
 export {
   ANTHROPIC_DEFAULT_MAX_TOKENS,
   AnthropicStreamReducer,
@@ -21,6 +21,7 @@ export {
 } from './providers/anthropic.js';
 export {
   OPENAI_PLACEHOLDER_API_KEY,
+  normalizeVector,
   OpenAiStreamReducer,
   createOpenAiClient,
   fromDataUrl,

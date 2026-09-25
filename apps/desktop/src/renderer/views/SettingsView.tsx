@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react';
-import { CHAT_ZOOM_MAX, CHAT_ZOOM_MIN, CHAT_ZOOM_STEP, DEFAULT_RUN_LIMITS, UNLIMITED, type AppSettings, type ProviderConfig, type RunLimits } from '@rp/shared';
+import {
+  CHAT_ZOOM_MAX,
+  CHAT_ZOOM_MIN,
+  CHAT_ZOOM_STEP,
+  DEFAULT_RUN_LIMITS,
+  UNLIMITED,
+  type AppSettings,
+  type EmbeddingStatus,
+  type ProviderConfig,
+  type RunLimits,
+} from '@rp/shared';
 import { api } from '../api';
 import { BrowserSection } from '../components/settings/BrowserSection';
 import { CommandsSection } from '../components/settings/CommandsSection';
@@ -130,6 +140,107 @@ function MediaLimitFields({ settings }: { settings: AppSettings }) {
         ))}
       </div>
     </div>
+  );
+}
+
+/** One line of plain English for what `memories.embeddingStatus()` came back with. */
+function embeddingStatusText(status: EmbeddingStatus): string {
+  if (status.problem) return `Keyword ranking only — ${status.problem}`;
+  const where = status.source === 'local' ? 'on this machine' : 'through the provider';
+  return `Ranking by meaning ${where}: ${status.label ?? 'embedder'}${status.dims ? `, ${status.dims} dimensions` : ''}.`;
+}
+
+/**
+ * `settings.memory`: where the vectors behind semantic recall come from.
+ *
+ * The model has to be named because an embedding model id cannot be guessed from a chat one, and
+ * naming the wrong one fails in a way that is invisible from the chat window — every recall simply
+ * goes back to keywords. Hence the check button: one short embedding is the only honest test.
+ */
+function SemanticMemoryFields({ settings }: { settings: AppSettings }) {
+  const managed = useManaged('memory.semanticRanking');
+  const [status, setStatus] = useState<EmbeddingStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [model, setModel] = useState(settings.memory.embeddingModel ?? '');
+  const patchMemory = (patch: Partial<AppSettings['memory']>) => void patchSettings({ memory: { ...settings.memory, ...patch } });
+  const check = async () => {
+    setChecking(true);
+    try {
+      setStatus(await api().memories.embeddingStatus());
+    } catch (err) {
+      reportError('Could not check the embedder', err);
+    } finally {
+      setChecking(false);
+    }
+  };
+  const commitModel = () => {
+    const next = model.trim();
+    if (next !== (settings.memory.embeddingModel ?? '')) {
+      setStatus(null);
+      patchMemory({ embeddingModel: next.length > 0 ? next : undefined });
+    }
+  };
+  return (
+    <>
+      <div className="field">
+        <span className="field-label">
+          Recall by meaning
+          <ManagedBadge show={managed} />
+        </span>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={settings.memory.semanticRanking}
+            disabled={managed}
+            onChange={(e) => patchMemory({ semanticRanking: e.target.checked })}
+          />
+          Rank memories with an embedding model as well as by keywords
+        </label>
+        <span className="field-hint">
+          Lets "how is your sister?" reach a memory that only ever says her name. Without an embedder nothing changes — memories are ranked by their words and
+          tags as before.
+        </span>
+      </div>
+      <div className="field">
+        <label htmlFor="mem-embed-provider">Embeddings provider</label>
+        <select
+          id="mem-embed-provider"
+          value={settings.memory.embeddingProviderId ?? ''}
+          disabled={!settings.memory.semanticRanking}
+          onChange={(e) => {
+            setStatus(null);
+            patchMemory({ embeddingProviderId: e.target.value || undefined });
+          }}
+        >
+          <option value="">Default provider</option>
+          {settings.providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+        <span className="field-hint">Anthropic serves no embeddings endpoint; point this at a local server (Ollama, LM Studio) or an OpenAI-compatible one.</span>
+      </div>
+      <div className="field">
+        <label htmlFor="mem-embed-model">Embedding model</label>
+        <input
+          id="mem-embed-model"
+          type="text"
+          value={model}
+          placeholder="nomic-embed-text"
+          disabled={!settings.memory.semanticRanking}
+          onChange={(e) => setModel(e.target.value)}
+          onBlur={commitModel}
+          onKeyDown={(e) => e.key === 'Enter' && commitModel()}
+        />
+        <span className="field-hint">
+          <button type="button" className="btn btn-sm" onClick={() => void check()} disabled={checking || !settings.memory.semanticRanking}>
+            {checking ? 'Checking…' : 'Check embedder'}
+          </button>{' '}
+          {status ? embeddingStatusText(status) : 'Changing the model re-embeds every memory in the background.'}
+        </span>
+      </div>
+    </>
   );
 }
 
@@ -394,6 +505,7 @@ export function SettingsView() {
           <NumberField id="mem-every" label="Consolidate every N turns" path="memory.consolidateEveryTurns" value={settings.memory.consolidateEveryTurns} min={1} onCommit={(v) => patchSettings({ memory: { ...settings.memory, consolidateEveryTurns: Math.round(v) } })} />
           <NumberField id="mem-max" label="Max memories per character" path="memory.maxEntriesPerCharacter" value={settings.memory.maxEntriesPerCharacter} min={10} step={10} onCommit={(v) => patchSettings({ memory: { ...settings.memory, maxEntriesPerCharacter: Math.round(v) } })} />
           <NumberField id="mem-budget" label="Prompt budget (tokens)" path="memory.promptBudgetTokens" value={settings.memory.promptBudgetTokens} min={100} step={100} onCommit={(v) => patchSettings({ memory: { ...settings.memory, promptBudgetTokens: Math.round(v) } })} />
+          <SemanticMemoryFields settings={settings} />
         </div>
       </section>
 

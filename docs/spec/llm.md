@@ -24,6 +24,13 @@ export const RUN_ACTION_TOOL: ToolDefinition;   // name RUN_ACTION_TOOL_NAME, sc
 - Streaming: use SDK streaming; call `onTextDelta` as text arrives; call `onToolUseStart` when a tool call begins and `onToolUse` with parsed input once complete. Always resolve with the full `LlmChatResponse`.
 - `signal` aborts the request → reject with `RpError('LLM_ABORTED')`. Other errors → `RpError('LLM_PROVIDER', message, { status, body })`.
 - `supportsTools === false` in config → do not send tools; core will use fenced fallback.
+- `embed(request)` is optional on `LlmProvider` and implemented by `OpenAiCompatibleProvider` only:
+  `POST /v1/embeddings` (OpenAI, Ollama, LM Studio, llama.cpp). The reply is sorted by `index` before
+  use — the spec does not promise request order, and a silent mispairing would be invisible — the
+  vector count is checked against the text count, and every vector is scaled to unit length
+  (`normalizeVector`) so a dot product is a cosine. Anthropic publishes no embeddings endpoint and
+  leaves the method out; `@rp/core` then falls back to an on-device embedder or to keyword ranking
+  (docs/spec/memory.md).
 - `request.responseFormat` → OpenAI-compatible `response_format` (`json_object`, or `json_schema` sent
   `strict` so the server constrains the tokens). Anthropic and the mock provider ignore it. This is what
   keeps a local reasoning model from thinking past `maxTokens` without ever answering.
@@ -44,7 +51,7 @@ export const RUN_ACTION_TOOL: ToolDefinition;   // name RUN_ACTION_TOOL_NAME, sc
 new MockProvider(config, { script: MockTurn[] })
 type MockTurn = { text?: string; toolCalls?: Array<{ name: string; input: unknown }>; stopReason?: StopReason; delayMs?: number }
 ```
-Each `chat()` consumes the next turn, streams the text in ~3 chunks through handlers, records requests in `provider.requests` for assertions. Also support `respond: (req) => MockTurn` function form.
+Each `chat()` consumes the next turn, streams the text in ~3 chunks through handlers, records requests in `provider.requests` for assertions. Also support `respond: (req) => MockTurn` function form. `embed()` records into `provider.embedRequests` and answers with `mockEmbedding` (a hashed bag of words) unless the test passes `embed: (text) => number[]` — which is how a test makes two differently-worded texts mean the same thing.
 
 ## Tests
 

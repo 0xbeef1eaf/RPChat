@@ -6,6 +6,7 @@ import type {
   InstalledPackRecord,
   Json,
   MemoryEntry,
+  MemoryVectorCache,
   ScheduledTimer,
   Session,
   SessionId,
@@ -26,6 +27,7 @@ export class MemoryStorage implements Storage {
   private readonly stateRecords = new Map<string, Map<string, Json>>();
   private readonly timerRecords = new Map<string, ScheduledTimer>();
   private readonly memoryRecords = new Map<string, MemoryEntry>();
+  private readonly embeddingRecords = new Map<string, MemoryVectorCache>();
   private readonly subscriptionRecords = new Map<string, EventSubscription>();
   private readonly auditEntries: AuditEntry[] = [];
 
@@ -132,6 +134,16 @@ export class MemoryStorage implements Storage {
     },
     removeForCharacter: async (characterRef) => {
       for (const [id, m] of this.memoryRecords) if (m.characterRef === characterRef) this.memoryRecords.delete(id);
+    },
+  };
+
+  readonly embeddings: Storage['embeddings'] = {
+    get: async (characterRef) => clone(this.embeddingRecords.get(characterRef)),
+    set: async (characterRef, cache) => {
+      this.embeddingRecords.set(characterRef, clone(cache));
+    },
+    removeForCharacter: async (characterRef) => {
+      this.embeddingRecords.delete(characterRef);
     },
   };
 

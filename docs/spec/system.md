@@ -608,7 +608,7 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
 | `permissions` | `permissions.functionAllow.<module>`, `permissions.functionAllow.<module>.<function>` | booleans per module or per function; a function entry wins over its module's, an unlisted key stays the user's choice. `moduleAllow` is the pre-function name of the same map and is still read (module keys only), folded into `functionAllow` by `parsePolicy`. Pinning a module takes its functions with it: `applyPolicy` drops the user's `<module>.<function>` entries under a pinned module, which a function entry would otherwise outrank. |
 | `web` | `web.allowlist` | string[] |
 | `desktop` | `desktop.launchAllowlist` | string[] |
-| `memory` | `memory.enabled`, `memory.consolidateEveryTurns`, `memory.maxEntriesPerCharacter`, `memory.promptBudgetTokens` | the last two take `-1` for no limit; `consolidateEveryTurns` is a cadence and does not |
+| `memory` | `memory.enabled`, `memory.semanticRanking`, `memory.consolidateEveryTurns`, `memory.maxEntriesPerCharacter`, `memory.promptBudgetTokens` | the last two take `-1` for no limit; `consolidateEveryTurns` is a cadence and does not |
 | `senses` | `senses.includeInPrompt`, `senses.watchDirs`, `senses.calendarSources` | |
 | `displayBackend` | `displayBackend` | `auto` \| `electron` \| `hyprland` |
 | `updates` | `updates.automatic`, `updates.enabled` (`allowDowngrade` accepted, never managed) | booleans. `enabled: false` switches update checks off entirely (`UpdateStatus.state === 'disabled'`, token field hidden, `automatic` forced off); `automatic` pins the background-check toggle; `allowDowngrade: true` lets the daemon's `apply-update` install an older version (daemon-enforced, default false). |
