@@ -477,11 +477,36 @@ The honest answer is "several things, none of them absolute", and the app says w
 5. **The session guard takes the ways out away.** In `enforce` mode a locked policy also denies
    the confined sessions everything under `/etc/rpchat`, `/var/lib/rpchat` and `/run/rpchat` —
    reading included, because in code mode the secret is in there — and the binaries that would
-   start a shell outside the confinement or undo it: `run0`, `systemd-run`, `machinectl`,
-   `pkexec`, `chattr`, `apparmor_parser`, `aa-teardown`. **`sudo` is deliberately left alone**:
-   what `sudo` starts is its child, so it stays inside the profile and gains nothing. `run0` and
-   `systemd-run` are the interesting ones, because they ask systemd to start the shell and it is
-   born unconfined.
+   start a shell outside the confinement or undo it: `run0`, `machinectl`, `pkexec`, `chattr`,
+   `apparmor_parser`, `aa-teardown`. **`sudo` is deliberately left alone**: what `sudo` starts is
+   its child, so it stays inside the profile and gains nothing. `run0` is the interesting one,
+   because it asks the system manager to start the shell and PID 1 is unconfined.
+
+   **`systemd-run` looks like `run0` and is not.** It has three halves and only one of them is an
+   escape, so it gets a profile — `rpchat-systemd-run` — instead of a refusal:
+
+   | how it is called | who runs the command | confined? |
+   | --- | --- | --- |
+   | `systemd-run --user …` | `systemd --user` | yes — the guard's own `user@<uid>.service.d` drop-in confines the user manager, so what it starts inherits `rpchat-session` |
+   | `systemd-run --scope …` | `systemd-run` itself, after registering the scope | yes — it `exec`s in its own process, so the command inherits whatever confined it |
+   | `systemd-run …` | the **system** manager | **no** — PID 1 is unconfined |
+
+   AppArmor cannot read argv, so the split is made by transport: `rpchat-systemd-run` denies the
+   system bus and PID 1's private socket, which only the third form uses. Everything it launches
+   goes back through the ordinary exec table, so `systemd-run --scope -- <shell>` still lands the
+   shell in `rpchat-shell`.
+
+   This matters more than it sounds. `uwsm app -- <command>` is `systemd-run --user --scope`
+   underneath, and that is how a systemd-managed Hyprland, sway or niri session starts its bar,
+   its shell and everything on a keybind. While the binary was denied outright, `enforce` meant
+   the shell simply never launched — whereas a wallpaper daemon started from XDG autostart (a
+   real unit, no `systemd-run` in the path) came up fine. The desktop lost its bar and kept its
+   wallpaper, which reads as the guard breaking the shell rather than blocking an escape.
+
+   A path listed in `guard.allowBinaries` overrides whatever rule the guard would otherwise write
+   for it — the deny, the `px` into a sub-profile, all of it. It has to: two exec rules for one
+   path is `profile has merged rule with conflicting x modifiers`, which is not a conflict
+   AppArmor resolves but a parse error that leaves the whole guard unloaded.
 6. **The service refuses to stop.** A drop-in with `RefuseManualStop=yes` and `Restart=always`
    turns `systemctl stop rpchatd` into a refusal and brings a killed daemon back.
 7. **The app fails closed.** It keeps its own copy of a locked policy. Once it has seen one it

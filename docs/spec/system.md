@@ -590,7 +590,7 @@ build a file the daemon refuses.
 | `lock.selfHeal` | boolean, default `true` | Rewrite the policy file from the seal when it changes. |
 | `lock.immutable` | boolean, default `true` | `FS_IMMUTABLE_FL` on the policy, the seal and its mirrors. |
 | `lock.refuseManualStop` | boolean, default `true` | The `RefuseManualStop=yes` drop-in for the unit. |
-| `lock.denyEscapes` | boolean, default `true` | With the guard enforcing, deny `run0`, `systemd-run`, `machinectl`, `pkexec`, `chattr`, `apparmor_parser`, `aa-teardown`. `sudo` stays: its children stay confined. |
+| `lock.denyEscapes` | boolean, default `true` | With the guard enforcing, deny `run0`, `machinectl`, `pkexec`, `chattr`, `apparmor_parser`, `aa-teardown`, and confine `systemd-run` in `rpchat-systemd-run` (no system bus, so `--user` and `--scope` work and the system manager is out of reach). `sudo` stays: its children stay confined. A path in `guard.allowBinaries` overrides all of this for that path. |
 
 A `lock` block also makes `PolicyFile::guard_rules()` set `protectPolicy` (every path the seal
 lives in is denied to the guarded sessions, read as well as write) and `denyEscapes`. None of the

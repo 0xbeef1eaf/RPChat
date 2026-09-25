@@ -45,11 +45,12 @@ pub const DEFAULT_APP_EXEC: &str = "/opt/rpchat/current/rpchat";
 /// AppArmor's securityfs mount: present iff the LSM is active.
 pub const APPARMOR_FS: &str = "/sys/kernel/security/apparmor";
 /// Profile names, in load order.
-pub const PROFILE_NAMES: [&str; 5] = [
+pub const PROFILE_NAMES: [&str; 6] = [
     "rpchat-session",
     "rpchat-app",
     "rpchat-shell",
     "rpchat-compositor",
+    "rpchat-systemd-run",
     "rpchat-login",
 ];
 /// Login helpers the guard attaches its hats to when `guard.loginHelpers` is absent (those
@@ -372,16 +373,18 @@ pub const SEALED_PATHS: [&str; 6] = [
 /// The binaries that would put a shell outside this profile, or undo the lock from inside it.
 ///
 /// `sudo` is deliberately **not** here: a `sudo` child is a child, so it stays in the profile and
-/// gains nothing. `run0`, `systemd-run` and `machinectl` are different — they ask PID 1 (or the
-/// machine manager) to start the shell, so it is born outside the confinement, which is exactly
-/// the hole `sudo` does not open. `chattr` and the AppArmor tools are here because they undo the
-/// other two layers. Both spellings of each path are listed: distributions disagree about
-/// `/usr/bin` and `/usr/sbin`, and a rule for a path that does not exist costs nothing.
-pub const ESCAPE_BINARIES: [&str; 14] = [
+/// gains nothing. `run0` and `machinectl` are different — they ask PID 1 (or the machine manager)
+/// to start the shell, so it is born outside the confinement, which is exactly the hole `sudo`
+/// does not open. `chattr` and the AppArmor tools are here because they undo the other two
+/// layers. Both spellings of each path are listed: distributions disagree about `/usr/bin` and
+/// `/usr/sbin`, and a rule for a path that does not exist costs nothing.
+///
+/// `systemd-run` is **not** here either, and it used to be. See [`SYSTEMD_RUN_BINARIES`]: only
+/// its system-manager half is an escape, and denying the binary outright broke every
+/// uwsm-launched desktop.
+pub const ESCAPE_BINARIES: [&str; 12] = [
     "/usr/bin/run0",
     "/bin/run0",
-    "/usr/bin/systemd-run",
-    "/bin/systemd-run",
     "/usr/bin/machinectl",
     "/usr/bin/pkexec",
     "/bin/pkexec",
@@ -393,6 +396,37 @@ pub const ESCAPE_BINARIES: [&str; 14] = [
     "/usr/bin/aa-teardown",
     "/usr/sbin/aa-teardown",
 ];
+
+/// `systemd-run`, which gets its own profile ([`SYSTEM_MANAGER_TRANSPORTS`]) rather than a deny.
+///
+/// It looks like `run0` and it is not. Which half runs the command decides:
+///
+/// - `systemd-run --user` asks `systemd --user` to start it — and the user manager is itself
+///   confined, by the `user@<uid>.service.d` drop-in this guard writes. What it starts is exec'd
+///   from inside `rpchat-session` and inherits it. Nothing is gained.
+/// - `systemd-run --scope` does not ask anyone: it registers the scope over D-Bus, moves itself
+///   into the new cgroup and `exec`s the command in its own process, so the command inherits
+///   whatever confined `systemd-run`.
+/// - `systemd-run` with neither flag asks the **system** manager, and PID 1 is unconfined. That
+///   one is a real escape, and it is the one this profile takes away.
+///
+/// AppArmor cannot read argv, so the split is made by transport instead: the profile denies the
+/// system bus and the system manager's private socket, which is how the system-manager half
+/// talks and the other two halves never do.
+///
+/// The cost of getting this wrong was not theoretical. `uwsm app -- <shell>` — how a
+/// systemd-managed Hyprland, sway or niri session starts everything, including the bar and the
+/// wallpaper daemon — is `systemd-run --user --scope` underneath. Denying the binary meant the
+/// shell never launched under `enforce`, while a wallpaper daemon started from XDG autostart
+/// (a real unit, no `systemd-run`) came up fine: the desktop lost its bar and kept its
+/// wallpaper, which reads as "the guard broke the shell" rather than "the guard blocked an
+/// escape".
+pub const SYSTEMD_RUN_BINARIES: [&str; 2] = ["/usr/bin/systemd-run", "/bin/systemd-run"];
+
+/// How `systemd-run` reaches the **system** manager: the system bus and PID 1's private socket.
+/// Denied inside `rpchat-systemd-run`, so `--user` and `--scope` work and the escape does not.
+pub const SYSTEM_MANAGER_TRANSPORTS: [&str; 2] =
+    ["@{run}/dbus/system_bus_socket", "@{run}/systemd/private"];
 
 /// `audit <rule>` in audit mode (allowed, logged), `audit deny <rule>` in enforce mode.
 fn guarded(mode: GuardMode, rule: &str) -> String {
@@ -482,10 +516,20 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
             deny_all.insert((*p).to_string());
         }
     }
+    // `guard.allowBinaries` is the admin saying "this one leaves the confinement", so it wins
+    // over every rule this function would otherwise write for the same path. It has to: two
+    // exec rules for one path with different transitions is not a conflict AppArmor resolves,
+    // it is `profile has merged rule with conflicting x modifiers` and the whole guard fails to
+    // load — a policy the settings UI happily accepts, turning the guard off at the next login.
+    // (A `deny` and a `ux` for one path do parse, but then the deny silently wins and the
+    // escape hatch does nothing, which is the same trap wearing a quieter face.)
+    let unconfined: BTreeSet<&str> = rules.allow_binaries.iter().map(String::as_str).collect();
     let mut deny_exec: BTreeSet<String> = BTreeSet::new();
     if rules.deny_escapes {
         for b in ESCAPE_BINARIES {
-            deny_exec.insert((*b).to_string());
+            if !unconfined.contains(b) {
+                deny_exec.insert((*b).to_string());
+            }
         }
     }
     deny_sockets.extend(shell_sockets.iter().cloned());
@@ -494,20 +538,37 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     let shell_profile = rules.wallpaper && !ctx.shells.is_empty();
     let compositor_profile =
         rules.compositor_ipc != CompositorIpc::Allow && !ctx.compositors.is_empty();
+    // `systemd-run` keeps working, in its own profile, whenever escapes are denied at all.
+    let systemd_run_profile =
+        rules.deny_escapes && SYSTEMD_RUN_BINARIES.iter().any(|b| !unconfined.contains(b));
 
     // --- exec transitions shared by session, shell and compositor -------------------
     let mut exits = String::new();
-    exits.push_str(&format!("  {} px -> rpchat-app,\n", ctx.app_exec));
+    let exit = |path: &str, rule: String, exits: &mut String| {
+        if !unconfined.contains(path) {
+            exits.push_str(&rule);
+        }
+    };
+    exit(
+        &ctx.app_exec,
+        format!("  {} px -> rpchat-app,\n", ctx.app_exec),
+        &mut exits,
+    );
     if shell_profile {
         for b in ctx.shells.iter().flat_map(|s| s.binaries.iter()) {
-            exits.push_str(&format!("  {b} px -> rpchat-shell,\n"));
+            exit(b, format!("  {b} px -> rpchat-shell,\n"), &mut exits);
         }
     }
     if compositor_profile {
         for c in &ctx.compositors {
             for b in c.binaries {
-                exits.push_str(&format!("  {b} px -> rpchat-compositor,\n"));
+                exit(b, format!("  {b} px -> rpchat-compositor,\n"), &mut exits);
             }
+        }
+    }
+    if systemd_run_profile {
+        for b in SYSTEMD_RUN_BINARIES {
+            exit(b, format!("  {b} px -> rpchat-systemd-run,\n"), &mut exits);
         }
     }
     for b in &rules.allow_binaries {
@@ -531,6 +592,26 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     if rules.protect_app {
         guard_rules.push_str(&guarded(mode, "signal (send) peer=rpchat-app"));
         guard_rules.push_str(&guarded(mode, "ptrace (trace) peer=rpchat-app"));
+    }
+
+    // The same rules for a profile whose catch-all is `px -> rpchat-session` rather than `ix`.
+    // Two differences, both forced by the parser: the sealed paths lose the `x` and the denied
+    // binaries are dropped entirely, because an exec-shaped rule for a path the catch-all sends
+    // through `px` is `conflicting x modifiers` and the profile does not load. Nothing is given
+    // away — every exec from such a profile lands in rpchat-session, which denies both.
+    let mut relay_rules = String::new();
+    for p in &deny_all {
+        relay_rules.push_str(&guarded(mode, &format!("{p} rwkl")));
+    }
+    for s in &deny_sockets {
+        relay_rules.push_str(&guarded(mode, &format!("{s} rw")));
+    }
+    for f in &deny_files {
+        relay_rules.push_str(&guarded(mode, &format!("{f} wl")));
+    }
+    if rules.protect_app {
+        relay_rules.push_str(&guarded(mode, "signal (send) peer=rpchat-app"));
+        relay_rules.push_str(&guarded(mode, "ptrace (trace) peer=rpchat-app"));
     }
 
     let mut files = Vec::new();
@@ -625,6 +706,32 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         files.push(ProfileFile {
             name: "rpchat-compositor",
             text: comp,
+        });
+    }
+
+    // rpchat-systemd-run: `systemd-run` itself, confined rather than denied. It keeps the
+    // session's own guarded rules (it is still the session running it), sends whatever it
+    // launches back through the same exec table — so `systemd-run --scope -- <shell>` still
+    // lands the shell in rpchat-shell — and loses only the way to the *system* manager, which
+    // is the half that would start something PID 1 owns and AppArmor does not confine.
+    if systemd_run_profile {
+        let mut sdrun = String::new();
+        sdrun.push_str(&format!(
+            "profile rpchat-systemd-run {session_flags} {{\n{ALLOW_CLASSES}  /{{,**}} mrwlk,\n  /{{,**}} px -> rpchat-session,\n"
+        ));
+        sdrun.push_str(&exits);
+        sdrun.push_str(&relay_rules);
+        for t in SYSTEM_MANAGER_TRANSPORTS {
+            sdrun.push_str(&guarded(mode, &format!("{t} rw")));
+        }
+        // The socket rules are what actually bite; the dbus rule is the same denial spelled in
+        // the class that mediates it, for the case where the bus lives somewhere else
+        // (`DBUS_SYSTEM_BUS_ADDRESS`) and the path rules therefore miss.
+        sdrun.push_str(&guarded(mode, "dbus bus=system"));
+        sdrun.push_str("}\n");
+        files.push(ProfileFile {
+            name: "rpchat-systemd-run",
+            text: sdrun,
         });
     }
 
@@ -743,6 +850,9 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     }
     if compositor_profile {
         residual.push("compositor plugins run inside the compositor and are not confined; only its child processes are".to_string());
+    }
+    if systemd_run_profile {
+        residual.push("systemd-run keeps working for --user and --scope (what uwsm app uses to start the shell); only the system manager, which PID 1 owns and no profile confines, is out of reach".to_string());
     }
     residual.push(
         "the display sockets (Wayland, X11), the session bus and the audio sockets are never guarded: the session could not run without them".to_string(),
@@ -1829,7 +1939,6 @@ pub mod tests {
         // The binaries that would start a shell outside this profile, or undo the lock.
         for binary in [
             "/usr/bin/run0",
-            "/usr/bin/systemd-run",
             "/usr/bin/machinectl",
             "/usr/bin/pkexec",
             "/usr/bin/chattr",
@@ -1840,6 +1949,9 @@ pub mod tests {
                 "{binary}:\n{session}"
             );
         }
+        // `systemd-run` is confined instead of denied: see SYSTEMD_RUN_BINARIES.
+        assert!(!session.contains("audit deny /usr/bin/systemd-run"));
+        assert!(session.contains("  /usr/bin/systemd-run px -> rpchat-systemd-run,\n"));
         // `sudo` stays available on purpose: its children stay inside the profile, so it gains
         // nobody anything, and taking it away would break the machine for its administrator.
         assert!(!session.contains("audit deny /usr/bin/sudo"));
@@ -1858,6 +1970,12 @@ pub mod tests {
         .to_string();
         assert!(session.contains("audit deny /etc/rpchat/** rwklx,"));
         assert!(!session.contains("run0"));
+        // Nothing is denied, so systemd-run needs no profile of its own either.
+        assert!(!session.contains("rpchat-systemd-run"));
+        assert!(render(&softer, &noctalia_hyprland_ctx(&["work"]))
+            .files
+            .iter()
+            .all(|f| f.name != "rpchat-systemd-run"));
     }
 
     #[test]
@@ -2730,6 +2848,100 @@ garbage line\n";
         assert_eq!(os.parser_calls.lock().unwrap().len(), before + 1);
     }
 
+    /// `systemd-run` is confined, not denied: `--user` and `--scope` keep working (that is how
+    /// `uwsm app` starts the shell) and only the system manager, which nothing confines, is out
+    /// of reach.
+    #[test]
+    fn systemd_run_is_confined_rather_than_denied() {
+        let r = rules(serde_json::json!({
+            "version":1,"app":{"users":["work"]},
+            "guard":{"mode":"enforce"},"lock":{}
+        }));
+        let plan = render(&r, &noctalia_hyprland_ctx(&["work"]));
+        assert!(plan.files.iter().any(|f| f.name == "rpchat-systemd-run"));
+
+        // Every profile the session can reach sends systemd-run to the same place, so it does
+        // not matter whether the compositor, the shell or a terminal launched it.
+        for profile in ["rpchat-session", "rpchat-shell", "rpchat-compositor"] {
+            let text = text_of(&plan, profile);
+            assert!(
+                text.contains("  /usr/bin/systemd-run px -> rpchat-systemd-run,\n"),
+                "{profile}:\n{text}"
+            );
+            assert!(
+                !text.contains("audit deny /usr/bin/systemd-run"),
+                "{profile}"
+            );
+        }
+
+        let sdrun = text_of(&plan, "rpchat-systemd-run");
+        // The escape: the system manager runs as PID 1 and no profile confines it.
+        assert!(
+            sdrun.contains("  audit deny @{run}/dbus/system_bus_socket rw,\n"),
+            "{sdrun}"
+        );
+        assert!(
+            sdrun.contains("  audit deny @{run}/systemd/private rw,\n"),
+            "{sdrun}"
+        );
+        assert!(sdrun.contains("  audit deny dbus bus=system,\n"), "{sdrun}");
+        // Not the escape: the user manager is confined by this guard's own drop-in, and a
+        // `--scope` command is exec'd by systemd-run itself. Neither goes near the user bus
+        // being denied, and `uwsm app -- noctalia` still lands the shell in rpchat-shell.
+        assert!(!sdrun.contains("@{run}/user/[0-9]*/bus"), "{sdrun}");
+        assert!(
+            sdrun.contains("  /usr/bin/noctalia px -> rpchat-shell,\n"),
+            "{sdrun}"
+        );
+        assert!(
+            sdrun.contains("  /{,**} px -> rpchat-session,\n"),
+            "{sdrun}"
+        );
+        // It is still the session running it: the seal stays unreadable, the shell's socket
+        // stays out of reach. The `x` is gone from the sealed paths because the catch-all above
+        // already sends every exec to rpchat-session, which denies it there.
+        assert!(
+            sdrun.contains("  audit deny /etc/rpchat/** rwkl,\n"),
+            "{sdrun}"
+        );
+        assert!(
+            sdrun.contains("  audit deny @{run}/user/[0-9]*/noctalia-*.sock rw,\n"),
+            "{sdrun}"
+        );
+    }
+
+    /// `guard.allowBinaries` wins over every rule this file would write for the same path.
+    /// Before it did, the two rules collided: `ux` next to a `px` transition is
+    /// `conflicting x modifiers` and the guard does not load at all, while `ux` next to a
+    /// `deny` parses and then quietly loses.
+    #[test]
+    fn allow_binaries_replace_the_rule_the_guard_would_have_written() {
+        let r = rules(serde_json::json!({
+            "version":1,"app":{"users":["work"]},
+            "guard":{"mode":"enforce","allowBinaries":["/usr/bin/run0","/usr/bin/noctalia","/usr/bin/systemd-run"]},
+            "lock":{}
+        }));
+        let plan = render(&r, &noctalia_hyprland_ctx(&["work"]));
+        let session = text_of(&plan, "rpchat-session");
+        for binary in ["/usr/bin/run0", "/usr/bin/noctalia", "/usr/bin/systemd-run"] {
+            assert_eq!(
+                session.matches(&format!("  {binary} ")).count(),
+                1,
+                "{binary} has more than one exec rule:\n{session}"
+            );
+            assert!(session.contains(&format!("  {binary} ux,\n")), "{binary}");
+            assert!(
+                !session.contains(&format!("audit deny {binary} x,")),
+                "{binary}"
+            );
+            assert!(!session.contains(&format!("  {binary} px ->")), "{binary}");
+        }
+        // The other spelling of each is untouched: allowing one path allows that path.
+        assert!(session.contains("  audit deny /bin/run0 x,\n"));
+        assert!(session.contains("  /usr/local/bin/noctalia px -> rpchat-shell,\n"));
+        assert!(session.contains("  /bin/systemd-run px -> rpchat-systemd-run,\n"));
+    }
+
     /// The generated profiles pass `apparmor_parser -Q` when the parser is installed (CI has
     /// it; the container may). Skipped otherwise.
     #[test]
@@ -2750,6 +2962,10 @@ garbage line\n";
         // The `lock` cases matter as much as the rest: a sealed policy adds the only rules in
         // this file whose permissions include exec, and those have to be spelled differently per
         // mode. Rendering them here is what stops that being discovered on somebody's machine.
+        //
+        // `allowBinaries` names an escape binary and a shell binary on purpose: both are paths
+        // this file writes its own exec rule for, and two exec rules for one path is
+        // `conflicting x modifiers` — a parser error, so the guard silently does not load.
         for (mode, ipc, lock) in [
             ("audit", "shell-only", false),
             ("enforce", "deny", false),
@@ -2757,7 +2973,7 @@ garbage line\n";
             ("audit", "shell-only", true),
             ("enforce", "shell-only", true),
         ] {
-            let mut policy = serde_json::json!({"version":1,"app":{"users":["work","o'neil"]},"guard":{"mode":mode,"compositorIpc":ipc,"allowBinaries":["/usr/bin/free"],"extraDenyPaths":["~/.config/hypr/hyprpaper.conf"],"extraDenySockets":["/run/user/1000/extra.sock"]}});
+            let mut policy = serde_json::json!({"version":1,"app":{"users":["work","o'neil"]},"guard":{"mode":mode,"compositorIpc":ipc,"allowBinaries":["/usr/bin/free","/usr/bin/systemd-run","/usr/bin/noctalia"],"extraDenyPaths":["~/.config/hypr/hyprpaper.conf"],"extraDenySockets":["/run/user/1000/extra.sock"]}});
             if lock {
                 policy
                     .as_object_mut()

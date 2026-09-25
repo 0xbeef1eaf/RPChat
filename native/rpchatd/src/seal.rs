@@ -34,8 +34,9 @@
 //! 4. **The guard.** With the session guard in `enforce`, the confined users' sessions — and
 //!    anything they start through `sudo`, which stays in the profile — cannot read or write
 //!    `/etc/rpchat/**` at all, and `lock.denyEscapes` also takes away the binaries that leave
-//!    the profile behind (`run0`, `systemd-run`, `machinectl`, `pkexec`, `chattr`,
-//!    `apparmor_parser`). That is the part that answers "but I have sudo".
+//!    the profile behind (`run0`, `machinectl`, `pkexec`, `chattr`, `apparmor_parser`) and
+//!    confines `systemd-run`, whose system-manager half is one of them. That is the part that
+//!    answers "but I have sudo".
 //! 5. **The app fails closed.** The app caches the sealed policy and refuses to run unmanaged
 //!    once it has seen a seal, so even a machine whose `/etc/rpchat` was wiped stays managed
 //!    until a code unseals it (`docs/system-integration.md`).

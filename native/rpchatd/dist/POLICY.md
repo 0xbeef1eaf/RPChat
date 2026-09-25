@@ -88,10 +88,12 @@ Sealing is layered rather than absolute, and the app says so — `seal-status` r
    denies the confined sessions everything under `/etc/rpchat`, `/var/lib/rpchat`,
    `/run/rpchat` and the unit files — read as well as write, because in `totp` mode reading the
    secret is as good as owning the lock — and, with `lock.denyEscapes`, the binaries that would
-   leave the confinement behind or undo it: `run0`, `systemd-run`, `machinectl`, `pkexec`,
-   `chattr`, `apparmor_parser`, `aa-teardown`. **`sudo` is deliberately still there**: a `sudo`
-   child is a child, so it stays inside the profile and gains nothing. `run0` and `systemd-run`
-   are the ones that matter, because they ask PID 1 to start the shell and it is born outside.
+   leave the confinement behind or undo it: `run0`, `machinectl`, `pkexec`, `chattr`,
+   `apparmor_parser`, `aa-teardown`. **`sudo` is deliberately still there**: a `sudo` child is a
+   child, so it stays inside the profile and gains nothing. `run0` is the one that matters,
+   because it asks PID 1 to start the shell and it is born outside. **`systemd-run` is confined
+   rather than denied**, in `rpchat-systemd-run`: only its system-manager half is an escape, and
+   `--user`/`--scope` is how a systemd-managed desktop starts its own shell.
 6. **`RefuseManualStop`.** `lock.refuseManualStop` writes
    `/etc/systemd/system/rpchatd.service.d/50-rpchat-sealed.conf` with `RefuseManualStop=yes`
    and `Restart=always`, so `systemctl stop rpchatd` is declined and a killed daemon comes back.
