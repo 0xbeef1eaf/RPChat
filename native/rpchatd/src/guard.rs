@@ -17,14 +17,16 @@
 //!   checked against (`AA_MAY_CONNECT|AA_MAY_SEND|AA_MAY_RECEIVE` = `rw`). On a kernel that
 //!   advertises `network_v9/af_unix` — which is every current one — `connect()` moves to the
 //!   `unix` class instead, and a profile carrying a blanket `unix,` allows it **however the
-//!   file rule reads**. Measured on 7.2.6 against a loaded `enforce` profile holding
-//!   `audit deny @{run}/user/[0-9]*/*-awww-daemon*.sock rw,`: `open()` on the node was EACCES
-//!   and `connect()` to it succeeded, so `awww img <path>` still set the wallpaper. The shell's
-//!   sockets therefore also carry a `unix (connect)` deny, written against the peer's **label**
-//!   — `addr=` cannot name a filesystem socket, the parser rejects one — so it reads "nothing
-//!   the shell serves", which for `rpchat-shell` is the same set. The file rules stay: they
-//!   still cover `open()` and `bind`, and on a kernel without `af_unix` they are the whole
-//!   mediation. See [`unix_connect_shell`].
+//!   file rule reads**. The `unix (connect) peer=(label=rpchat-shell)` rule these profiles
+//!   carry is the right rule and does nothing without [`APPARMOR_UNIX_CLASS`], which a kernel
+//!   advertising only `network_v9/af_unix` does not have — that is the coarse "may use unix
+//!   sockets" mediation, with no address and no peer. There is then **no way to deny
+//!   `connect()` to a filesystem socket at all**. Measured on 7.2.6, inside a loaded `enforce`
+//!   profile, servers and client correctly labelled: `deny <path> rw` → `open()` EACCES,
+//!   `connect()` allowed; `deny /run/rpchat/** rwklx` → same; `deny unix (connect)
+//!   peer=(label=rpchat-shell)` → allowed. So the socket cannot be closed and the thing that
+//!   speaks to it is closed instead — see `TableEntry::clients` — while `render` reports the
+//!   gap in its residual list rather than leaving it to be discovered with `awww query`.
 //! - Explicit `deny` rules are enforced even in complain mode, so audit mode uses
 //!   `audit <rule>` (allowed, logged as `apparmor="AUDIT"`) and enforce mode `audit deny`.
 //! - Named exec transitions take globs (`/{,**} px -> rpchat-session`), and a more specific
@@ -54,6 +56,12 @@ pub const DEFAULT_STATE_FILE: &str = "/etc/rpchat/guard-state.json";
 pub const DEFAULT_APP_EXEC: &str = "/opt/rpchat/current/rpchat";
 /// AppArmor's securityfs mount: present iff the LSM is active.
 pub const APPARMOR_FS: &str = "/sys/kernel/security/apparmor";
+/// Present iff the kernel has the fine-grained `unix` mediation class — the one whose rules can
+/// name a socket's peer. Without it a `unix (connect) peer=(label=…)` rule compiles, loads and
+/// mediates nothing, which is why [`render`] reports the wallpaper IPC as unguarded rather than
+/// pretending. `network_v9/af_unix` is *not* this: that is the coarse "may use unix sockets"
+/// mediation, with no address and no peer.
+pub const APPARMOR_UNIX_CLASS: &str = "/sys/kernel/security/apparmor/features/unix";
 /// Profile names, in load order.
 pub const PROFILE_NAMES: [&str; 6] = [
     "rpchat-session",
@@ -100,7 +108,13 @@ pub enum Owner {
 pub struct TableEntry {
     pub id: &'static str,
     pub owner: Owner,
+    /// The binaries that *serve*: they transition into `rpchat-shell`.
     pub binaries: &'static [&'static str],
+    /// Binaries of this row that are only ever clients — they exist to drive the daemon and
+    /// nothing else, so a guarded session is denied them outright. Empty when the project ships
+    /// one binary for both jobs (`noctalia` is the shell *and* `noctalia msg`), because a path
+    /// rule cannot tell those apart and denying it would stop the shell from starting.
+    pub clients: &'static [&'static str],
     pub comm: &'static [&'static str],
     pub sockets: &'static [&'static str],
     /// Config/state paths only the owner may write (the wallpaper persists here).
@@ -113,6 +127,8 @@ pub const NOCTALIA: TableEntry = TableEntry {
     id: "noctalia",
     owner: Owner::Shell,
     binaries: &["/usr/bin/noctalia", "/usr/local/bin/noctalia"],
+    // `noctalia msg …` is the same binary as the shell, so it cannot be denied by path.
+    clients: &[],
     comm: &["noctalia"],
     sockets: &["@{run}/user/[0-9]*/noctalia-*.sock"],
     // Only what actually carries the wallpaper, not the whole tree. Verified against a v5
@@ -144,6 +160,8 @@ pub const QUICKSHELL: TableEntry = TableEntry {
     id: "quickshell",
     owner: Owner::Shell,
     binaries: &["/usr/bin/quickshell", "/usr/bin/qs"],
+    // `qs -c <config> ipc call …` — the shell binary again.
+    clients: &[],
     comm: &["quickshell", "qs"],
     sockets: &["@{run}/user/[0-9]*/quickshell/**"],
     // Quickshell's own config is QML (code), so it stays whole; the noctalia half is scoped
@@ -163,6 +181,8 @@ pub const HYPRPAPER: TableEntry = TableEntry {
     id: "hyprpaper",
     owner: Owner::Shell,
     binaries: &["/usr/bin/hyprpaper"],
+    // Driven through `hyprctl hyprpaper …`, which is the compositor's client, not this row's.
+    clients: &[],
     comm: &["hyprpaper"],
     sockets: &["@{run}/user/[0-9]*/hypr/*/.hyprpaper.sock"],
     files: &["@{HOME}/.config/hypr/hyprpaper.conf"],
@@ -179,12 +199,10 @@ pub const HYPRPAPER: TableEntry = TableEntry {
 pub const SWWW: TableEntry = TableEntry {
     id: "swww",
     owner: Owner::Shell,
-    binaries: &[
-        "/usr/bin/swww-daemon",
-        "/usr/bin/swww",
-        "/usr/bin/awww-daemon",
-        "/usr/bin/awww",
-    ],
+    binaries: &["/usr/bin/swww-daemon", "/usr/bin/awww-daemon"],
+    // The one row where the two jobs are separate binaries, so the client half can be taken
+    // away: `awww img <path>` is the whole of the "set the wallpaper from a terminal" case.
+    clients: &["/usr/bin/swww", "/usr/bin/awww"],
     comm: &["swww-daemon", "swww", "awww-daemon", "awww"],
     sockets: &[
         "@{run}/user/[0-9]*/swww-*.sock",
@@ -199,6 +217,7 @@ pub const HYPRLAND: TableEntry = TableEntry {
     id: "hyprland",
     owner: Owner::Compositor,
     binaries: &["/usr/bin/Hyprland", "/usr/bin/hyprland"],
+    clients: &[],
     comm: &["Hyprland", "hyprland"],
     sockets: &[
         "@{run}/user/[0-9]*/hypr/*/.socket.sock",
@@ -210,6 +229,7 @@ pub const SWAY: TableEntry = TableEntry {
     id: "sway",
     owner: Owner::Compositor,
     binaries: &["/usr/bin/sway"],
+    clients: &[],
     comm: &["sway"],
     sockets: &["@{run}/user/[0-9]*/sway-ipc.*.sock"],
     files: &[],
@@ -218,6 +238,7 @@ pub const NIRI: TableEntry = TableEntry {
     id: "niri",
     owner: Owner::Compositor,
     binaries: &["/usr/bin/niri"],
+    clients: &[],
     comm: &["niri"],
     sockets: &["@{run}/user/[0-9]*/niri.*.sock"],
     files: &[],
@@ -272,6 +293,10 @@ pub struct GuardContext {
     pub compositors: Vec<&'static TableEntry>,
     /// `abi/4.0` when `/etc/apparmor.d/abi/4.0` exists, else `abi/3.0`, else none.
     pub abi: Option<String>,
+    /// The kernel has [`APPARMOR_UNIX_CLASS`]. When it does not, the `unix` rules these profiles
+    /// carry are inert and the wallpaper IPC is not actually guarded — said out loud in the
+    /// residual list rather than left for someone to discover with `awww query`.
+    pub unix_class: bool,
     /// Sockets discovered at runtime or cached.
     pub discovered: Vec<DiscoveredSocket>,
     /// `app.users` that resolve to a uid, with it — the `user@<uid>.service` drop-ins.
@@ -601,6 +626,16 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
             exit(b, format!("  {b} px -> rpchat-systemd-run,\n"), &mut exits);
         }
     }
+    // The client half of a wallpaper daemon, taken away from every profile that is not the app.
+    // This is the only lever left once `connect()` turns out to be unmediatable: the socket
+    // cannot be closed, so the thing that speaks to it is. It is a low wall by construction —
+    // see the residual list — but it is the difference between `awww img <path>` working from a
+    // terminal and not.
+    if shell_profile {
+        for b in ctx.shells.iter().flat_map(|s| s.clients.iter()) {
+            exit(b, guarded_exec(mode, b, "x"), &mut exits);
+        }
+    }
     for b in &rules.allow_binaries {
         exits.push_str(&format!("  {b} ux,\n"));
     }
@@ -907,7 +942,16 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         "sessions that were already open when the guard engaged are confined at their next login"
             .to_string(),
     );
+    if shell_profile && !ctx.unix_class {
+        residual.push("this kernel has no AppArmor unix mediation class (only the coarse network_v9/af_unix), so connect() to a filesystem socket cannot be denied at all: the wallpaper IPC is NOT guarded. What holds is the config files — a wallpaper set through the shell's socket does not persist — and the client binaries being denied. Measured, not assumed: with `deny /run/rpchat/** rwklx` loaded, open() on a socket there is EACCES and connect() to it succeeds".to_string());
+    }
+    // Per shell, not "none of them": one row with a separate client binary does not close the
+    // hole another row leaves open.
+    if shell_profile && ctx.shells.iter().any(|s| s.clients.is_empty()) {
+        residual.push("this shell ships one binary for both the daemon and its client (`noctalia`, `qs`), so the client cannot be denied by path without stopping the shell from starting: `<shell> msg` from a terminal still reaches it".to_string());
+    }
     if shell_profile {
+        residual.push("a denied client binary is a low wall: copying it elsewhere, or a few lines that open the socket directly, still reaches the daemon. It stops the ordinary command, not a determined one".to_string());
         residual.push("if the audit log shows the shell denied getattr on its own socket, the shell needs r too and `<shell> msg` from a terminal becomes the residual gap".to_string());
         residual.push("the shell's own helpers return to rpchat-session like any other child, so under enforce they may not write what the session may not: palettes, templates and colour schemes are left writable and keep updating, but plugin self-update does not, because a plugin is code the shell executes and could set the wallpaper from inside it".to_string());
     }
@@ -1546,6 +1590,7 @@ pub fn resolve_context(
         shells,
         compositors,
         abi: (hooks.abi)(),
+        unix_class: exists(APPARMOR_UNIX_CLASS),
         discovered: discovered.into_iter().collect(),
         daemon_version: paths.daemon_version.clone(),
     }
@@ -1929,6 +1974,7 @@ pub mod tests {
             shells: vec![&NOCTALIA],
             compositors: vec![&HYPRLAND],
             abi: Some("abi/4.0".into()),
+            unix_class: true,
             discovered: vec![DiscoveredSocket {
                 glob: "@{run}/user/[0-9]*/noctalia-wayland-*.sock".into(),
                 owner: Owner::Shell,
@@ -2156,6 +2202,7 @@ pub mod tests {
             shells: vec![&NOCTALIA],
             compositors: vec![&HYPRLAND],
             abi: None,
+            unix_class: true,
             discovered: vec![],
             user_uids: vec![("a".to_string(), 1000)],
             daemon_version: "1".into(),
@@ -2543,14 +2590,20 @@ pub mod tests {
         // swww was renamed to awww and ships no swww-named binaries, so a row matching only the
         // old names guards nothing while looking like it works: the daemon runs unconfined, the
         // wallpaper still changes, and the audit log stays empty.
-        for exe in [
-            "/usr/bin/swww-daemon",
-            "/usr/bin/awww-daemon",
-            "/usr/bin/awww",
-        ] {
+        for exe in ["/usr/bin/swww-daemon", "/usr/bin/awww-daemon"] {
             assert!(
                 SWWW.binaries.contains(&exe),
                 "{exe} must enter rpchat-shell"
+            );
+        }
+        // The client half is the other list: it is denied outright, not transitioned, so a
+        // terminal cannot run it. Both spellings, because the rename left the old name working
+        // on boxes that still have it.
+        for exe in ["/usr/bin/swww", "/usr/bin/awww"] {
+            assert!(SWWW.clients.contains(&exe), "{exe} must be denied");
+            assert!(
+                !SWWW.binaries.contains(&exe),
+                "{exe} cannot be both denied and transitioned: conflicting x modifiers"
             );
         }
         for comm in ["swww-daemon", "awww-daemon", "awww"] {
@@ -2960,6 +3013,60 @@ garbage line\n";
             "{text}"
         );
         assert!(!text.contains("audit deny unix"), "{text}");
+    }
+
+    /// The socket cannot be closed on a kernel with no `unix` mediation class, so the client
+    /// that speaks to it is — and the residual list says which of the two happened.
+    #[test]
+    fn the_wallpaper_client_is_denied_and_the_gap_is_reported() {
+        let policy = serde_json::json!({
+            "version":1,"app":{"users":["work"]},
+            "guard":{"mode":"enforce","shell":["awww","noctalia"]}
+        });
+        let r = rules(policy);
+        let mut ctx = noctalia_hyprland_ctx(&["work"]);
+        ctx.shells = vec![&SWWW, &NOCTALIA];
+        ctx.unix_class = false;
+        let plan = render(&r, &ctx);
+
+        // The client half is denied everywhere the session can reach, the daemon half is not:
+        // one must not start a shell, the other must.
+        for profile in ["rpchat-session", "rpchat-shell", "rpchat-compositor"] {
+            let text = text_of(&plan, profile);
+            for client in ["/usr/bin/awww", "/usr/bin/swww"] {
+                assert!(
+                    text.contains(&format!("  audit deny {client} x,\n")),
+                    "{profile} must deny {client}:\n{text}"
+                );
+            }
+            assert!(
+                text.contains("  /usr/bin/awww-daemon px -> rpchat-shell,\n"),
+                "{profile} must still let the daemon start:\n{text}"
+            );
+            // Denying and transitioning the same path is `conflicting x modifiers`, which does
+            // not load at all — the one mistake here that turns the guard off.
+            assert!(!text.contains("/usr/bin/awww px ->"), "{profile}:\n{text}");
+        }
+        // The app is how a character sets the wallpaper, and it is not confined by this.
+        assert!(!text_of(&plan, "rpchat-app").contains("/usr/bin/awww"));
+
+        // Said out loud, both halves: what this kernel cannot do, and how low the wall is.
+        let residual = plan.residual.join("\n");
+        assert!(
+            residual.contains("wallpaper IPC is NOT guarded"),
+            "{residual}"
+        );
+        assert!(residual.contains("low wall"), "{residual}");
+        // noctalia ships one binary for both jobs, so its client survives and that is said too.
+        assert!(residual.contains("one binary for both"), "{residual}");
+
+        // A kernel that *can* mediate connect gets no such warning.
+        ctx.unix_class = true;
+        let residual = render(&r, &ctx).residual.join("\n");
+        assert!(
+            !residual.contains("wallpaper IPC is NOT guarded"),
+            "{residual}"
+        );
     }
 
     /// `systemd-run` is confined, not denied: `--user` and `--scope` keep working (that is how
