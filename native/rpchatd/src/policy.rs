@@ -294,9 +294,10 @@ pub struct GuardRules {
     /// seal lives in, so a terminal inside one — including one under `sudo`, which stays in the
     /// profile — cannot read the TOTP secret or delete the policy.
     pub protect_policy: bool,
-    /// Also take away the binaries that would leave the profile behind (`run0`, `systemd-run`,
-    /// `machinectl`, `pkexec`) and the ones that would undo the lock (`chattr`,
-    /// `apparmor_parser`). `lock.denyEscapes`, on by default with a `lock` block.
+    /// Also take away the binaries that would leave the profile behind (`run0`, `machinectl`,
+    /// `pkexec`) and the ones that would undo the lock (`chattr`, `apparmor_parser`), and
+    /// confine `systemd-run`, which is only an escape when it asks the system manager
+    /// (`guard::SYSTEMD_RUN_BINARIES`). `lock.denyEscapes`, on by default with a `lock` block.
     pub deny_escapes: bool,
 }
 

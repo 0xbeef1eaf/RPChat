@@ -751,7 +751,7 @@ export interface PolicyLock {
   immutable?: boolean;
   /** Write the `RefuseManualStop=yes` drop-in for `rpchatd.service`. Default true. */
   refuseManualStop?: boolean;
-  /** Deny guarded sessions `run0`, `systemd-run`, `machinectl`, `pkexec`, `chattr`, `apparmor_parser`. Default true. */
+  /** Deny guarded sessions `run0`, `machinectl`, `pkexec`, `chattr`, `apparmor_parser`, and confine `systemd-run` (its `--user`/`--scope` half is not an escape). Default true. */
   denyEscapes?: boolean;
 }
 

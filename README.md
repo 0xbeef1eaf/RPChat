@@ -272,8 +272,10 @@ release is an act the key authorises.
 Either way the effective policy is published into a read-only filesystem the daemon mounts itself,
 an edited policy file is put back within seconds and reported, spare copies of the lock are kept,
 the files are immutable, the service refuses a manual stop, and — with the session guard enforcing
-— `run0`, `systemd-run`, `machinectl`, `pkexec` and `chattr` are taken away from the managed
-sessions, so there is no unconfined shell to undo it from. What it still cannot do is listed in
+— `run0`, `machinectl`, `pkexec` and `chattr` are taken away from the managed sessions, so there is
+no unconfined shell to undo it from (`systemd-run` gets a profile instead of a refusal: the half
+that asks the *system* manager is the escape, and the `--user`/`--scope` half is how a
+systemd-managed desktop starts its own shell). What it still cannot do is listed in
 the app rather than glossed over.
 
 A machine follows a chain by being given a **Remote Link**: one base64 blob carrying the address,
