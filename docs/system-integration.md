@@ -263,8 +263,9 @@ Points worth knowing:
 - `app.allowQuit: false` with `app.users: ["alice"]` keeps the app running for those users: no
   way to quit in the UI and a relaunch by the daemon after a kill or crash. Details below.
 - `guard: { "mode": "audit" }` confines the listed users' login sessions with AppArmor so their
-  own terminals and scripts cannot reach the compositor/shell IPC, edit the wallpaper config or
-  kill rpchat — see [Session guard](#session-guard).
+  own terminals and scripts cannot edit the wallpaper config, run a wallpaper client or kill
+  rpchat — and, on a kernel whose AppArmor has the `unix` mediation class, cannot reach the
+  compositor/shell IPC either — see [Session guard](#session-guard).
 - `dev: { "allow": false }` takes the app's development switches away, so nobody can start the
   app in a mode that ignores the rest of this file. Details below.
 
@@ -596,7 +597,19 @@ compositor's and the desktop shell's IPC sockets, writing the wallpaper/shell co
 files, and sending signals or `ptrace` to rpchat. rpchat itself (launched from
 `/opt/rpchat/current/rpchat`) transitions into its own profile that allows all of it, so the
 character's `noctalia msg wallpaper-set …`, `hyprctl …` and so on keep working while the user's
-`hyprctl`, `noctalia msg`, `kill` and `vim ~/.config/noctalia/*.toml` are refused. It ships in
+`hyprctl`, `noctalia msg`, `kill` and `vim ~/.config/noctalia/*.toml` are refused.
+
+**How much of that first item is real depends on the kernel, and the app says which you have.**
+Denying a `connect()` to a filesystem socket needs AppArmor's fine-grained `unix` mediation
+class (`/sys/kernel/security/apparmor/features/unix`). A kernel advertising only
+`network_v9/af_unix` has the *coarse* form — "may use unix sockets", no address, no peer — and
+on one of those there is no way to express the rule at all. Measured inside a loaded `enforce`
+profile on 7.2.6: with `deny /run/rpchat/** rwklx` in force, `open()` on a socket there is
+`EACCES` and `connect()` to it **succeeds**; a `unix (connect) peer=(label=rpchat-shell)` rule
+loads and changes nothing. The file rules are unaffected — they cover `open()` and `bind` — so
+what survives is that a wallpaper set through the shell's socket does not *persist*, plus the
+client binaries below. Settings → System lists the gap under *What the lock cannot do* whenever
+the running kernel is one of these. It ships in
 **audit mode** (nothing blocked, everything logged and reported to the character); `enforce` is
 a policy switch.
 
@@ -608,7 +621,7 @@ a policy switch.
 |---|---|---|
 | `mode` | `off` | `audit` loads the profiles with audit rules in complain mode: attempts are logged as `apparmor="AUDIT"`/`"ALLOWED"` and become `guard-attempt` events, nothing is blocked. `enforce` turns them into `deny` rules. `off` unloads everything. |
 | `protectApp` | `true` | Signals and `ptrace` from the session to rpchat. |
-| `wallpaper` | `true` | The shell's IPC socket and config/state files; the shell runs in `rpchat-shell`. |
+| `wallpaper` | `true` | The shell's IPC socket and config/state files; the shell runs in `rpchat-shell`. Also denies the row's client-only binaries (`swww`, `awww`) to every profile but rpchat's, which is what stops `awww img <path>` from a terminal on a kernel that cannot mediate `connect()`. A shell shipping one binary for both jobs (`noctalia`, `qs`) cannot be denied that way — it would stop the shell starting — so `noctalia msg` survives there and the residual list says so. |
 | `compositorIpc` | `shell-only` | `allow` (nothing), `shell-only` (only the shell and rpchat may talk to the compositor), `deny` (only rpchat). |
 | `shell` | `auto` | One row or a list. `auto` takes every row whose binary exists. With several (`["noctalia","hyprpaper"]`) each may serve its own socket but none may connect to another's, so a bar cannot set the wallpaper through a wallpaper daemon. |
 | `loginHelpers` | auto-detect | The PAM login helpers whose profile carries the per-user hats (see below). |
