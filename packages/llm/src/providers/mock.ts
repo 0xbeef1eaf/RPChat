@@ -3,6 +3,8 @@ import type {
   ContentPart,
   LlmChatRequest,
   LlmChatResponse,
+  LlmEmbedRequest,
+  LlmEmbedResponse,
   LlmProvider,
   LlmStreamHandlers,
   ModelInfo,
@@ -35,6 +37,28 @@ export interface MockProviderOptions {
   respond?: (request: LlmChatRequest) => MockTurn;
   /** Number of chunks the text is streamed in. Default 3. */
   chunks?: number;
+  /**
+   * Vectors for `embed()`. The default hashes words into a fixed-width bag, which is enough to
+   * exercise the plumbing; a test that needs two differently-worded texts to *mean* the same
+   * thing supplies its own.
+   */
+  embed?: (text: string) => number[];
+}
+
+/** Width of the default mock embedding: small enough to read in a failing assertion. */
+export const MOCK_EMBEDDING_DIMS = 16;
+
+/** Hash the words of `text` into a unit-length bag-of-words vector. Same words in, same vector out. */
+export function mockEmbedding(text: string, dims = MOCK_EMBEDDING_DIMS): number[] {
+  const out = new Array<number>(dims).fill(0);
+  for (const word of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    if (word.length === 0) continue;
+    let hash = 0;
+    for (let i = 0; i < word.length; i += 1) hash = (hash * 31 + word.charCodeAt(i)) % 1_000_003;
+    out[hash % dims] = (out[hash % dims] ?? 0) + 1;
+  }
+  const norm = Math.sqrt(out.reduce((sum, v) => sum + v * v, 0));
+  return norm > 0 ? out.map((v) => v / norm) : out;
 }
 
 const DEFAULT_TURN: MockTurn = { text: 'Mock response.' };
@@ -71,9 +95,12 @@ export class MockProvider implements LlmProvider {
   readonly requests: LlmChatRequest[] = [];
   /** Every response produced, in order. */
   readonly responses: LlmChatResponse[] = [];
+  /** Every batch `embed()` received, in order. */
+  readonly embedRequests: LlmEmbedRequest[] = [];
   private readonly script: MockTurn[];
   private readonly respond: ((request: LlmChatRequest) => MockTurn) | undefined;
   private readonly chunks: number;
+  private readonly embedOne: (text: string) => number[];
   private cursor = 0;
   private toolCounter = 0;
 
@@ -83,6 +110,13 @@ export class MockProvider implements LlmProvider {
     this.script = options.script ?? [];
     this.respond = options.respond;
     this.chunks = options.chunks ?? 3;
+    this.embedOne = options.embed ?? ((text) => mockEmbedding(text));
+  }
+
+  async embed(request: LlmEmbedRequest): Promise<LlmEmbedResponse> {
+    this.embedRequests.push(request);
+    if (request.signal?.aborted) throw new RpError('LLM_ABORTED', 'LLM request aborted');
+    return { model: request.model, vectors: request.texts.map((t) => this.embedOne(t)) };
   }
 
   /** Turns not yet consumed from the script. */

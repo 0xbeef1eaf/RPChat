@@ -39,6 +39,8 @@ import { RoutineService } from './services/routine.js';
 import { SandboxService } from './services/sandbox.js';
 import { HistoryService } from './services/history.js';
 import { LibraryService } from './services/library.js';
+import { EmbeddingService } from './services/embeddings.js';
+import type { Embedder } from './services/embeddings.js';
 import { MemoryService } from './services/memory.js';
 import { PackService } from './services/packs.js';
 import { PermissionService } from './services/permissions.js';
@@ -67,6 +69,11 @@ export interface EngineOptions {
   locale?: string;
   /** Host presence sampler + raw host events (Phase 2). Optional: without it there is no senses line and only core-generated events. */
   senses?: SensesProvider;
+  /**
+   * On-device embedder for semantic memory search, used when no provider can embed. Optional:
+   * without it (and without a configured embeddings endpoint) memories are ranked by keywords.
+   */
+  localEmbedder?: () => Promise<Embedder | undefined>;
 }
 
 /** How often core evaluates `time` events and routine transitions. */
@@ -88,6 +95,8 @@ export class Engine {
   readonly sessions: SessionService;
   /** Long-term character memories (`IpcApi.memories` maps 1:1 onto list/add/update/remove/consolidate). */
   readonly memories: MemoryService;
+  /** Vectors behind semantic memory ranking (`IpcApi.memories.embeddingStatus`). */
+  readonly embeddings: EmbeddingService;
   /** Background summarisation of the older messages of a session. */
   readonly history: HistoryService;
   /** Per-character function libraries: the `lib` prelude of every run (and, through it, `sdk.lib`). */
@@ -144,6 +153,14 @@ export class Engine {
     this.timers = new TimerService(opts.storage, now, logger, async () => (await this.settings.get()).autonomy);
     this.packs = new PackService(opts.storage, opts.packsDir, this.timers, now, logger);
     this.sessions = new SessionService(opts.storage, this.packs, this.permissions, this.timers, this.events, now, logger);
+    this.embeddings = new EmbeddingService({
+      storage: opts.storage,
+      settings: this.settings,
+      providerFactory,
+      now,
+      logger,
+      ...(opts.localEmbedder ? { localEmbedder: opts.localEmbedder } : {}),
+    });
     this.memories = new MemoryService({
       storage: opts.storage,
       settings: this.settings,
@@ -152,6 +169,7 @@ export class Engine {
       emitter: this.events,
       now,
       logger,
+      embeddings: this.embeddings,
     });
     this.history = new HistoryService({
       storage: opts.storage,

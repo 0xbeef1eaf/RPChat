@@ -112,12 +112,32 @@ export interface ModelInfo {
   label?: string;
 }
 
+/** A batch of texts to turn into vectors. One vector comes back per text, in the same order. */
+export interface LlmEmbedRequest {
+  /** The embedding model, which is never the chat model (`nomic-embed-text`, `text-embedding-3-small`, …). */
+  model: string;
+  texts: string[];
+  signal?: AbortSignal;
+}
+
+export interface LlmEmbedResponse {
+  model: string;
+  /** Unit-length vectors, all of the same width, in request order. */
+  vectors: number[][];
+}
+
 export interface LlmProvider {
   readonly id: ProviderId;
   readonly kind: ProviderKind;
   readonly config: ProviderConfig;
   /** Send a chat request; stream via handlers when supported, always resolve with the full response. */
   chat(request: LlmChatRequest, handlers?: LlmStreamHandlers): Promise<LlmChatResponse>;
+  /**
+   * Embed texts for semantic memory search. Optional because it is not a universal API:
+   * Anthropic publishes no embeddings endpoint (it points at third parties), so that provider
+   * leaves this out and the caller falls back to something else.
+   */
+  embed?(request: LlmEmbedRequest): Promise<LlmEmbedResponse>;
   /** Optional model enumeration for the settings UI. */
   listModels?(): Promise<ModelInfo[]>;
   /** Cheap connectivity/auth check. */

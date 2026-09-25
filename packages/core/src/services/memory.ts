@@ -3,6 +3,7 @@ import { estimateTokens } from '@rp/llm';
 import type { ChatMessage, LlmChatRequest, LlmProvider, MemoryEntry, MemoryImportance, MemorySource, Storage } from '@rp/shared';
 import { RpError, capOf, parseCharacterRef } from '@rp/shared';
 import { jaccard, promptOrder, rankMemories, tokenize } from '../memory/rank.js';
+import type { EmbeddingService } from './embeddings.js';
 import { providerLabel, recordExchange } from './exchanges.js';
 import type { PackService } from './packs.js';
 import type { ProviderFactory, SettingsService } from './settings.js';
@@ -33,6 +34,8 @@ export interface MemoryServiceOptions {
   emitter: EngineEmitter;
   now: Clock;
   logger: Logger;
+  /** Semantic side of ranking. Absent (or without an embedder) ranks by keywords alone. */
+  embeddings?: EmbeddingService;
 }
 
 export interface ConsolidateOptions {
@@ -154,6 +157,7 @@ export class MemoryService {
 
   async removeForCharacter(characterRef: string): Promise<void> {
     await this.o.storage.memories.removeForCharacter(characterRef);
+    await this.o.embeddings?.forget(characterRef);
   }
 
   /** Newest memories first. */
@@ -162,11 +166,15 @@ export class MemoryService {
     return entries.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0)).slice(0, Math.max(0, limit));
   }
 
-  /** Ranked keyword/tag search. Returned entries get their recall stats bumped (unless `touch` is false). */
+  /**
+   * Ranked search over tags, words and — when an embedder is available — meaning. Returned entries
+   * get their recall stats bumped (unless `touch` is false).
+   */
   async search(characterRef: string, query: string, limit = 10, options: { touch?: boolean } = {}): Promise<MemoryEntry[]> {
     const entries = await this.o.storage.memories.list(characterRef);
     const now = this.o.now();
-    const hits = rankMemories(entries, query, now)
+    const similarities = await this.similarities(characterRef, entries, query);
+    const hits = rankMemories(entries, query, now, similarities ? { similarities } : {})
       .filter((s) => s.match > 0)
       .slice(0, Math.max(0, limit))
       .map((s) => s.entry);
@@ -184,7 +192,8 @@ export class MemoryService {
   }
 
   /**
-   * Memories for the `<memories>` prompt section: the best matches for `focusText`, always
+   * Memories for the `<memories>` prompt section: the best matches for `focusText` (by meaning
+   * as well as by wording, when an embedder is available), always
    * including the top-3 by importance and the 3 newest, deduplicated, trimmed to `budgetTokens`,
    * in stable order (importance desc, createdAt asc).
    */
@@ -195,7 +204,8 @@ export class MemoryService {
     const now = this.o.now();
     const byImportance = [...entries].sort((a, b) => b.importance - a.importance || (a.createdAt < b.createdAt ? 1 : -1)).slice(0, 3);
     const newest = [...entries].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0)).slice(0, 3);
-    const ranked = rankMemories(entries, focusText, now).map((s) => s.entry);
+    const similarities = await this.similarities(characterRef, entries, focusText);
+    const ranked = rankMemories(entries, focusText, now, similarities ? { similarities } : {}).map((s) => s.entry);
 
     const picked: MemoryEntry[] = [];
     const seen = new Set<string>();
@@ -294,7 +304,9 @@ export class MemoryService {
     const pool = [...existing];
     for (const c of candidates) {
       const tokens = tokenize(c.text);
-      const dup = pool.find((e) => jaccard(tokens, tokenize(e.text)) >= CONSOLIDATION_DEDUPE_THRESHOLD);
+      const dup =
+        pool.find((e) => jaccard(tokens, tokenize(e.text)) >= CONSOLIDATION_DEDUPE_THRESHOLD) ??
+        (await this.o.embeddings?.duplicateOf(session.characterRef, pool, c.text));
       if (dup) {
         if (c.importance > dup.importance) {
           const updated = await this.update({ id: dup.id, importance: c.importance });
@@ -327,6 +339,11 @@ export class MemoryService {
     const victims = order.slice(0, entries.length - max);
     for (const v of victims) await this.o.storage.memories.remove(v.id);
     return victims.length;
+  }
+
+  /** Cosine similarities for ranking, or `undefined` when this build ranks by keywords alone. */
+  private async similarities(characterRef: string, entries: MemoryEntry[], query: string): Promise<Map<string, number> | undefined> {
+    return this.o.embeddings?.similarities(characterRef, entries, query);
   }
 
   private renderTranscript(messages: ChatMessage[], characterName: string, userName: string): string {

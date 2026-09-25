@@ -3,6 +3,8 @@ import type {
   ContentPart,
   LlmChatRequest,
   LlmChatResponse,
+  LlmEmbedRequest,
+  LlmEmbedResponse,
   LlmMessage,
   LlmProvider,
   LlmResponseFormat,
@@ -14,6 +16,7 @@ import type {
   StopReason,
   ToolDefinition,
 } from '@rp/shared';
+import { RpError } from '@rp/shared';
 import {
   parseToolInput,
   resolveSupportsVision,
@@ -44,6 +47,14 @@ function joinText(parts: ContentPart[]): string {
     .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text')
     .map((p) => p.text)
     .join('');
+}
+
+/** Scale a vector to unit length; an all-zero vector (which no model should produce) is returned as is. */
+export function normalizeVector(values: number[]): number[] {
+  let sum = 0;
+  for (const v of values) sum += v * v;
+  const norm = Math.sqrt(sum);
+  return norm > 0 ? values.map((v) => v / norm) : values;
 }
 
 /**
@@ -379,6 +390,32 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       return reducer.finish(request.model);
     } catch (err) {
       throw toProviderError(err, request.signal, err instanceof APIUserAbortError);
+    }
+  }
+
+  /**
+   * `POST /v1/embeddings`, which Ollama, LM Studio, llama.cpp and OpenAI all serve.
+   *
+   * The response is sorted by `index` before use: the spec allows a server to return the objects
+   * in any order, and a silently mismatched pairing of text to vector would be invisible — every
+   * memory would simply rank oddly. Vectors are normalised here so callers can treat a dot
+   * product as a cosine; servers differ on whether they normalise, and OpenAI's shortened
+   * `dimensions` output is explicitly not unit-length.
+   */
+  async embed(request: LlmEmbedRequest): Promise<LlmEmbedResponse> {
+    if (request.texts.length === 0) return { model: request.model, vectors: [] };
+    try {
+      const response = await this.client.embeddings.create(
+        { model: request.model, input: request.texts },
+        { signal: request.signal ?? null },
+      );
+      const sorted = [...response.data].sort((a, b) => a.index - b.index);
+      if (sorted.length !== request.texts.length) {
+        throw new RpError('LLM_PROVIDER', `Embedding endpoint returned ${sorted.length} vectors for ${request.texts.length} texts`);
+      }
+      return { model: response.model || request.model, vectors: sorted.map((d) => normalizeVector(d.embedding)) };
+    } catch (err) {
+      throw toProviderError(err, request.signal);
     }
   }
 

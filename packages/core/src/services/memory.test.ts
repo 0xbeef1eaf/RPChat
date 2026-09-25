@@ -1,22 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { MockProvider } from '@rp/llm';
 import { estimateTokens } from '@rp/llm';
+import { DEFAULT_MEMORY_SETTINGS } from '@rp/shared';
 import type { ChatEvent, ChatMessage, LlmChatRequest, MemoryEntry } from '@rp/shared';
 import { TypedEmitter } from '../emitter.js';
+import { EmbeddingService } from './embeddings.js';
 import { MemoryStorage } from '../storage/memory.js';
 import { FakeClock, MOCK_PROVIDER } from '../test/helpers.js';
 import type { EngineEvents } from '../types.js';
 import { NOOP_LOGGER } from '../types.js';
 import { memoryFocus } from './chat.js';
-import { MemoryService, memoryLine, parseJsonArray } from './memory.js';
+import { jaccard, tokenize } from '../memory/rank.js';
+import { CONSOLIDATION_DEDUPE_THRESHOLD, MemoryService, memoryLine, parseJsonArray } from './memory.js';
 import { SettingsService } from './settings.js';
 
 const REF = 'com.example.luna/luna';
 
-function harness(respond?: (request: LlmChatRequest) => { text: string }) {
+function harness(respond?: (request: LlmChatRequest) => { text: string }, embed?: (text: string) => number[]) {
   const storage = new MemoryStorage();
   const clock = new FakeClock('2026-03-10T12:00:00.000Z');
-  const provider = new MockProvider(MOCK_PROVIDER, respond ? { respond } : {});
+  const provider = new MockProvider(MOCK_PROVIDER, { ...(respond ? { respond } : {}), ...(embed ? { embed } : {}) });
   const settings = new SettingsService(storage, () => provider);
   const emitter = new TypedEmitter<EngineEvents>();
   const events: ChatEvent[] = [];
@@ -25,8 +28,20 @@ function harness(respond?: (request: LlmChatRequest) => { text: string }) {
     tryGetLoaded: () => ({}) as never,
     getCharacter: () => ({ pack: {} as never, character: { definition: { name: 'Luna' } } as never }),
   };
-  const memories = new MemoryService({ storage, settings, packs, providerFactory: () => provider, emitter, now: clock.now, logger: NOOP_LOGGER });
-  return { storage, clock, provider, settings, memories, events };
+  const embeddings = embed
+    ? new EmbeddingService({ storage, settings, providerFactory: () => provider, now: clock.now, logger: NOOP_LOGGER })
+    : undefined;
+  const memories = new MemoryService({
+    storage,
+    settings,
+    packs,
+    providerFactory: () => provider,
+    emitter,
+    now: clock.now,
+    logger: NOOP_LOGGER,
+    ...(embeddings ? { embeddings } : {}),
+  });
+  return { storage, clock, provider, settings, memories, events, embeddings };
 }
 
 async function seedSession(h: ReturnType<typeof harness>, id = 's1', turns: string[] = []) {
@@ -182,6 +197,76 @@ describe('MemoryService', () => {
     expect(parseJsonArray('[1, 2] and [3]')).toEqual([1, 2]);
     expect(parseJsonArray('nothing')).toBeUndefined();
     expect(parseJsonArray('{"a": [1]}')).toEqual([1]);
+  });
+});
+
+describe('MemoryService with an embedder', () => {
+  /** Toy vectors: a text scores on each theme it mentions, so wording and meaning can be pulled apart. */
+  const THEMES: ReadonlyArray<RegExp> = [/sister|hannah|family/i, /cat|miso|vet/i, /work|nurse|shift/i, /tea|coffee|drink/i];
+
+  function toyVector(text: string): number[] {
+    const raw = THEMES.map((pattern) => (pattern.test(text) ? 1 : 0.05));
+    const norm = Math.sqrt(raw.reduce((sum, v) => sum + v * v, 0));
+    return raw.map((v) => v / norm);
+  }
+
+  async function semantic(respond?: (request: LlmChatRequest) => { text: string }) {
+    const h = harness(respond, toyVector);
+    await h.settings.update({
+      providers: [MOCK_PROVIDER],
+      defaultProviderId: MOCK_PROVIDER.id,
+      memory: { ...DEFAULT_MEMORY_SETTINGS, embeddingModel: 'embed-1' },
+    });
+    return h;
+  }
+
+  const FILLER = [
+    'The bins go out on a Tuesday',
+    'They repainted the hallway last year',
+    'Their bicycle has a squeaky wheel',
+    'They keep the thermostat too low',
+  ];
+
+  it('recalls by meaning when the query shares no word with the memory', async () => {
+    const h = await semantic();
+    const hannah = await h.memories.add(REF, 'Hannah rings every Sunday evening', { source: 'character' });
+    for (const text of FILLER) await h.memories.add(REF, text, { source: 'character' });
+
+    const hits = await h.memories.search(REF, 'how is your sister?', 3);
+    expect(hits.map((m) => m.id)).toEqual([hannah.id]);
+    expect((await h.memories.get(hannah.id))?.recallCount).toBe(1);
+
+    // The same search without an embedder finds nothing at all.
+    const lexical = harness();
+    await lexical.memories.add(REF, 'Hannah rings every Sunday evening', { source: 'character' });
+    expect(await lexical.memories.search(REF, 'how is your sister?', 3)).toEqual([]);
+  });
+
+  it('puts the memory that matches in meaning into a tight prompt budget', async () => {
+    const h = await semantic();
+    for (const text of FILLER) await h.memories.add(REF, text, { source: 'character', importance: 1 });
+    h.clock.advance(60_000);
+    const cat = await h.memories.add(REF, 'Miso stops eating whenever the vet is mentioned', { source: 'character', importance: 1 });
+    h.clock.advance(60_000);
+    for (const text of FILLER) await h.memories.add(REF, `${text} again`, { source: 'character', importance: 1 });
+
+    const all = await h.memories.list(REF);
+    const picked = await h.memories.forPrompt(REF, 'is the cat alright?', 90);
+    expect(picked.map((m) => m.id)).toContain(cat.id);
+    expect(picked.length).toBeLessThan(all.length); // the budget really did leave memories out
+  });
+
+  it('skips a candidate that only paraphrases a memory it already has', async () => {
+    const paraphrase = 'Miso will not touch food once the vet has been named.';
+    const h = await semantic(() => ({ text: JSON.stringify([{ text: paraphrase, tags: [], importance: 3 }]) }));
+    await seedSession(h, 's1', ['hi', 'hello', 'the cat again', 'poor Miso']);
+    await h.settings.update({ memory: { ...DEFAULT_MEMORY_SETTINGS, embeddingModel: 'embed-1' } });
+    const existing = await h.memories.add(REF, 'Miso stops eating whenever the vet is mentioned', { source: 'character' });
+    for (const text of FILLER) await h.memories.add(REF, text, { source: 'character' });
+    expect(jaccard(tokenize(paraphrase), tokenize(existing.text))).toBeLessThan(CONSOLIDATION_DEDUPE_THRESHOLD);
+
+    expect(await h.memories.consolidate('s1')).toEqual([]);
+    expect((await h.memories.list(REF)).map((m) => m.text)).not.toContain(paraphrase);
   });
 });
 

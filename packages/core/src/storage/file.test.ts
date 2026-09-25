@@ -74,6 +74,9 @@ describe('FileStorage', () => {
     await b.memories.removeForCharacter('q/d');
     expect(await b.memories.list('q/d')).toEqual([]);
 
+    await b.embeddings.set('p/c', { embedder: 'mock / e1', dims: 2, vectors: { me2: { hash: 'h', data: 'AACAPwAAAAA=' } } });
+    expect(await b.embeddings.get('q/d')).toBeUndefined();
+
     await b.messages.remove('s1', m1.id);
     expect((await b.messages.list('s1')).map((m) => m.content)).toEqual(['hello']);
     await b.messages.remove('s1', 'missing'); // no-op
@@ -91,6 +94,9 @@ describe('FileStorage', () => {
     expect(await c.timers.list()).toEqual([]);
     expect((await c.memories.list('p/c')).map((m) => m.id)).toEqual(['me2']);
     expect(await c.memories.get('me3')).toBeUndefined();
+    expect(await c.embeddings.get('p/c')).toEqual({ embedder: 'mock / e1', dims: 2, vectors: { me2: { hash: 'h', data: 'AACAPwAAAAA=' } } });
+    await c.embeddings.removeForCharacter('p/c');
+    expect(await c.embeddings.get('p/c')).toBeUndefined();
   });
 
   it('writes atomically and leaves no temp files, even with concurrent writes', async () => {

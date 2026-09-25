@@ -12,7 +12,7 @@ import type { SealCache } from './seal-cache.js';
 import { policyHash } from './seal-cache.js';
 
 const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTimersPerSession', 'minRepeatIntervalMs', 'minDelayMs'] as const;
-const MEMORY_KEYS = ['enabled', 'consolidateEveryTurns', 'maxEntriesPerCharacter', 'promptBudgetTokens'] as const;
+const MEMORY_KEYS = ['enabled', 'semanticRanking', 'consolidateEveryTurns', 'maxEntriesPerCharacter', 'promptBudgetTokens'] as const;
 const SENSES_KEYS = ['includeInPrompt', 'watchDirs', 'calendarSources'] as const;
 const UPDATES_KEYS = ['automatic', 'enabled', 'allowDowngrade'] as const;
 /** `updates.enabled` and `updates.allowDowngrade` are updater/daemon rules, not settings the UI pins. */
@@ -99,9 +99,9 @@ export function parsePolicy(json: unknown): PolicyFile {
       for (const k of MEMORY_KEYS) {
         const v = (s.memory as Record<string, unknown>)[k];
         if (v === undefined) continue;
-        if (k === 'enabled') {
-          if (typeof v === 'boolean') m.enabled = v;
-          else problems.push('settings.memory.enabled must be a boolean');
+        if (k === 'enabled' || k === 'semanticRanking') {
+          if (typeof v === 'boolean') m[k] = v;
+          else problems.push(`settings.memory.${k} must be a boolean`);
         } else if (isNumber(v) && (v >= 0 || (v === UNLIMITED && MEMORY_LIMIT_KEYS.has(k)))) m[k] = Math.round(v);
         else problems.push(`settings.memory.${k} must be a non-negative number${MEMORY_LIMIT_KEYS.has(k) ? ', or -1 for unlimited' : ''}`);
       }
