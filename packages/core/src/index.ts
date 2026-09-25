@@ -13,7 +13,7 @@ export { FakeRunner } from './fake-runner.js';
 export type { FakeRunHandler, FakeRunOutcome } from './fake-runner.js';
 export { PromptBuilder, transcriptToMessages, STATE_JSON_CAP } from './prompt.js';
 export type { PromptInput, BuiltPrompt } from './prompt.js';
-export { ActionLoop, ACTION_LIMIT_NOTICE, resultPayload } from './action-loop.js';
+export { ActionLoop, ACTION_LIMIT_NOTICE, ACTION_REPAIR_NOTICE, isRepairable, resultPayload } from './action-loop.js';
 export type { ActionLoopOptions, TurnInput } from './action-loop.js';
 export { CapabilityDispatcher } from './dispatcher.js';
 export type { DispatcherOptions } from './dispatcher.js';

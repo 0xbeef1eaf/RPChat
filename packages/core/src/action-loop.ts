@@ -12,12 +12,13 @@ import type {
   LlmChatResponse,
   LlmMessage,
   LlmProvider,
+  RpErrorCode,
   RunLimits,
   SdkSurface,
   SerializedError,
   Session,
 } from '@rp/shared';
-import { RUN_ACTION_TOOL_NAME, RpError, serializeError } from '@rp/shared';
+import { RUN_ACTION_TOOL_NAME, RpError, capOf, serializeError } from '@rp/shared';
 import { recordExchange } from './services/exchanges.js';
 import type { Clock, EngineEmitter, Logger } from './types.js';
 import { NOOP_LOGGER } from './types.js';
@@ -45,6 +46,14 @@ export interface TurnInput {
   messages: LlmMessage[];
   useTools: boolean;
   maxActionRounds: number;
+  /**
+   * Extra action rounds a failure may buy, on top of `maxActionRounds`, when the round that hit
+   * the limit failed in a way a rewrite could fix (`isRepairable`). Without them the last thing
+   * the model hears about a broken action can be "reply with text only", and the user gets an
+   * apology where a working action was one fix away. `-1` (`UNLIMITED`) keeps granting them for as
+   * long as the model keeps failing repairably; default 0 — the round limit is the whole budget.
+   */
+  maxActionRepairs?: number;
   temperature?: number;
   maxTokens?: number;
   /** Who is acting (trigger is filled in per action). */
@@ -62,6 +71,9 @@ export interface TurnInput {
 }
 
 export const ACTION_LIMIT_NOTICE = '[system] action limit reached, reply with text only';
+/** Sent with the results of a failed round that bought one more (`TurnInput.maxActionRepairs`). */
+export const ACTION_REPAIR_NOTICE =
+  '[system] that action failed. You have one more action round: fix the cause the result names (read its `fix`) and run the corrected code — nothing new. If the result says rewriting cannot fix it, reply with text only and tell the user what is wrong, in your own voice.';
 
 interface PendingAction {
   purpose: string;
@@ -102,6 +114,16 @@ function withoutCodeComments(message: LlmMessage): LlmMessage {
   };
 }
 
+/**
+ * Add a line to a round's results. In fenced mode they are already one text part, so the line is
+ * folded into it rather than left sitting beside it as a second one.
+ */
+function appendText(parts: ContentPart[], text: string): void {
+  const last = parts.at(-1);
+  if (last?.type === 'text') last.text = `${last.text}\n\n${text}`;
+  else parts.push({ type: 'text', text });
+}
+
 function toolInput(input: unknown): { purpose: string; code: string } | undefined {
   if (!input || typeof input !== 'object') return undefined;
   const { purpose, code } = input as { purpose?: unknown; code?: unknown };
@@ -110,13 +132,118 @@ function toolInput(input: unknown): { purpose: string; code: string } | undefine
 }
 
 /**
+ * What each failure code means for the model's next move: the line of advice that goes back with
+ * the error as `fix`, and whether code written differently could get past it at all. `retryable`
+ * is what buys a failing round another one (`TurnInput.maxActionRepairs`): a method name typed
+ * wrong is one rewrite away from working, a permission the user switched off is not.
+ */
+const FAILURE_GUIDE: Record<RpErrorCode, { retryable: boolean; hint: string }> = {
+  SANDBOX_COMPILE: {
+    retryable: true,
+    hint: 'Your code did not compile. `line`, `column` and `frame` are action.ts coordinates — the lines you wrote: fix that line and run the corrected code.',
+  },
+  SANDBOX_RUNTIME: {
+    retryable: true,
+    hint: 'Your code threw. `line`, `column`, `frame` and `stack` are action.ts coordinates — the lines you wrote: fix the cause there and run the corrected code.',
+  },
+  SANDBOX_TIMEOUT: {
+    retryable: true,
+    hint: 'The run used up its time budget. Never sleep, poll or loop waiting inside an action: do the one thing now and leave the rest to sdk.timers.',
+  },
+  SANDBOX_MEMORY: {
+    retryable: true,
+    hint: 'The run ran out of memory. Work on less at a time: fewer items per call, no large strings built up in a loop.',
+  },
+  SANDBOX_CALL_BUDGET: {
+    retryable: true,
+    hint: 'One action may only make so many sdk calls. Reach the same result with fewer (one findAssets instead of a listAssets per folder), or split it over two actions.',
+  },
+  CAPABILITY_UNKNOWN: {
+    retryable: true,
+    hint: 'That method is not part of the sdk you have. Use one <sdk_reference> lists — `await sdk.help.module("<id>")` returns a module\'s full typings — and do not invent names.',
+  },
+  INVALID_ARGUMENT: {
+    retryable: true,
+    hint: 'The arguments did not match the method. Check its signature (`await sdk.help.module("<id>")` for the full typings) and call it again with the right shape.',
+  },
+  NOT_FOUND: {
+    retryable: true,
+    hint: 'What you named does not exist. Do not guess again: look it up first (sdk.pack.findAssets or sdk.pack.listAssets for media, the module\'s own list/get elsewhere) and use exactly what comes back.',
+  },
+  PATH_ESCAPE: {
+    retryable: true,
+    hint: 'The path left the folder this call may touch. Use one inside it, without "..", taken from a listing rather than written by hand.',
+  },
+  PERMISSION_DENIED: {
+    retryable: false,
+    hint: 'The user has this switched off, so running it again fails the same way. Tell them plainly what to switch on — the message names the place — and carry on in character.',
+  },
+  PERMISSION_PROMPT_REJECTED: {
+    retryable: false,
+    hint: 'The user said no. Accept it in character and do not ask again this turn.',
+  },
+  CAPABILITY_FAILED: {
+    retryable: false,
+    hint: 'The call failed on the host side, so rewriting the code will not help. If the message names something missing or unconfigured, say so in your own voice; otherwise carry on without it.',
+  },
+  LLM_PROVIDER: { retryable: false, hint: 'The model call behind this sdk method failed. Carry on without its answer.' },
+  LLM_ABORTED: { retryable: false, hint: 'The turn was stopped. Do not run anything else.' },
+  STORAGE: {
+    retryable: false,
+    hint: 'The app could not read or write its own files, which different code will not fix. Carry on, and do not count on what was being saved.',
+  },
+  PACK_INVALID: { retryable: false, hint: 'Something in the character pack is not valid. An action cannot fix that; carry on in character.' },
+  PACK_CONFLICT: { retryable: false, hint: 'That name is already taken in the character pack. Pick another one, or carry on in character.' },
+  INTERNAL: { retryable: false, hint: 'Something inside the app failed. Running the same call again is unlikely to help; carry on in character.' },
+};
+
+/**
+ * The guide for one failure. An sdk call that failed and was never caught arrives as
+ * `SANDBOX_RUNTIME` — it threw, inside the model's own code — carrying the capability's own code
+ * under `details.code`; that inner code is the one worth advising on, so it wins.
+ */
+function guideFor(error: SerializedError): { retryable: boolean; hint: string } {
+  const details = error.details;
+  if (details !== null && typeof details === 'object' && !Array.isArray(details)) {
+    const inner = (details as { code?: unknown }).code;
+    if (typeof inner === 'string' && inner in FAILURE_GUIDE) return FAILURE_GUIDE[inner as RpErrorCode];
+  }
+  return FAILURE_GUIDE[error.code] ?? FAILURE_GUIDE.INTERNAL;
+}
+
+/** Whether a finished run failed in a way the model could plausibly write its way out of. */
+export function isRepairable(result: CodeRunResult | undefined): boolean {
+  if (!result) return false;
+  if (result.error && guideFor(result.error).retryable) return true;
+  return result.calls.some((call) => !call.ok && call.error !== undefined && guideFor(call.error).retryable);
+}
+
+/**
+ * Calls that failed without ending the run: the code caught them, or never awaited them, so the
+ * run reports `ok: true` (or a different error) and the model would otherwise be told everything
+ * worked. Each one names the sdk method and carries the same detail a failed run gets. The call
+ * that *did* end the run is left out — it is already the run's `error`, with the line it was
+ * made on.
+ */
+function unreportedCallFailures(result: CodeRunResult): Array<Record<string, unknown>> {
+  const runMessage = result.ok ? undefined : result.error?.message;
+  const out: Array<Record<string, unknown>> = [];
+  for (const call of result.calls) {
+    if (call.ok || call.error === undefined) continue;
+    if (runMessage !== undefined && runMessage.includes(call.error.message)) continue;
+    out.push({ call: `sdk.${call.module}.${call.method}`, ...errorForModel(call.error) });
+  }
+  return out;
+}
+
+/**
  * Everything the model is told about a failure, so it can fix the code and try
- * again in the next round: the message, where in *its own* source the failure
- * happened, that line quoted with a caret, and the mapped stack (the sandbox
- * maps both back through the source map before they get here).
+ * again in the next round: the message, how to correct it (`fix`), where in *its
+ * own* source the failure happened, that line quoted with a caret, and the mapped
+ * stack (the sandbox maps both back through the source map before they get here).
  */
 export function errorForModel(error: SerializedError): Record<string, unknown> {
-  const out: Record<string, unknown> = { code: error.code, message: error.message };
+  const out: Record<string, unknown> = { code: error.code, message: error.message, fix: guideFor(error).hint };
   const details = error.details && typeof error.details === 'object' && !Array.isArray(error.details) ? { ...(error.details as Record<string, unknown>) } : undefined;
   if (details) {
     // Lifted out of `details` rather than copied: the model reads them, and the
@@ -136,6 +263,8 @@ export function errorForModel(error: SerializedError): Record<string, unknown> {
 export function resultPayload(result: CodeRunResult): Record<string, unknown> {
   const payload: Record<string, unknown> = { ok: result.ok, returnValue: result.returnValue ?? null };
   if (result.error) payload.error = errorForModel(result.error);
+  const failedCalls = unreportedCallFailures(result);
+  if (failedCalls.length > 0) payload.failedCalls = failedCalls;
   if (result.logs.length > 0) payload.logs = result.logs.map((l) => `${l.level}: ${l.message}`);
   return payload;
 }
@@ -219,11 +348,15 @@ export class ActionLoop {
 
     try {
       let round = 0;
+      /** Rounds the model may still act in; grows as failures buy repair rounds. */
+      let budget = input.maxActionRounds;
+      let repairs = 0;
+      const maxRepairs = capOf(input.maxActionRepairs ?? 0);
       let exhausted = false;
       for (;;) {
         this.throwIfAborted(input.signal);
         const before = message.content;
-        const response = await callProvider(input.useTools && round < input.maxActionRounds, round);
+        const response = await callProvider(input.useTools && round < budget, round);
 
         const pending: PendingAction[] = [];
         if (input.useTools) {
@@ -239,9 +372,9 @@ export class ActionLoop {
         settleText(before, response, fenced.length > 0);
 
         if (pending.length === 0) break;
-        if (round >= input.maxActionRounds) {
+        if (round >= budget) {
           // The model asked for actions after its last allowed round: refuse them and ask for text.
-          this.logger.warn(`[action-loop] action limit (${input.maxActionRounds}) reached in session ${sessionId}`);
+          this.logger.warn(`[action-loop] action limit (${budget}) reached in session ${sessionId}`);
           exhausted = true;
           conversation.push(withoutCodeComments(response.message));
           conversation.push({ role: 'user', content: this.refusedResults(pending) });
@@ -280,13 +413,22 @@ export class ActionLoop {
           }
         }
         if (fencedResults.length > 0) resultParts.push({ type: 'text', text: fencedResults.join('\n') });
-        conversation.push({ role: 'user', content: resultParts });
         round += 1;
 
-        if (round >= input.maxActionRounds) {
-          exhausted = true;
-          break;
+        if (round >= budget) {
+          // Out of rounds. A round that ended in a fixable failure buys another one, so the model
+          // gets to act on the `fix` it was just handed instead of being told to stop acting.
+          if (repairs < maxRepairs && ran.some(({ action }) => isRepairable(action.result))) {
+            repairs += 1;
+            budget += 1;
+            this.logger.info(`[action-loop] granting repair round ${repairs} in session ${sessionId}`);
+            appendText(resultParts, ACTION_REPAIR_NOTICE);
+          } else {
+            exhausted = true;
+          }
         }
+        conversation.push({ role: 'user', content: resultParts });
+        if (exhausted) break;
       }
 
       if (exhausted) {

@@ -588,6 +588,7 @@ export class ChatService {
         messages,
         useTools,
         maxActionRounds: settings.maxActionRounds,
+        maxActionRepairs: settings.maxActionRepairs,
         actor: { packId: pack.manifest.id, characterId: character.definition.id, packRoot: pack.root },
         surface,
         limits: settings.runLimits,

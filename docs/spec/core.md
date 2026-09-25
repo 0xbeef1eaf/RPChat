@@ -86,15 +86,37 @@ There is deliberately no second scope. A nested `lib` shadowing an outer one is 
 ```
 emit turn-started
 create assistant message (empty) → emit message-added
-for round in 0..maxActionRounds:
+budget = maxActionRounds
+for round in 0..budget:
   provider.chat(request, { onTextDelta → append to message.content, emit text-delta })
   actions = tool_use parts named run_action (+ fenced blocks from text when in fenced mode or when found anyway)
   if none: break
   for each action (sequential): emit action-started; runner.run(...); attach result; emit action-finished
-  append tool_result parts (JSON of { ok, returnValue, error, logs }) to the next request
-  if round == max: append a final user message "[system] action limit reached, reply with text only" and do one last provider.chat without tools
+  append tool_result parts (JSON of { ok, returnValue, error, failedCalls, logs }) to the next request
+  if round == budget and a result failed repairably and repairs < maxActionRepairs:
+    budget += 1 and append ACTION_REPAIR_NOTICE to those same results
+  else if round == budget: append a final user message "[system] action limit reached, reply with text only" and do one last provider.chat without tools
 persist message, emit message-updated, turn-finished; on error attach error and emit error
 ```
+Failures as the model gets them (`errorForModel`, `resultPayload`): `code`, `message`, a `fix` line
+taken from `FAILURE_GUIDE` — one per `RpErrorCode`, saying how to correct that kind of failure — and,
+for its own code, `line`/`column`/`frame`/`stack` in `action.ts` coordinates. An sdk call that failed
+and was never caught arrives as `SANDBOX_RUNTIME` carrying the capability's own code under
+`details.code`; that inner code is what the `fix` is chosen by. Calls that failed *without* ending the
+run (caught, or never awaited) are listed under `failedCalls` — `call: "sdk.<module>.<method>"` plus the
+same detail — so a `try/catch` cannot report success where a call failed; the call that did end the run
+is left out, it is already the run's `error`. `PromptBuilder` replays a stored result through the same
+`resultPayload`, so a replayed failure reads exactly as it did live.
+
+**Repair rounds** (`TurnInput.maxActionRepairs`, `settings.maxActionRepairs`, default 2, `-1`
+unlimited): when the round that used up the budget failed in a way `isRepairable` says different code
+could get past — its own compile/runtime error, a wrong argument, an unknown method, a path that
+escaped, a budget it can split — the loop grants one more round and appends `ACTION_REPAIR_NOTICE`
+to that round's results instead of ending the turn, up to the cap. A failure a rewrite cannot fix
+(`PERMISSION_DENIED`, `PERMISSION_PROMPT_REJECTED`, `CAPABILITY_FAILED`, …) grants nothing: the
+character is told plainly, in the same `fix`, that retrying is not the answer and to tell the user.
+The model is never *forced* to act again — a turn that replies with text only after a failure ends
+there, as it always did.
 Abort: `chat.abort(sessionId)` aborts the provider `signal` and the runner `signal`; partial text is kept and persisted.
 Model traffic: with `TurnInput.captureExchanges` (ChatService passes `settings.debug.showModelTraffic`, plus `providerLabel` = the provider config's label or id) every provider call emits exactly one `model-exchange` chat event (`ModelExchange`: kind `turn`, `round` index from 0, the final text-only call after the action limit included, `turnId`, `messageId`, a `structuredClone` snapshot of system/messages/tools taken before the call, then `response` with usage/stop reason or the serialized `error`, and `durationMs`). `sdk.llm.ask` (and screenshot descriptions) emit the same event with kind `llm.ask`, memory extraction with kind `memory`; all three go through `services/exchanges.ts` `recordExchange`. When the setting is off nothing is copied or emitted.
 `sdk.chat.emote` during an action appends a separate assistant message *before* the streaming one is finalised; that is fine — order them by createdAt.
@@ -117,6 +139,8 @@ What this gives up is ordering between a background run and a turn. Two runs may
 - create session → greeting message present; onSessionStart behaviour ran (FakeRunner asserts hook + says something via invoker → message-added)
 - full turn: mock provider returns tool_use run_action → FakeRunner returns value → second mock turn returns text; assert event order and persisted message with actions[0].result
 - fenced fallback mode (supportsTools false) extracts ```action block and feeds `<action_result>` back
+- a repairable failure in the last allowed round buys one more (`maxActionRepairs`): the results carry the error with its `fix` and `ACTION_REPAIR_NOTICE`, the tool is still offered, and the corrected action runs; in fenced mode the notice is folded into the `<action_result>` text part rather than added beside it; a `PERMISSION_DENIED` failure buys nothing and the turn goes straight to the text-only call
+- a call that failed inside an action that returned `ok: true` comes back under `failedCalls`; the call that ended the run does not come back twice
 - permission: media switched off under Settings → Permissions → CapabilityResult PERMISSION_DENIED (reason names the settings page) + audit entry denied; switched on (the default) → host handler invoked, for every installed character alike; prompt-level → prompter called, `allow-session` remembered; `permissions-matrix.test.ts` checks every non-trusted module × policy state across effective set, dispatcher, surface and prompt
 - library: define through the dispatcher from a serialised function → the file `characters/<id>/lib/<name>.ts` holds `// <description>` + the function, list/source round-trip; the next turn's `CodeRunRequest.prelude` carries it (FakeRunner), as do `timers.runLater` handlers, event handlers and behaviour hooks; the prompt shows `<library>` with params after `<sdk_reference>`; bad names, oversized or non-function sources are rejected; remove deletes the file; the library survives sessions of the same character and is not visible to another character; a `lib/*.ts` the author shipped (Luna with an extra file, Makima's `glance`) is listed and in the prelude from the first install, a broken shipped file is skipped; functions left in character state are migrated to files on `start()` and on install
 - state handler scoping and caps; timers fire (use fake `now` + exposed `timers.fireDue()` for deterministic tests)

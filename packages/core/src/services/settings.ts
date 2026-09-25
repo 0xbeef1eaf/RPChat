@@ -1,5 +1,5 @@
 import type { AppSettings, LlmProvider, ModelInfo, ProviderConfig, Storage } from '@rp/shared';
-import { RpError } from '@rp/shared';
+import { RpError, UNLIMITED } from '@rp/shared';
 import { mergeSettings } from '../defaults.js';
 
 export type ProviderFactory = (config: ProviderConfig) => LlmProvider;
@@ -33,6 +33,7 @@ export class SettingsService {
       delete next.defaultProviderId;
     }
     if (!Number.isFinite(next.maxActionRounds) || next.maxActionRounds < 0) next.maxActionRounds = current.maxActionRounds;
+    if (!Number.isFinite(next.maxActionRepairs) || next.maxActionRepairs < UNLIMITED) next.maxActionRepairs = current.maxActionRepairs;
     if (!Number.isFinite(next.contextTokenBudget) || next.contextTokenBudget < 1000) {
       next.contextTokenBudget = current.contextTokenBudget;
     }
