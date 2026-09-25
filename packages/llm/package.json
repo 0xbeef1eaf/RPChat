@@ -12,6 +12,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
-  "dependencies": { "@rp/shared": "workspace:*", "@anthropic-ai/sdk": "^0.125.0", "openai": "^7.15.0" },
-  "devDependencies": { "typescript": "^5.9.3", "vitest": "^5.0.0", "@types/node": "^22" }
+  "dependencies": { "@rp/shared": "workspace:*", "@anthropic-ai/sdk": "^0.128.0", "openai": "^7.21.0" },
+  "devDependencies": { "typescript": "^5.9.3", "vitest": "^5.0.1", "@types/node": "^22" }
 }
