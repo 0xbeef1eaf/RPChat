@@ -7,7 +7,8 @@ interface SessionPanelProps {
   onSave: (session: Session) => Promise<boolean>;
   /** Omitted while the policy forbids deleting sessions — the button is then not rendered. */
   onDelete?: (() => void) | undefined;
-  onReset: () => void;
+  /** Omitted while the policy forbids resetting the session state — the button is then not rendered. */
+  onReset?: (() => void) | undefined;
   onClose: () => void;
 }
 
@@ -86,14 +87,16 @@ export function SessionPanel({ session, providers, onSave, onDelete, onReset, on
               Delete session
             </button>
           ) : null}
-          <button
-            type="button"
-            className="btn"
-            onClick={onReset}
-            title="Forget scratch state, timers, event subscriptions, the history summary and the status line; messages and memories stay"
-          >
-            Reset session state
-          </button>
+          {onReset ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={onReset}
+              title="Forget this session's scratch state, timers, event subscriptions, the history summary and the status line; messages, the character's own state and its memories stay"
+            >
+              Reset session state
+            </button>
+          ) : null}
           <span className="grow" />
           <button type="button" className="btn" onClick={onClose}>
             Close

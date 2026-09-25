@@ -159,7 +159,7 @@ export function ChatView() {
           providers={settings?.providers ?? []}
           onSave={saveSession}
           onDelete={canDeleteSession ? () => setConfirmDelete(true) : undefined}
-          onReset={() => setConfirmReset(true)}
+          onReset={restrictions.allowResetState ? () => setConfirmReset(true) : undefined}
           onClose={() => setPanelOpen(false)}
         />
       ) : null}

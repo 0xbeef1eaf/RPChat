@@ -545,6 +545,7 @@ when a reply is genuinely being cut short, and retry/reset/delete keep working o
 | `allowStopGeneration` | `true` | *Stop* in the composer is disabled: a reply runs to the end. | `chat:abort`, plus `chat:retry`, `sessions:resetState`, `sessions:removeMessage`, `sessions:clearMessages` **only while a turn is running** (each aborts it first) |
 | `allowDeleteSession` | `true` | No *Delete session* in the session panel. | `sessions:remove` |
 | `allowDeleteHistory` | `true` | No *Clear history*, no per-message delete. | `sessions:clearMessages`, `sessions:removeMessage` |
+| `allowResetState` | `true` | No *Reset session state* in the session panel. Session-scoped only — the character's own `sdk.state.*` and its memories outlive a reset regardless. Also the side door out of `allowRemoveEvents`: a reset drops every subscription at once. | `sessions:resetState` |
 | `allowDeleteMemories` | `true` | No *Forget* in the memories panel; add/edit still work. | `memories:remove` |
 | `allowRemoveEvents` | `true` | No *Remove* in the events drawer. | `events:remove` |
 | `allowCloseMedia` | `true` | No *Close media* in the chat header. Characters' own `sdk.media.close`/`closeAll` still work — they never cross this channel. | `media:closeAll` |

@@ -296,6 +296,15 @@ export interface AppRestrictions {
   allowDeleteSession: boolean;
   /** `false` refuses `sessions.clearMessages` and `sessions.removeMessage` — the chat history cannot be erased. */
   allowDeleteHistory: boolean;
+  /**
+   * `false` refuses `sessions.resetState` — a conversation cannot be started over from its
+   * runtime side. What a reset throws away is session-scoped only: `sdk.state.session.*`, pending
+   * timers, event subscriptions, the rolling history summary and the status line. The messages,
+   * the character's own `sdk.state.*` and its memories persist across a reset either way — this
+   * key is about the scratch space, not about what the character knows. It is also the side door
+   * out of `allowRemoveEvents`: one reset unsubscribes every handler at once.
+   */
+  allowResetState: boolean;
   /** `false` refuses `memories.remove` — what a character remembers cannot be deleted. */
   allowDeleteMemories: boolean;
   /** `false` refuses `events.remove` — a character's event handlers cannot be unsubscribed by hand. */
@@ -325,6 +334,7 @@ export const DEFAULT_APP_RESTRICTIONS: AppRestrictions = {
   allowStopGeneration: true,
   allowDeleteSession: true,
   allowDeleteHistory: true,
+  allowResetState: true,
   allowDeleteMemories: true,
   allowRemoveEvents: true,
   allowCloseMedia: true,
@@ -340,6 +350,7 @@ export const APP_ALLOW_KEYS = [
   'allowStopGeneration',
   'allowDeleteSession',
   'allowDeleteHistory',
+  'allowResetState',
   'allowDeleteMemories',
   'allowRemoveEvents',
   'allowCloseMedia',

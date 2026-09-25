@@ -100,6 +100,11 @@ export const POLICY_RESTRICTIONS: ReadonlyArray<{ key: keyof AppRestrictions; la
   { key: 'allowStopGeneration', label: 'Stop a reply', hint: 'Cut a reply short while it is being written. Off also blocks retrying, resetting or editing the history while one is running, since those stop it too.' },
   { key: 'allowDeleteSession', label: 'Delete conversations', hint: 'Remove a whole conversation.' },
   { key: 'allowDeleteHistory', label: 'Delete chat history', hint: 'Clear a conversation or remove single messages from it.' },
+  {
+    key: 'allowResetState',
+    label: 'Reset session state',
+    hint: 'Start a conversation over from its runtime side: the session’s scratch state, timers, event subscriptions, history summary and status line. The messages, the character’s own state and its memories outlive a reset either way.',
+  },
   { key: 'allowDeleteMemories', label: 'Delete memories', hint: 'Remove what a character remembers.' },
   { key: 'allowRemoveEvents', label: 'Remove event handlers', hint: 'Unsubscribe a character’s handlers by hand.' },
   { key: 'allowCloseMedia', label: 'Close media', hint: 'Sweep a character’s open overlays off the screen by hand. Off hides the button; the character’s own scripts still close their media.' },

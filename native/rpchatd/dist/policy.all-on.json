@@ -24,6 +24,7 @@
     "allowStopGeneration": false,
     "allowDeleteSession": false,
     "allowDeleteHistory": false,
+    "allowResetState": false,
     "allowDeleteMemories": false,
     "allowRemoveEvents": false,
     "allowCloseMedia": false,

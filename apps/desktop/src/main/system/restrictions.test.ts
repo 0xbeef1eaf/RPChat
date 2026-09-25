@@ -62,6 +62,7 @@ describe('app restrictions — which channels they close', () => {
     expect(refusalFor('sessions:remove', withOff('allowDeleteSession'))).toMatch(/Deleting a session/);
     expect(refusalFor('sessions:clearMessages', withOff('allowDeleteHistory'))).toMatch(/chat history/);
     expect(refusalFor('sessions:removeMessage', withOff('allowDeleteHistory'))).toMatch(/Deleting a message/);
+    expect(refusalFor('sessions:resetState', withOff('allowResetState'))).toMatch(/Resetting the session state/);
     expect(refusalFor('memories:remove', withOff('allowDeleteMemories'))).toMatch(/Deleting a memory/);
     expect(refusalFor('events:remove', withOff('allowRemoveEvents'))).toMatch(/event handler/);
     expect(refusalFor('media:closeAll', withOff('allowCloseMedia'))).toMatch(/Closing a character’s media/);
@@ -74,6 +75,16 @@ describe('app restrictions — which channels they close', () => {
     for (const open of ['packs:list', 'sessions:list', 'sessions:messages', 'memories:list', 'events:list', 'chat:send']) {
       expect(refusalFor(open, off), open).toBeNull();
     }
+  });
+
+  it('keeps the messages reachable when only the reset is closed, and the reset when only they are', () => {
+    // A reset is not a delete and a delete is not a reset: neither key covers the other.
+    const noReset = withOff('allowResetState');
+    expect(refusalFor('sessions:clearMessages', noReset)).toBeNull();
+    expect(refusalFor('sessions:removeMessage', noReset)).toBeNull();
+    expect(refusalFor('events:remove', noReset)).toBeNull();
+    const noHistory = withOff('allowDeleteHistory');
+    expect(refusalFor('sessions:resetState', noHistory)).toBeNull();
   });
 
   it('takes only the by-hand sweep away with allowCloseMedia, leaving the rest of the media channel open', () => {
@@ -134,7 +145,7 @@ describe('the restriction table matches the real IPC surface', () => {
   });
 
   it('guards every channel the guards name', () => {
-    const mustBeGuarded = ['packs:uninstall', 'packs:install', 'chat:abort', 'sessions:remove', 'sessions:clearMessages', 'sessions:removeMessage', 'memories:remove', 'events:remove', 'media:closeAll', 'sandbox:run', 'sandbox:cancel', 'editor:installToApp'];
+    const mustBeGuarded = ['packs:uninstall', 'packs:install', 'chat:abort', 'sessions:remove', 'sessions:clearMessages', 'sessions:removeMessage', 'sessions:resetState', 'memories:remove', 'events:remove', 'media:closeAll', 'sandbox:run', 'sandbox:cancel', 'editor:installToApp'];
     for (const c of mustBeGuarded) expect(isRestrictable(c), c).toBe(true);
   });
 
@@ -152,6 +163,8 @@ describe('allowStopGeneration', () => {
     // Sending and retrying are not stopping, so the table itself leaves them alone.
     expect(refusalFor('chat:send', withOff('allowStopGeneration'))).toBeNull();
     expect(refusalFor('chat:retry', withOff('allowStopGeneration'))).toBeNull();
+    // Nor is resetting: with its own key still on, a reset is refused only while a reply runs.
+    expect(refusalFor('sessions:resetState', withOff('allowStopGeneration'))).toBeNull();
   });
 
   it('knows which channels cut a reply short on their way past', () => {
@@ -168,6 +181,7 @@ describe('allowStopGeneration', () => {
     expect(refusalForStoppingTurn(DEFAULT_APP_RESTRICTIONS)).toBeNull();
     // Another restriction being off does not make a running reply untouchable.
     expect(refusalForStoppingTurn(withOff('allowDeleteHistory'))).toBeNull();
+    expect(refusalForStoppingTurn(withOff('allowResetState'))).toBeNull();
     expect(refusalForStoppingTurn(withOff('allowStopGeneration'))).toBe('Stopping a reply is disabled by the system policy: wait for this one to finish');
     expect(refusalForStoppingTurn(withOff('allowStopGeneration'), 'the household admin')).toMatch(/managed by the household admin\): wait for this one to finish$/);
   });
