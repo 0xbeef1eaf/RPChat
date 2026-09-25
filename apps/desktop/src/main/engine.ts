@@ -32,6 +32,8 @@ import { VoiceModelInstaller } from './capabilities/voice-model-install.js';
 import { VoiceEngine } from './capabilities/voice-engine.js';
 import { QwenRunner } from './capabilities/qwen-engine.js';
 import { QwenModelInstaller } from './capabilities/qwen-install.js';
+import { EmbedModelInstaller } from './memory/embed-model.js';
+import { LocalEmbedder } from './memory/local-embedder.js';
 import { WebHandler } from './capabilities/web.js';
 import { WidgetsHandler } from './capabilities/widgets.js';
 import { electronCapturer } from './capture.js';
@@ -95,6 +97,8 @@ export interface AppServices {
   quitGuard: QuitGuard;
   /** The long-lived relaunch registration with rpchatd (unregistered before an authorised quit). */
   keepalive: KeepaliveLink;
+  /** The on-device embedding model behind semantic memory search, downloaded on request only. */
+  embedModel: EmbedModelInstaller;
   commands: CommandRunner;
   permissionPrompts: PendingPrompts<PermissionDecision>;
   uiPrompts: PendingPrompts<UiPromptAnswer>;
@@ -142,6 +146,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   // Declared up front: handler closures reference it before the Engine is constructed.
   let engine: Engine;
   const dataDir = path.join(opts.userData, 'data');
+  const modelsDir = path.join(opts.userData, 'models');
   const packsDir = path.join(opts.userData, 'packs');
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(packsDir, { recursive: true });
@@ -454,6 +459,17 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     voiceStudio,
   });
 
+  // The fallback for a provider with no embeddings endpoint. Resolved on demand and only when the
+  // model is already on disk: a turn reaching for a memory must never start a download.
+  const embedModel = new EmbedModelInstaller({ modelsDir, logger });
+  let localEmbedder: LocalEmbedder | undefined;
+  const localEmbedderFor = async (): Promise<LocalEmbedder | undefined> => {
+    const dir = await embedModel.installed();
+    if (!dir) return undefined;
+    localEmbedder ??= new LocalEmbedder({ modelDir: dir });
+    return localEmbedder;
+  };
+
   engine = new Engine({
     storage,
     registry: createStandardRegistry(),
@@ -495,6 +511,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     appVersion: opts.appVersion,
     logger,
     locale: app.getLocale(),
+    localEmbedder: localEmbedderFor,
     // `senses` is the phase-2 `EngineOptions.senses` (SensesProvider); spread so older core builds ignore it.
     ...({ senses: senses.provider } as object),
   });
@@ -725,6 +742,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     daemon,
     quitGuard,
     keepalive,
+    embedModel,
     commands,
     permissionPrompts,
     uiPrompts,

@@ -79,17 +79,48 @@ keyword ranking.
 - **Failure**: logged once, not retried for a minute; the turn ranks lexically meanwhile.
 - `check()` embeds one short text and reports `EmbeddingStatus` (`source`/`label`/`dims`/`problem`) for the settings
   screen — the only honest test of an endpoint and a model name that are invisible from the chat window otherwise.
+- A resolution that finds no embedder is not cached, so the on-device model below starts being used as soon as it
+  finishes downloading, without a restart.
+
+## The on-device embedder (`apps/desktop/src/main/memory/`)
+
+What answers when the provider cannot: Anthropic publishes no embeddings endpoint, and a user with no local LLM
+server has nothing to point the provider path at.
+
+- **Model** (`embed-model.ts`): `Xenova/bge-small-en-v1.5`, the int8 ONNX export — 34 MB and a few milliseconds a
+  batch against ~130 MB for float32, which is the right trade for a fallback. Two files
+  (`onnx/model_quantized.onnx`, `vocab.txt`) under `<userData>/models/bge-small-en-v1.5/`, fetched by
+  `EmbedModelInstaller` on top of the shared `HfModelInstaller` (`capabilities/hf-install.ts`, extracted from the
+  Qwen installer, which now sits on it too). The revision is pinned to a commit: file sizes are the only integrity
+  check Hugging Face offers, and they mean nothing against a moving `main`.
+- **Not fetched on start, and never from inside a turn.** A download that begins because a character reached for a
+  memory is a surprise; Settings → Memory offers it, `memories.embeddingInstall()` starts it, and the engine's
+  `localEmbedder` hook resolves to an embedder only once the files are on disk.
+- **Tokeniser** (`wordpiece.ts`): the `bert-base-uncased` recipe written out — strip control characters, lower-case,
+  drop combining marks, split on whitespace/punctuation, one token per CJK character, then greedy longest-prefix
+  WordPiece with `##` continuations and `[UNK]` for a word that does not fully match. Taking this from a library
+  would mean a transformers stack and a second copy of ONNX Runtime for a hundred lines whose specification is
+  public and testable against known ids.
+- **Inference** (`local-embedder.ts`): `onnxruntime-node`, imported on first use (~46 MB of native library, and most
+  sessions never ask for a vector). Batches are padded to their own longest row rather than to the model's 512, and
+  split into runs of `EMBED_ROWS_PER_RUN` (16) so one long memory does not make every other row pay for padding.
+  The sentence vector is the `[CLS]` position of `last_hidden_state` — what BGE is trained for — scaled to unit
+  length; output of the wrong width is refused rather than ranked with.
 
 Tests: rank scoring (tags beat body words, importance/recency tie-breaks, the same standard scores for two models
 with different baselines, a boost only for standing out), `EmbeddingService` (cache re-use and invalidation, backlog,
 failure cooldown, on-device fallback, `duplicateOf`), recall of a memory sharing no word with the query, forPrompt
 budget and dedupe, consolidate with MockProvider returning fenced JSON (adds, dedupes, prunes, emits event), handler
-limits, FileStorage round-trip.
+limits, FileStorage round-trip. Desktop: the tokeniser against hand-checked ids (accents, punctuation, CJK, a word
+that only exists as pieces, truncation, batch padding and mask), the embedder against a stubbed session (feeds,
+run splitting, `[CLS]` pooling, a refused output shape) and the installer's file layout.
 
 ## Renderer
 
 - **Settings → Memory**: a "Recall by meaning" switch, the embeddings provider picker, the embedding model field and
-  a **Check embedder** button showing what `memories.embeddingStatus()` reports.
+  a **Check embedder** button showing what `memories.embeddingStatus()` reports. When no provider can embed, the
+  same block offers the 34 MB on-device model (`memories.embeddingInstall()`) and counts the download up, polling
+  only while it is in flight.
 - **Memories panel** per character (from the session's character; open from the character header and
   from the Packs view): list with search box, importance stars (editable), tags (editable chips), text
   (inline edit), source badge, "Forget" button with confirm, "Add memory" form, "Consolidate now" button
@@ -100,5 +131,9 @@ limits, FileStorage round-trip.
 
 ## Desktop main
 
-`IpcApi.memories` → `engine.memories` service methods (`search` passes `touch: false`; `embeddingStatus` calls
-`engine.embeddings.check()`); forward `memory-added` like other chat events.
+`IpcApi.memories` → `engine.memories` service methods (`search` passes `touch: false`); forward `memory-added` like
+other chat events. `embeddingStatus` merges the two halves nobody else can see together — `engine.embeddings.check()`
+for whether anything can embed, `EmbedModelInstaller.currentStatus()` for whether the on-device model is there —
+and `embeddingInstall` starts that download and answers with the status straight away.
+`EngineOptions.localEmbedder` is wired to a `LocalEmbedder` over the installed model directory, or `undefined`
+while there is none.

@@ -80,8 +80,13 @@ Tooling: pnpm workspaces, TypeScript 5.9 (ESM, `NodeNext`), vitest 3, zod 4,
 esbuild (transpile only), quickjs-emscripten 0.32, Electron 44 + electron-vite
 5 + React 19, fflate for zip, Monaco 0.56 for the app's code boxes (loaded on
 demand, its language workers served as `file://` chunks — see
-`apps/desktop/src/renderer/lib/monaco.ts`). No native Node modules anywhere
-(the sandbox is wasm), so no `electron-rebuild` step is needed.
+`apps/desktop/src/renderer/lib/monaco.ts`). The sandbox is wasm, and the two
+native modules the app does load — `sherpa-onnx-node` for speech and
+`onnxruntime-node` for the on-device memory embedder (docs/spec/memory.md),
+both imported on demand — ship prebuilt N-API binaries, so there is still no
+`electron-rebuild` step (`npmRebuild: false`). `onnxruntime-node` carries every
+platform's runtime in one package, so the packaging config drops the ones that
+are not being built.
 
 Every package: `src/index.ts` public entry, `pnpm build` = `tsc -p tsconfig.json`
 to `dist/`, `pnpm test` = vitest, `pnpm typecheck` = `tsc --noEmit`.

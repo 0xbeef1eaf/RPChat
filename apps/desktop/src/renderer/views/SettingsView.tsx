@@ -145,10 +145,19 @@ function MediaLimitFields({ settings }: { settings: AppSettings }) {
 
 /** One line of plain English for what `memories.embeddingStatus()` came back with. */
 function embeddingStatusText(status: EmbeddingStatus): string {
+  const install = status.install;
+  if (install?.state === 'downloading') {
+    const pct = install.total ? Math.round(((install.received ?? 0) / install.total) * 100) : 0;
+    return `Fetching the on-device model — ${pct}%.`;
+  }
+  if (install?.state === 'failed') return `The on-device model did not download: ${install.error ?? 'unknown error'}`;
   if (status.problem) return `Keyword ranking only — ${status.problem}`;
   const where = status.source === 'local' ? 'on this machine' : 'through the provider';
   return `Ranking by meaning ${where}: ${status.label ?? 'embedder'}${status.dims ? `, ${status.dims} dimensions` : ''}.`;
 }
+
+/** Size of the on-device model, quoted before anyone commits to fetching it. */
+const EMBED_MODEL_MB = 34;
 
 /**
  * `settings.memory`: where the vectors behind semantic recall come from.
@@ -173,6 +182,26 @@ function SemanticMemoryFields({ settings }: { settings: AppSettings }) {
       setChecking(false);
     }
   };
+  // Poll only while the model is coming down, so the line counts up and then stops.
+  useEffect(() => {
+    if (status?.install?.state !== 'downloading') return;
+    const timer = setInterval(() => {
+      void api()
+        .memories.embeddingStatus()
+        .then(setStatus)
+        .catch(() => undefined);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [status?.install?.state]);
+
+  const download = async () => {
+    try {
+      setStatus(await api().memories.embeddingInstall());
+    } catch (err) {
+      reportError('Could not start the download', err);
+    }
+  };
+
   const commitModel = () => {
     const next = model.trim();
     if (next !== (settings.memory.embeddingModel ?? '')) {
@@ -180,6 +209,8 @@ function SemanticMemoryFields({ settings }: { settings: AppSettings }) {
       patchMemory({ embeddingModel: next.length > 0 ? next : undefined });
     }
   };
+  const offerDownload =
+    settings.memory.semanticRanking && status !== null && status.source !== 'provider' && (status.install?.state === 'absent' || status.install?.state === 'failed');
   return (
     <>
       <div className="field">
@@ -240,6 +271,19 @@ function SemanticMemoryFields({ settings }: { settings: AppSettings }) {
           {status ? embeddingStatusText(status) : 'Changing the model re-embeds every memory in the background.'}
         </span>
       </div>
+      {offerDownload ? (
+        <div className="field">
+          <span className="field-label">On-device embedder</span>
+          <span className="field-hint">
+            No provider here serves embeddings. A small model ({EMBED_MODEL_MB} MB) can do it on this machine instead — nothing is fetched until you ask.
+          </span>
+          <div className="row">
+            <button type="button" className="btn btn-sm" onClick={() => void download()}>
+              {status?.install?.state === 'failed' ? 'Try the download again' : `Download the on-device model (${EMBED_MODEL_MB} MB)`}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
