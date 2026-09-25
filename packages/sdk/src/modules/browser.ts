@@ -2,10 +2,10 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const browserModule: CapabilityModuleSpec = {
   id: 'browser',
-  version: '2.2.0',
+  version: '2.3.0',
   title: 'Web browser',
   summary:
-    "Open web pages, and — with the rpchat browser extension connected — list, read, click, type into and screenshot the user's browser tabs, block pages for a while, style or swap images, set the home page, use bookmarks and history, and run JavaScript in a page.",
+    "Open web pages, and — with the rpchat browser extension installed — list, read, click, type into and screenshot the user's browser tabs, block pages for a while, style or swap images, set the home page, use bookmarks and history, and run JavaScript in a page. A closed browser is started for you.",
   permission: 'pack',
   apiTypeName: 'BrowserApi',
   typings: `/** A browser tab as the extension reports it. Internal pages (chrome://…) are listed with an empty url and title. */
@@ -53,9 +53,11 @@ interface BrowserHistoryItem {
 type BrowserImageEffect = "blur" | "grayscale" | "sepia" | "invert" | "hue" | "pixelate" | "none" | { css: string };
 /**
  * The user's web browser. \`open()\` always works (it runs the browser command from Settings). Everything
- * else drives tabs through the rpchat browser extension, so it needs the extension installed and
- * connected (check \`status()\`); without it those methods fail with CAPABILITY_FAILED. Only http(s)
- * URLs, and only hosts on the user's web allowlist when they set one. Requires the 'browser' capability.
+ * else drives tabs through the rpchat browser extension, so it needs the extension installed — but not
+ * the browser open: when no browser is running, rpchat starts one and waits for the extension (up to
+ * ~20 s) before carrying the call out. Those methods fail with CAPABILITY_FAILED when the extension
+ * never turns up or the user switched starting the browser off. Only http(s) URLs, and only hosts on
+ * the user's web allowlist when they set one. Requires the 'browser' capability.
  */
 interface BrowserApi {
   /**
@@ -66,7 +68,7 @@ interface BrowserApi {
    * @example await sdk.browser.open("https://en.wikipedia.org/wiki/Aurora", { newWindow: true });
    */
   open(url: string, options?: { newWindow?: boolean }): Promise<BrowserTab | null>;
-  /** Whether the extension is connected, and which browser it runs in. */
+  /** Whether the extension is connected right now, and which browser it runs in. Other methods start the browser themselves, so a false here is not a reason to give up. */
   status(): Promise<{ connected: boolean; browser?: string }>;
   /** Every open tab, across windows. */
   tabs(): Promise<BrowserTab[]>;
@@ -185,7 +187,7 @@ interface BrowserApi {
 }`,
   docs: `Open pages and, when the user has installed the browser extension, work inside their browser. Requires the \`browser\` capability.
 
-- \`open(url)\` always works (browser command or extension). Everything else needs the extension: check \`status()\` first, and if it is not connected tell the user (Settings → Browser in rpchat) instead of retrying.
+- \`open(url)\` always works (browser command or extension). Everything else needs the extension, not an open browser: with none running, the first call starts the browser and waits for the extension, so it takes a few seconds. If it still fails with CAPABILITY_FAILED, say so (Settings → Browser in rpchat) instead of retrying.
 - Only http/https URLs, only hosts on the user's web allowlist when they set one (PERMISSION_DENIED otherwise). Never open pages the user did not ask for or would not expect; say what you opened.
 - Read before you act: \`read()\` for the text, \`query()\` for the links/buttons/fields you need, then \`click()\` / \`type()\`. Keep to one page and a couple of interactions per action; return what you learned, not whole pages.
 - Clicks and typing land in the user's real browser session (logged in accounts, forms). Do not submit forms or buy, post or send anything without the user asking for it in this conversation.

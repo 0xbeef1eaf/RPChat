@@ -119,7 +119,7 @@ ui (pack)
 - `confirm(question: string): Promise<boolean>` — a window of its own, in front of the user; the user answers.
 - `choose(question: string, options: string[]): Promise<string | null>`
 
-browser (pack, v2.2.0; docs/browser-extension.md) — `open`, `openTab`, `close`, `navigate`, `click`, `type`, `screenshot`, `block`, `imageEffect`, `setHomePage`, `addBookmark`, `removeBookmark`, `eval` are `dangerous: true`
+browser (pack, v2.3.0; docs/browser-extension.md) — `open`, `openTab`, `close`, `navigate`, `click`, `type`, `screenshot`, `block`, `imageEffect`, `setHomePage`, `addBookmark`, `removeBookmark`, `eval` are `dangerous: true`
 - `open(url: string, options?: { newWindow?: boolean }): Promise<BrowserTab | null>` — the extension when connected (returns the tab), else the browser command template (returns null).
 - `status(): Promise<{ connected: boolean; browser?: string }>`
 - `tabs(): Promise<BrowserTab[]>`, `openTab(url, { active?, newWindow? }): Promise<BrowserTab>`, `activate(tabId)`, `close(tabId)`, `navigate(tabId, url)`, `back/forward/reload(tabId)` — all `BrowserTab` (`{ id, windowId, url, title, active, index }`).
@@ -130,7 +130,7 @@ browser (pack, v2.2.0; docs/browser-extension.md) — `open`, `openTab`, `close`
 - `bookmarks({ folder? })`, `searchBookmarks(query)`, `addBookmark(url, title, { folder? })`, `removeBookmark(idOrUrl)` — `BrowserBookmark` = `{ id, title, url?, parentId, path }`.
 - `eval(tabId, code, { world?: "isolated" | "main", timeoutMs? }): Promise<{ value; world; fallback? }>` — the code is an async function body; result JSON, 64 KiB cap. The isolated world refuses eval under the MV3 extension CSP, so the extension falls back to the main world and reports it (`fallback`); the main world is subject to the page's CSP.
 - `history({ text?, since?, until?, limit? })`, `historyVisits(url)`, `recentHistory(limit?)` — `BrowserHistoryItem` = `{ url, title, lastVisitTime, visitCount }`.
-- Only http(s) URLs; `settings.web.allowlist` applies to every URL opened, navigated to, bookmarked, redirected to or set as home page. Every method but `open` (and `setHomePage`/`homePage`, which read and write the setting) throws `CAPABILITY_FAILED` while no extension is connected; `block`, `eval` and the history methods throw `CAPABILITY_FAILED` with a message naming the toggle when `settings.browser.allowBlocking` / `allowEval` / `allowHistory` is off.
+- Only http(s) URLs; `settings.web.allowlist` applies to every URL opened, navigated to, bookmarked, redirected to or set as home page. Every method but `open`, `status` and `setHomePage`/`homePage` needs a connected extension — but not an open browser: with none connected the handler runs the browser command on the app's own `http://127.0.0.1:<port>/extension/start` page and waits up to 20 s for the extension (`settings.browser.autoLaunch`, default true, policy key `browser.autoLaunch`). One launch serves every call waiting on it, and a launch that brought no extension is not retried for 60 s; then, and whenever `autoLaunch` is off, the call throws `CAPABILITY_FAILED`. `block`, `eval` and the history methods throw `CAPABILITY_FAILED` with a message naming the toggle when `settings.browser.allowBlocking` / `allowEval` / `allowHistory` is off.
 
 system (pack; was `prompt` before per-call prompts were dropped) — every method `dangerous: true`
 - `openExternal(url: string): Promise<void>` (http/https only)

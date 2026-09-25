@@ -325,6 +325,27 @@ export class BrowserBridge {
     });
   }
 
+  /**
+   * Resolve as soon as an extension is connected, or false when none is within `timeoutMs` — how
+   * the `sdk.browser` handler waits out a browser it has just started.
+   */
+  waitForConnection(timeoutMs: number): Promise<boolean> {
+    if (this.connected) return Promise.resolve(true);
+    if (this.closed) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      const done = (value: boolean): void => {
+        clearTimeout(timer);
+        off();
+        resolve(value);
+      };
+      const timer = setTimeout(() => done(false), timeoutMs);
+      timer.unref?.();
+      const off = this.onStatus((s) => {
+        if (s.connected) done(true);
+      });
+    });
+  }
+
   onEvent(listener: (event: BrowserBridgeEvent) => void): () => void {
     this.eventListeners.add(listener);
     return () => {

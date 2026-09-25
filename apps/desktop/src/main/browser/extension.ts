@@ -2,13 +2,36 @@
  * The bundled browser extension as the app serves it: locates `resources/extension/`, owns the
  * per-user signing key (`<userData>/extension-key.pem`), packs the CRX (re-packed when the bundled
  * manifest version changes) and answers the loopback routes Chromium's force-install polls:
- * `GET /extension/update.xml`, `GET /extension/rpchat.crx`, `GET /extension/id`.
+ * `GET /extension/update.xml`, `GET /extension/rpchat.crx`, `GET /extension/id` — plus
+ * `GET /extension/start`, the page the app opens to wake a closed browser.
  */
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import { extensionIdFromPrivateKeyPem, loadOrCreateKey, packCrx3, readExtensionDir, zipExtension } from './crx.js';
 import { crxUrlFor, updateUrlFor, updateXml } from './policy.js';
+
+/**
+ * The page `GET /extension/start` serves: what the app opens to get a browser running when a
+ * character reaches for one and none is (`sdk.browser` auto-launch), so the user is never left
+ * wondering why their browser appeared.
+ */
+export const START_PAGE_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>rpchat</title><style>
+ :root { color-scheme: light dark; }
+ body { font: 15px/1.6 system-ui, sans-serif; margin: 12vh auto; max-width: 34rem; padding: 0 1.5rem; }
+ h1 { font-size: 1.3rem; margin: 0 0 .6rem; }
+ p { margin: 0 0 .8rem; opacity: .85; }
+</style></head>
+<body>
+ <h1>rpchat opened your browser</h1>
+ <p>A character asked to work in your browser while it was closed, so rpchat started it. The
+ rpchat browser bridge extension is connecting; you can go on browsing in this tab.</p>
+ <p>Settings &rarr; Browser in rpchat switches this off (&ldquo;Start the browser when a character needs it&rdquo;).</p>
+</body>
+</html>
+`;
 
 export const EXTENSION_KEY_FILENAME = 'extension-key.pem';
 export const EXTENSION_ROUTE_PREFIX = '/extension';
@@ -114,6 +137,11 @@ export class ExtensionService {
         const id = await this.id();
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(req.method === 'HEAD' ? undefined : id);
+        return;
+      }
+      if (rel === 'start') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Length': String(Buffer.byteLength(START_PAGE_HTML)) });
+        res.end(req.method === 'HEAD' ? undefined : START_PAGE_HTML);
         return;
       }
       if (rel === 'update.xml') {

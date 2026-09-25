@@ -29,6 +29,7 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
   const blockingManaged = useManaged('browser.allowBlocking');
   const evalManaged = useManaged('browser.allowEval');
   const historyManaged = useManaged('browser.allowHistory');
+  const autoLaunchManaged = useManaged('browser.autoLaunch');
 
   const loadBlocks = useCallback(async () => {
     try {
@@ -319,6 +320,15 @@ export function BrowserSection({ settings, onPatch }: BrowserSectionProps) {
               Read the browser history (<code>sdk.browser.history</code>)
               <ManagedBadge show={historyManaged} />
             </label>
+            <label className="check">
+              <input type="checkbox" checked={browser.autoLaunch} disabled={autoLaunchManaged || busy} onChange={(e) => void patchBrowser({ autoLaunch: e.target.checked })} />
+              Start the browser when a character needs it
+              <ManagedBadge show={autoLaunchManaged} />
+            </label>
+            <span className="field-hint">
+              With no browser running there is no extension to reach, so rpchat runs your browser command on its own start page and waits for the
+              extension. Switched off, those calls fail instead and the character is told the extension is not connected.
+            </span>
             <dl className="kv small" style={{ marginTop: 4 }}>
               <dt>Home page</dt>
               <dd>{browser.homePage ? <code style={{ overflowWrap: 'anywhere' }}>{browser.homePage}</code> : <span className="muted">not set — new tabs show the plain page</span>}</dd>

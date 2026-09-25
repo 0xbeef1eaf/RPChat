@@ -1,8 +1,12 @@
 /**
  * `sdk.browser`: `open` runs the user's browser command (or the extension when connected); every
- * other method drives tabs through the browser-extension bridge and fails with `CAPABILITY_FAILED`
- * while no extension is connected. URLs opened, navigated to, bookmarked, redirected to or set as
- * home page must be http(s) and, when the user set `settings.web.allowlist`, on it. Page blocking,
+ * other method drives tabs through the browser-extension bridge. A closed browser is not a wall:
+ * when nothing is connected the handler starts the browser on the app's own start page and waits
+ * for the extension to say hello (`settings.browser.autoLaunch`, on by default), so the module
+ * works whether or not the user had a browser open; only when that wait runs out — or the user
+ * switched auto-launch off — does the call fail with `CAPABILITY_FAILED`.
+ * URLs opened, navigated to, bookmarked, redirected to or set as home page must be http(s) and,
+ * when the user set `settings.web.allowlist`, on it. Page blocking,
  * JavaScript injection and history access are switchable in Settings → Browser
  * (`settings.browser.allowBlocking` / `allowEval` / `allowHistory`). A block without durationMs lasts
  * until it is lifted, and names either the pages that may not open (a denylist, the default) or the
@@ -25,9 +29,11 @@ export interface BrowserBridgeLike {
   request(op: string, args?: Record<string, Json>, opts?: { timeoutMs?: number }): Promise<Json>;
   status(): Promise<{ connected: boolean; browser?: string }>;
   onEvent?(listener: (event: BrowserBridgeEvent) => void): () => void;
+  /** Resolves true once an extension connects, false when none does in time; without it the handler never auto-launches. */
+  waitForConnection?(timeoutMs: number): Promise<boolean>;
 }
 
-export type BrowserSettingsSlice = Pick<AppSettings['browser'], 'allowBlocking' | 'allowEval' | 'allowHistory' | 'homePage'>;
+export type BrowserSettingsSlice = Pick<AppSettings['browser'], 'allowBlocking' | 'allowEval' | 'allowHistory' | 'autoLaunch' | 'homePage'>;
 
 export interface BrowserHandlerDeps {
   commands: CommandRunner;
@@ -45,9 +51,16 @@ export interface BrowserHandlerDeps {
   packs?: { getLoaded(packId: string): LoadedPack };
   /** The http URL under which the browser can load a pack asset (the loopback server's asset route). */
   assetUrl?: (packId: string, asset: string) => string;
+  /** The loopback page a browser started by auto-launch opens (`/extension/start`); without it the handler never auto-launches. */
+  startUrl?: () => string;
 }
 
 export const NOT_CONNECTED_MESSAGE = 'The browser extension is not connected (Settings → Browser: install the extension policy or load it unpacked)';
+/** How long a browser started for a character has to come back with the extension. */
+export const LAUNCH_WAIT_MS = 20_000;
+/** After a launch that led nowhere, every call fails outright for this long instead of opening more browser windows. */
+export const LAUNCH_COOLDOWN_MS = 60_000;
+export const LAUNCH_FAILED_MESSAGE = `rpchat started the browser, but the extension did not connect within ${Math.round(LAUNCH_WAIT_MS / 1000)} s (Settings → Browser: install the extension policy or load it unpacked)`;
 export const BLOCKING_DISABLED_MESSAGE = 'Blocking pages is disabled in Settings → Browser';
 export const EVAL_DISABLED_MESSAGE = 'JavaScript injection is disabled in Settings → Browser';
 export const HISTORY_DISABLED_MESSAGE = 'Browser history access is disabled in Settings → Browser';
@@ -56,7 +69,7 @@ export const MAX_BLOCK_PATTERNS = 50;
 export const EVAL_TIMEOUT_MAX_MS = 60_000;
 export const EVAL_TIMEOUT_DEFAULT_MS = 10_000;
 export const HISTORY_LIMIT_MAX = 500;
-export const DEFAULT_BROWSER_SETTINGS: BrowserSettingsSlice = { allowBlocking: true, allowEval: true, allowHistory: true, homePage: '' };
+export const DEFAULT_BROWSER_SETTINGS: BrowserSettingsSlice = { allowBlocking: true, allowEval: true, allowHistory: true, autoLaunch: true, homePage: '' };
 
 function record(v: Json | undefined): Record<string, Json> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, Json>) : {};
@@ -132,6 +145,9 @@ function historyTime(v: Json | undefined, what: string, now: number): number | u
 
 export class BrowserHandler implements CapabilityHandler {
   readonly moduleId = 'browser';
+  /** The launch in flight, so calls that arrive together start one browser between them. */
+  private launching: Promise<boolean> | undefined;
+  private lastLaunchFailedAt = 0;
 
   constructor(private readonly deps: BrowserHandlerDeps) {}
 
@@ -324,7 +340,7 @@ export class BrowserHandler implements CapabilityHandler {
     if (!world) throw new RpError('INVALID_ARGUMENT', 'world must be "isolated" (default) or "main"');
     const wanted = optionalNumber(options['timeoutMs']);
     const timeoutMs = wanted !== undefined && wanted > 0 ? Math.min(EVAL_TIMEOUT_MAX_MS, Math.round(wanted)) : EVAL_TIMEOUT_DEFAULT_MS;
-    return this.bridge().request('page.eval', { tabId, code: src, world, timeoutMs }, { timeoutMs: timeoutMs + 5_000 });
+    return (await this.liveBridge()).request('page.eval', { tabId, code: src, world, timeoutMs }, { timeoutMs: timeoutMs + 5_000 });
   }
 
   // ---- history -----------------------------------------------------------------------------
@@ -362,14 +378,45 @@ export class BrowserHandler implements CapabilityHandler {
     return url;
   }
 
-  private bridge(): BrowserBridgeLike {
+  /**
+   * The bridge with an extension on the other end: when none is connected the browser is started
+   * (the user's browser command, on the app's start page) and the extension given `LAUNCH_WAIT_MS`
+   * to say hello. `autoLaunch: false` keeps the old behaviour — the call just fails.
+   */
+  private async liveBridge(): Promise<BrowserBridgeLike> {
     const bridge = this.deps.bridge;
-    if (!bridge || !bridge.connected) throw new RpError('CAPABILITY_FAILED', NOT_CONNECTED_MESSAGE);
+    if (!bridge) throw new RpError('CAPABILITY_FAILED', NOT_CONNECTED_MESSAGE);
+    if (bridge.connected) return bridge;
+    const wait = bridge.waitForConnection?.bind(bridge);
+    const startUrl = this.deps.startUrl?.();
+    if (!wait || !startUrl || !(await this.settings()).autoLaunch) throw new RpError('CAPABILITY_FAILED', NOT_CONNECTED_MESSAGE);
+    if (!(await this.launch(startUrl, wait))) throw new RpError('CAPABILITY_FAILED', LAUNCH_FAILED_MESSAGE);
     return bridge;
   }
 
-  private bridged(op: string, args: Record<string, Json> = {}): Promise<Json> {
-    return this.bridge().request(op, args);
+  /** Start the browser once for however many calls are waiting on it, and keep quiet for a minute after a launch that failed. */
+  private launch(startUrl: string, wait: (timeoutMs: number) => Promise<boolean>): Promise<boolean> {
+    if (this.launching) return this.launching;
+    if (Date.now() - this.lastLaunchFailedAt < LAUNCH_COOLDOWN_MS) return Promise.resolve(false);
+    const started = (async () => {
+      try {
+        await this.runBrowserCommand(startUrl, false);
+      } catch (err) {
+        this.lastLaunchFailedAt = Date.now();
+        throw err;
+      }
+      const ok = await wait(LAUNCH_WAIT_MS);
+      if (!ok) this.lastLaunchFailedAt = Date.now();
+      return ok;
+    })();
+    this.launching = started.finally(() => {
+      this.launching = undefined;
+    });
+    return this.launching;
+  }
+
+  private async bridged(op: string, args: Record<string, Json> = {}): Promise<Json> {
+    return (await this.liveBridge()).request(op, args);
   }
 
   private async activeTabId(): Promise<number> {
@@ -385,15 +432,22 @@ export class BrowserHandler implements CapabilityHandler {
     if (this.deps.bridge?.connected) {
       return this.deps.bridge.request('tabs.open', { url, active: true, newWindow });
     }
+    // No extension to open the tab: the browser command does it (and brings the extension with it,
+    // for whatever the character does next).
+    await this.runBrowserCommand(url, newWindow);
+    return null;
+  }
+
+  /** Open a URL with the user's browser command — `open` without the extension, and the auto-launch. */
+  private async runBrowserCommand(url: string, newWindow: boolean): Promise<void> {
     const tpl = await this.deps.commands.resolve('browser');
     if (!isConfigured(tpl)) {
       // Only reachable when the platform has no default (it always has one); still never silent.
       await (this.deps.openExternal ?? ((u: string) => shell.openExternal(u)))(url);
-      return null;
+      return;
     }
     const flag = newWindow && tpl.command.includes('{newWindow}') ? '--new-window' : '';
     const result = await this.deps.commands.runTemplate(tpl, { url, newWindow: flag }, 'browser');
     if (result.code !== 0) throw commandFailed('browser', tpl, result);
-    return null;
   }
 }
