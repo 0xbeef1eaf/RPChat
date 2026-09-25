@@ -66,6 +66,7 @@ mod crypto_keys;
 mod devices;
 mod guard;
 mod inject;
+mod ipcguard;
 mod keepalive;
 mod lock;
 mod policy;
@@ -86,7 +87,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chain::ChainError;
 use crypto_keys::CryptoKeyStore;
@@ -114,6 +115,11 @@ pub const DEFAULT_SOCKET_PATH: &str = "/run/rpchat/daemon.sock";
 pub const SYSTEM_GROUP: &str = "rpchat";
 /// Where the drop-in that refuses a manual stop is written while the policy is sealed.
 pub const DEFAULT_DROP_IN_DIR: &str = "/etc/systemd/system/rpchatd.service.d";
+
+/// How long the IPC guard's watcher waits for a runtime directory to change before refreshing
+/// anyway. inotify catches the interesting cases; this catches a directory that did not exist
+/// when the watch was added (a user who has not logged in yet).
+pub const IPC_REFRESH_EVERY: Duration = Duration::from_secs(30);
 /// The crate version; `RPCHATD_VERSION` at build time overrides it (test builds that must look
 /// newer than the running daemon to exercise the self-update path).
 pub const VERSION: &str = match option_env!("RPCHATD_VERSION") {
@@ -365,8 +371,18 @@ pub struct Daemon {
     guard_info: Mutex<Option<GuardInfo>>,
     /// Policy file stamp at the last guard engage (re-engaged when it changes).
     guard_stamp: Mutex<Option<(std::time::SystemTime, u64)>>,
+    /// The guard state file as this daemon last left it.
+    ///
+    /// `rpchatd --guard-apply` from a terminal — what `install.sh --guard` runs — engages in its
+    /// *own* process and rewrites this file. For the AppArmor half that is harmless: the
+    /// profiles are loaded either way. For the IPC guard it is not: that process pinned its own
+    /// program over this one's, so the maps this daemon holds belong to something no longer
+    /// attached and its refreshes go nowhere. Noticing the file changed underneath is how it
+    /// takes the guard back.
+    guard_state_seen: Mutex<Option<String>>,
     ticks: AtomicU64,
     tailer_started: AtomicBool,
+    ipc_threads_started: AtomicBool,
     limiter: Mutex<AttemptLimiter>,
     /// Connections that asked for pushed events.
     subscribers: Mutex<Vec<Subscriber>>,
@@ -417,8 +433,10 @@ impl Daemon {
             guard_paths: GuardPaths::default(),
             guard_info: Mutex::new(None),
             guard_stamp: Mutex::new(None),
+            guard_state_seen: Mutex::new(None),
             ticks: AtomicU64::new(0),
             tailer_started: AtomicBool::new(false),
+            ipc_threads_started: AtomicBool::new(false),
             limiter: Mutex::new(AttemptLimiter::default()),
             subscribers: Mutex::new(Vec::new()),
             seal_gaps: Mutex::new(Vec::new()),
@@ -513,6 +531,19 @@ impl Daemon {
         if changed {
             log_info!("policy file changed; re-applying the session guard");
             self.guard_apply();
+            return;
+        }
+        let state = (self.guard_hooks.read_file)(&self.guard_paths.state_file);
+        let engaged_elsewhere = {
+            let last = self
+                .guard_state_seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            last.is_some() && *last != state
+        };
+        if engaged_elsewhere {
+            log_info!("the session guard was engaged from outside this daemon; re-applying");
+            self.guard_apply();
         }
     }
 
@@ -561,6 +592,12 @@ impl Daemon {
             ),
             (None, true) => log_info!("session guard off"),
         }
+        // After the engage, because that is what wrote the file.
+        *self
+            .guard_state_seen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
+            (self.guard_hooks.read_file)(&self.guard_paths.state_file);
         *self.guard_info.lock().unwrap_or_else(|e| e.into_inner()) = Some(info.clone());
         info
     }
@@ -591,6 +628,13 @@ impl Daemon {
     /// Mark the audit tailer as started; false when it already was.
     pub fn claim_tailer(&self) -> bool {
         self.tailer_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// The same for the IPC guard's reporting and refresh threads.
+    pub fn claim_ipc_threads(&self) -> bool {
+        self.ipc_threads_started
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
     }
@@ -1175,6 +1219,9 @@ impl Daemon {
                 reg.user
             );
         }
+        // The IPC guard allows the app by cgroup, and this is where it learns which one: the
+        // guard engaged at boot, long before the app existed.
+        os::register_app_cgroup(peer.pid);
         ctx.registration = Some(reg);
         Ok(OkPayload::Register)
     }
@@ -2726,6 +2773,9 @@ mod os {
             remove_file: Box::new(|p| fs::remove_file(p)),
             parser: Box::new(run_apparmor_parser),
             discover: Box::new(discover_sockets),
+            ipc_targets: Box::new(ipc_targets),
+            app_cgroup: Box::new(app_cgroup),
+            ipc_engage: Box::new(ipc_engage),
             unconfined_helpers: Box::new(unconfined_login_helpers),
             unconfined_session: Box::new(unconfined_session_processes),
             uid_of: Box::new(|name| {
@@ -2820,7 +2870,7 @@ mod os {
 
     /// Listening path sockets owned by shell/compositor processes of the listed users
     /// (`/proc/net/unix` + `/proc/<pid>/fd`), generalised into profile globs.
-    pub fn discover_sockets(users: &[String]) -> Vec<guard::DiscoveredSocket> {
+    pub fn discover_sockets(users: &[String]) -> Vec<guard::ServedSocket> {
         let uids: Vec<u32> = users
             .iter()
             .filter_map(|u| {
@@ -2873,6 +2923,7 @@ mod os {
             let Ok(fds) = fs::read_dir(base.join("fd")) else {
                 continue;
             };
+            let owner_pid: i32 = pid.parse().unwrap_or(0);
             for fd in fds.flatten() {
                 let Ok(link) = fs::read_link(fd.path()) else {
                     continue;
@@ -2881,15 +2932,306 @@ mod os {
                     continue;
                 };
                 if let Some(sock) = by_inode.get(&inode) {
-                    out.insert(guard::DiscoveredSocket {
-                        glob: guard::generalise_socket_path(&sock.path),
+                    out.insert(guard::ServedSocket {
+                        path: sock.path.clone(),
                         owner: entry.owner,
                         entry: entry.id.to_string(),
+                        pid: owner_pid,
                     });
                 }
             }
         }
         out.into_iter().collect()
+    }
+
+    // -----------------------------------------------------------------------
+    // The IPC guard (BPF LSM): what the daemon has to supply it
+    // -----------------------------------------------------------------------
+
+    /// The rpchat app's cgroup, learned from its keepalive registration.
+    ///
+    /// Process-global, like [`ENGAGED`], because the guard hooks are built before any connection
+    /// exists and there is one app per machine. The alternative — threading a handle through
+    /// `Daemon::new`, `with_guard` and every test that builds hooks — buys nothing here.
+    static APP_CGROUP: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+    /// The loaded BPF program's maps, for as long as it is engaged. Replaced by every
+    /// `guard-apply`; [`IPC_GENERATION`] is how the reporting thread notices.
+    static ENGAGED: Mutex<Option<ipcguard::Engaged>> = Mutex::new(None);
+    static IPC_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+    fn engaged<T>(f: impl FnOnce(&mut ipcguard::Engaged) -> T) -> Option<T> {
+        let mut slot = ENGAGED.lock().unwrap_or_else(|e| e.into_inner());
+        slot.as_mut().map(f)
+    }
+
+    /// The unified-hierarchy cgroup directory a process is in, or `None` on a cgroup v1 machine
+    /// (where `bpf_current_task_under_cgroup` has nothing to test against).
+    pub fn cgroup_of_pid(pid: i32) -> Option<PathBuf> {
+        let text = fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
+        let dir = ipcguard::cgroup_dir(&text)?;
+        dir.is_dir().then_some(dir)
+    }
+
+    /// The app registered: remember its cgroup and put it in the allow-list straight away.
+    ///
+    /// This is the one moment that matters. `guard-apply` runs at boot, long before the app
+    /// starts, so slot 0 is empty until here — and an empty slot 0 means the character's
+    /// `<shell> msg wallpaper-set …` is denied along with everyone else's.
+    pub fn register_app_cgroup(pid: i32) {
+        let dir = cgroup_of_pid(pid);
+        if dir.is_none() {
+            log_debug!("no cgroup v2 path for pid {pid}; the IPC guard cannot allow the app");
+        }
+        *APP_CGROUP.lock().unwrap_or_else(|e| e.into_inner()) = dir;
+        refresh_allowed();
+    }
+
+    pub fn app_cgroup() -> Option<PathBuf> {
+        APP_CGROUP.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn list_dir(path: &Path) -> Vec<String> {
+        fs::read_dir(path)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// `stat()` a candidate socket. `symlink_metadata`, so a symlink pointing at something the
+    /// guard may not touch cannot smuggle it into the map.
+    fn stat_socket(path: &Path) -> Option<ipcguard::SocketStat> {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        let md = fs::symlink_metadata(path).ok()?;
+        let dev = md.dev();
+        Some(ipcguard::SocketStat {
+            uid: md.uid(),
+            key: ipcguard::TargetKey {
+                dev_major: nix::sys::stat::major(dev) as u32,
+                dev_minor: nix::sys::stat::minor(dev) as u32,
+                ino: md.ino(),
+            },
+            is_socket: md.file_type().is_socket(),
+        })
+    }
+
+    /// The sockets the IPC guard should mediate, and the cgroups of the processes serving them
+    /// (which stay allowed, so a bar can still drive a wallpaper daemon).
+    pub fn ipc_targets(
+        rules: &policy::GuardRules,
+        ctx: &guard::GuardContext,
+    ) -> (Vec<ipcguard::Target>, Vec<PathBuf>) {
+        let targets = ipcguard::resolve_targets(rules, ctx, &list_dir, &stat_socket);
+        let mut servers = Vec::new();
+        let guarded: Vec<&str> = ctx.shells.iter().map(|s| s.id).collect();
+        for s in &ctx.served {
+            if s.owner != guard::Owner::Shell || !guarded.contains(&s.entry.as_str()) {
+                continue;
+            }
+            if let Some(dir) = cgroup_of_pid(s.pid) {
+                if !servers.contains(&dir) {
+                    servers.push(dir);
+                }
+            }
+        }
+        (targets, servers)
+    }
+
+    /// The `ipc_engage` hook: load or unload, and keep the maps for the refresh loop.
+    pub fn ipc_engage(req: &ipcguard::IpcRequest) -> ipcguard::IpcOutcome {
+        let (outcome, next) = ipcguard::engage(req);
+        if let Some(e) = &outcome.reason {
+            log_info!("IPC guard not engaged: {e}");
+        } else {
+            log_info!(
+                "IPC guard engaged ({}): {} socket(s) mediated",
+                req.mode.as_str(),
+                outcome.targets
+            );
+        }
+        *ENGAGED.lock().unwrap_or_else(|e| e.into_inner()) = next;
+        IPC_GENERATION.fetch_add(1, Ordering::SeqCst);
+        outcome
+    }
+
+    /// Push the current allow-list into the map without touching anything else — what a
+    /// registration needs, and nothing more.
+    fn refresh_allowed() {
+        let app = app_cgroup();
+        if let Some(Err(e)) =
+            engaged(|e| e.set_allowed(&ipcguard::allowed_cgroups(app, &e.server_cgroups.clone())))
+        {
+            log_warn!("IPC guard: {e}");
+        }
+    }
+
+    /// Re-resolve the mediated sockets and the allow-list against the machine as it is now.
+    ///
+    /// Inodes churn: every time the shell restarts it unlinks and rebinds, and the map that
+    /// named the old inode now mediates nothing. That is not a corner case — it is exactly when
+    /// someone would try `<shell> msg` again.
+    pub fn refresh_ipc_guard(daemon: &Daemon) {
+        if ENGAGED.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+            return;
+        }
+        let policy = daemon.policy().load().ok().flatten();
+        let rules = policy.as_ref().map(|p| p.guard_rules()).unwrap_or_default();
+        let users = policy
+            .as_ref()
+            .map(|p| p.app_rules().users)
+            .unwrap_or_default();
+        if !rules.enabled() || users.is_empty() {
+            return;
+        }
+        // No cached sockets: a cache is for writing profiles before the shell has started, and
+        // an inode that is not being served right now is not one to mediate.
+        let ctx = guard::resolve_context(
+            &rules,
+            &users,
+            &daemon.guard_hooks,
+            &daemon.guard_paths,
+            &[],
+        );
+        let (targets, servers) = ipc_targets(&rules, &ctx);
+        let app = app_cgroup();
+        let result = engaged(|e| {
+            e.server_cgroups = servers.clone();
+            e.set_targets(&targets)
+                .and_then(|()| e.set_allowed(&ipcguard::allowed_cgroups(app, &servers)))
+                .and_then(|()| e.set_mode(rules.mode))
+        });
+        match result {
+            Some(Err(e)) => log_warn!("IPC guard refresh: {e}"),
+            _ => log_debug!("IPC guard: {} socket(s) mediated", targets.len()),
+        }
+    }
+
+    /// Start the IPC guard's two threads (idempotent): one turns ring buffer records into
+    /// `guard-attempt` events, the other keeps the mediated set current.
+    pub fn start_ipc_guard_threads(daemon: &Arc<Daemon>) {
+        if !daemon.claim_ipc_threads() {
+            return;
+        }
+        for (name, run) in [
+            ("rpchatd-ipc", ipc_event_loop as fn(&Arc<Daemon>)),
+            ("rpchatd-ipc-watch", ipc_watch_loop as fn(&Arc<Daemon>)),
+        ] {
+            let d = daemon.clone();
+            thread::Builder::new()
+                .name(name.into())
+                .spawn(move || run(&d))
+                .ok();
+        }
+    }
+
+    /// Records → the same `guard-attempt` event an AppArmor denial produces, rate-limited per
+    /// target by the same limiter.
+    ///
+    /// The ring buffer belongs to one engagement; a `guard-apply` that reloads the program makes
+    /// a new one, so the generation is re-checked on every pass rather than reading a buffer
+    /// nothing writes to any more.
+    fn ipc_event_loop(daemon: &Arc<Daemon>) {
+        let mut current: Option<(u64, aya::maps::RingBuf<aya::maps::MapData>)> = None;
+        loop {
+            let generation = IPC_GENERATION.load(Ordering::SeqCst);
+            if current.as_ref().map(|(g, _)| *g) != Some(generation) {
+                current = engaged(|e| e.take_events())
+                    .flatten()
+                    .map(|ring| (generation, ring));
+            }
+            let Some((_, ring)) = current.as_mut() else {
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            };
+            let events = match ipcguard::read_events(ring, 500) {
+                Ok(events) => events,
+                Err(e) => {
+                    log_warn!("IPC guard: cannot read the event buffer ({e})");
+                    thread::sleep(Duration::from_secs(1));
+                    continue;
+                }
+            };
+            for event in events {
+                let paths = engaged(|e| e.paths.clone()).unwrap_or_default();
+                let at = (daemon.guard_hooks.now)();
+                daemon.report_attempt(ipcguard::attempt(&event, &paths), Instant::now(), at);
+            }
+        }
+    }
+
+    /// Watch the runtime directories and refresh whenever a socket appears or goes.
+    ///
+    /// The timeout is the belt to inotify's braces: a watch cannot be added to a directory that
+    /// does not exist yet (a user who has not logged in), so the loop re-adds them every pass.
+    fn ipc_watch_loop(daemon: &Arc<Daemon>) {
+        use nix::sys::inotify::{AddWatchFlags, InitFlags, Inotify};
+        use std::os::fd::AsFd as _;
+
+        let inotify = match Inotify::init(InitFlags::IN_CLOEXEC | InitFlags::IN_NONBLOCK) {
+            Ok(i) => i,
+            Err(e) => {
+                log_warn!("IPC guard: no inotify ({e}); falling back to a periodic refresh");
+                loop {
+                    thread::sleep(IPC_REFRESH_EVERY);
+                    refresh_ipc_guard(daemon);
+                }
+            }
+        };
+        let flags = AddWatchFlags::IN_CREATE
+            | AddWatchFlags::IN_MOVED_TO
+            | AddWatchFlags::IN_DELETE
+            | AddWatchFlags::IN_MOVED_FROM;
+        loop {
+            for dir in watched_runtime_dirs(daemon) {
+                // Re-adding an existing watch returns the same descriptor, so this is how the
+                // set stays current without tracking it.
+                let _ = inotify.add_watch(&dir, flags);
+            }
+            let mut fds = [nix::poll::PollFd::new(
+                inotify.as_fd(),
+                nix::poll::PollFlags::POLLIN,
+            )];
+            let woken = matches!(
+                nix::poll::poll(
+                    &mut fds,
+                    nix::poll::PollTimeout::from(IPC_REFRESH_EVERY.as_millis() as u16)
+                ),
+                Ok(n) if n > 0
+            );
+            if woken {
+                // A shell restart is a burst of unlink/bind; settle before reading /proc, or the
+                // refresh races the process that is still binding.
+                thread::sleep(Duration::from_millis(250));
+                while inotify.read_events().is_ok_and(|e| !e.is_empty()) {}
+            }
+            refresh_ipc_guard(daemon);
+        }
+    }
+
+    /// `/run/user` and the guarded users' directories inside it: where every socket this guard
+    /// mediates is bound.
+    fn watched_runtime_dirs(daemon: &Daemon) -> Vec<PathBuf> {
+        let mut out = vec![PathBuf::from("/run/user")];
+        let users = daemon
+            .policy()
+            .load()
+            .ok()
+            .flatten()
+            .map(|p| p.app_rules().users)
+            .unwrap_or_default();
+        for user in &users {
+            if let Some(uid) = nix::unistd::User::from_name(user).ok().flatten() {
+                let dir = PathBuf::from(format!("/run/user/{}", uid.uid.as_raw()));
+                if dir.is_dir() {
+                    out.push(dir);
+                }
+            }
+        }
+        out
     }
 
     /// Start the audit tail once the guard is engaged (idempotent): `journalctl -f -o json`
@@ -3260,6 +3602,7 @@ fn run(args: Args) -> ExitCode {
     // `guard-apply` on request. The audit tail starts once something is loaded.
     daemon.guard_apply();
     os::start_audit_tailer_if_engaged(&daemon);
+    os::start_ipc_guard_threads(&daemon);
     accept_loop(listener, daemon.clone());
     daemon.shutdown();
     let _ = fs::remove_file(&args.socket);
@@ -5045,6 +5388,25 @@ mod tests {
             .cloned()
             .unwrap();
         assert!(session.contains("audit deny"));
+
+        // `rpchatd --guard-apply` from a terminal (what `install.sh --guard` runs) engages in its
+        // own process and rewrites the state file. The AppArmor half survives that, but the IPC
+        // guard does not — that process pinned its own program over this one's — so a state file
+        // that moved without this daemon writing it has to bring the guard back here.
+        let before = os.parser_calls.lock().unwrap().len();
+        os.files
+            .lock()
+            .unwrap()
+            .insert(server.daemon.guard_paths.state_file.clone(), "{}".into());
+        server.daemon.guard_tick();
+        assert!(
+            os.parser_calls.lock().unwrap().len() > before,
+            "a state file written by another process must re-engage the guard here"
+        );
+        // And having re-engaged, the daemon is back in step: nothing more to do next tick.
+        let settled = os.parser_calls.lock().unwrap().len();
+        server.daemon.guard_tick();
+        assert_eq!(os.parser_calls.lock().unwrap().len(), settled);
 
         // mode off → unloaded; a broken policy keeps whatever is engaged and says why.
         fs::write(

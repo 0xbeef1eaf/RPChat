@@ -589,7 +589,7 @@ guard_disengage() {
   if f="$(pam_file)"; then pam_remove "$f"; else skip "no PAM file (${PAM_FILES})"; fi
   if $SYSTEM_CMDS && [ -x "$DAEMON_DST" ]; then
     if $DRY_RUN; then note "+ $DAEMON_DST --guard-off"; else
-      if "$DAEMON_DST" --guard-off | sed 's/^/       /'; then ok "session guard profiles unloaded"; else warn "rpchatd --guard-off reported a problem"; fi
+      if "$DAEMON_DST" --guard-off | sed 's/^/       /'; then ok "session guard unloaded (AppArmor profiles and the BPF IPC guard)"; else warn "rpchatd --guard-off reported a problem"; fi
     fi
   else
     skip "profile unload (no daemon binary, or --prefix)"

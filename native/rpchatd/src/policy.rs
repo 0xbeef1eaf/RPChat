@@ -202,6 +202,32 @@ impl CompositorIpc {
     }
 }
 
+/// `guard.ipcGuard`: whether the BPF LSM program that mediates `connect()` to the shell's
+/// sockets is used (`ipcguard.rs`, `docs/spec/ipc-guard-bpf.md`).
+///
+/// Two values on purpose. A `require` variant that refused to engage the guard at all on a
+/// kernel without BPF LSM reads like the safe choice and is the opposite: it turns a kernel
+/// update into a desktop that will not confine anything, or will not come up. What is wanted
+/// there is a warning in the app, which `GuardInfo.ipcMediation` already carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IpcGuardMode {
+    /// Use it when the kernel allows it, report `ipcMediation: "none"` when it does not.
+    #[default]
+    Auto,
+    /// Never load it. The AppArmor half of the guard is unaffected.
+    Off,
+}
+
+impl IpcGuardMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IpcGuardMode::Auto => "auto",
+            IpcGuardMode::Off => "off",
+        }
+    }
+}
+
 /// `guard.shell` as written in the policy: one name or a list of them. A machine often has
 /// more than one — a bar/shell that owns its own IPC socket and a separate wallpaper daemon —
 /// and guarding only the first leaves the other's socket open to everyone.
@@ -264,6 +290,8 @@ pub struct GuardPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compositor_ipc: Option<CompositorIpc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipc_guard: Option<IpcGuardMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<GuardShells>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login_helpers: Option<Vec<String>>,
@@ -276,13 +304,17 @@ pub struct GuardPolicy {
 }
 
 /// Effective `guard` block with defaults: off, app protected, wallpaper guarded, compositor
-/// IPC for the shell only, shell auto-detected, login helpers auto-detected, no extras.
+/// IPC for the shell only, the BPF IPC guard on when the kernel allows it, shell auto-detected,
+/// login helpers auto-detected, no extras.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuardRules {
     pub mode: GuardMode,
     pub protect_app: bool,
     pub wallpaper: bool,
     pub compositor_ipc: CompositorIpc,
+    /// Whether `connect()` to the shell's sockets is mediated by the BPF LSM program when the
+    /// kernel allows it. Default `auto`; nothing else in the guard depends on it.
+    pub ipc_guard: IpcGuardMode,
     /// Every shell row the policy asks for. `[Auto]` means "every one whose binary is present".
     pub shells: Vec<GuardShell>,
     /// `None`: auto-detect the login helpers present on the box.
@@ -308,6 +340,7 @@ impl Default for GuardRules {
             protect_app: true,
             wallpaper: true,
             compositor_ipc: CompositorIpc::ShellOnly,
+            ipc_guard: IpcGuardMode::Auto,
             shells: vec![GuardShell::Auto],
             login_helpers: None,
             extra_deny_paths: Vec::new(),
@@ -328,6 +361,7 @@ impl GuardRules {
             protect_app: g.protect_app.unwrap_or(d.protect_app),
             wallpaper: g.wallpaper.unwrap_or(d.wallpaper),
             compositor_ipc: g.compositor_ipc.unwrap_or(d.compositor_ipc),
+            ipc_guard: g.ipc_guard.unwrap_or(d.ipc_guard),
             shells: g
                 .shell
                 .clone()

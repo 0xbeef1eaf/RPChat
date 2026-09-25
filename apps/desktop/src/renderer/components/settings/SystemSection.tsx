@@ -476,7 +476,25 @@ export function guardLine(guard: SystemIntegrationStatus['guard']): string {
   const users = guard.users.length > 0 ? guard.users.join(', ') : 'nobody';
   const what = [guard.shell ? `shell ${guard.shell}` : null, guard.compositor ? `compositor ${guard.compositor}` : null].filter(Boolean).join(', ');
   if (guard.loaded.length === 0) return `Session guard: ${guard.mode} (AppArmor) — nothing loaded yet — users: ${users}.`;
-  return `Session guard: ${guard.mode} (AppArmor) — ${guard.loaded.length} profiles loaded — users: ${users}${what ? ` — ${what}` : ''}${guard.appliedAt ? ` — applied ${formatDateTime(guard.appliedAt)}` : ''}.`;
+  return `Session guard: ${guard.mode} (AppArmor${ipcNote(guard)}) — ${guard.loaded.length} profiles loaded — users: ${users}${what ? ` — ${what}` : ''}${guard.appliedAt ? ` — applied ${formatDateTime(guard.appliedAt)}` : ''}.`;
+}
+
+/**
+ * What mediates `connect()` to the shell's sockets, when it is not AppArmor.
+ *
+ * Worth its own words in the summary rather than only in the residual list: `none` means the
+ * wallpaper IPC is open however good the profiles look, which is exactly the thing the guard
+ * used to claim it had closed.
+ */
+function ipcNote(guard: SystemIntegrationStatus['guard']): string {
+  switch (guard.ipcMediation) {
+    case 'bpf':
+      return ` + BPF IPC guard, ${guard.ipcTargets ?? 0} socket(s)`;
+    case 'none':
+      return ', IPC not mediated';
+    default:
+      return '';
+  }
 }
 
 function guardBadge(guard: SystemIntegrationStatus['guard']): string {

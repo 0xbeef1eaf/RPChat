@@ -599,19 +599,23 @@ files, and sending signals or `ptrace` to rpchat. rpchat itself (launched from
 character's `noctalia msg wallpaper-set …`, `hyprctl …` and so on keep working while the user's
 `hyprctl`, `noctalia msg`, `kill` and `vim ~/.config/noctalia/*.toml` are refused.
 
-**How much of that first item is real depends on the kernel, and the app says which you have.**
-Denying a `connect()` to a filesystem socket needs AppArmor's fine-grained `unix` mediation
-class (`/sys/kernel/security/apparmor/features/unix`). A kernel advertising only
-`network_v9/af_unix` has the *coarse* form — "may use unix sockets", no address, no peer — and
-on one of those there is no way to express the rule at all. Measured inside a loaded `enforce`
-profile on 7.2.6: with `deny /run/rpchat/** rwklx` in force, `open()` on a socket there is
-`EACCES` and `connect()` to it **succeeds**; a `unix (connect) peer=(label=rpchat-shell)` rule
-loads and changes nothing. The file rules are unaffected — they cover `open()` and `bind` — so
-what survives is that a wallpaper set through the shell's socket does not *persist*, plus the
-client binaries below. Settings → System lists the gap under *What the lock cannot do* whenever
-the running kernel is one of these. It ships in
-**audit mode** (nothing blocked, everything logged and reported to the character); `enforce` is
-a policy switch.
+**Denying that first `connect()` is not something AppArmor can do on a mainstream kernel, so a
+second mechanism does it — and the app says which one you have.** Denying a `connect()` to a
+filesystem socket needs AppArmor's fine-grained `unix` mediation class
+(`/sys/kernel/security/apparmor/features/unix`). A kernel advertising only `network_v9/af_unix`
+has the *coarse* form — "may use unix sockets", no address, no peer — and on one of those there
+is no way to express the rule at all. Measured inside a loaded `enforce` profile on 7.2.6: with
+`deny /run/rpchat/** rwklx` in force, `open()` on a socket there is `EACCES` and `connect()` to
+it **succeeds**; a `unix (connect) peer=(label=rpchat-shell)` rule loads and changes nothing.
+
+So on such a kernel the guard loads a small **BPF LSM** program on `lsm/unix_stream_connect`,
+which has the hook AppArmor lacks ([IPC guard](#ipc-guard-bpf-lsm) below, `guard.ipcGuard`). It
+needs the kernel booted with the `bpf` LSM; where that is missing the mediation is genuinely
+absent and `status.guard.ipcMediation` says `none`, with the gap under *What the lock cannot do*.
+The file rules are unaffected either way — they cover `open()` and `bind` — so what survives
+without it is that a wallpaper set through the shell's socket does not *persist*, plus the client
+binaries below. The guard ships in **audit mode** (nothing blocked, everything logged and
+reported to the character); `enforce` is a policy switch.
 
 ```json
 { "version": 1, "app": { "allowQuit": false, "users": ["work"] }, "guard": { "mode": "audit" } }
@@ -623,6 +627,7 @@ a policy switch.
 | `protectApp` | `true` | Signals and `ptrace` from the session to rpchat. |
 | `wallpaper` | `true` | The shell's IPC socket and config/state files; the shell runs in `rpchat-shell`. Also denies the row's client-only binaries (`swww`, `awww`) to every profile but rpchat's, which is what stops `awww img <path>` from a terminal on a kernel that cannot mediate `connect()`. A shell shipping one binary for both jobs (`noctalia`, `qs`) cannot be denied that way — it would stop the shell starting — so `noctalia msg` survives there and the residual list says so. |
 | `compositorIpc` | `shell-only` | `allow` (nothing), `shell-only` (only the shell and rpchat may talk to the compositor), `deny` (only rpchat). |
+| `ipcGuard` | `auto` | Mediate `connect()` to the shell's sockets with a BPF LSM program where the kernel allows it — the check AppArmor cannot make. `off` never loads it. See [IPC guard](#ipc-guard-bpf-lsm). |
 | `shell` | `auto` | One row or a list. `auto` takes every row whose binary exists. With several (`["noctalia","hyprpaper"]`) each may serve its own socket but none may connect to another's, so a bar cannot set the wallpaper through a wallpaper daemon. |
 | `loginHelpers` | auto-detect | The PAM login helpers whose profile carries the per-user hats (see below). |
 | `extraDenyPaths`, `extraDenySockets`, `allowBinaries` | `[]` | More guarded files/sockets (`~/…` allowed); binaries that leave the confinement entirely when executed. |
@@ -635,7 +640,10 @@ Full field reference: `native/rpchatd/dist/POLICY.md`.
    add `lsm=landlock,lockdown,yama,integrity,apparmor,bpf` to the kernel command line and install
    the `apparmor` package, which ships `apparmor_parser` and `pam_apparmor.so`; on Debian/Ubuntu
    it is on by default, `libpam-apparmor` adds the PAM module). No distro profile needs to be
-   enabled — the guard loads only its own five `rpchat-*` profiles.
+   enabled — the guard loads only its own five `rpchat-*` profiles. The **`bpf`** in that `lsm=`
+   list is what makes the wallpaper IPC lock real rather than partial (see
+   [IPC guard](#ipc-guard-bpf-lsm)); Arch's default kernel has `CONFIG_BPF_LSM=y`, Debian's and
+   Ubuntu's `CONFIG_LSM` usually omits `bpf` and their `lsm=` has to be set by hand to include it.
 2. Put the `guard` block into `/etc/rpchat/policy.json` (Settings → System → *Create policy…*
    when no file exists, `sudoedit` otherwise) with `mode: "audit"` and the users in `app.users`.
 3. Run the installer once with `--guard` (Settings → System → *Install system integration…* passes
@@ -765,6 +773,76 @@ headed with a hash of the policy and context so a re-engage rewrites nothing tha
 nothing from the distro, so a machine with every distro profile parked in
 `/etc/apparmor.d/disable` works unchanged. The unit gains `CAP_MAC_ADMIN` and write access to
 `/etc/apparmor.d` and `/sys/kernel/security/apparmor` for this.
+
+### IPC guard (BPF LSM)
+
+The one check AppArmor cannot make on a mainstream kernel. Design notes and the measurements
+behind it: `docs/spec/ipc-guard-bpf.md`; the code is `native/rpchatd/src/ipcguard.rs` and the
+program itself `native/rpchatd/src/bpf/ipc_guard.bpf.c` (~150 lines of C, readable in one sitting).
+
+When `guard.ipcGuard` is `auto` (the default) and `guard.mode` is not `off`, the daemon loads a
+BPF program attached to `lsm/unix_stream_connect` and decides from three maps:
+
+| Map | Holds | Filled from |
+|---|---|---|
+| `rpchat_targets` | the socket nodes to mediate, keyed by `(device major, device minor, inode)` | the shell sockets discovery found (`/proc/net/unix` + `/proc/<pid>/fd`) and the table's globs expanded against the real runtime directories, `stat()`ed |
+| `rpchat_allowed` | up to 8 cgroups whose tasks may connect anyway | slot 0 the rpchat app's, from its keepalive registration; the rest the cgroups of the processes serving the mediated sockets |
+| `rpchat_mode` | 0 off, 1 audit, 2 enforce | `guard.mode` |
+
+A connection to a socket in `rpchat_targets` from a task in none of `rpchat_allowed` returns
+`-EACCES` in enforce and 0 in audit, and either way a record goes into a ring buffer that the
+daemon turns into the same `guard-attempt` event an AppArmor denial produces — with
+`profile: "bpf-ipc"` rather than an `rpchat-*` name, so a reader can tell them apart.
+
+Four things are worth knowing before turning it on:
+
+- **It is keyed on the inode, not the path**, because the hook is handed a `struct sock *` and
+  no string. Inodes churn: a shell that restarts unlinks and rebinds, and the map goes stale at
+  exactly the moment someone would retry. The daemon watches `/run/user/<uid>` with inotify and
+  rescans, plus every 30 s regardless, but there is a window between `bind()` and the rescan.
+- **It allows by cgroup, not by binary.** The character sets a wallpaper by running
+  `noctalia msg wallpaper-set …`, a *different binary* from the app, so the allow-list has to
+  cover the app's descendants and a cgroup is the one identity they all inherit. The cost is
+  that anything sharing the app's cgroup is allowed too: an app started from a terminal shares
+  that terminal's scope, which opens the lock to everything in it. A packaged install started
+  from autostart or the desktop entry gets its own scope and does not have that gap.
+- **It mediates every process on the machine**, not only the confined users' sessions — a BPF
+  LSM program has no notion of a profile. Root and system services are denied the guarded sockets
+  too. Only the *guarded users' own* sockets go into the map, so another user's shell is
+  untouched, but within a guarded user's session the reach is wider than the AppArmor half's.
+- **The socket servers may reach each other.** noctalia setting a wallpaper through swww is a
+  real configuration, and mediating it would break the shell's own wallpaper setting, so each
+  server's cgroup is in the allow-list. The AppArmor design always intended shell→shell denial;
+  this is where that intent is traded for a desktop that works, and it is in the residual list.
+
+The program is **pinned** under `/sys/fs/bpf/rpchat/<build>/link`, so `kill -9 rpchatd` does not
+drop the mediation — the unit has `RefuseManualStop=yes` and `Restart=always`, but there is a
+window otherwise. `guard.mode: off`, `rpchatd --guard-off` and `install.sh --no-guard` unpin it;
+`apparmor_parser -R` does not, so remove `/sys/fs/bpf/rpchat/` by hand if that is how you turned
+the guard off. The build directory in the path is a hash of the compiled program: a daemon that
+was upgraded finds no pin of its own and replaces the old one rather than running both. The unit
+gains `CAP_BPF`, `CAP_PERFMON` and write access to `/sys/fs/bpf` for this.
+
+It **fails open**: a kernel without the `bpf` LSM or without BTF, a build made without `clang`,
+a program the verifier refuses — all of them leave the desktop working, leave `guard-apply`
+succeeding, and set `ipcMediation: "none"` with the reason in the residual list. `bpftool` is
+added to the denied escape binaries for the same reason `apparmor_parser` is: it undoes this
+layer. Checking it on a live box, from a terminal in a guarded session:
+
+```sh
+rpchatd --guard-apply | grep ipcMediation   # must say "bpf" before the rest means anything
+awww query                                  # expect: cannot reach the daemon
+noctalia msg wallpaper-get                  # expect: the same
+```
+
+The program is written in C and compiled by `build.rs` with `clang -target bpf`, then loaded with
+[aya](https://aya-rs.dev) (a pure-Rust loader, so the daemon stays on stable Rust — `aya-ebpf`,
+which would let the program itself be Rust, needs a nightly toolchain). The kernel types it reads
+are hand-written in `src/bpf/vmlinux.h` — five structs and one field each, rather than the
+160,000 lines `bpftool btf dump` generates — and every field access is a CO-RE relocation, so one
+object works across kernels. Compositor IPC is deliberately **out of scope**: the same hook would
+mediate it, but the compositor serves the Wayland display and the X11 sockets alongside its
+control socket, and that allow-list is a different question.
 
 ### What it cannot do
 

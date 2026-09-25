@@ -42,6 +42,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::ipcguard::{IpcMediation, IpcOutcome, IpcRequest, Target};
 use crate::policy::{CompositorIpc, GuardMode, GuardRules, GuardShell, PolicyFile};
 
 /// Where the generated profiles go.
@@ -268,6 +269,23 @@ pub fn classify_comm(comm: &str) -> Option<&'static TableEntry> {
 // Plan: what the profiles are generated from
 // ---------------------------------------------------------------------------
 
+/// A listening filesystem socket a table process owns **right now**: the concrete path and the
+/// pid that serves it.
+///
+/// This is discovery's raw output, and unlike [`DiscoveredSocket`] it is never cached. A path,
+/// an inode and a pid are only true for as long as the process holding them lives, and the IPC
+/// guard keys on exactly those — see `ipcguard.rs`. The generalised glob the AppArmor profiles
+/// need is derived from it by [`resolve_context`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ServedSocket {
+    pub path: String,
+    pub owner: Owner,
+    /// Which table entry the owning process matched (`noctalia`, `hyprland`, …).
+    pub entry: String,
+    /// The process serving it, for its cgroup (the IPC guard's allow-list).
+    pub pid: i32,
+}
+
 /// A socket found by discovery (or cached from an earlier run), already generalised.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct DiscoveredSocket {
@@ -299,6 +317,11 @@ pub struct GuardContext {
     pub unix_class: bool,
     /// Sockets discovered at runtime or cached.
     pub discovered: Vec<DiscoveredSocket>,
+    /// The concrete sockets discovery found on this pass, for the IPC guard. Not cached.
+    pub served: Vec<ServedSocket>,
+    /// What the BPF LSM IPC guard managed to do on this pass; drives the residual lines about
+    /// `connect()` mediation (see [`crate::ipcguard::residual`]).
+    pub ipc: IpcOutcome,
     /// `app.users` that resolve to a uid, with it — the `user@<uid>.service` drop-ins.
     pub user_uids: Vec<(String, u32)>,
     pub daemon_version: String,
@@ -417,7 +440,11 @@ pub const SEALED_PATHS: [&str; 6] = [
 /// `systemd-run` is **not** here either, and it used to be. See [`SYSTEMD_RUN_BINARIES`]: only
 /// its system-manager half is an escape, and denying the binary outright broke every
 /// uwsm-launched desktop.
-pub const ESCAPE_BINARIES: [&str; 12] = [
+///
+/// `bpftool` is here for the same reason `apparmor_parser` is: `bpftool link detach` or an
+/// `rm` through a bpffs it can mount undoes the IPC guard (`ipcguard.rs`) exactly the way
+/// `apparmor_parser -R` undoes the profiles.
+pub const ESCAPE_BINARIES: [&str; 14] = [
     "/usr/bin/run0",
     "/bin/run0",
     "/usr/bin/machinectl",
@@ -430,6 +457,8 @@ pub const ESCAPE_BINARIES: [&str; 12] = [
     "/usr/sbin/apparmor_parser",
     "/usr/bin/aa-teardown",
     "/usr/sbin/aa-teardown",
+    "/usr/bin/bpftool",
+    "/usr/sbin/bpftool",
 ];
 
 /// `systemd-run`, which gets its own profile ([`SYSTEM_MANAGER_TRANSPORTS`]) rather than a deny.
@@ -942,9 +971,13 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         "sessions that were already open when the guard engaged are confined at their next login"
             .to_string(),
     );
-    if shell_profile && !ctx.unix_class {
-        residual.push("this kernel has no AppArmor unix mediation class (only the coarse network_v9/af_unix), so connect() to a filesystem socket cannot be denied at all: the wallpaper IPC is NOT guarded. What holds is the config files — a wallpaper set through the shell's socket does not persist — and the client binaries being denied. Measured, not assumed: with `deny /run/rpchat/** rwklx` loaded, open() on a socket there is EACCES and connect() to it succeeds".to_string());
-    }
+    // Who actually mediates `connect()`, and what that leaves open. The AppArmor `unix` class
+    // and the BPF LSM program are alternatives, so one function answers for both.
+    residual.extend(crate::ipcguard::residual(
+        &ctx.ipc,
+        ctx.unix_class,
+        shell_profile,
+    ));
     // Per shell, not "none of them": one row with a separate client binary does not close the
     // hole another row leaves open.
     if shell_profile && ctx.shells.iter().any(|s| s.clients.is_empty()) {
@@ -1351,6 +1384,10 @@ pub struct GuardState {
     pub users: Vec<String>,
     #[serde(default)]
     pub sockets: Vec<DiscoveredSocket>,
+    /// What mediated `connect()` when the guard was last engaged, so `guard-status` can report
+    /// it without loading anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipc_mediation: Option<IpcMediation>,
     /// uids that currently carry a `user@<uid>.service.d` drop-in.
     #[serde(default)]
     pub dropin_uids: Vec<u32>,
@@ -1388,6 +1425,13 @@ pub struct GuardInfo {
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pam_configured: Option<bool>,
+    /// How `connect()` to the guarded sockets is mediated: AppArmor's `unix` class, the BPF LSM
+    /// program, or nothing. `None` when the guard is not engaged, so there is nothing to say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipc_mediation: Option<IpcMediation>,
+    /// How many socket nodes the BPF IPC guard is mediating right now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipc_targets: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1427,7 +1471,17 @@ pub type ReadFile = Box<dyn Fn(&Path) -> Option<String> + Send + Sync>;
 pub type WriteFile = Box<dyn Fn(&Path, &str) -> io::Result<()> + Send + Sync>;
 pub type RemoveFile = Box<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
 pub type Parser = Box<dyn Fn(ParserOp, &[PathBuf]) -> Result<(), String> + Send + Sync>;
-pub type Discover = Box<dyn Fn(&[String]) -> Vec<DiscoveredSocket> + Send + Sync>;
+pub type Discover = Box<dyn Fn(&[String]) -> Vec<ServedSocket> + Send + Sync>;
+/// Engage (or unload) the BPF LSM IPC guard. A hook because `apply` is unit-tested without any
+/// privilege and loading a BPF program needs plenty; `main.rs` supplies the real one.
+pub type IpcEngage = Box<dyn Fn(&IpcRequest) -> IpcOutcome + Send + Sync>;
+/// The IPC guard's view of the machine: which sockets to mediate and which cgroups to allow,
+/// resolved from the context. Also a hook, for the same reason — it stats and lists directories.
+pub type IpcTargets =
+    Box<dyn Fn(&GuardRules, &GuardContext) -> (Vec<Target>, Vec<PathBuf>) + Send + Sync>;
+/// The cgroup directory of the rpchat app, so the IPC guard can let the character's own
+/// `<shell> msg …` through. `None` until the app registers for keepalive.
+pub type AppCgroup = Box<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 /// Login helpers (by executable path) that are running right now WITHOUT an AppArmor label:
 /// `(pid, exe)` pairs. Such a helper was exec'd before the profiles were loaded and cannot enter
 /// a hat, so every login it handles stays unconfined until it restarts.
@@ -1451,8 +1505,14 @@ pub struct GuardHooks {
     pub write_file: WriteFile,
     pub remove_file: RemoveFile,
     pub parser: Parser,
-    /// Listening sockets of the listed users' shell/compositor processes, generalised.
+    /// Listening sockets of the listed users' shell/compositor processes.
     pub discover: Discover,
+    /// Which sockets the IPC guard should mediate, and the cgroups of the processes serving them.
+    pub ipc_targets: IpcTargets,
+    /// The app's cgroup, for the IPC guard's allow-list.
+    pub app_cgroup: AppCgroup,
+    /// Load/unload the BPF LSM IPC guard (see `ipcguard.rs`).
+    pub ipc_engage: IpcEngage,
     /// Running login helpers that carry no profile (see `UnconfinedHelpers`).
     pub unconfined_helpers: UnconfinedHelpers,
     /// The listed users' session processes that carry no profile (see `UnconfinedSession`).
@@ -1573,8 +1633,13 @@ pub fn resolve_context(
         .iter()
         .filter(|c| c.binaries.iter().any(|b| exists(b)))
         .collect();
+    let served = (hooks.discover)(users);
     let mut discovered: BTreeSet<DiscoveredSocket> = cached.iter().cloned().collect();
-    discovered.extend((hooks.discover)(users));
+    discovered.extend(served.iter().map(|s| DiscoveredSocket {
+        glob: generalise_socket_path(&s.path),
+        owner: s.owner,
+        entry: s.entry.clone(),
+    }));
     // Drop the session's lifelines before they reach the profiles or the state cache; an
     // older cache may still carry them (see NEVER_GUARD).
     discovered.retain(|d| !never_guard(&d.glob));
@@ -1592,6 +1657,9 @@ pub fn resolve_context(
         abi: (hooks.abi)(),
         unix_class: exists(APPARMOR_UNIX_CLASS),
         discovered: discovered.into_iter().collect(),
+        served,
+        // Filled in by `apply`, which is the only caller that may touch the kernel.
+        ipc: IpcOutcome::default(),
         daemon_version: paths.daemon_version.clone(),
     }
 }
@@ -1613,6 +1681,10 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
     };
 
     if !rules.enabled() {
+        // The BPF program first, and unconditionally: it is pinned, so a previous run's copy is
+        // still attached even if this daemon never loaded it and the state file says nothing.
+        (hooks.ipc_engage)(&IpcRequest::default());
+        state.ipc_mediation = None;
         // Disengage whatever an earlier run loaded.
         if !state.loaded.is_empty() || state.mode != GuardMode::Off {
             let files: Vec<PathBuf> = PROFILE_NAMES
@@ -1673,7 +1745,24 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
         return info;
     }
 
-    let ctx = resolve_context(&rules, &users, hooks, paths, &state.sockets);
+    let mut ctx = resolve_context(&rules, &users, hooks, paths, &state.sockets);
+    // Before the profiles, because `render` reports what this managed to do: the residual list
+    // has to say which mechanism is mediating `connect()`, and guessing is how the guard came to
+    // claim a wallpaper lock it did not have. Failure here is never `lastError` — the AppArmor
+    // half must still engage, and the desktop must still work.
+    let (targets, server_cgroups) = (hooks.ipc_targets)(&rules, &ctx);
+    ctx.ipc = (hooks.ipc_engage)(&IpcRequest {
+        mode: rules.mode,
+        setting: rules.ipc_guard,
+        targets,
+        app_cgroup: (hooks.app_cgroup)(),
+        server_cgroups,
+    });
+    let mediation = crate::ipcguard::effective_mediation(&ctx.ipc, ctx.unix_class);
+    info.ipc_mediation = Some(mediation);
+    info.ipc_targets = Some(ctx.ipc.targets);
+    state.ipc_mediation = Some(mediation);
+    let ctx = ctx;
     let plan = render(&rules, &ctx);
     info.residual = plan.residual.clone();
     info.shell = if plan.shells.is_empty() {
@@ -1844,6 +1933,7 @@ pub fn current_info(
         loaded: state.loaded.clone(),
         users: state.users.clone(),
         pam_configured: pam_configured(hooks),
+        ipc_mediation: state.ipc_mediation,
         applied_at: state.applied_at.clone(),
         last_error: state.last_error.clone(),
         ..GuardInfo::default()
@@ -1883,7 +1973,9 @@ pub mod tests {
         pub existing: Mutex<Vec<String>>,
         pub parser_calls: Mutex<Vec<(ParserOp, Vec<PathBuf>)>>,
         pub parser_fail: Mutex<Option<ParserOp>>,
-        pub discovered: Mutex<Vec<DiscoveredSocket>>,
+        pub discovered: Mutex<Vec<ServedSocket>>,
+        /// What the fake `ipc_engage` hook reports back.
+        pub ipc: Mutex<IpcOutcome>,
         pub unconfined_session: Mutex<Vec<(u32, String)>>,
         pub uids: Mutex<HashMap<String, u32>>,
         pub reloads: Mutex<u32>,
@@ -1903,6 +1995,7 @@ pub mod tests {
             let i = self.clone();
             let j = self.clone();
             let k = self.clone();
+            let l = self.clone();
             GuardHooks {
                 available: Box::new(move || *a.available.lock().unwrap()),
                 abi: Box::new(|| Some("abi/4.0".into())),
@@ -1930,6 +2023,9 @@ pub mod tests {
                     Ok(())
                 }),
                 discover: Box::new(move |_| g.discovered.lock().unwrap().clone()),
+                ipc_targets: Box::new(|_, _| (Vec::new(), Vec::new())),
+                app_cgroup: Box::new(|| None),
+                ipc_engage: Box::new(move |_| l.ipc.lock().unwrap().clone()),
                 unconfined_helpers: Box::new(move |_| Vec::new()),
                 unconfined_session: Box::new(move |_| i.unconfined_session.lock().unwrap().clone()),
                 uid_of: Box::new(move |name| {
@@ -1980,6 +2076,8 @@ pub mod tests {
                 owner: Owner::Shell,
                 entry: "noctalia".into(),
             }],
+            served: Vec::new(),
+            ipc: IpcOutcome::default(),
             user_uids: mode_users
                 .iter()
                 .enumerate()
@@ -2204,6 +2302,8 @@ pub mod tests {
             abi: None,
             unix_class: true,
             discovered: vec![],
+            served: Vec::new(),
+            ipc: IpcOutcome::default(),
             user_uids: vec![("a".to_string(), 1000)],
             daemon_version: "1".into(),
         };
@@ -2775,6 +2875,7 @@ garbage line\n";
                 owner: Owner::Shell,
                 entry: "noctalia".into(),
             }],
+            ipc_mediation: Some(IpcMediation::Bpf),
             dropin_uids: vec![1000],
             applied_at: Some("2026-09-14T12:00:00.000Z".into()),
             last_error: None,
@@ -2817,10 +2918,11 @@ garbage line\n";
             PathBuf::from("/etc/pam.d/system-login"),
             "session optional pam_apparmor.so order=user,group,default\n".into(),
         );
-        os.discovered.lock().unwrap().push(DiscoveredSocket {
-            glob: "@{run}/user/[0-9]*/noctalia-wayland-*.sock".into(),
+        os.discovered.lock().unwrap().push(ServedSocket {
+            path: "/run/user/1000/noctalia-wayland-1.sock".into(),
             owner: Owner::Shell,
             entry: "noctalia".into(),
+            pid: 4242,
         });
         let hooks = os.hooks();
         let p = paths(Path::new("/t"));

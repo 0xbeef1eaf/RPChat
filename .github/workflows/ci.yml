@@ -56,12 +56,12 @@ jobs:
           workspaces: |
             native/overlay-wlr
             native/rpchatd
-      - name: Install system packages (helper build, Xvfb and nested Sway for smoke tests, apparmor_parser for the guard profiles, OpenBLAS for the Qwen voice engine)
+      - name: Install system packages (helper build, Xvfb and nested Sway for smoke tests, apparmor_parser for the guard profiles, clang and libbpf for the IPC guard's BPF program, OpenBLAS for the Qwen voice engine)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libgtk-3-dev libgtk-layer-shell-dev libwebkit2gtk-4.1-dev pkg-config \
-            libopenblas-dev \
+            libopenblas-dev clang libbpf-dev \
             xvfb x11-apps xdotool imagemagick sway grim apparmor
       - run: pnpm install --frozen-lockfile
       - name: Build packages and app (compiles and bundles the native helper)
@@ -80,11 +80,21 @@ jobs:
       - name: Helper unit tests
         run: cargo test --manifest-path native/overlay-wlr/Cargo.toml
       - name: Daemon unit tests and lint
+        # RP_REQUIRE_BPF turns a missing clang into a build failure instead of a daemon that
+        # silently cannot mediate connect(); see native/rpchatd/build.rs.
+        env:
+          RP_REQUIRE_BPF: '1'
         run: |
           cargo test --manifest-path native/rpchatd/Cargo.toml
           cargo clippy --manifest-path native/rpchatd/Cargo.toml --all-targets -- -D warnings
           cargo fmt --manifest-path native/rpchatd/Cargo.toml --check
           native/rpchatd/target/release/rpchatd --check-devices || true
+      - name: IPC guard load test (as root; skips itself when the runner's kernel has no BPF LSM)
+        env:
+          RP_REQUIRE_BPF: '1'
+        run: |
+          sudo -E env "PATH=$PATH" cargo test --manifest-path native/rpchatd/Cargo.toml \
+            the_program_denies_a_mediated_socket_and_nothing_else -- --nocapture
       - name: Installer smoke (install.sh against a scratch prefix, fake AppImage)
         run: sudo scripts/install-smoke.sh "$RUNNER_TEMP/install-smoke"
       - name: Headful smoke (Xvfb, mock LLM, pixel checks)

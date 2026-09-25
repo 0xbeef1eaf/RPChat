@@ -7,7 +7,7 @@
  * its own switch (`forced`) next to the value that would be written (`values`). The `app`,
  * `inputLock` and `guard` blocks have meaningful defaults of their own and are always written.
  */
-import type { AppRestrictions, DevRules, GuardCompositorIpc, GuardMode, GuardShell, PackSource, PolicyFile } from '@rp/shared';
+import type { AppRestrictions, DevRules, GuardCompositorIpc, GuardIpcGuard, GuardMode, GuardShell, PackSource, PolicyFile } from '@rp/shared';
 import { DEFAULT_APP_RESTRICTIONS, DEFAULT_DEV_RULES, UNLIMITED } from '@rp/shared';
 
 export type PolicyValue = number | boolean | string | string[] | Record<string, boolean>;
@@ -160,6 +160,7 @@ export interface PolicyDraft {
     protectApp: boolean;
     wallpaper: boolean;
     compositorIpc: GuardCompositorIpc;
+    ipcGuard: GuardIpcGuard;
     shell: GuardShell[];
     loginHelpers: string[];
     extraDenyPaths: string[];
@@ -239,6 +240,7 @@ export function policyDraftFrom(policy: PolicyFile): PolicyDraft {
       protectApp: policy.guard?.protectApp !== false,
       wallpaper: policy.guard?.wallpaper !== false,
       compositorIpc: policy.guard?.compositorIpc ?? 'shell-only',
+      ipcGuard: policy.guard?.ipcGuard ?? 'auto',
       shell: shell === undefined ? ['auto'] : Array.isArray(shell) ? [...shell] : [shell],
       loginHelpers: [...(policy.guard?.loginHelpers ?? [])],
       extraDenyPaths: [...(policy.guard?.extraDenyPaths ?? [])],
@@ -294,6 +296,7 @@ export function policyDraftToFile(draft: PolicyDraft): PolicyFile {
     protectApp: draft.guard.protectApp,
     wallpaper: draft.guard.wallpaper,
     compositorIpc: draft.guard.compositorIpc,
+    ipcGuard: draft.guard.ipcGuard,
     extraDenyPaths: [...draft.guard.extraDenyPaths],
     extraDenySockets: [...draft.guard.extraDenySockets],
     allowBinaries: [...draft.guard.allowBinaries],

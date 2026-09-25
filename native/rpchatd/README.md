@@ -176,6 +176,18 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   `/dev/kmsg`) turns `apparmor="DENIED|ALLOWED|AUDIT"` records with `profile="rpchat-…"` into
   `guard-attempt` events (`blocked` only for `DENIED`, i.e. enforce mode).
 
+- **IPC guard** (`policy.guard.ipcGuard`, `src/ipcguard.rs`): AppArmor cannot deny a `connect()`
+  to a filesystem socket on a kernel without its fine-grained `unix` mediation class, which is
+  every current one, so where the kernel allows it (`lsm=…,bpf`, BTF, bpffs) the daemon also
+  loads a BPF LSM program on `lsm/unix_stream_connect` that mediates the shell's sockets by
+  `(device, inode)` and allows the app's cgroup and the socket servers'. It is pinned under
+  `/sys/fs/bpf/rpchat/<build>/`, refreshed on inotify from `/run/user/<uid>` (inodes churn when a
+  shell rebinds), and its records become the same `guard-attempt` events with `profile:
+  "bpf-ipc"`. `guard-status` reports `ipcMediation` (`apparmor` / `bpf` / `none`) and
+  `ipcTargets`. Everything about it fails open: an unsupported kernel, a build without `clang`
+  or a program the verifier refuses leaves the desktop working, `guard-apply` succeeding, and
+  the gap in `residual`.
+
 - **Lock**: `durationMs` is rounded and clamped to `[1000, inputLock.maxDurationMs]` (default max
   300 000). A `lock` while locked replaces the deadline and device class (devices no longer
   selected are released, newly selected ones grabbed). `reason` is kept (≤ 200 chars) and
@@ -270,11 +282,13 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 | `src/remote.rs` | The `remote`/`packs` policy blocks and pack-signature verification (Ed25519 over id + version + hash); pure |
 | `src/crypto_keys.rs` | `sdk.crypto`'s per-uid key history: `/etc/rpchat/crypto-keys/<uid>.json` (dir `0700`, file `0600`, root-only), `crypto-keys`/`crypto-rotate-key` scoped by `SO_PEERCRED`; tested |
 | `src/guard.rs` | Session guard: shell/compositor table, profile rendering (`render`), audit-line parsing, per-target rate limiting, `/proc` discovery parsing and socket-path generalisation, `GuardState` file, `apply`/`current_info` behind `GuardHooks` (fakes in tests, `apparmor_parser -Q` when installed) |
+| `src/ipcguard.rs` | IPC guard: capability check, socket-glob expansion and `(device, inode)` resolution, `NEVER_GUARD` exclusion, cgroup allow-list, ring-buffer record → `GuardAttempt`, residual lines; then the aya loader (load/attach/pin/teardown). The program is `src/bpf/ipc_guard.bpf.c` with its own hand-written `src/bpf/vmlinux.h`, compiled by `build.rs` |
 | `src/keepalive.rs` | Pure relaunch logic: registration validation, the gate (policy, users, active session, process), `RelaunchTracker` backoff/give-up, logind session-file and `loginctl` parsing, `command_spec`/`build_command`; all tested |
 | `src/sysinstall.rs` | System install: `versions.json`, semver + downgrade rule, SHA-512 decoding, tree checks/normalisation, atomic swap, `apply_update` behind injectable `ApplyHooks` (home lookup, extraction as the user, bundled daemon version, `install.sh --refresh-daemon-files`); tested on a temp root with a fake AppImage |
 | `src/lock.rs` | `LockEngine` state machine (grab, timer, emergency chord, hot-plug, device classes) behind `DeviceSource`/`GrabbedDevice`; fakes and tests |
 | `src/inject.rs` | US keymap, `plan_text`, `parse_combo`, `ScreenSize` clamping, `Injector` trait, `NullInjector`, `FakeInjector` |
 | `src/devices.rs` | evdev `DeviceSource`, capability classification, DRM screen size, uinput `Injector`, `--check-devices` report |
+| `build.rs` | Compiles `src/bpf/ipc_guard.bpf.c` with `clang -target bpf`. A missing `clang` is a warning and an empty object (the daemon then reports `ipcMediation: "none"`); `RP_REQUIRE_BPF=1` makes it a hard error, which CI and the release build set |
 | `dist/` | `rpchatd.service`, `70-rpchat.rules`, `rpchat.conf`, `policy.example.json`, `POLICY.md`, `rpchat-autostart.desktop`, `rpchat.service` (user unit) |
 | `install.sh` | Idempotent installer / uninstaller, system install (`--system-install`, `--rollback`, `--remove`), `--refresh-daemon-files`, session guard (`--guard`/`--no-guard`: PAM line + `--guard-apply`/`--guard-off`), `--prefix` for tests (see the docs; `scripts/install-smoke.sh`) |
 

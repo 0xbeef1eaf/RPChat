@@ -407,6 +407,7 @@ verified AppArmor facts and the recovery steps: `docs/system-integration.md` "Se
 | `protectApp` | boolean | `true` | Signals (`kill`, `pkill`) and `ptrace` from the session to rpchat are guarded. |
 | `wallpaper` | boolean | `true` | The shell's IPC socket and its config/state files are guarded; the shell itself runs in `rpchat-shell` (may serve its socket, may not connect to it). |
 | `compositorIpc` | `"allow"` \| `"shell-only"` \| `"deny"` | `"shell-only"` | Who may reach the compositor's control socket (Hyprland `.socket.sock`/`.socket2.sock`, sway, niri): everyone, only the shell and rpchat, or only rpchat. Anything but `allow` runs the compositor in `rpchat-compositor` so its keybind/exec children return to the session confinement. |
+| `ipcGuard` | `"auto"` \| `"off"` | `"auto"` | Mediate `connect()` to the shell's sockets with a **BPF LSM program** where the kernel allows it (`lsm=…,bpf` on the kernel command line, `CONFIG_BPF_LSM=y`, BTF at `/sys/kernel/btf/vmlinux`). AppArmor cannot make that check on a mainstream kernel — it has only the coarse `af_unix` class — so without this `wallpaper` covers `open()` and the config files but not `connect()`, and `<shell> msg` from a terminal still reaches the daemon. `auto` uses it where it works and reports `ipcMediation: "none"` where it does not; `off` never loads it. There is no `require`: refusing to engage the guard at all on an unsupported kernel would turn a kernel update into an unconfined desktop. `guard-status` reports which mechanism is live. |
 | `shell` | one of `"auto"`, `"noctalia"`, `"quickshell"`, `"hyprpaper"`, `"swww"`, `"none"` — **or a non-empty list of them** | `"auto"` | Which shell table rows apply. `auto` takes **every** row whose binary exists. Name several (`["noctalia","hyprpaper"]`) when a bar and a separate wallpaper daemon are both running: they share one `rpchat-shell` profile where each may *serve* its own socket but none may *connect* to any of them, so neither can drive the other — a bar cannot set the wallpaper through a wallpaper daemon. Guarding a socket nobody serves costs nothing, so listing extra rows is safe. |
 | `loginHelpers` | non-empty string[] | auto-detect | The PAM login helpers whose profile carries the per-user hats (`/usr/lib/sddm/sddm-helper`, `greetd`, `/usr/bin/login`, `sshd` — those present on the box). |
 | `extraDenyPaths` | string[] | `[]` | More files the session may not write (absolute, `~/…` or `@{HOME}/…` globs). |
@@ -414,7 +415,9 @@ verified AppArmor facts and the recovery steps: `docs/system-integration.md` "Se
 | `allowBinaries` | string[] | `[]` | Absolute paths that leave the confinement entirely when executed (`ux`); use sparingly. |
 
 Recovery as root: `guard.mode: "off"` (picked up within seconds, or `rpchatd --guard-apply`),
-`rpchatd --guard-off`, or `apparmor_parser -R /etc/apparmor.d/rpchat-*`. `install.sh --no-guard`
+`rpchatd --guard-off`, or `apparmor_parser -R /etc/apparmor.d/rpchat-*`. The last one leaves the
+BPF program attached — it is pinned, deliberately, so `kill -9 rpchatd` does not drop it — so
+remove `/sys/fs/bpf/rpchat/` as well, or use one of the first two, which unpin it. `install.sh --no-guard`
 also removes the PAM line. Sessions already open when the guard engages are confined at their
 next login.
 

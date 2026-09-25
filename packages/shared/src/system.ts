@@ -153,6 +153,10 @@ export const DEV_ARGV_FLAGS = [
 
 export type GuardMode = 'off' | 'audit' | 'enforce';
 export type GuardCompositorIpc = 'allow' | 'shell-only' | 'deny';
+/** `guard.ipcGuard`: whether the BPF LSM program that mediates `connect()` is used. */
+export type GuardIpcGuard = 'auto' | 'off';
+/** Which mechanism mediates `connect()` to the guarded sockets (`GuardInfo.ipcMediation`). */
+export type GuardIpcMediation = 'apparmor' | 'bpf' | 'none';
 export type GuardShell = 'auto' | 'noctalia' | 'quickshell' | 'hyprpaper' | 'swww' | 'awww' | 'none';
 
 export interface GuardPolicy {
@@ -164,6 +168,16 @@ export interface GuardPolicy {
   wallpaper?: boolean;
   /** Who may reach the compositor's control socket. Default `shell-only`. */
   compositorIpc?: GuardCompositorIpc;
+  /**
+   * Mediate `connect()` to the shell's sockets with a BPF LSM program when the kernel allows it
+   * (`lsm=…,bpf` plus BTF). AppArmor cannot make that check on a mainstream kernel, so without
+   * this the wallpaper lock only covers `open()` and the config files.
+   *
+   * `auto` (default) uses it where it works and reports `ipcMediation: 'none'` where it does
+   * not; `off` never loads it. There is deliberately no `require`: refusing to engage the guard
+   * at all on an unsupported kernel would turn a kernel update into an unconfined desktop.
+   */
+  ipcGuard?: GuardIpcGuard;
   /** Which shell table row applies. Default `auto` (first whose binary exists). */
   /** One shell, or several: a bar with its own IPC socket and a wallpaper daemon are commonly both present. */
   shell?: GuardShell | GuardShell[];
@@ -179,6 +193,7 @@ export interface GuardPolicy {
 
 export const GUARD_MODES: readonly GuardMode[] = ['off', 'audit', 'enforce'];
 export const GUARD_COMPOSITOR_IPC: readonly GuardCompositorIpc[] = ['allow', 'shell-only', 'deny'];
+export const GUARD_IPC_GUARD: readonly GuardIpcGuard[] = ['auto', 'off'];
 /** `awww` is `swww` after its rename; both select the same row in the daemon. */
 export const GUARD_SHELLS: readonly GuardShell[] = ['auto', 'noctalia', 'quickshell', 'hyprpaper', 'swww', 'awww', 'none'];
 
@@ -200,6 +215,17 @@ export interface GuardInfo {
   warnings?: string[];
   /** The `pam_apparmor.so` session line is present (undefined when no known PAM file exists). */
   pamConfigured?: boolean;
+  /**
+   * How `connect()` to the guarded sockets is mediated: AppArmor's `unix` class, the BPF LSM
+   * program, or nothing at all. Undefined when the guard is not engaged, or when the daemon
+   * predates the BPF layer.
+   *
+   * `none` is the case to notice: the shell's IPC socket can be opened but not connected to by
+   * any rule, so `<shell> msg` from a terminal still reaches the daemon. `residual` says so.
+   */
+  ipcMediation?: GuardIpcMediation;
+  /** How many socket nodes the BPF layer is mediating (0 unless `ipcMediation` is `bpf`). */
+  ipcTargets?: number;
   shell?: string;
   compositor?: string;
   appliedAt?: string;

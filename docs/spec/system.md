@@ -187,7 +187,8 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   `KillMode=process`.
 - **Session guard** (`src/guard.rs`, pure + tested; OS glue in `main.rs::os`; user guide
   `docs/system-integration.md` "Session guard"): `policy.guard` (`GuardPolicy`, `deny_unknown_fields`;
-  `mode` off|audit|enforce, `protectApp`, `wallpaper`, `compositorIpc` allow|shell-only|deny, `shell`
+  `mode` off|audit|enforce, `protectApp`, `wallpaper`, `compositorIpc` allow|shell-only|deny,
+  `ipcGuard` auto|off, `shell`
   auto|noctalia|quickshell|hyprpaper|swww|none, `loginHelpers`, `extraDenyPaths`, `extraDenySockets`,
   `allowBinaries`; path entries absolute or `~/`/`@{HOME}/`, no whitespace/quotes; a mode other than
   off requires `app.users`) → `GuardRules` with defaults. A **table** (`NOCTALIA`, `QUICKSHELL`,
@@ -239,6 +240,34 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   (engage, idempotent re-engage with cached sockets, enforce rewrite, parser failure, off, no
   LSM), socket-level `guard-apply`/`guard-status`/policy-change and `subscribe` + pushed events,
   and the generated profiles through `apparmor_parser -Q` when it is installed (CI installs it).
+- **IPC guard** (`src/ipcguard.rs` + `src/bpf/ipc_guard.bpf.c`, built by `build.rs` with
+  `clang -target bpf`; user guide `docs/system-integration.md` "IPC guard (BPF LSM)", design
+  `docs/spec/ipc-guard-bpf.md`): AppArmor cannot mediate `connect()` to a filesystem socket on a
+  kernel without its fine-grained `unix` class — which is every current one — so `guard.ipcGuard:
+  auto` (default) also loads a BPF LSM program on `lsm/unix_stream_connect` when
+  `/sys/kernel/security/lsm` contains `bpf`, `/sys/kernel/btf/vmlinux` exists and `/sys/fs/bpf` is
+  mounted (`support`). Maps: `rpchat_targets` (hash, key `(dev_major, dev_minor, ino)`, 1024
+  entries) from `resolve_targets` — discovery's concrete socket paths plus the table's globs
+  expanded by `expand_glob`/`fnmatch` against the real directories, then `stat`ed and filtered to
+  sockets owned by an `app.users` uid and not in `NEVER_GUARD`; `rpchat_allowed`
+  (`BPF_MAP_TYPE_CGROUP_ARRAY`, 8 slots) with slot 0 the app's cgroup from its keepalive
+  registration (`cgroup_dir` of `/proc/<pid>/cgroup`, v2 only) and the rest the socket servers';
+  `rpchat_mode` (0 off / 1 audit / 2 enforce); `rpchat_events` (ring buffer). The program returns
+  `-EACCES` in enforce, `0` in audit, and `0` for anything it cannot resolve. Records become the
+  same `guard-attempt` events with `profile: "bpf-ipc"` and `operation: "connect"`, through the
+  same `AttemptLimiter`. The link is pinned at `/sys/fs/bpf/rpchat/<sha256[..16] of the object>/
+  link` (so `kill -9` does not drop it); `engage` attaches the new program before unpinning the
+  old, and both being attached briefly is harmless because each passes the other's verdict
+  through as the hook's incoming `ret`. Two threads: one drains the ring buffer, one watches
+  `/run/user/<uid>` with inotify (plus a 30 s timeout) and re-resolves, because a shell that
+  restarts rebinds to a new inode. `GuardInfo` gains `ipcMediation` (`apparmor` when the kernel
+  has the `unix` class, `bpf` when the program is attached, else `none` —
+  `effective_mediation`) and `ipcTargets`; `residual` names the gaps of whichever is live.
+  Everything fails open: a kernel that cannot run it, a build without `clang` (`build.rs` then
+  embeds an empty object; `RP_REQUIRE_BPF=1` makes that a build error) or a load failure leaves
+  the desktop working and `guard-apply` succeeding. `bpftool` joins `ESCAPE_BINARIES`. Tests are
+  pure for everything above plus an integration test that binds a socket, mediates it and
+  connects — skipped without `CAP_BPF` or BPF LSM, the way the `apparmor_parser` test skips.
 - **`sdk.crypto` key storage** (`src/crypto_keys.rs`): one JSON file per uid,
   `/etc/rpchat/crypto-keys/<uid>.json` (dir `0700`, file `0600`, both `root:root` — nobody but
   root/the daemon can open it directly, unlike everything else under `/etc/rpchat`). `crypto-keys`
@@ -528,7 +557,7 @@ sets `deny_unknown_fields` — it does not act on them.
 
 ### Policy `guard` block
 
-`GuardPolicy` in `@rp/shared/system.ts`; validated identically by `parseGuard` (app) and `validate_guard` (daemon). `mode` `off` (default) \| `audit` \| `enforce`; `protectApp`, `wallpaper` booleans (default true); `compositorIpc` `allow` \| `shell-only` (default) \| `deny`; `shell` `auto` (default) \| `noctalia` \| `quickshell` \| `hyprpaper` \| `swww` \| `none`; `loginHelpers` (non-empty, absolute), `extraDenyPaths`/`extraDenySockets` (absolute, `~/…` or `@{HOME}/…`), `allowBinaries` (absolute) — no whitespace or quotes anywhere (they become AppArmor rules). A `mode` other than `off` without `app.users` is invalid; the listed users are the ones confined. Not a settings key; reported as `SystemIntegrationStatus.guard`.
+`GuardPolicy` in `@rp/shared/system.ts`; validated identically by `parseGuard` (app) and `validate_guard` (daemon). `mode` `off` (default) \| `audit` \| `enforce`; `protectApp`, `wallpaper` booleans (default true); `compositorIpc` `allow` \| `shell-only` (default) \| `deny`; `ipcGuard` `auto` (default) \| `off` (the BPF LSM IPC guard; see the *IPC guard* bullet above); `shell` `auto` (default) \| `noctalia` \| `quickshell` \| `hyprpaper` \| `swww` \| `none`; `loginHelpers` (non-empty, absolute), `extraDenyPaths`/`extraDenySockets` (absolute, `~/…` or `@{HOME}/…`), `allowBinaries` (absolute) — no whitespace or quotes anywhere (they become AppArmor rules). A `mode` other than `off` without `app.users` is invalid; the listed users are the ones confined. Not a settings key; reported as `SystemIntegrationStatus.guard`.
 
 ### Policy `dev` block
 

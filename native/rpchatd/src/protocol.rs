@@ -1043,12 +1043,14 @@ mod tests {
             residual: vec!["audit mode".into()],
             warnings: vec![],
             pam_configured: Some(true),
+            ipc_mediation: Some(crate::ipcguard::IpcMediation::Bpf),
+            ipc_targets: Some(2),
             shell: Some("noctalia".into()),
             compositor: Some("hyprland".into()),
             applied_at: Some("2026-09-14T12:00:00.000Z".into()),
             last_error: None,
         };
-        let engaged_json = json!({"available":true,"mode":"audit","loaded":["rpchat-session"],"users":["work"],"residual":["audit mode"],"pamConfigured":true,"shell":"noctalia","compositor":"hyprland","appliedAt":"2026-09-14T12:00:00.000Z"});
+        let engaged_json = json!({"available":true,"mode":"audit","loaded":["rpchat-session"],"users":["work"],"residual":["audit mode"],"pamConfigured":true,"ipcMediation":"bpf","ipcTargets":2,"shell":"noctalia","compositor":"hyprland","appliedAt":"2026-09-14T12:00:00.000Z"});
         round_trip_response(
             &Response::ok(Ok::GuardApply {
                 guard: engaged.clone(),
