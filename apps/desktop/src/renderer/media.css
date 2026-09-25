@@ -16,6 +16,9 @@ body {
   height: 100vh;
 }
 
+/* The padding is also what keeps the layer-shell helper's activation click harmless: it clicks at
+   (1, 1) to give the page the user gesture WebKit wants before it will play a video, and that lands
+   in this padding rather than on an item (see `grant_user_activation` in native/overlay-wlr). */
 .media-stage {
   display: flex;
   flex-direction: column;

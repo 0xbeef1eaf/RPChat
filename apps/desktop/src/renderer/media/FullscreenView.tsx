@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { effectiveOpacity, effectiveVolume, type FullscreenEntry, type MediaLocalEvent } from './mediaState';
 import type { NaturalSize } from './fit';
 import { tileLayout, tilePositions } from './tile';
+import { startPlayback } from './playback';
 
 /** The url inside a CSS `url("…")`; the state machine has already vetted the scheme. */
 function cssUrl(url: string): string {
@@ -75,7 +76,8 @@ function FullscreenVideo({ entry, onEvent }: FullscreenViewProps) {
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
-    el.play().catch((err: unknown) => onEvent({ type: 'error', id: entry.id, message: err instanceof Error ? err.message : String(err) }));
+    const attempt = startPlayback(el, (message) => onEvent({ type: 'error', id: entry.id, message }));
+    return () => attempt.cancel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry.id, entry.url]);
 

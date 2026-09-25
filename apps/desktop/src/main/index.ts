@@ -72,6 +72,11 @@ function resolveAppVersion(): string {
 
 if (env.RP_USER_DATA) app.setPath('userData', path.resolve(env.RP_USER_DATA));
 
+// From here the log also goes to `<userData>/logs/main.log`: launched from a desktop entry the app
+// has no console, and a failure like an overlay that will not play its video is only ever explained
+// in the log. Attached as soon as the path is settled, before anything interesting happens.
+logger.toFile(app.getPath('userData'));
+
 if (process.platform === 'linux') {
   app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
   app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations');
