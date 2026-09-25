@@ -56,6 +56,15 @@ export function embeddingsOf(engine: Engine): EmbeddingServiceLike {
   return service;
 }
 
+/**
+ * What semantic ranking is doing, from both halves: core knows whether it can embed at all, and
+ * only main knows whether the on-device model is downloaded, downloading or missing.
+ */
+async function embeddingStatus(services: AppServices): Promise<EmbeddingStatus> {
+  const status = await embeddingsOf(services.engine).check();
+  return { ...status, install: await services.embedModel.currentStatus() };
+}
+
 export function memoriesOf(engine: Engine): MemoryServiceLike {
   const service = (engine as unknown as { memories?: MemoryServiceLike }).memories;
   if (!service) throw new RpError('INTERNAL', 'The memory service is not available in this build');
@@ -285,7 +294,12 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
           touch: false,
         }),
       consolidate: (_e, sessionId) => memoriesOf(engine).consolidate(requireString(sessionId, 'sessionId'), { auto: false }),
-      embeddingStatus: () => embeddingsOf(engine).check(),
+      embeddingStatus: () => embeddingStatus(services),
+      embeddingInstall: async () => {
+        services.embedModel.begin();
+        void services.embedModel.ensure();
+        return embeddingStatus(services);
+      },
     },
     editor: {
       workspaceDir: async () => services.editor.workspaceDir,

@@ -27,6 +27,7 @@
     "fflate": "^0.8.3",
     "marked": "^18.0.13",
     "monaco-editor": "^0.56.0",
+    "onnxruntime-node": "^1.30.0",
     "qrcode-generator": "2.0.4",
     "quickjs-emscripten": "^0.32.0",
     "react": "^19.3.0",
@@ -106,12 +107,16 @@
       "**/sherpa-onnx-node/**",
       "**/sherpa-onnx-linux-*/**",
       "**/sherpa-onnx-darwin-*/**",
-      "**/sherpa-onnx-win-*/**"
+      "**/sherpa-onnx-win-*/**",
+      "**/onnxruntime-node/**"
     ],
     "npmRebuild": false,
     "win": {
       "target": [
         "nsis"
+      ],
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/{linux,darwin}/**"
       ]
     },
     "nsis": {
@@ -122,6 +127,9 @@
       "target": [
         "dmg"
       ],
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/{linux,win32}/**"
+      ],
       "category": "public.app-category.entertainment",
       "identity": null
     },
@@ -129,6 +137,9 @@
       "target": [
         "AppImage",
         "deb"
+      ],
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/{win32,darwin}/**"
       ],
       "category": "Utility",
       "icon": "build/icon.png",

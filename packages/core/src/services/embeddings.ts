@@ -208,8 +208,12 @@ export class EmbeddingService {
     if (this.resolving?.key === key) return this.resolving.task;
     const task = this.resolveEmbedder(settings)
       .then((embedder) => {
-        this.resolved = { key, embedder };
-        this.dims = undefined;
+        // A miss is not cached: the on-device model may be downloading right now, and the point of
+        // the settings screen offering it is that the next turn picks it up without a restart.
+        if (embedder) {
+          this.resolved = { key, embedder };
+          this.dims = undefined;
+        }
         return embedder;
       })
       .finally(() => {
@@ -235,7 +239,7 @@ export class EmbeddingService {
         };
       }
     }
-    if (!this.local) this.local = { value: await this.o.localEmbedder?.().catch(() => undefined) };
+    if (!this.local?.value) this.local = { value: await this.o.localEmbedder?.().catch(() => undefined) };
     return this.local.value;
   }
 

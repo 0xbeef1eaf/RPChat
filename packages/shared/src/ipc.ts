@@ -232,6 +232,8 @@ export interface IpcApi {
     consolidate(sessionId: string): Promise<MemoryEntry[]>;
     /** Whether semantic ranking is live, and what it uses; embeds one short text to find out. */
     embeddingStatus(): Promise<EmbeddingStatus>;
+    /** Start (or resume) the on-device embedding model download; returns the status right away. */
+    embeddingInstall(): Promise<EmbeddingStatus>;
   };
   /** Prompt windows: one question per window (see `PromptWindowPayload`). */
   prompts: {

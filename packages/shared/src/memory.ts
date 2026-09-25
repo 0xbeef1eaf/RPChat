@@ -1,4 +1,5 @@
 import type { CharacterRef, SessionId } from './ids.js';
+import type { AssetInstallStatus } from './voice.js';
 
 /** Importance 1 (trivia) .. 5 (defining fact about the user or the relationship). */
 export type MemoryImportance = 1 | 2 | 3 | 4 | 5;
@@ -52,6 +53,12 @@ export interface EmbeddingStatus {
   dims?: number;
   /** Why there is no embedder, or why the last attempt failed. */
   problem?: string;
+  /**
+   * State of the on-device model behind the `local` source: absent until the user asks for it, so
+   * nothing downloads 34 MB because a character reached for a memory. Omitted when this build has
+   * no on-device embedder at all.
+   */
+  install?: AssetInstallStatus;
 }
 
 export interface MemorySettings {
