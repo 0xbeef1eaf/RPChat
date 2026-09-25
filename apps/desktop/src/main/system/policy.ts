@@ -5,7 +5,7 @@
  */
 import * as fs from 'node:fs/promises';
 import type { AppPolicy, AppRestrictions, AppSettings, GuardPolicy, ManagedSettingsPaths, PackSource, PacksPolicy, PolicyFile, PolicyLock, RemotePolicy } from '@rp/shared';
-import { APP_ALLOW_KEYS, APP_REQUIRE_KEYS, DEFAULT_APP_RESTRICTIONS, GUARD_COMPOSITOR_IPC, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RUNTIME_POLICY_FILE, RpError, SEAL_MARKER_PATH, UNLIMITED, capOf, parseFunctionKey } from '@rp/shared';
+import { APP_ALLOW_KEYS, APP_REQUIRE_KEYS, DEFAULT_APP_RESTRICTIONS, GUARD_COMPOSITOR_IPC, GUARD_IPC_GUARD, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RUNTIME_POLICY_FILE, RpError, SEAL_MARKER_PATH, UNLIMITED, capOf, parseFunctionKey } from '@rp/shared';
 import type { GuardShell } from '@rp/shared';
 import { activeRestrictions } from './restrictions.js';
 import type { SealCache } from './seal-cache.js';
@@ -417,6 +417,10 @@ export function parseGuard(raw: unknown, problems: string[]): GuardPolicy | unde
   if (g.compositorIpc !== undefined) {
     if (typeof g.compositorIpc === 'string' && (GUARD_COMPOSITOR_IPC as readonly string[]).includes(g.compositorIpc)) out.compositorIpc = g.compositorIpc as GuardPolicy['compositorIpc'];
     else problems.push('guard.compositorIpc must be allow, shell-only or deny');
+  }
+  if (g.ipcGuard !== undefined) {
+    if (typeof g.ipcGuard === 'string' && (GUARD_IPC_GUARD as readonly string[]).includes(g.ipcGuard)) out.ipcGuard = g.ipcGuard as GuardPolicy['ipcGuard'];
+    else problems.push('guard.ipcGuard must be auto or off');
   }
   if (g.shell !== undefined) {
     // One name or a list of them; the daemon guards every row it is given.

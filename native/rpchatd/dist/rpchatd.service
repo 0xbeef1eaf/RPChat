@@ -44,8 +44,11 @@ SystemCallArchitectures=native
 # CAP_SYS_ADMIN: mount and remount the runtime policy filesystem (/run/rpchat/policy) — the
 # one thing here that needs it, and the reason the seal can publish a policy root cannot edit
 # in place. CAP_LINUX_IMMUTABLE: set FS_IMMUTABLE_FL on the policy, the seal and its mirrors
-# (`lock.immutable`), which the kernel gates on that capability alone.
-CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID CAP_MAC_ADMIN CAP_SYS_ADMIN CAP_LINUX_IMMUTABLE
+# (`lock.immutable`), which the kernel gates on that capability alone. CAP_BPF/CAP_PERFMON:
+# load and attach the IPC guard's BPF LSM program (README "Session guard"). CAP_SYS_ADMIN
+# already implies both — `bpf_capable()` and `perfmon_capable()` accept it — but naming them
+# says what the daemon actually uses, and keeps it working if CAP_SYS_ADMIN is ever dropped.
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID CAP_MAC_ADMIN CAP_SYS_ADMIN CAP_LINUX_IMMUTABLE CAP_BPF CAP_PERFMON
 # The bounding set is not enough. NoNewPrivileges=yes together with any option that installs a
 # seccomp filter (ProtectClock, ProtectKernelTunables/Modules/Logs, ProtectHostname,
 # RestrictRealtime, RestrictSUIDSGID, LockPersonality, SystemCallArchitectures — this unit has
@@ -99,6 +102,10 @@ ReadWritePaths=-/usr/local/share/icons
 # ProtectKernelLogs); the /dev/kmsg fallback is only reachable when that option is removed.
 ReadWritePaths=-/etc/apparmor.d
 ReadWritePaths=-/sys/kernel/security/apparmor
+# The IPC guard pins its BPF program under /sys/fs/bpf/rpchat so a killed daemon does not drop
+# the mediation; ProtectKernelTunables leaves the whole of /sys read-only without this. "-":
+# absent on a machine with no bpffs, where the program is not loaded at all.
+ReadWritePaths=-/sys/fs/bpf
 
 [Install]
 WantedBy=multi-user.target

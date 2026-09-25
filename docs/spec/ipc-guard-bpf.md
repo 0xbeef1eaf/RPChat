@@ -1,8 +1,36 @@
 # IPC guard (BPF LSM): mediating `connect()` where AppArmor cannot
 
-Status: **proposed, not implemented.** This spec is self-contained; it assumes no knowledge of the
-conversation that produced it. Read `docs/system-integration.md` → *Session guard* and
-`native/rpchatd/src/guard.rs` first — this is an addition to that guard, not a replacement.
+Status: **implemented.** The code is `native/rpchatd/src/ipcguard.rs` and
+`native/rpchatd/src/bpf/ipc_guard.bpf.c`; the user-facing description is
+`docs/system-integration.md` → *IPC guard (BPF LSM)*. This document is kept as the design record —
+the measurements that motivated it, the alternatives that were rejected and why, and the
+decisions the "Consequences" section called for. Where it and the code disagree, the code is
+right; the notes below say where the implementation deliberately went another way. Read
+`docs/system-integration.md` → *Session guard* and `native/rpchatd/src/guard.rs` first — this is
+an addition to that guard, not a replacement.
+
+## What was decided
+
+The spec left three things open. They were settled like this:
+
+1. **Shell→shell is allowed, not denied.** Consequence 1 below asks whether noctalia driving
+   swww should break. It should not: that is how a real desktop sets a wallpaper, and a guard
+   that takes the wallpaper away from the shell gets switched off. So each socket *server's*
+   cgroup goes into the allow-list alongside the app's, and the residual list says that a session
+   which moves itself into the shell's cgroup gets through the same way. The AppArmor profiles'
+   `unix (connect) peer=(label=rpchat-shell)` rule still reads as shell→shell denial, and on the
+   kernel where it would bite the BPF layer is not what is mediating.
+2. **`unix_may_send` is not hooked.** Both guarded daemons are stream, as the spec expected.
+3. **`vmlinux.h` is hand-written, not generated.** Vendoring `bpftool btf dump`'s output means
+   160,000 lines and five megabytes in the repository. The program reads five structs and one
+   field in each, so those are written out by hand in `src/bpf/vmlinux.h` — CO-RE relocates them
+   against the running kernel either way, which is the property that mattered.
+
+Two smaller departures: the pins live under `/sys/fs/bpf/rpchat/<build>/` rather than a flat
+directory, so an upgraded daemon replaces the previous build's program instead of reusing maps
+whose layout it may no longer agree with; and rather than reusing an existing pin, `engage`
+attaches the new program *before* unpinning the old, which has no gap and no double-attach
+(each program passes the other's verdict through as the hook's incoming `ret`).
 
 ## The problem
 

@@ -52,6 +52,11 @@ const COMPOSITOR_HINTS: Record<string, string> = {
   deny: 'Nothing in the session may, not even the shell.',
 };
 
+const IPC_GUARD_HINTS: Record<string, string> = {
+  auto: 'Used where the kernel allows it (booted with lsm=…,bpf). Where it does not, the shell’s socket can still be reached — System shows which you have.',
+  off: 'Never loaded. On a kernel without AppArmor’s unix mediation class — which is most of them — nothing stops the session connecting to the shell’s socket.',
+};
+
 /** A small radio group that reads as one control — modes, keys and backends rather than a dropdown. */
 function Segmented<T extends string>({
   value,
@@ -505,6 +510,11 @@ export function CreatePolicyDialog({
               <span className="field-label">Who may drive the compositor</span>
               <Segmented label="Compositor IPC" value={draft.guard.compositorIpc} options={['allow', 'shell-only', 'deny'] as const} disabled={busy} onChange={(compositorIpc) => setDraft({ ...draft, guard: { ...draft.guard, compositorIpc } })} />
               <span className="field-hint">{COMPOSITOR_HINTS[draft.guard.compositorIpc]}</span>
+            </div>
+            <div className="field">
+              <span className="field-label">Block connections to the shell’s socket (BPF)</span>
+              <Segmented label="IPC guard" value={draft.guard.ipcGuard} options={['auto', 'off'] as const} disabled={busy} onChange={(ipcGuard) => setDraft({ ...draft, guard: { ...draft.guard, ipcGuard } })} />
+              <span className="field-hint">{IPC_GUARD_HINTS[draft.guard.ipcGuard]}</span>
             </div>
             <div className="field">
               <span className="field-label">Shell</span>

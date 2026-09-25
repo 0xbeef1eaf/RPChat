@@ -39,6 +39,7 @@
     "protectApp": true,
     "wallpaper": true,
     "compositorIpc": "shell-only",
+    "ipcGuard": "auto",
     "shell": "auto",
     "extraDenyPaths": [],
     "extraDenySockets": [],

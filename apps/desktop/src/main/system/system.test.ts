@@ -446,12 +446,15 @@ describe('policy', () => {
     const full = parsePolicy({
       version: 1,
       app: { users: ['work'] },
-      guard: { mode: 'enforce', protectApp: false, wallpaper: true, compositorIpc: 'deny', shell: 'noctalia', loginHelpers: ['/usr/lib/sddm/sddm-helper'], extraDenyPaths: ['~/.config/hypr/hyprpaper.conf', '@{HOME}/x'], extraDenySockets: ['/run/user/1000/foo.sock'], allowBinaries: ['/usr/bin/hyprctl'] },
+      guard: { mode: 'enforce', protectApp: false, wallpaper: true, compositorIpc: 'deny', ipcGuard: 'off', shell: 'noctalia', loginHelpers: ['/usr/lib/sddm/sddm-helper'], extraDenyPaths: ['~/.config/hypr/hyprpaper.conf', '@{HOME}/x'], extraDenySockets: ['/run/user/1000/foo.sock'], allowBinaries: ['/usr/bin/hyprctl'] },
     });
     // A bar and a wallpaper daemon can both be named, so neither can drive the other.
     const twoShells = parsePolicy({ version: 1, app: { users: ['a'] }, guard: { shell: ['noctalia', 'hyprpaper'] } });
     expect(twoShells.guard?.shell).toEqual(['noctalia', 'hyprpaper']);
-    expect(full.guard).toEqual({ mode: 'enforce', protectApp: false, wallpaper: true, compositorIpc: 'deny', shell: 'noctalia', loginHelpers: ['/usr/lib/sddm/sddm-helper'], extraDenyPaths: ['~/.config/hypr/hyprpaper.conf', '@{HOME}/x'], extraDenySockets: ['/run/user/1000/foo.sock'], allowBinaries: ['/usr/bin/hyprctl'] });
+    expect(full.guard).toEqual({ mode: 'enforce', protectApp: false, wallpaper: true, compositorIpc: 'deny', ipcGuard: 'off', shell: 'noctalia', loginHelpers: ['/usr/lib/sddm/sddm-helper'], extraDenyPaths: ['~/.config/hypr/hyprpaper.conf', '@{HOME}/x'], extraDenySockets: ['/run/user/1000/foo.sock'], allowBinaries: ['/usr/bin/hyprctl'] });
+    // `auto` is the default and the only other value; a `require` that refuses to engage the
+    // guard on an unsupported kernel is deliberately not offered.
+    expect(parsePolicy({ version: 1, app: { users: ['a'] }, guard: { mode: 'audit', ipcGuard: 'auto' } }).guard?.ipcGuard).toBe('auto');
     expect(guardMode(full)).toBe('enforce');
     expect(guardMode(parsePolicy({ version: 1 }))).toBe('off');
     expect(guardMode(parsePolicy({ version: 1, guard: {} }))).toBe('off');
@@ -462,6 +465,8 @@ describe('policy', () => {
       { version: 1, guard: { mode: 'on' } },
       { version: 1, guard: { mode: 'audit' } },
       { version: 1, app: { users: ['a'] }, guard: { compositorIpc: 'maybe' } },
+      { version: 1, app: { users: ['a'] }, guard: { ipcGuard: 'require' } },
+      { version: 1, app: { users: ['a'] }, guard: { ipcGuard: true } },
       { version: 1, app: { users: ['a'] }, guard: { shell: 'waybar' } },
       { version: 1, app: { users: ['a'] }, guard: { shell: ['noctalia', 'waybar'] } },
       { version: 1, app: { users: ['a'] }, guard: { shell: [] } },

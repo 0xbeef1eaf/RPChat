@@ -43,7 +43,7 @@ describe('policyDraftFrom', () => {
     const draft = policyDraftFrom({ version: 1 });
     expect(POLICY_SETTINGS.some((s) => draft.forced[s.path])).toBe(false);
     expect(draft.app).toEqual({ allowQuit: true, users: [], restrictions: expect.objectContaining({ allowSandbox: true, requireCharacterSession: false }) });
-    expect(draft.guard).toMatchObject({ mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', shell: ['auto'] });
+    expect(draft.guard).toMatchObject({ mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', ipcGuard: 'auto', shell: ['auto'] });
     expect(draft.inputLock).toEqual({ enabled: true, maxDurationMs: 300_000, emergencyKey: 'esc', emergencyHoldMs: 5000 });
   });
 
@@ -135,10 +135,20 @@ describe('policyDraftToFile', () => {
     expect(policyDraftToFile(draft).dev).toEqual({ allow: false, devTools: true });
   });
 
+  it('keeps guard.ipcGuard through an edit rather than silently turning it off', () => {
+    // The form is the only way most people ever touch the policy, so a key it does not carry is
+    // a key that disappears the first time someone changes anything else.
+    const draft = policyDraftFrom({ ...POLICY_TEMPLATE, guard: { ...POLICY_TEMPLATE.guard, mode: 'audit', ipcGuard: 'off' } });
+    expect(draft.guard.ipcGuard).toBe('off');
+    expect(policyDraftToFile(draft).guard?.ipcGuard).toBe('off');
+    draft.guard.ipcGuard = 'auto';
+    expect(policyDraftToFile(draft).guard?.ipcGuard).toBe('auto');
+  });
+
   it('survives a second round trip through its own output', () => {
     const draft = policyDraftFrom(POLICY_TEMPLATE);
     draft.managedBy = 'IT';
-    draft.guard = { ...draft.guard, mode: 'enforce', shell: ['quickshell', 'hyprpaper'], extraDenyPaths: ['~/.config/hypr/*'], loginHelpers: ['/usr/bin/greetd'] };
+    draft.guard = { ...draft.guard, mode: 'enforce', ipcGuard: 'off', shell: ['quickshell', 'hyprpaper'], extraDenyPaths: ['~/.config/hypr/*'], loginHelpers: ['/usr/bin/greetd'] };
     const once = policyDraftToFile(draft);
     const twice = policyDraftToFile(policyDraftFrom(once));
     expect(twice).toEqual(once);
