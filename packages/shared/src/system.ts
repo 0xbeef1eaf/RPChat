@@ -34,7 +34,7 @@ export interface PolicyFile {
      * Browser extension limits: what characters may do in the browser. The home page is not one of
      * them — only a character sets it, through `sdk.browser.setHomePage`.
      */
-    browser?: Partial<Pick<AppSettings['browser'], 'allowBlocking' | 'allowEval' | 'allowHistory'>>;
+    browser?: Partial<Pick<AppSettings['browser'], 'allowBlocking' | 'allowEval' | 'allowHistory' | 'autoLaunch'>>;
     /**
      * How much media a character may put on screen at once, per kind: `maxConcurrent` is the cap
      * (`0` = none) and `maxQueued` how many calls may wait behind it (`0` = over-cap calls are

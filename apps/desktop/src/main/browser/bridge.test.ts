@@ -1,9 +1,11 @@
+import type * as http from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { RpError } from '@rp/shared';
 import type { BrowserBridgeEvent, BrowserBridgeStatus } from '@rp/shared';
 import { BrowserBridge, CLOSE_CODES, NOT_CONNECTED_MESSAGE, extensionIdFromOrigin, rpChatFor } from './bridge.js';
 import type { BridgeSocket, BrowserBridgeDeps } from './bridge.js';
-import { BROWSER_POLICY_DIRS, LEGACY_BROWSER_POLICY_FILENAME, browserPolicy, browserPolicyFilename, browserPolicyText, updateXml } from './policy.js';
+import { ExtensionService, START_PAGE_HTML } from './extension.js';
+import { BROWSER_POLICY_DIRS, LEGACY_BROWSER_POLICY_FILENAME, browserPolicy, browserPolicyFilename, browserPolicyText, startUrlFor, updateXml } from './policy.js';
 
 const ID_A = 'abcdefghijklmnopabcdefghijklmnop';
 const ID_B = 'ppppppppppppppppaaaaaaaaaaaaaaaa';
@@ -204,6 +206,15 @@ describe('BrowserBridge', () => {
     expect(events).toHaveLength(2);
   });
 
+  it('waitForConnection resolves on the next connection, true right away when one is live, false on timeout', async () => {
+    const { bridge, connect } = setup();
+    expect(await bridge.waitForConnection(20)).toBe(false);
+    const waiting = bridge.waitForConnection(1000);
+    await connect();
+    expect(await waiting).toBe(true);
+    expect(await bridge.waitForConnection(1000)).toBe(true);
+  });
+
   it('untrust closes the live connection and close() drops everything', async () => {
     const { bridge, connect } = setup();
     const a = await connect();
@@ -253,5 +264,23 @@ describe('policy', () => {
     expect(browserPolicyFilename('', 1002)).toBe('rpchat-uid-1002.json');
     // The machine-wide file older versions wrote; the installer deletes it wherever it finds one.
     expect(LEGACY_BROWSER_POLICY_FILENAME).toBe('rpchat.json');
+  });
+});
+
+describe('the start page', () => {
+  it('is served under /extension/start, the URL a launched browser opens', async () => {
+    expect(startUrlFor(47821)).toBe('http://127.0.0.1:47821/extension/start');
+    const service = new ExtensionService({ resourcesDirs: [], keyFile: '/nonexistent/key.pem', port: () => 47821, logger });
+    const head: Array<[number, Record<string, string>]> = [];
+    let body: string | undefined;
+    const res = {
+      writeHead: (status: number, headers: Record<string, string>) => head.push([status, headers]),
+      end: (data?: string) => (body = data),
+    } as unknown as http.ServerResponse;
+    await service.handle({ method: 'GET' } as http.IncomingMessage, res, new URL(startUrlFor(47821)));
+    expect(head[0]![0]).toBe(200);
+    expect(head[0]![1]['Content-Type']).toBe('text/html; charset=utf-8');
+    expect(body).toBe(START_PAGE_HTML);
+    expect(body).toContain('rpchat opened your browser');
   });
 });

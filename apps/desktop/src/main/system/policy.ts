@@ -17,7 +17,7 @@ const SENSES_KEYS = ['includeInPrompt', 'watchDirs', 'calendarSources'] as const
 const UPDATES_KEYS = ['automatic', 'enabled', 'allowDowngrade'] as const;
 /** `updates.enabled` and `updates.allowDowngrade` are updater/daemon rules, not settings the UI pins. */
 const UPDATES_MANAGED_KEYS = ['automatic', 'enabled'] as const;
-const BROWSER_KEYS = ['allowBlocking', 'allowEval', 'allowHistory'] as const;
+const BROWSER_KEYS = ['allowBlocking', 'allowEval', 'allowHistory', 'autoLaunch'] as const;
 /** The two halves of `settings.media`, each holding one number per `MediaKind`. */
 const MEDIA_SIDES = ['maxConcurrent', 'maxQueued'] as const;
 const MEDIA_KINDS = ['image', 'video', 'audio'] as const;

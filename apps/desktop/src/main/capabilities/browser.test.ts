@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Json } from '@rp/shared';
-import { BLOCKING_DISABLED_MESSAGE, BrowserHandler, EVAL_DISABLED_MESSAGE, HISTORY_DISABLED_MESSAGE, NOT_CONNECTED_MESSAGE } from './browser.js';
+import { BLOCKING_DISABLED_MESSAGE, BrowserHandler, EVAL_DISABLED_MESSAGE, HISTORY_DISABLED_MESSAGE, LAUNCH_FAILED_MESSAGE, NOT_CONNECTED_MESSAGE } from './browser.js';
 import type { BrowserBridgeLike } from './browser.js';
 import type { CommandRunner } from './commands-runner.js';
 
@@ -152,10 +152,11 @@ describe('BrowserHandler with the extension', () => {
 
 describe('BrowserHandler: blocking, effects, home page, bookmarks, eval, history', () => {
   const ctxNamed = { ...ctx, packId: 'com.x.p', characterId: 'mira' };
-  const settingsOf = (over: Partial<{ allowBlocking: boolean; allowEval: boolean; allowHistory: boolean; homePage: string }> = {}) => async () => ({
+  const settingsOf = (over: Partial<{ allowBlocking: boolean; allowEval: boolean; allowHistory: boolean; autoLaunch: boolean; homePage: string }> = {}) => async () => ({
     allowBlocking: true,
     allowEval: true,
     allowHistory: true,
+    autoLaunch: true,
     homePage: '',
     ...over,
   });
@@ -333,5 +334,87 @@ describe('BrowserHandler: blocking, effects, home page, bookmarks, eval, history
     expect(calls[5]).toEqual({ op: 'history.recent', args: {} });
     await expect(h.invoke('history', [{ since: 'yesterday' }], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
     await expect(h.invoke('historyVisits', ['chrome://history'], ctxNamed)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+  });
+});
+
+describe('BrowserHandler with no browser running', () => {
+  const START_URL = 'http://127.0.0.1:47821/extension/start';
+  const settingsOf = (autoLaunch: boolean) => async () => ({ allowBlocking: true, allowEval: true, allowHistory: true, autoLaunch, homePage: '' });
+
+  /** A bridge nothing is connected to yet; `waitForConnection` settles when the test lets it, connecting or not. */
+  function sleepingBridge(answers: Record<string, Json> = {}) {
+    let connected = false;
+    let release: ((connects: boolean) => void) | undefined;
+    const calls: Array<{ op: string; args: Record<string, Json> }> = [];
+    let waits = 0;
+    const bridge: BrowserBridgeLike = {
+      get connected() {
+        return connected;
+      },
+      request: async (op, args = {}) => {
+        if (!connected) throw new Error(`${op} reached a bridge with nothing connected`);
+        calls.push({ op, args });
+        return answers[op] ?? null;
+      },
+      status: async () => ({ connected }),
+      waitForConnection: () => {
+        waits += 1;
+        return new Promise<boolean>((resolve) => {
+          release = (connects) => {
+            connected = connects;
+            resolve(connects);
+          };
+        });
+      },
+    };
+    return { bridge, calls, waits: () => waits, settle: (connects: boolean) => release?.(connects) };
+  }
+
+  it('starts the browser on the app start page and carries the call out once the extension connects', async () => {
+    const { commands, runs } = fakeCommands();
+    const { bridge, calls, settle } = sleepingBridge({ 'tabs.list': [] });
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf(true), startUrl: () => START_URL });
+    const tabs = h.invoke('tabs', [], ctx);
+    await vi.waitFor(() => expect(runs).toHaveLength(1));
+    expect(runs[0]).toEqual({ command: 'xdg-open {url}', vars: { url: START_URL, newWindow: '' } });
+    settle(true);
+    expect(await tabs).toEqual([]);
+    expect(calls.map((c) => c.op)).toEqual(['tabs.list']);
+  });
+
+  it('starts one browser for the calls waiting on it', async () => {
+    const { commands, runs } = fakeCommands();
+    const { bridge, waits, settle } = sleepingBridge({ 'tabs.list': [], 'rules.list': [] });
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf(true), startUrl: () => START_URL });
+    const both = Promise.all([h.invoke('tabs', [], ctx), h.invoke('blocks', [], ctx)]);
+    await vi.waitFor(() => expect(waits()).toBe(1));
+    settle(true);
+    await both;
+    expect(runs).toHaveLength(1);
+  });
+
+  it('says the extension never turned up, and holds off launching again', async () => {
+    const { commands, runs } = fakeCommands();
+    const { bridge, waits, settle } = sleepingBridge();
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf(true), startUrl: () => START_URL });
+    const first = h.invoke('tabs', [], ctx);
+    await vi.waitFor(() => expect(waits()).toBe(1));
+    settle(false);
+    await expect(first).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: LAUNCH_FAILED_MESSAGE });
+    // Within the cooldown the next call fails outright rather than opening another window.
+    await expect(h.invoke('tabs', [], ctx)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: LAUNCH_FAILED_MESSAGE });
+    expect(runs).toHaveLength(1);
+    expect(waits()).toBe(1);
+  });
+
+  it('leaves the browser alone when the user switched auto-launch off, or nothing can launch it', async () => {
+    const { commands, runs } = fakeCommands();
+    const { bridge, waits } = sleepingBridge();
+    const off = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf(false), startUrl: () => START_URL });
+    await expect(off.invoke('tabs', [], ctx)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: NOT_CONNECTED_MESSAGE });
+    const noStartPage = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf(true) });
+    await expect(noStartPage.invoke('tabs', [], ctx)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: NOT_CONNECTED_MESSAGE });
+    expect(runs).toEqual([]);
+    expect(waits()).toBe(0);
   });
 });

@@ -75,6 +75,7 @@ import { ensureExamplePack, ensureMockProvider, isMockLlm, isSmokeRun, mockProvi
 import { LoopbackServer } from './loopback.js';
 import { BrowserBridge } from './browser/bridge.js';
 import { EXTENSION_KEY_FILENAME, EXTENSION_ROUTE_PREFIX, ExtensionService } from './browser/extension.js';
+import { startUrlFor } from './browser/policy.js';
 import { PendingPrompts } from './prompts.js';
 import type { WindowManager } from './windows.js';
 
@@ -475,6 +476,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
         characterName: (context) => characterOf(context.packId, context.characterId).name,
         packs,
         assetUrl: (packId, asset) => loopback.rewriteAssetUrl(assetUrl(packId, asset)),
+        startUrl: () => startUrlFor(loopback.listeningPort),
       }),
       input,
       new PresenceHandler(senses.provider),

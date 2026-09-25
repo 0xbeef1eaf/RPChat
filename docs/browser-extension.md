@@ -6,10 +6,12 @@ take screenshots and react when a page finishes loading — in your real browser
 real logins. Since `sdk.browser` 2.1 it can also keep pages from opening for a while, restyle
 or swap the pictures on a page, set your home page, use your bookmarks and history, and run a
 script in a page (each of those switchable in Settings → Browser; see
-[What else a character can do](#what-else-a-character-can-do-sdkbrowser-21)). Without the extension `sdk.browser.open(url)` still works (it runs the browser
-command from Settings → Commands) and every other `sdk.browser` method fails with
-`CAPABILITY_FAILED` ("The browser extension is not connected …"), so nothing breaks when it
-is absent.
+[What else a character can do](#what-else-a-character-can-do-sdkbrowser-21)). A closed browser
+is no obstacle: when a character reaches for the browser and nothing is connected, rpchat starts
+it for them (see [Starting the browser](#starting-the-browser)). Without the extension
+*installed*, `sdk.browser.open(url)` still works (it runs the browser command from Settings →
+Commands) and every other `sdk.browser` method fails with `CAPABILITY_FAILED` ("The browser
+extension is not connected …"), so nothing breaks when it is absent.
 
 Supported browsers: every Chromium-based one that accepts Manifest V3 extensions and, for the
 policy install, managed policies on Linux — Chromium, Google Chrome, Brave, Microsoft Edge,
@@ -307,9 +309,26 @@ refused ids and lets you allow them, or add any id by hand. *Remove* forgets an 
 its live connection. One connection per id is kept — a newer one replaces the old — and
 requests go to the most recently connected extension.
 
+### Starting the browser
+
+The extension only exists while a browser runs it, so with every window closed there is nothing
+for rpchat to talk to. Rather than fail, the `sdk.browser` handler starts the browser itself: it
+runs your **browser command** (Settings → Commands, `xdg-open {url}` by default) on the app's own
+`http://127.0.0.1:<port>/extension/start` page — a short page saying why your browser just
+appeared — and waits up to 20 s for the extension to say hello, then carries the call out. Several
+calls arriving together share one launch, and after a launch that brought no extension the next
+minute of calls fails outright instead of opening more windows. When it does fail the character is
+told: *"rpchat started the browser, but the extension did not connect within 20 s …"*.
+
+Switch it off with **Start the browser when a character needs it** in Settings → Browser →
+*What characters may do* (`settings.browser.autoLaunch`, also pinnable from the machine policy as
+`browser.autoLaunch`); then a call with no browser open fails as it did before, with "The browser
+extension is not connected …". Either way, this only wakes a browser for a character that already
+has the `browser` capability — it is not a way around the permission.
+
 ## What a character can and cannot do
 
-Can (unless you switched `browser`, or the single function named, off under Settings → Permissions, and only while the extension is connected):
+Can (unless you switched `browser`, or the single function named, off under Settings → Permissions; with no browser running, the first call starts one):
 
 - see every open tab's URL and title (`tabs()`), open new tabs or windows, switch between
   tabs, close tabs, navigate, go back/forward, reload;
@@ -335,8 +354,9 @@ Cannot:
   every other page op only injects the fixed, self-contained helpers with the arguments above;
 - block the app's own pages, `localhost` or browser pages, block for longer than the cap in
   Settings → Browser, or block anything while blocking is switched off;
-- reach the extension at all when it is not connected, or from another machine (the bridge
-  and the update URL are bound to `127.0.0.1`);
+- reach the extension when it is not installed, refused, or does not connect within 20 s of
+  rpchat starting the browser for it — nor from another machine (the bridge and the update URL
+  are bound to `127.0.0.1`);
 - act once you switched it off: `browser` is a pack-level capability (on for every character
   unless switched off under Settings → Permissions, whole or one function at a time) and
   `openTab`, `navigate`, `close`, `click`, `type` and `screenshot` are marked *dangerous* in the

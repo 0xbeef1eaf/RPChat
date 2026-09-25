@@ -47,6 +47,15 @@ export function crxUrlFor(port: number): string {
 }
 
 /**
+ * The page the app opens to start the browser when a character needs the extension and no browser
+ * is running (`sdk.browser` auto-launch). It is on the loopback server, so a character's own page
+ * allowlist can never keep it shut.
+ */
+export function startUrlFor(port: number): string {
+  return `http://127.0.0.1:${port}/extension/start`;
+}
+
+/**
  * The policy document: force-install from the loopback update URL and hand the extension its port.
  * The `3rdparty` block reaches the extension's `chrome.storage.managed` verbatim (Chromium passes
  * the JSON through, checked against the extension's `schema.json`); the nested `policy` object is
