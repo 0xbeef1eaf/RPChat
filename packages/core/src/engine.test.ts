@@ -3,7 +3,8 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FakeRunHandler } from './fake-runner.js';
 import { RpError } from '@rp/shared';
-import type { ChatEvent, ChatMessage } from '@rp/shared';
+import type { ChatEvent, ChatMessage, ContentPart } from '@rp/shared';
+import { ACTION_LIMIT_NOTICE, ACTION_REPAIR_NOTICE } from './action-loop.js';
 import {
   ECHO_REF,
   LUNA_DIR,
@@ -283,6 +284,97 @@ describe('ChatService turns', () => {
     const reply = (await t.engine.sessions.messages(session.id)).at(-1)!;
     expect(reply.actions).toHaveLength(2);
     expect(reply.content).toBe('Done.');
+  });
+
+  it('gives a fixable failure one more round, with the failure and how to fix it', async () => {
+    let attempt = 0;
+    t = await createTestEngine({
+      respond: (request) => (request.tools ? { toolCalls: [runAction(attempt === 0 ? 'return oops;' : 'return 7;')] } : { text: 'Seven.' }),
+      runnerHandler: () => {
+        attempt += 1;
+        if (attempt > 1) return 7;
+        return {
+          ok: false,
+          error: { code: 'SANDBOX_RUNTIME', message: 'ReferenceError: oops is not defined', details: { line: 1, column: 8, frame: '> 1 | return oops;' } },
+        };
+      },
+    });
+    // One round only: without a repair round the model would never get to run the fix.
+    await t.engine.settings.update({ maxActionRounds: 1, maxActionRepairs: 1 });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    await t.engine.chat.send(session.id, 'count please');
+
+    expect(t.provider.requests).toHaveLength(3);
+    // The repair round is a round like any other: the tool is still on the table.
+    expect(t.provider.requests[1]!.tools).toBeDefined();
+    // Every request holds the same growing conversation, so pick the failed round out of it.
+    const failed = t.provider.requests[2]!.messages.find((m) => m.content.some((p) => p.type === 'tool_result' && p.isError === true))!;
+    const toolResult = failed.content.find((p): p is Extract<ContentPart, { type: 'tool_result' }> => p.type === 'tool_result')!;
+    const payload = JSON.parse(toolResult.content) as { error: Record<string, unknown> };
+    expect(payload.error).toMatchObject({ code: 'SANDBOX_RUNTIME', message: 'ReferenceError: oops is not defined', line: 1, column: 8 });
+    expect(payload.error['fix']).toContain('action.ts coordinates');
+    // …and the results carry the failure back with the round it bought.
+    expect(failed.content.at(-1)).toEqual({ type: 'text', text: ACTION_REPAIR_NOTICE });
+
+    const reply = (await t.engine.sessions.messages(session.id)).at(-1)!;
+    expect(reply.actions).toHaveLength(2);
+    expect(reply.actions![0]!.result?.ok).toBe(false);
+    expect(reply.actions![1]!.result?.returnValue).toBe(7);
+    expect(reply.content).toBe('Seven.');
+  });
+
+  it('folds the repair notice into the action result in fenced mode', async () => {
+    let attempt = 0;
+    t = await createTestEngine({
+      supportsTools: false,
+      script: [
+        { text: 'One sec.\n\n```action\nreturn oops;\n```\n' },
+        { text: '```action\nreturn 7;\n```\n' },
+        { text: 'Seven.' },
+      ],
+      runnerHandler: () => {
+        attempt += 1;
+        if (attempt > 1) return 7;
+        return { ok: false, error: { code: 'SANDBOX_RUNTIME', message: 'ReferenceError: oops is not defined' } };
+      },
+    });
+    await t.engine.settings.update({ maxActionRounds: 1, maxActionRepairs: 1 });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    await t.engine.chat.send(session.id, 'count please');
+
+    expect(t.provider.requests).toHaveLength(3);
+    const results = t.provider.requests[2]!.messages
+      .flatMap((m) => m.content)
+      .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text' && p.text.startsWith('<action_result>'));
+    // One part, not an `<action_result>` with a second text part beside it.
+    expect(results[0]!.text).toContain('"ok":false');
+    expect(results[0]!.text.endsWith(ACTION_REPAIR_NOTICE)).toBe(true);
+    expect(results[1]!.text).toContain('"returnValue":7');
+    expect((await t.engine.sessions.messages(session.id)).at(-1)!.content).toBe('One sec.\n\nSeven.');
+  });
+
+  it('buys no extra round for a failure rewriting the code cannot fix', async () => {
+    t = await createTestEngine({
+      respond: (request) => (request.tools ? { toolCalls: [runAction('await sdk.media.showImage("a.png");')] } : { text: 'I cannot show you that.' }),
+      runnerHandler: () => ({
+        ok: false,
+        error: { code: 'PERMISSION_DENIED', message: 'media is switched off under Settings → Permissions' },
+      }),
+    });
+    await t.engine.settings.update({ maxActionRounds: 1, maxActionRepairs: 2 });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    await t.engine.chat.send(session.id, 'show me');
+
+    expect(t.provider.requests).toHaveLength(2);
+    const last = t.provider.requests[1]!;
+    expect(last.tools).toBeUndefined();
+    expect(last.messages.at(-1)!.content[0]).toEqual({ type: 'text', text: ACTION_LIMIT_NOTICE });
+    const reply = (await t.engine.sessions.messages(session.id)).at(-1)!;
+    expect(reply.actions).toHaveLength(1);
+    expect(reply.content).toBe('I cannot show you that.');
   });
 
   it('lets onUserMessage skip the LLM', async () => {

@@ -230,11 +230,19 @@ per-run call budgets, writes the audit log, then invokes the host handler.
    `ActionResult` (`ok`, `returnValue`, `error`, `logs[]`, `calls[]`,
    `durationMs`). Actions from one assistant message run sequentially.
 4. The result is fed back as a tool result (or, in fallback mode, as a user
-   message wrapped in `<action_result>`), and the model is called again.
+   message wrapped in `<action_result>`), and the model is called again. Every
+   failure goes back with a `fix` line saying how to correct that kind of
+   failure, and an sdk call that failed without ending the run — one the code
+   caught, or never awaited — is listed under `failedCalls`, so catching a
+   failure cannot hide it from the character.
 5. The loop ends when the model produces a message with no actions, or after
-   `maxActionRounds` (default 4), or on abort. `sdk.chat.emote()` output is
-   appended to the transcript as assistant text immediately, so a character can
-   speak while acting.
+   `maxActionRounds` (default 4), or on abort. A round that ends in a failure a
+   rewrite could fix buys up to `maxActionRepairs` (default 2) more rounds, so
+   the character gets to act on the `fix` it was just handed instead of being
+   told to stop acting; failures a rewrite cannot fix (a permission the user
+   switched off, a command they have not configured) buy nothing.
+   `sdk.chat.emote()` output is appended to the transcript as assistant text
+   immediately, so a character can speak while acting.
 
 The actions of one message run in order, but a turn does not own the runtime.
 The character's **background code** — event handlers, `code` timers, `onTimer`

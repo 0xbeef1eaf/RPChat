@@ -201,6 +201,14 @@ export interface AppSettings {
   defaultProviderId?: string;
   /** Max LLM ⇄ action rounds per user message. Default 4. */
   maxActionRounds: number;
+  /**
+   * Extra action rounds granted, over `maxActionRounds`, to a round that failed in a way the
+   * character could fix by writing the code differently (a compile error, a wrong argument, a
+   * method that does not exist). Each one carries the failure and how to correct it back to the
+   * model. Failures a rewrite cannot fix — a permission the user switched off, a command the user
+   * has not configured — buy nothing. `0` = none, `-1` = as many as it takes. Default 2.
+   */
+  maxActionRepairs: number;
   /** Approximate token budget for the whole request (system prompt + transcript window). Default 64_000. */
   contextTokenBudget: number;
   runLimits: RunLimits;
@@ -332,6 +340,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: RunLimits } = {
   providers: [],
   maxActionRounds: 4,
+  maxActionRepairs: 2,
   contextTokenBudget: 64_000,
   useToolCalling: true,
   userDisplayName: 'You',

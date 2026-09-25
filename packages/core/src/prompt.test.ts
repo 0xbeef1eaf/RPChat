@@ -310,8 +310,51 @@ describe('errorForModel', () => {
     expect(out['frame']).toContain('> 3 |');
   });
 
-  it('keeps working for errors that carry nothing to point at', () => {
-    expect(errorForModel({ code: 'PERMISSION_DENIED', message: 'denied' })).toEqual({ code: 'PERMISSION_DENIED', message: 'denied' });
+  it('keeps working for errors that carry nothing to point at, and says what to do about them', () => {
+    const out = errorForModel({ code: 'PERMISSION_DENIED', message: 'denied' });
+    expect(out).toMatchObject({ code: 'PERMISSION_DENIED', message: 'denied' });
+    expect(out['fix']).toContain('switched off');
+  });
+
+  it('takes the fix from the capability code an uncaught sdk failure carries, not from the wrapper', () => {
+    // The sandbox reports it as SANDBOX_RUNTIME — the call threw inside the model's own code —
+    // with the capability's own code underneath; advising "fix your line" there would be wrong.
+    const out = errorForModel({
+      code: 'SANDBOX_RUNTIME',
+      message: 'Error: media is switched off under Settings → Permissions',
+      details: { name: 'Error', code: 'PERMISSION_DENIED', line: 2, column: 7 },
+    });
+    expect(out['fix']).toContain('switched off');
+    expect(out['fix']).not.toContain('action.ts');
+    expect(out).toMatchObject({ line: 2, column: 7 });
+  });
+
+  it('reports a call that failed inside an action that returned ok, and never twice', () => {
+    const failed = {
+      callId: 'c1',
+      module: 'media',
+      method: 'showImage',
+      args: ['a.png'],
+      ok: false,
+      error: { code: 'PERMISSION_DENIED' as const, message: 'media is switched off under Settings → Permissions' },
+      durationMs: 1,
+    };
+    // The code caught it and carried on, so the run itself succeeded.
+    const swallowed = resultPayload({ ok: true, returnValue: 'done', logs: [], calls: [failed], durationMs: 2 });
+    expect(swallowed).toMatchObject({ ok: true, returnValue: 'done' });
+    expect(swallowed['failedCalls']).toEqual([
+      { call: 'sdk.media.showImage', ...errorForModel(failed.error) },
+    ]);
+
+    // Uncaught, the same call is the run's error: it is not reported a second time.
+    const uncaught = resultPayload({
+      ok: false,
+      error: { code: 'SANDBOX_RUNTIME', message: `Error: ${failed.error.message}` },
+      logs: [],
+      calls: [failed],
+      durationMs: 2,
+    });
+    expect(uncaught).not.toHaveProperty('failedCalls');
   });
 
   it('is the same shape live and in the replayed transcript', () => {

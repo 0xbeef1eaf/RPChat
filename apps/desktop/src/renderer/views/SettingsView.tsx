@@ -289,6 +289,14 @@ export function SettingsView() {
             onCommit={(v) => patchSettings({ maxActionRounds: Math.round(v) })}
           />
           <NumberField
+            id="max-repairs"
+            label="Extra rounds to fix a failed action"
+            value={settings.maxActionRepairs}
+            min={-1}
+            hint="Rounds granted on top of the limit above when an action fails in a way the character could fix by writing the code differently. The failure and how to correct it go back to it either way. 0 = none, -1 = as many as it takes."
+            onCommit={(v) => patchSettings({ maxActionRepairs: Math.round(v) })}
+          />
+          <NumberField
             id="ctx-budget"
             label="Context token budget"
             value={settings.contextTokenBudget}
