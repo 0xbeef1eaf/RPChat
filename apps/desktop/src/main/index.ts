@@ -10,7 +10,7 @@ import { ASSET_PROTOCOL, IPC_EVENT_CHANNELS } from '@rp/shared';
 import type { ChatMessage, UpdateStatus } from '@rp/shared';
 import { handleAssetRequest } from './asset-protocol.js';
 import { ChatVisibility } from './chat-visibility.js';
-import { isHyprland } from './display/layers.js';
+import { detectWindowSystem, isHyprland } from './display/layers.js';
 import { createApp } from './engine.js';
 import type { AppServices } from './engine.js';
 import { applyDevGuard, refusalMessage } from './dev-guard.js';
@@ -18,6 +18,7 @@ import { isBrowserSmokeRun, isSmokeRun, runBrowserSmoke, runSmokeTurn, smokeEnab
 import { registerIpc } from './ipc.js';
 import { createLogger } from './logger.js';
 import { trayMenuTemplate } from './quit-guard.js';
+import { buildTrayWhenHostReady, statusNotifierHostProbe } from './tray-host.js';
 import { WindowManager } from './windows.js';
 
 const OUT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -40,8 +41,21 @@ const env = process.env;
 /** `rpchat --hidden` (autostart): start minimized to the tray, no window until Show. */
 const START_HIDDEN = process.argv.includes('--hidden');
 let tray: Tray | undefined;
+/** Drops the tray menu's policy watcher; called before a tray is replaced (`tray-host.ts` rebuilds one built without a host). */
+let untrackTrayPolicy: (() => void) | undefined;
+/**
+ * True from startup until the tray has been built, which on Linux waits for a StatusNotifier host
+ * (`tray-host.ts`). A close during that wait must hide the window as it will once the tray is
+ * there, not quit the app out from under a tray that is seconds away.
+ */
+let trayPending = true;
 /** Set by the tray's Quit (and before-quit) so the close-to-tray handler lets the window close. */
 let quitting = false;
+
+/** A tray to hide to — or one still on its way, which for a window close is as good as one. */
+function trayExpected(): boolean {
+  return tray !== undefined || trayPending;
+}
 
 /** `app.getVersion()` is Electron's own version when launched as `electron out/main/index.js`; prefer our package.json. */
 function resolveAppVersion(): string {
@@ -144,7 +158,7 @@ async function main(): Promise<void> {
   app.on('window-all-closed', () => {
     // With a tray icon the app keeps running in the background; without one (tray unavailable)
     // closing quits — unless the policy forbids quitting, in which case the app stays up without a window.
-    if (process.platform !== 'darwin' && !tray && (services?.quitGuard.allowQuit ?? true)) app.quit();
+    if (process.platform !== 'darwin' && !trayExpected() && (services?.quitGuard.allowQuit ?? true)) app.quit();
   });
 
   app.on('activate', () => {
@@ -213,10 +227,28 @@ async function main(): Promise<void> {
   if (isSmokeRun(env)) await smokeEnableModelTraffic(engine);
   // The tray is always there (not only for --hidden): it is how the app stays alive for timers,
   // self-wakes and the browser bridge while the window is closed, and how you quit.
-  tray = createTray(windows, active, () => {
+  const quitFromTray = (): void => {
     if (!active.quitGuard.mayQuit) return;
     quitting = true;
     void shutdown().finally(() => app.quit());
+  };
+  // Not right now, though: Chromium picks the tray's backend inside `new Tray()` and never
+  // reconsiders, and at login the panel that hosts tray icons is usually a second or two behind
+  // us — build it when there is a host to register with (tray-host.ts). Nothing waits for this:
+  // the window opens while the probe runs, and off Linux the tray is built in the same tick.
+  void buildTrayWhenHostReady({ probe: statusNotifierHostProbe(), wayland: detectWindowSystem(env) === 'wayland' }, (hostReady) => {
+    // A host that appears while the app is on its way out gets no icon for the trouble.
+    if (quitting || stopping) return;
+    const replacing = tray !== undefined;
+    untrackTrayPolicy?.();
+    tray?.destroy();
+    tray = createTray(windows, active, quitFromTray);
+    trayPending = false;
+    if (replacing) logger.info('[main] tray rebuilt: a StatusNotifier host appeared after the wait');
+    else if (!hostReady) logger.warn('[main] no StatusNotifier host answered; the tray icon may not appear until one is running');
+    // The window was closed while we were waiting and no tray came of it: `window-all-closed` has
+    // already been and gone, so honour it now rather than leave the app running invisibly.
+    if (!tray && BrowserWindow.getAllWindows().length === 0 && process.platform !== 'darwin' && active.quitGuard.allowQuit) app.quit();
   });
   const win = windows.createMainWindow({ hidden: START_HIDDEN });
   win.once('ready-to-show', () => {
@@ -374,7 +406,7 @@ function installCloseToTray(win: BrowserWindow, services: AppServices): void {
       refresh();
       return;
     }
-    if (!tray || !closeToTray) return;
+    if (!trayExpected() || !closeToTray) return;
     event.preventDefault();
     win.hide();
     refresh();
@@ -382,7 +414,11 @@ function installCloseToTray(win: BrowserWindow, services: AppServices): void {
   win.on('show', refresh);
 }
 
-/** Tray icon with Show/Hide / Check for updates / Quit (no Quit while the policy forbids quitting); present on every launch. */
+/**
+ * Tray icon with Show/Hide / Check for updates / Quit (no Quit while the policy forbids quitting);
+ * present on every launch. Called once a StatusNotifier host is there to register with, or once
+ * waiting for one has been given up on (`tray-host.ts`) — never straight from `main`.
+ */
 function createTray(windows: WindowManager, services: AppServices, quit: () => void): Tray | undefined {
   try {
     const iconFile = [path.join(APP_ROOT, 'resources', 'tray.png'), path.join(process.resourcesPath ?? '', 'tray.png')].find((f) => fs.existsSync(f));
@@ -417,7 +453,9 @@ function createTray(windows: WindowManager, services: AppServices, quit: () => v
     const buildMenu = (): Menu => Menu.buildFromTemplate(trayMenuTemplate(services.quitGuard.allowQuit).map((item) => ('type' in item ? item : { label: item.label, click: actions[item.id] })));
     t.setContextMenu(buildMenu());
     // The policy can change while running (root edits the file): rebuild so Quit appears/disappears.
-    services.quitGuard.onChange((policy) => {
+    // The watcher goes with the tray — this one may itself be a replacement (`tray-host.ts`).
+    untrackTrayPolicy = services.quitGuard.onChange((policy) => {
+      if (t.isDestroyed()) return;
       t.setContextMenu(buildMenu());
       logger.info(`[main] tray menu rebuilt: quitting ${policy.allowQuit ? 'allowed' : 'disabled by policy'}`);
     });
