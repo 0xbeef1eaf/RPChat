@@ -42,7 +42,20 @@ export type LibFunctionInfo = Omit<LibFunction, 'source'>;
 /** Name rules for library functions: a JavaScript identifier, at most this long. */
 export const LIB_NAME_PATTERN = /^[a-zA-Z_$][\w$]*$/;
 export const LIB_NAME_MAX_CHARS = 64;
-/** Functions (files) per character. */
+/**
+ * Advisory ceiling on functions (files) per character. Over it the pack still
+ * installs, exports and loads; the scan reports a `warning:` line instead.
+ * The cost of each one is a `<library>` line in the prompt of every turn
+ * (`- lib.<name>(<params>) — <description>`; sources never go in the prompt,
+ * and `@internal` helpers are not listed at all).
+ */
 export const LIB_MAX_FUNCTIONS = 50;
-/** UTF-8 bytes of all sources of one character together: what the prelude prepended to every run costs. */
+/**
+ * Advisory ceiling on the UTF-8 bytes of all sources of one character together:
+ * what the prelude prepended to every run costs. Over it the pack still
+ * installs, exports and loads; the scan reports a `warning:` line instead.
+ * This is the expensive one — the whole library is transpiled and evaluated in
+ * the isolate on every action, timer and event handler, against that run's
+ * `cpuMs` budget.
+ */
 export const LIB_MAX_TOTAL_BYTES = 128 * 1024;

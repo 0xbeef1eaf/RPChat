@@ -9,7 +9,7 @@ import {
   writeLibraryFunction,
 } from '@rp/pack';
 import type { CharacterLibraryEntry, LibFunction, LibFunctionInfo, LoadedCharacter, LoadedPack } from '@rp/shared';
-import { LIB_MAX_FUNCTIONS, LIB_MAX_TOTAL_BYTES, RpError } from '@rp/shared';
+import { RpError } from '@rp/shared';
 
 export { functionSourceProblem, unwrapFunctionSource } from '@rp/pack';
 
@@ -148,7 +148,6 @@ export class LibraryService {
     if (nameProblem !== undefined) throw new RpError('INVALID_ARGUMENT', nameProblem, { name });
     if (typeof fn !== 'string') throw new RpError('INVALID_ARGUMENT', 'fn must be a function (or a string holding a function expression)');
     const source = unwrapFunctionSource(fn);
-    const bytes = Buffer.byteLength(source, 'utf8');
     const problem = functionSourceProblem(source);
     if (problem !== undefined) throw new RpError('INVALID_ARGUMENT', problem);
     if (opts.description !== undefined && opts.description !== null && typeof opts.description !== 'string') {
@@ -166,13 +165,9 @@ export class LibraryService {
       // A helper the character does not see: it must not lose it to a name it picked blind.
       throw new RpError('INVALID_ARGUMENT', `lib.${name} is reserved by this pack (an internal helper); choose another name`, { name });
     }
-    if (!(name in functions) && Object.keys(functions).length >= LIB_MAX_FUNCTIONS) {
-      throw new RpError('INVALID_ARGUMENT', `the library already holds ${LIB_MAX_FUNCTIONS} functions; remove one first`, { limit: LIB_MAX_FUNCTIONS });
-    }
-    const total = Object.entries(functions).reduce((n, [other, f]) => n + (other === name ? 0 : f.bytes), 0) + bytes;
-    if (total > LIB_MAX_TOTAL_BYTES) {
-      throw new RpError('INVALID_ARGUMENT', `the library would be ${total} bytes; the limit is ${LIB_MAX_TOTAL_BYTES} bytes in total`, { bytes: total, limit: LIB_MAX_TOTAL_BYTES });
-    }
+    // The caps are advisory: a register over them is never refused. The rescan
+    // below goes through PackService.reloadCharacterLibrary, which logs the
+    // `over the advisory …` warning for both.
     await writeLibraryFunction(pack.root, character.dir, name, source, description.length > 0 ? description : undefined, internal);
     const library = await this.reload(target);
     const entry = library[name];

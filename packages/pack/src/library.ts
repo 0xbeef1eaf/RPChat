@@ -117,8 +117,14 @@ export interface CharacterLibraryScan {
   library: Record<string, CharacterLibraryEntry>;
   /** Files skipped with the reason: the pack still loads, the function is left out. */
   skipped: LibraryFileProblem[];
-  /** Cap violations (too many files, one too large, all together too large): the pack does not load. */
+  /** Hard errors: the pack does not load. Nothing reports one today; the caps are advisory (see {@link CharacterLibraryScan.warnings}). */
   problems: string[];
+  /**
+   * Advisory ceilings exceeded (too many functions, too many bytes in total).
+   * The pack still loads, installs and exports; the caller surfaces these as
+   * `warning:` lines so the cost stays visible.
+   */
+  warnings: string[];
 }
 
 export interface ReadLibraryOptions {
@@ -133,12 +139,12 @@ export interface ReadLibraryOptions {
  * Reads `<charDir>/lib/*.ts` under `rootAbs`. Only regular `.ts` files count;
  * anything else in the folder (a README, sub-folders, dotfiles) is ignored.
  * A file whose stem is not a valid name or whose body is not a single
- * function expression lands in `skipped` with the reason; the caps
- * (`LIB_MAX_FUNCTIONS`, `LIB_MAX_TOTAL_BYTES`) are reported in `problems`.
- * A single file has no size cap of its own.
+ * function expression lands in `skipped` with the reason; the advisory caps
+ * (`LIB_MAX_FUNCTIONS`, `LIB_MAX_TOTAL_BYTES`) are reported in `warnings` and
+ * do not stop the pack loading. A single file has no size cap of its own.
  */
 export async function readCharacterLibrary(rootAbs: string, charDir: string, options: ReadLibraryOptions = {}): Promise<CharacterLibraryScan> {
-  const out: CharacterLibraryScan = { library: {}, skipped: [], problems: [] };
+  const out: CharacterLibraryScan = { library: {}, skipped: [], problems: [], warnings: [] };
   const n = normalizeRelativePath(charDir);
   if (!n.ok) return out;
   const libRel = joinRelative(n.path, LIB_DIR_NAME);
@@ -159,7 +165,7 @@ export async function readCharacterLibrary(rootAbs: string, charDir: string, opt
     .map((e) => e.name)
     .sort();
   if (files.length > LIB_MAX_FUNCTIONS) {
-    out.problems.push(`${libRel}: ${files.length} functions (max ${LIB_MAX_FUNCTIONS})`);
+    out.warnings.push(`${libRel}: ${files.length} functions (over the advisory ${LIB_MAX_FUNCTIONS}); each one adds a <library> line to every prompt`);
   }
   let total = 0;
   for (const fileName of files) {
@@ -198,7 +204,7 @@ export async function readCharacterLibrary(rootAbs: string, charDir: string, opt
     out.library[name] = entry;
   }
   if (total > LIB_MAX_TOTAL_BYTES) {
-    out.problems.push(`${libRel}: ${total} bytes in total (max ${LIB_MAX_TOTAL_BYTES} bytes)`);
+    out.warnings.push(`${libRel}: ${total} bytes in total (over the advisory ${LIB_MAX_TOTAL_BYTES} bytes); the whole library is transpiled and evaluated on every run`);
   }
   return out;
 }

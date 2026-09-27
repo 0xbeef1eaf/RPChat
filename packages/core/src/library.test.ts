@@ -206,32 +206,29 @@ describe('the lib module through the engine', () => {
     expect((await visible(MINIMAL_ID, 'echo')).map((f) => f.name)).toEqual(['cheer', 'double']);
   });
 
-  it('caps the number of functions and their total size', async () => {
+  it('treats the function and size caps as advisory: registers over them still succeed', async () => {
     t = await createTestEngine();
     await t.engine.packs.install(MINIMAL_DIR);
     const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
     const ctx = ctxOf(MINIMAL_ID, 'echo', session.id);
     for (let i = 0; i < LIB_MAX_FUNCTIONS; i++) expect((await invoke(ctx, 'register', `f${i}`, '() => 1')).ok, `f${i}`).toBe(true);
-    expect(await invoke(ctx, 'register', 'oneMore', '() => 1')).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining(String(LIB_MAX_FUNCTIONS)) } });
-    expect((await invoke(ctx, 'register', 'f0', '() => 2')).ok).toBe(true); // replacing is fine at the cap
-    expect(await invoke(ctx, 'unregister', 'f1')).toEqual({ ok: true, value: true });
+    // Over the advisory function ceiling: accepted, and the prelude carries it.
     expect((await invoke(ctx, 'register', 'oneMore', '() => 1')).ok).toBe(true);
+    expect(await visible(MINIMAL_ID, 'echo')).toHaveLength(LIB_MAX_FUNCTIONS + 1);
+    expect(await t.engine.library.preludeFor(MINIMAL_ID, 'echo')).toContain('oneMore');
+    expect((await invoke(ctx, 'register', 'f0', '() => 2')).ok).toBe(true);
+    expect(await invoke(ctx, 'unregister', 'f1')).toEqual({ ok: true, value: true });
 
     for (const f of await visible(MINIMAL_ID, 'echo')) expect(await invoke(ctx, 'unregister', f.name)).toEqual({ ok: true, value: true });
     expect(await t.engine.library.preludeFor(MINIMAL_ID, 'echo')).toBe(EMPTY_PRELUDE);
+
+    // Over the advisory byte ceiling: also accepted.
     const big = `() => "${'b'.repeat(4000)}"`;
-    let defined = 0;
-    let error: { code: string; message: string } | undefined;
-    for (let i = 0; i < LIB_MAX_FUNCTIONS; i++) {
-      const r = (await invoke(ctx, 'register', `f${i}`, big)) as { ok: boolean; error?: { code: string; message: string } };
-      if (!r.ok) {
-        error = r.error;
-        break;
-      }
-      defined += 1;
+    const overBytes = Math.floor(LIB_MAX_TOTAL_BYTES / Buffer.byteLength(big)) + 1;
+    for (let i = 0; i < overBytes; i++) {
+      expect((await invoke(ctx, 'register', `g${i}`, big)).ok, `g${i}`).toBe(true);
     }
-    expect(defined).toBe(Math.floor(LIB_MAX_TOTAL_BYTES / Buffer.byteLength(big)));
-    expect(error).toMatchObject({ code: 'INVALID_ARGUMENT', message: expect.stringContaining('in total') });
+    expect(await visible(MINIMAL_ID, 'echo')).toHaveLength(overBytes);
   }, 20_000);
 
   it('prepends the prelude to LLM actions, and lists the library in the prompt after <sdk_reference>', async () => {

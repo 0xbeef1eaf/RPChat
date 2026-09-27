@@ -132,16 +132,18 @@ export class PackService {
   /**
    * Rescan `characters/<id>/lib/*.ts` of an installed pack and swap the result
    * into the loaded character (`LibraryService` calls this after writing or
-   * deleting a function file). Files the scan skips are logged; cap violations
-   * throw `PACK_INVALID` and leave the previous library in place.
+   * deleting a function file). Files the scan skips are logged, as are the
+   * advisory cap warnings; a hard problem throws `PACK_INVALID` and leaves the
+   * previous library in place.
    */
   async reloadCharacterLibrary(packId: string): Promise<Record<string, CharacterLibraryEntry>> {
     const pack = this.getLoaded(packId);
     const character = pack.character;
     const scan = await readCharacterLibrary(pack.root, character.dir, { previous: character.library });
     for (const skipped of scan.skipped) this.logger.warn(`[packs] ${packId}: ${skipped.file}: ${skipped.message}`);
+    for (const over of scan.warnings) this.logger.warn(`[packs] ${packId}: ${over}`);
     if (scan.problems.length > 0) {
-      throw new RpError('PACK_INVALID', `The function library of ${packId} is over its limits:\n${scan.problems.join('\n')}`, { packId, problems: scan.problems });
+      throw new RpError('PACK_INVALID', `The function library of ${packId} could not be read:\n${scan.problems.join('\n')}`, { packId, problems: scan.problems });
     }
     character.library = scan.library;
     return scan.library;

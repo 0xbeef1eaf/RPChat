@@ -366,18 +366,28 @@ describe('validatePack / loadPack problems', () => {
     const oneBig = await packWith({ ...minimalPackFiles(), 'characters/a/lib/big.ts': big });
     expect((await validatePack(oneBig)).problems).toEqual([]);
 
+    // Both caps are advisory: over them the pack still validates, loads and keeps every function.
     const many: Record<string, string> = {};
     for (let i = 0; i <= LIB_MAX_FUNCTIONS; i++) many[`characters/a/lib/f${i}.ts`] = '() => 1';
     const tooMany = await packWith({ ...minimalPackFiles(), ...many });
-    expect((await validatePack(tooMany)).problems).toEqual([`characters/a/lib: ${LIB_MAX_FUNCTIONS + 1} functions (max ${LIB_MAX_FUNCTIONS})`]);
+    const manyResult = await validatePack(tooMany);
+    expect(manyResult.ok).toBe(true);
+    expect(manyResult.warnings).toEqual([
+      `warning: characters/a/lib: ${LIB_MAX_FUNCTIONS + 1} functions (over the advisory ${LIB_MAX_FUNCTIONS}); each one adds a <library> line to every prompt`,
+    ]);
+    expect(Object.keys((await loadPack(tooMany)).character.library)).toHaveLength(LIB_MAX_FUNCTIONS + 1);
 
     const chunk = `() => "${'c'.repeat(16 * 1024)}"`;
     const files: Record<string, string> = {};
     const count = Math.floor(LIB_MAX_TOTAL_BYTES / Buffer.byteLength(chunk)) + 1;
     for (let i = 0; i < count; i++) files[`characters/a/lib/g${i}.ts`] = chunk;
     const tooMuch = await packWith({ ...minimalPackFiles(), ...files });
-    expect((await validatePack(tooMuch)).problems).toEqual([`characters/a/lib: ${count * Buffer.byteLength(chunk)} bytes in total (max ${LIB_MAX_TOTAL_BYTES} bytes)`]);
-    await expect(loadPack(tooMuch)).rejects.toMatchObject({ code: 'PACK_INVALID' });
+    const muchResult = await validatePack(tooMuch);
+    expect(muchResult.ok).toBe(true);
+    expect(muchResult.warnings).toEqual([
+      `warning: characters/a/lib: ${count * Buffer.byteLength(chunk)} bytes in total (over the advisory ${LIB_MAX_TOTAL_BYTES} bytes); the whole library is transpiled and evaluated on every run`,
+    ]);
+    await expect(loadPack(tooMuch)).resolves.toBeTruthy();
   });
 
   it('reports a mediaRoot that is a file, but tolerates a missing one', async () => {
