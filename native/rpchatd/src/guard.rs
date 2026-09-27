@@ -655,12 +655,24 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
             exit(b, format!("  {b} px -> rpchat-systemd-run,\n"), &mut exits);
         }
     }
-    // The client half of a wallpaper daemon, taken away from every profile that is not the app.
-    // This is the only lever left once `connect()` turns out to be unmediatable: the socket
-    // cannot be closed, so the thing that speaks to it is. It is a low wall by construction —
-    // see the residual list — but it is the difference between `awww img <path>` working from a
-    // terminal and not.
-    if shell_profile {
+    // The client half of a wallpaper daemon, taken away from every profile that is not the app —
+    // but **only when `connect()` is not mediated at all**.
+    //
+    // It was the only lever left when the socket could not be closed: deny the thing that speaks
+    // to it instead. A low wall by construction (see the residual list), and it has a cost that
+    // is not theoretical — `awww-daemon` runs `/usr/bin/awww` through `sh` as part of its own
+    // startup, so denying the path stops the wallpaper daemon restoring the wallpaper it had:
+    //
+    //     awww-daemon[1532]: sh: line 1: /usr/bin/awww: Permission denied
+    //
+    // Once `connect()` really is mediated — the BPF program of `ipcguard.rs`, or AppArmor's
+    // `unix` class on a kernel that has one — the wall is somewhere better and this one is pure
+    // cost. The daemon's own `awww` keeps working because it inherits the daemon's cgroup, which
+    // is in the IPC guard's allow-list for exactly this reason; a terminal's `awww` is in a
+    // different cgroup and is refused at `connect()` instead of at `exec`.
+    let deny_clients = shell_profile
+        && crate::ipcguard::effective_mediation(&ctx.ipc, ctx.unix_class) == IpcMediation::None;
+    if deny_clients {
         for b in ctx.shells.iter().flat_map(|s| s.clients.iter()) {
             exit(b, guarded_exec(mode, b, "x"), &mut exits);
         }
@@ -980,11 +992,13 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     ));
     // Per shell, not "none of them": one row with a separate client binary does not close the
     // hole another row leaves open.
-    if shell_profile && ctx.shells.iter().any(|s| s.clients.is_empty()) {
+    if deny_clients && ctx.shells.iter().any(|s| s.clients.is_empty()) {
         residual.push("this shell ships one binary for both the daemon and its client (`noctalia`, `qs`), so the client cannot be denied by path without stopping the shell from starting: `<shell> msg` from a terminal still reaches it".to_string());
     }
+    if deny_clients {
+        residual.push("a denied client binary is a low wall: copying it elsewhere, or a few lines that open the socket directly, still reaches the daemon. It stops the ordinary command, not a determined one. It also stops the wallpaper daemon's own startup, which runs its client to restore the wallpaper it had — the cost of having no way to mediate connect() on this kernel".to_string());
+    }
     if shell_profile {
-        residual.push("a denied client binary is a low wall: copying it elsewhere, or a few lines that open the socket directly, still reaches the daemon. It stops the ordinary command, not a determined one".to_string());
         residual.push("if the audit log shows the shell denied getattr on its own socket, the shell needs r too and `<shell> msg` from a terminal becomes the residual gap".to_string());
         residual.push("the shell's own helpers return to rpchat-session like any other child, so under enforce they may not write what the session may not: palettes, templates and colour schemes are left writable and keep updating, but plugin self-update does not, because a plugin is code the shell executes and could set the wallpaper from inside it".to_string());
     }
@@ -3115,6 +3129,68 @@ garbage line\n";
             "{text}"
         );
         assert!(!text.contains("audit deny unix"), "{text}");
+    }
+
+    /// The client denial is a stand-in for mediating `connect()`, so it lifts the moment
+    /// `connect()` is really mediated — and that is not a nicety.
+    ///
+    /// `awww-daemon` runs `/usr/bin/awww` through `sh` as part of its own startup, to put back
+    /// the wallpaper it had. Denying the path breaks that, measured on the reference box:
+    ///
+    /// ```text
+    /// awww-daemon[1532]: sh: line 1: /usr/bin/awww: Permission denied
+    /// ```
+    ///
+    /// With the IPC guard live the daemon's own `awww` works (it inherits the daemon's cgroup,
+    /// which is in the allow-list) and a terminal's `awww` is refused at `connect()` instead —
+    /// a better wall in a better place, so keeping this one costs without buying.
+    #[test]
+    fn the_client_denial_lifts_once_connect_is_really_mediated() {
+        let r = rules(serde_json::json!({
+            "version":1,"app":{"users":["work"]},
+            "guard":{"mode":"enforce","shell":["awww","noctalia"]}
+        }));
+        let mut ctx = noctalia_hyprland_ctx(&["work"]);
+        ctx.shells = vec![&SWWW, &NOCTALIA];
+
+        // No mediation anywhere: the low wall is all there is, so it stays up.
+        ctx.unix_class = false;
+        ctx.ipc = IpcOutcome::default();
+        let plan = render(&r, &ctx);
+        assert!(text_of(&plan, "rpchat-session").contains("  audit deny /usr/bin/awww x,\n"));
+        assert!(plan.residual.iter().any(|l| l.contains("low wall")));
+
+        // The BPF IPC guard is mediating connect(): the exec denial goes, and so does its
+        // apology in the residual list.
+        ctx.ipc = IpcOutcome {
+            mediation: IpcMediation::Bpf,
+            reason: None,
+            targets: 2,
+        };
+        let plan = render(&r, &ctx);
+        for profile in ["rpchat-session", "rpchat-shell", "rpchat-compositor"] {
+            let text = text_of(&plan, profile);
+            assert!(
+                !text.contains("/usr/bin/awww x,"),
+                "{profile} must let the wallpaper daemon run its own client:\n{text}"
+            );
+        }
+        // The daemon half still transitions, which is what starts the shell at all.
+        assert!(text_of(&plan, "rpchat-session")
+            .contains("  /usr/bin/awww-daemon px -> rpchat-shell,\n"));
+        assert!(!plan.residual.iter().any(|l| l.contains("low wall")));
+        assert!(!plan
+            .residual
+            .iter()
+            .any(|l| l.contains("one binary for both")));
+
+        // Same again on a kernel whose AppArmor can mediate connect() by itself: the profile
+        // rule is the wall there, so the stand-in is equally unnecessary.
+        ctx.unix_class = true;
+        ctx.ipc = IpcOutcome::default();
+        let plan = render(&r, &ctx);
+        assert!(!text_of(&plan, "rpchat-session").contains("/usr/bin/awww x,"));
+        assert!(!plan.residual.iter().any(|l| l.contains("low wall")));
     }
 
     /// The socket cannot be closed on a kernel with no `unix` mediation class, so the client
