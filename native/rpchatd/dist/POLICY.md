@@ -419,7 +419,7 @@ verified AppArmor facts and the recovery steps: `docs/system-integration.md` "Se
 Recovery as root: `guard.mode: "off"` (picked up within seconds, or `rpchatd --guard-apply`),
 `rpchatd --guard-off`, or `apparmor_parser -R /etc/apparmor.d/rpchat-*`. The last one leaves the
 BPF program attached — it is pinned, deliberately, so `kill -9 rpchatd` does not drop it — so
-remove `/sys/fs/bpf/rpchat/` as well, or use one of the first two, which unpin it. `install.sh --no-guard`
+remove `/run/rpchat/bpf/` as well, or use one of the first two, which unpin it. `install.sh --no-guard`
 also removes the PAM line. Sessions already open when the guard engages are confined at their
 next login.
 

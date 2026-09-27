@@ -102,10 +102,16 @@ ReadWritePaths=-/usr/local/share/icons
 # ProtectKernelLogs); the /dev/kmsg fallback is only reachable when that option is removed.
 ReadWritePaths=-/etc/apparmor.d
 ReadWritePaths=-/sys/kernel/security/apparmor
-# The IPC guard pins its BPF program under /sys/fs/bpf/rpchat so a killed daemon does not drop
-# the mediation; ProtectKernelTunables leaves the whole of /sys read-only without this. "-":
-# absent on a machine with no bpffs, where the program is not loaded at all.
-ReadWritePaths=-/sys/fs/bpf
+# The IPC guard pins its BPF program so a killed daemon does not drop the mediation, and it pins
+# into a bpffs of its own under /run/rpchat/bpf (already writable, above) rather than into
+# /sys/fs/bpf. That is not a preference. ProtectKernelTunables=yes leaves /sys/fs/bpf read-only
+# inside this unit's mount namespace and `ReadWritePaths=-/sys/fs/bpf` does NOT lift it — systemd
+# carries a read-only entry for that exact path, so the two collide and the read-only one wins.
+# Measured on systemd 261, in the running daemon's /proc/<pid>/mountinfo: /sys is rw and
+# /sys/fs/bpf is ro, and creating the pin directory there failed with EROFS while the guard
+# reported "ipcMediation: none" on a kernel that could run the program. Dropping
+# ProtectKernelTunables to win that argument would cost /proc/sys, which is not a trade worth
+# making for a pin location. See native/rpchatd/src/ipcguard.rs (PIN_DIR).
 
 [Install]
 WantedBy=multi-user.target

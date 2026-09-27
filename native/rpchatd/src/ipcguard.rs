@@ -51,9 +51,25 @@ pub const LSM_HOOK: &str = "unix_stream_connect";
 pub const LSM_LIST: &str = "/sys/kernel/security/lsm";
 /// The kernel's own BTF: without it there is no CO-RE, so the program cannot be relocated.
 pub const BTF_VMLINUX: &str = "/sys/kernel/btf/vmlinux";
-/// Where pins live. The program is pinned so `kill -9 rpchatd` does not drop the mediation.
-pub const BPF_FS: &str = "/sys/fs/bpf";
-pub const PIN_DIR: &str = "/sys/fs/bpf/rpchat";
+/// Where pins live: a bpffs the daemon mounts itself, **not** `/sys/fs/bpf`.
+///
+/// Not for want of trying the obvious place. `ProtectKernelTunables=yes` — which the unit keeps,
+/// because it is what makes `/proc/sys` read-only — leaves `/sys/fs/bpf` read-only inside the
+/// daemon's mount namespace, and `ReadWritePaths=-/sys/fs/bpf` does not lift it: systemd carries
+/// a read-only entry for that exact path. Measured in the running daemon's
+/// `/proc/<pid>/mountinfo` on systemd 261, `/sys` is `rw` and `/sys/fs/bpf` is `ro`, so creating
+/// the pin directory there fails with `EROFS` and the guard reported `ipcMediation: "none"` on a
+/// kernel that could run the program perfectly well.
+///
+/// A bpffs of the daemon's own sidesteps the question entirely, and lands the pins somewhere
+/// better: `/run/rpchat` is the one directory the unit grants unconditionally, and
+/// [`crate::guard::SEALED_PATHS`] already denies `/run/rpchat/**` to every guarded session, so a
+/// confined terminal cannot unlink a pin. `MountFlags=shared` propagates the mount out to the
+/// host, so it — and the program the pin keeps attached — survives `kill -9 rpchatd`, exactly as
+/// the runtime policy tmpfs does.
+pub const PIN_DIR: &str = "/run/rpchat/bpf";
+/// `mount(2)` options for it: root-only, like `/sys/fs/bpf`'s own `mode=700`.
+const PIN_FS_OPTIONS: &str = "mode=700";
 
 /// Map names, as declared in `src/bpf/ipc_guard.bpf.c`.
 const MAP_TARGETS: &str = "rpchat_targets";
@@ -141,11 +157,6 @@ pub fn support(
     if !exists(Path::new(BTF_VMLINUX)) {
         return Err(format!(
             "{BTF_VMLINUX} is missing: the kernel carries no BTF, so the program cannot be relocated (CONFIG_DEBUG_INFO_BTF=y)"
-        ));
-    }
-    if !exists(Path::new(BPF_FS)) {
-        return Err(format!(
-            "{BPF_FS} is not mounted: the program cannot be pinned, so it would not survive a daemon restart"
         ));
     }
     Ok(())
@@ -582,7 +593,7 @@ pub fn mode_value(mode: GuardMode) -> u32 {
 }
 
 /// A short, stable identifier for the compiled program. Pins live under
-/// `/sys/fs/bpf/rpchat/<build>/`, so a daemon that was upgraded finds no pin for its own build,
+/// `<PIN_DIR>/<build>/`, so a daemon that was upgraded finds no pin for its own build,
 /// tears the old one down and attaches the new one — rather than reusing maps whose layout it
 /// no longer agrees with.
 pub fn build_id(program: &[u8]) -> String {
@@ -590,7 +601,7 @@ pub fn build_id(program: &[u8]) -> String {
     digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
-/// `/sys/fs/bpf/rpchat/<build>`.
+/// `<PIN_DIR>/<build>`.
 pub fn build_dir(program: &[u8]) -> PathBuf {
     Path::new(PIN_DIR).join(build_id(program))
 }
@@ -756,6 +767,7 @@ pub fn engage(req: &IpcRequest) -> (IpcOutcome, Option<Engaged>) {
 /// straight through, so the pair behaves exactly like one.
 fn load_and_attach(req: &IpcRequest) -> Result<Engaged, String> {
     let (engaged, link) = load(req)?;
+    ensure_pin_fs()?;
     teardown();
     let dir = build_dir(PROGRAM);
     std::fs::create_dir_all(&dir)
@@ -850,7 +862,43 @@ fn typed_map<T>(
     wrap(map).map_err(|e| format!("{name} is not the map type this daemon expects: {e}"))
 }
 
-/// Remove every pin under [`PIN_DIR`], whatever build wrote it, and the directory itself.
+/// Mount a bpffs at [`PIN_DIR`] unless one is already there. See [`PIN_DIR`] for why the daemon
+/// mounts its own rather than using `/sys/fs/bpf`.
+///
+/// Idempotent, and it has to be: the mount outlives the daemon (that is the point of pinning),
+/// so every start after the first finds it already there. `mount_state` answers that from
+/// `/proc/self/mountinfo` rather than from whether the directory looks empty — an unmounted
+/// directory of the same name would otherwise take pins on the ordinary tmpfs under `/run`,
+/// where `BPF_OBJ_PIN` fails and the reason would read as a permissions problem.
+fn ensure_pin_fs() -> Result<(), String> {
+    use nix::mount::{mount, MsFlags};
+
+    let dir = Path::new(PIN_DIR);
+    let mountinfo = std::fs::read_to_string("/proc/self/mountinfo")
+        .map_err(|e| format!("cannot read /proc/self/mountinfo: {e}"))?;
+    match crate::runtime::mount_state(&mountinfo, dir) {
+        Some(false) => return Ok(()),
+        // Mounted read-only: nothing here can pin into it, and remounting somebody else's mount
+        // is not this code's business. Say so rather than failing later with EROFS.
+        Some(true) => {
+            return Err(format!(
+                "{PIN_DIR} is mounted read-only, so the program cannot be pinned"
+            ))
+        }
+        None => {}
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {PIN_DIR}: {e}"))?;
+    mount(
+        Some("bpf"),
+        dir,
+        Some("bpf"),
+        MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
+        Some(PIN_FS_OPTIONS),
+    )
+    .map_err(|e| format!("cannot mount a bpffs on {PIN_DIR}: {e}"))
+}
+
+/// Remove every pin under [`PIN_DIR`], whatever build wrote it. The bpffs itself stays mounted.
 ///
 /// Unlinking a pinned link detaches the program once nothing else holds it, so this is how the
 /// guard is turned off — and how a daemon that was upgraded gets rid of the previous build's
@@ -873,7 +921,9 @@ pub fn teardown() {
             let _ = std::fs::remove_file(&path);
         }
     }
-    let _ = std::fs::remove_dir(root);
+    // The bpffs itself stays mounted. An empty one costs nothing, unmounting it would race the
+    // next engage, and leaving it means `guard-off` does not have to be undone before the guard
+    // can come back.
 }
 
 /// Wait up to `timeout_ms` for records and drain everything queued.
@@ -1071,10 +1121,6 @@ mod tests {
         let no_btf = |p: &Path| p != Path::new(BTF_VMLINUX);
         let e = support(b"\x7fELF", &ok, &no_btf).unwrap_err();
         assert!(e.contains("carries no BTF"), "{e}");
-
-        let no_bpffs = |p: &Path| p != Path::new(BPF_FS);
-        let e = support(b"\x7fELF", &ok, &no_bpffs).unwrap_err();
-        assert!(e.contains("not mounted"), "{e}");
 
         assert!(lsm_active("capability,apparmor,bpf", "bpf"));
         assert!(!lsm_active("capability,apparmor,bpfilter", "bpf"));
@@ -1357,6 +1403,41 @@ mod tests {
         assert_eq!(IpcMediation::Bpf.as_str(), "bpf");
         assert_eq!(IpcMediation::Apparmor.as_str(), "apparmor");
         assert_eq!(IpcMediation::None.as_str(), "none");
+    }
+
+    /// The pin directory moved off `/sys/fs/bpf` because the unit cannot make that writable; if
+    /// it ever drifts back, the guard silently stops engaging on a kernel that can run it.
+    #[test]
+    fn the_pins_live_where_the_unit_can_actually_write() {
+        assert!(
+            !PIN_DIR.starts_with("/sys/"),
+            "ProtectKernelTunables leaves /sys/fs/bpf read-only in the daemon's namespace"
+        );
+        // Under /run/rpchat, which the unit grants unconditionally and `SEALED_PATHS` denies to
+        // every guarded session, so a confined terminal cannot unlink a pin.
+        assert!(PIN_DIR.starts_with("/run/rpchat/"));
+        assert!(crate::guard::SEALED_PATHS.contains(&"/run/rpchat/**"));
+        assert!(build_dir(b"x").starts_with(PIN_DIR));
+    }
+
+    /// `mount_state` is what keeps [`ensure_pin_fs`] idempotent across the daemon restarts that
+    /// the pin is there to survive, so check it against the real thing's output shape.
+    #[test]
+    fn an_already_mounted_pin_filesystem_is_recognised() {
+        let mounted = format!(
+            "563 506 0:33 / {PIN_DIR} rw,nosuid,nodev,noexec,relatime shared:476 - bpf bpf rw,mode=700\n"
+        );
+        assert_eq!(
+            crate::runtime::mount_state(&mounted, Path::new(PIN_DIR)),
+            Some(false)
+        );
+        // The failure this whole change is about, one level up: mounted, but read-only.
+        assert_eq!(
+            crate::runtime::mount_state(&mounted.replace(" rw,", " ro,"), Path::new(PIN_DIR)),
+            Some(true)
+        );
+        // Nothing mounted there: `ensure_pin_fs` mounts one.
+        assert_eq!(crate::runtime::mount_state("", Path::new(PIN_DIR)), None);
     }
 
     #[test]

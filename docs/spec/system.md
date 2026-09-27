@@ -245,8 +245,7 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   `docs/spec/ipc-guard-bpf.md`): AppArmor cannot mediate `connect()` to a filesystem socket on a
   kernel without its fine-grained `unix` class — which is every current one — so `guard.ipcGuard:
   auto` (default) also loads a BPF LSM program on `lsm/unix_stream_connect` when
-  `/sys/kernel/security/lsm` contains `bpf`, `/sys/kernel/btf/vmlinux` exists and `/sys/fs/bpf` is
-  mounted (`support`). Maps: `rpchat_targets` (hash, key `(dev_major, dev_minor, ino)`, 1024
+  `/sys/kernel/security/lsm` contains `bpf` and `/sys/kernel/btf/vmlinux` exists (`support`). Maps: `rpchat_targets` (hash, key `(dev_major, dev_minor, ino)`, 1024
   entries) from `resolve_targets` — discovery's concrete socket paths plus the table's globs
   expanded by `expand_glob`/`fnmatch` against the real directories, then `stat`ed and filtered to
   sockets owned by an `app.users` uid and not in `NEVER_GUARD`; `rpchat_allowed`
@@ -255,8 +254,11 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   `rpchat_mode` (0 off / 1 audit / 2 enforce); `rpchat_events` (ring buffer). The program returns
   `-EACCES` in enforce, `0` in audit, and `0` for anything it cannot resolve. Records become the
   same `guard-attempt` events with `profile: "bpf-ipc"` and `operation: "connect"`, through the
-  same `AttemptLimiter`. The link is pinned at `/sys/fs/bpf/rpchat/<sha256[..16] of the object>/
-  link` (so `kill -9` does not drop it); `engage` attaches the new program before unpinning the
+  same `AttemptLimiter`. The link is pinned at `/run/rpchat/bpf/<sha256[..16] of the object>/link`
+  — a bpffs the daemon mounts itself (`ensure_pin_fs`), because `ProtectKernelTunables=yes` leaves
+  `/sys/fs/bpf` read-only in the unit's namespace and `ReadWritePaths=` cannot lift it (systemd
+  has a read-only entry for that exact path; measured on systemd 261) — so `kill -9` does not drop
+  it; `engage` attaches the new program before unpinning the
   old, and both being attached briefly is harmless because each passes the other's verdict
   through as the hook's incoming `ret`. Two threads: one drains the ring buffer, one watches
   `/run/user/<uid>` with inotify (plus a 30 s timeout) and re-resolves, because a shell that

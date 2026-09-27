@@ -815,13 +815,23 @@ Four things are worth knowing before turning it on:
   server's cgroup is in the allow-list. The AppArmor design always intended shell→shell denial;
   this is where that intent is traded for a desktop that works, and it is in the residual list.
 
-The program is **pinned** under `/sys/fs/bpf/rpchat/<build>/link`, so `kill -9 rpchatd` does not
+The program is **pinned** under `/run/rpchat/bpf/<build>/link`, so `kill -9 rpchatd` does not
 drop the mediation — the unit has `RefuseManualStop=yes` and `Restart=always`, but there is a
 window otherwise. `guard.mode: off`, `rpchatd --guard-off` and `install.sh --no-guard` unpin it;
-`apparmor_parser -R` does not, so remove `/sys/fs/bpf/rpchat/` by hand if that is how you turned
-the guard off. The build directory in the path is a hash of the compiled program: a daemon that
+`apparmor_parser -R` does not, so remove `/run/rpchat/bpf/` by hand if that is how you turned the
+guard off. The build directory in the path is a hash of the compiled program: a daemon that
 was upgraded finds no pin of its own and replaces the old one rather than running both. The unit
-gains `CAP_BPF`, `CAP_PERFMON` and write access to `/sys/fs/bpf` for this.
+gains `CAP_BPF` and `CAP_PERFMON` for this.
+
+That location is not `/sys/fs/bpf`, and that is worth knowing if you go looking for the pins.
+`ProtectKernelTunables=yes` leaves `/sys/fs/bpf` read-only inside the daemon's mount namespace and
+`ReadWritePaths=-/sys/fs/bpf` does **not** lift it — systemd carries a read-only entry for that
+exact path, so the two collide and read-only wins. Measured on systemd 261 in the running
+daemon's `/proc/<pid>/mountinfo`: `/sys` is `rw`, `/sys/fs/bpf` is `ro`, and the pin failed with
+`EROFS` while the guard reported `ipcMediation: "none"` on a kernel that could run the program
+perfectly well. So the daemon mounts a bpffs of its own at `/run/rpchat/bpf` instead, which also
+puts the pins behind `SEALED_PATHS` — a guarded session cannot unlink one, where `/sys/fs/bpf`
+relied on its `mode=700`.
 
 It **fails open**: a kernel without the `bpf` LSM or without BTF, a build made without `clang`,
 a program the verifier refuses — all of them leave the desktop working, leave `guard-apply`

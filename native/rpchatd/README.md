@@ -181,7 +181,9 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   every current one, so where the kernel allows it (`lsm=…,bpf`, BTF, bpffs) the daemon also
   loads a BPF LSM program on `lsm/unix_stream_connect` that mediates the shell's sockets by
   `(device, inode)` and allows the app's cgroup and the socket servers'. It is pinned under
-  `/sys/fs/bpf/rpchat/<build>/`, refreshed on inotify from `/run/user/<uid>` (inodes churn when a
+  `/run/rpchat/bpf/<build>/` — a bpffs the daemon mounts itself, because
+  `ProtectKernelTunables=yes` leaves `/sys/fs/bpf` read-only in the unit's namespace and
+  `ReadWritePaths=` cannot lift it — refreshed on inotify from `/run/user/<uid>` (inodes churn when a
   shell rebinds), and its records become the same `guard-attempt` events with `profile:
   "bpf-ipc"`. `guard-status` reports `ipcMediation` (`apparmor` / `bpf` / `none`) and
   `ipcTargets`. Everything about it fails open: an unsupported kernel, a build without `clang`
