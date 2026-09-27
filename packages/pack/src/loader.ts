@@ -184,10 +184,11 @@ async function loadCharacter(
     behaviourSources[hook] = await fs.readFile(scriptAbs, 'utf8');
   }
 
-  // function library: lib/<name>.ts (optional). A broken file is skipped with a warning; the caps are problems.
+  // function library: lib/<name>.ts (optional). A broken file is skipped with a warning; the caps are advisory warnings too.
   const scan = await readCharacterLibrary(rootAbs, dir);
   problems.push(...scan.problems);
   for (const skipped of scan.skipped) warnings.push(`warning: ${skipped.file}: ${skipped.message}`);
+  for (const over of scan.warnings) warnings.push(`warning: ${over}`);
 
   if (problems.length > before) return undefined;
   const loaded: LoadedCharacter = { dir, definition, personaText, behaviourSources, library: scan.library };
