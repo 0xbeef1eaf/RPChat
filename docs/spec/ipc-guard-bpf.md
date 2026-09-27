@@ -26,8 +26,11 @@ The spec left three things open. They were settled like this:
    field in each, so those are written out by hand in `src/bpf/vmlinux.h` — CO-RE relocates them
    against the running kernel either way, which is the property that mattered.
 
-Two smaller departures: the pins live under `/sys/fs/bpf/rpchat/<build>/` rather than a flat
-directory, so an upgraded daemon replaces the previous build's program instead of reusing maps
+Two smaller departures: the pins live under `/run/rpchat/bpf/<build>/` — a bpffs the daemon
+mounts itself, because `ProtectKernelTunables=yes` leaves `/sys/fs/bpf` read-only in the unit's
+mount namespace and `ReadWritePaths=-/sys/fs/bpf` does not lift it (systemd carries a read-only
+entry for that exact path; measured on systemd 261, where the pin failed with `EROFS`) — rather
+than a flat directory, so an upgraded daemon replaces the previous build's program instead of reusing maps
 whose layout it may no longer agree with; and rather than reusing an existing pin, `engage`
 attaches the new program *before* unpinning the old, which has no gap and no double-attach
 (each program passes the other's verdict through as the hook's incoming `ret`).
