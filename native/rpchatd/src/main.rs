@@ -1221,7 +1221,7 @@ impl Daemon {
         }
         // The IPC guard allows the app by cgroup, and this is where it learns which one: the
         // guard engaged at boot, long before the app existed.
-        os::register_app_cgroup(peer.pid);
+        os::register_app_cgroup(self, peer.pid);
         ctx.registration = Some(reg);
         Ok(OkPayload::Register)
     }
@@ -2978,13 +2978,16 @@ mod os {
     /// This is the one moment that matters. `guard-apply` runs at boot, long before the app
     /// starts, so slot 0 is empty until here — and an empty slot 0 means the character's
     /// `<shell> msg wallpaper-set …` is denied along with everyone else's.
-    pub fn register_app_cgroup(pid: i32) {
+    pub fn register_app_cgroup(daemon: &Daemon, pid: i32) {
         let dir = cgroup_of_pid(pid);
         if dir.is_none() {
             log_debug!("no cgroup v2 path for pid {pid}; the IPC guard cannot allow the app");
         }
         *APP_CGROUP.lock().unwrap_or_else(|e| e.into_inner()) = dir;
-        refresh_allowed();
+        // A full refresh, not just the allow-list: until this moment the guard was mediating
+        // nothing at all (see `IpcRequest::mediated`), so this is where the target map is filled
+        // in — and it has to go through the one function that knows the write order.
+        refresh_ipc_guard(daemon);
     }
 
     pub fn app_cgroup() -> Option<PathBuf> {
@@ -3058,17 +3061,6 @@ mod os {
         outcome
     }
 
-    /// Push the current allow-list into the map without touching anything else — what a
-    /// registration needs, and nothing more.
-    fn refresh_allowed() {
-        let app = app_cgroup();
-        if let Some(Err(e)) =
-            engaged(|e| e.set_allowed(&ipcguard::allowed_cgroups(app, &e.server_cgroups.clone())))
-        {
-            log_warn!("IPC guard: {e}");
-        }
-    }
-
     /// Re-resolve the mediated sockets and the allow-list against the machine as it is now.
     ///
     /// Inodes churn: every time the shell restarts it unlinks and rebinds, and the map that
@@ -3096,17 +3088,23 @@ mod os {
             &daemon.guard_paths,
             &[],
         );
-        let (targets, servers) = ipc_targets(&rules, &ctx);
-        let app = app_cgroup();
-        let result = engaged(|e| {
-            e.server_cgroups = servers.clone();
-            e.set_targets(&targets)
-                .and_then(|()| e.set_allowed(&ipcguard::allowed_cgroups(app, &servers)))
-                .and_then(|()| e.set_mode(rules.mode))
-        });
-        match result {
+        let (targets, server_cgroups) = ipc_targets(&rules, &ctx);
+        let request = ipcguard::IpcRequest {
+            mode: rules.mode,
+            setting: rules.ipc_guard,
+            targets,
+            app_cgroup: app_cgroup(),
+            server_cgroups,
+        };
+        match engaged(|e| e.update(&request)) {
             Some(Err(e)) => log_warn!("IPC guard refresh: {e}"),
-            _ => log_debug!("IPC guard: {} socket(s) mediated", targets.len()),
+            _ => {
+                if let Some(withheld) = request.withheld() {
+                    log_debug!("IPC guard: {withheld}");
+                } else {
+                    log_debug!("IPC guard: {} socket(s) mediated", request.mediated().len());
+                }
+            }
         }
     }
 

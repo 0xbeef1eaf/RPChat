@@ -173,9 +173,14 @@ export interface GuardPolicy {
    * (`lsm=…,bpf` plus BTF). AppArmor cannot make that check on a mainstream kernel, so without
    * this the wallpaper lock only covers `open()` and the config files.
    *
-   * `auto` (default) uses it where it works and reports `ipcMediation: 'none'` where it does
-   * not; `off` never loads it. There is deliberately no `require`: refusing to engage the guard
-   * at all on an unsupported kernel would turn a kernel update into an unconfined desktop.
+   * `auto` uses it where it works and reports `ipcMediation: 'none'` where it does not; `off`
+   * (the default) never loads it. There is deliberately no `require`: refusing to engage the
+   * guard at all on an unsupported kernel would turn a kernel update into an unconfined desktop.
+   *
+   * The default is `off` as a retreat, not a design: the first machine to run this in `enforce`
+   * failed to reach a login, and the program has still never been observed denying a connection.
+   * Until it has, `off` leaves the wallpaper lock exactly where it stood before — covering
+   * `open()` and the config files, with the gap in `residual`.
    */
   ipcGuard?: GuardIpcGuard;
   /** Which shell table row applies. Default `auto` (first whose binary exists). */
