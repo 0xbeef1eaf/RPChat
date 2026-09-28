@@ -235,10 +235,18 @@ interface TimerInfo {
 interface PresenceSnapshot {
   /** ISO-8601 time of the sample. */
   at: string;
-  /** Milliseconds since the last keyboard/mouse input. */
+  /** Milliseconds since the last keyboard/mouse input anywhere on the machine. */
   idleMs: number;
-  /** idleMs below the user's idle threshold (default 2 min). */
+  /** idleMs below the user's idle threshold (default 2 min): they are at the computer. */
   atKeyboard: boolean;
+  /**
+   * Milliseconds since the user last did something in rpchat itself (typed, clicked, scrolled,
+   * brought the window up, clicked your avatar). A second, independent timer: it keeps counting
+   * while they work in another window, where idleMs stays at zero.
+   */
+  appIdleMs: number;
+  /** appIdleMs below the user's app idle threshold (default 5 min): they are with *you*, not just awake. */
+  inApp: boolean;
   /** Focused window, or null when unknown. */
   activeWindow: { title: string; app: string; class?: string } | null;
   screenLocked: boolean | null;
@@ -280,7 +288,11 @@ interface CalendarEvent {
 /**
  * Host events you can subscribe to with sdk.events.on(). The data your code receives:
  * 'user-idle' { idleMs } (fires once when idle crosses filter.idleMs, default 5 min);
- * 'user-back' { idleMs } (first input after user-idle); 'window-changed' { title, app, class? };
+ * 'user-back' { idleMs } (first input after user-idle);
+ * 'app-idle' { appIdleMs } (the user stopped using rpchat — they may still be busy in another window;
+ * fires once when it crosses filter.appIdleMs, then repeats with the grown number) and
+ * 'app-back' { appIdleMs } (their first interaction with rpchat after that);
+ * 'window-changed' { title, app, class? };
  * 'app-launched' { app }; 'file-added' { path, dir, name } (watched directories);
  * 'battery-low' { percent } (crosses below filter.percent, default 20); 'screen-locked' {};
  * 'screen-unlocked' {}; 'song-changed' NowPlaying; 'time' { hour, minute, weekday, iso }
@@ -302,6 +314,8 @@ interface CalendarEvent {
 type HostEventName =
   | 'user-idle'
   | 'user-back'
+  | 'app-idle'
+  | 'app-back'
   | 'window-changed'
   | 'app-launched'
   | 'file-added'

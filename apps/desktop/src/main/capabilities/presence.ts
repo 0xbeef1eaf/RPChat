@@ -19,6 +19,8 @@ export class PresenceHandler implements CapabilityHandler {
         return (snap.activeWindow ?? null) as unknown as Json;
       case 'idleMs':
         return snap.idleMs;
+      case 'appIdleMs':
+        return snap.appIdleMs;
       default:
         throw new RpError('CAPABILITY_UNKNOWN', `Unknown method sdk.presence.${method}`);
     }

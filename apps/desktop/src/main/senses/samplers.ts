@@ -116,6 +116,8 @@ function isPeripheral(root: string, name: string): boolean {
 
 export interface SamplerParts {
   idleMs(): number;
+  /** The app's own idle timer (`AppActivity`): since the user last touched rpchat itself. */
+  appIdleMs(): number;
   screenLocked(): boolean | null;
   onBattery(): boolean | null;
   batteryPercent(): number | null;
@@ -143,6 +145,7 @@ export class CompositeSampler implements PresenceSampler {
     ]);
     return {
       idleMs: safe(() => this.parts.idleMs(), 0),
+      appIdleMs: safe(() => this.parts.appIdleMs(), 0),
       screenLocked: safe(() => this.parts.screenLocked(), null),
       onBattery: safe(() => this.parts.onBattery(), null),
       batteryPercent: safe(() => this.parts.batteryPercent(), null),

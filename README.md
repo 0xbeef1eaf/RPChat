@@ -105,10 +105,12 @@ Characters, their behaviours and their media are distributed as shareable
 - **See what the model sees**: Settings → General → Debug → "Show model traffic"
   adds a *Model traffic* button to the chat that lists every request sent to the
   model for the session (full system prompt, messages, tools) and its response.
-- **Senses and events**: characters can see what you're doing (idle time,
-  active window, now playing, battery, calendar), look at the screen through a
-  vision model, and subscribe to events (you came back, a song changed, a file
-  landed in Downloads, a time of day) that run their code without a turn.
+- **Senses and events**: characters can see what you're doing (two idle timers —
+  the machine's and this app's own, so they can tell "away" from "here but busy
+  elsewhere" — active window, now playing, battery, calendar), look at the screen
+  through a vision model, and subscribe to events (you came back, you stopped
+  using the app, a song changed, a file landed in Downloads, a time of day) that
+  run their code without a turn.
 - **A body and a voice**: a persistent avatar overlay with expressions, speech
   bubbles and animations; on-screen drawing; character-built widgets; text to
   speech in the character's own cloned voice (or through your own commands) and

@@ -1,10 +1,16 @@
 /**
  * Presence sensing (docs/spec/living.md §4): samples the host, derives edge
- * events (`user-idle`/`user-back`, `battery-low`, `screen-*`, `song-changed`,
- * `window-changed`, `app-launched`) and implements core's `SensesProvider`.
+ * events (`user-idle`/`user-back`, `app-idle`/`app-back`, `battery-low`, `screen-*`,
+ * `song-changed`, `window-changed`, `app-launched`) and implements core's `SensesProvider`.
  * Edge detection is pure (`detectEdges`) so it is unit-tested with a fake sampler.
+ *
+ * Two idle timers run side by side and never reset each other: the **system** one
+ * (`idleMs`, keyboard and mouse anywhere on the machine) says whether the user is
+ * at the computer at all, and the **app** one (`appIdleMs`, from `AppActivity`) says
+ * whether they are still with rpchat — someone can be typing away in another window
+ * for an hour, which is `atKeyboard` but not `inApp`.
  */
-import type { HostEvent, HostEventName, NowPlaying, PresenceSnapshot } from '@rp/shared';
+import type { HostEvent, HostEventName, Json, NowPlaying, PresenceSnapshot } from '@rp/shared';
 
 export interface ActiveWindow {
   title: string;
@@ -15,6 +21,8 @@ export interface ActiveWindow {
 /** One raw host sample (no derived fields). */
 export interface PresenceSample {
   idleMs: number;
+  /** Milliseconds since the last interaction with rpchat itself (`AppActivity`). */
+  appIdleMs: number;
   screenLocked: boolean | null;
   onBattery: boolean | null;
   batteryPercent: number | null;
@@ -30,6 +38,10 @@ export interface EdgeState {
   idle: boolean;
   /** `idleMs` reported by the last `user-idle` event, so repeats are paced. */
   idleNotifiedMs?: number;
+  /** The app timer's own away state, tracked separately from the system one. */
+  appIdle: boolean;
+  /** `appIdleMs` reported by the last `app-idle` event, so repeats are paced. */
+  appIdleNotifiedMs?: number;
   batteryLow: boolean;
   locked: boolean | null;
   windowKey: string | null;
@@ -41,21 +53,64 @@ export interface EdgeState {
 
 export interface EdgeOptions {
   idleThresholdMs: number;
+  /** When the app timer counts the user as gone from rpchat. Defaults to `idleThresholdMs`. */
+  appIdleThresholdMs?: number;
   batteryLowPercent?: number;
   /**
    * How much further the user has to stay idle before `user-idle` is repeated.
    * Subscriptions carry their own `filter.idleMs` and only fire once an event
    * reports at least that much, so one event at the crossing would leave every
    * longer wait ("tell me when they have been away 15 minutes") unfired.
+   * `app-idle` is paced the same way.
    */
   idleRepeatMs?: number;
 }
 
-/** Default pace of repeated `user-idle` events while the user stays away. */
+/** Default pace of repeated `user-idle` / `app-idle` events while the user stays away. */
 export const IDLE_REPEAT_MS = 30_000;
 
 export function initialEdgeState(): EdgeState {
-  return { idle: false, batteryLow: false, locked: null, windowKey: null, seenApps: [], songKey: null, primed: false };
+  return { idle: false, appIdle: false, batteryLow: false, locked: null, windowKey: null, seenApps: [], songKey: null, primed: false };
+}
+
+/** One idle timer's state: away or not, and the value its last event reported. */
+interface IdleTimerState {
+  idle: boolean;
+  notifiedMs?: number;
+}
+
+/** Which timer `idleEdges` is running: the events it raises and the field it reports its number in. */
+interface IdleTimerSpec {
+  thresholdMs: number;
+  repeatMs: number;
+  idleEvent: 'user-idle' | 'app-idle';
+  backEvent: 'user-back' | 'app-back';
+  field: 'idleMs' | 'appIdleMs';
+}
+
+/**
+ * The edges of one idle timer: the crossing, the paced repeats while the absence lasts (so a
+ * subscription waiting for a longer idle than the threshold is reached) and the return. The system
+ * timer and the app timer are the same shape over different numbers, and each keeps its own state —
+ * coming back to the keyboard does not end an `app-idle`, and using the app ends both.
+ */
+function idleEdges(state: IdleTimerState, idleMs: number, spec: IdleTimerSpec, at: string): { state: IdleTimerState; events: HostEvent[] } {
+  const events: HostEvent[] = [];
+  const next: IdleTimerState = { ...state };
+  const data = (ms: number): Json => ({ [spec.field]: ms });
+  if (!state.idle && idleMs >= spec.thresholdMs) {
+    next.idle = true;
+    next.notifiedMs = idleMs;
+    events.push({ name: spec.idleEvent, data: data(idleMs), at });
+  } else if (state.idle && idleMs < spec.thresholdMs) {
+    next.idle = false;
+    delete next.notifiedMs;
+    events.push({ name: spec.backEvent, data: data(idleMs), at });
+  } else if (state.idle && idleMs - (state.notifiedMs ?? 0) >= spec.repeatMs) {
+    next.notifiedMs = idleMs;
+    events.push({ name: spec.idleEvent, data: data(idleMs), at });
+  }
+  return { state: next, events };
 }
 
 export function windowKey(w: ActiveWindow | null): string | null {
@@ -71,22 +126,31 @@ export function songKey(n: NowPlaying | null): string | null {
 export function detectEdges(state: EdgeState, sample: PresenceSample, opts: EdgeOptions, at: string): { state: EdgeState; events: HostEvent[] } {
   const events: HostEvent[] = [];
   const next: EdgeState = { ...state, seenApps: [...state.seenApps] };
-  const threshold = Math.max(1000, opts.idleThresholdMs);
+  const repeatMs = Math.max(1000, opts.idleRepeatMs ?? IDLE_REPEAT_MS);
   const low = opts.batteryLowPercent ?? 20;
 
-  if (!state.idle && sample.idleMs >= threshold) {
-    next.idle = true;
-    next.idleNotifiedMs = sample.idleMs;
-    events.push({ name: 'user-idle', data: { idleMs: sample.idleMs }, at });
-  } else if (state.idle && sample.idleMs < threshold) {
-    next.idle = false;
-    delete next.idleNotifiedMs;
-    events.push({ name: 'user-back', data: { idleMs: sample.idleMs }, at });
-  } else if (state.idle && sample.idleMs - (state.idleNotifiedMs ?? 0) >= Math.max(1000, opts.idleRepeatMs ?? IDLE_REPEAT_MS)) {
-    // Still away: repeat with the grown idleMs so longer subscription thresholds are reached.
-    next.idleNotifiedMs = sample.idleMs;
-    events.push({ name: 'user-idle', data: { idleMs: sample.idleMs }, at });
-  }
+  // The two timers, each with its own threshold and its own away state.
+  const system = idleEdges({ idle: state.idle, notifiedMs: state.idleNotifiedMs }, sample.idleMs, {
+    thresholdMs: Math.max(1000, opts.idleThresholdMs),
+    repeatMs,
+    idleEvent: 'user-idle',
+    backEvent: 'user-back',
+    field: 'idleMs',
+  }, at);
+  next.idle = system.state.idle;
+  next.idleNotifiedMs = system.state.notifiedMs;
+  events.push(...system.events);
+
+  const appTimer = idleEdges({ idle: state.appIdle, notifiedMs: state.appIdleNotifiedMs }, sample.appIdleMs, {
+    thresholdMs: Math.max(1000, opts.appIdleThresholdMs ?? opts.idleThresholdMs),
+    repeatMs,
+    idleEvent: 'app-idle',
+    backEvent: 'app-back',
+    field: 'appIdleMs',
+  }, at);
+  next.appIdle = appTimer.state.idle;
+  next.appIdleNotifiedMs = appTimer.state.notifiedMs;
+  events.push(...appTimer.events);
 
   const onBattery = sample.onBattery === true;
   const percent = sample.batteryPercent;
@@ -147,11 +211,19 @@ export function localTimeOf(date: Date): string {
   return `${day} ${hh}:${mm}`;
 }
 
-export function toSnapshot(sample: PresenceSample, idleThresholdMs: number, now: Date): PresenceSnapshot {
+/** The two thresholds a snapshot is read against: the machine's and rpchat's own. */
+export interface IdleThresholds {
+  idleThresholdMs: number;
+  appIdleThresholdMs: number;
+}
+
+export function toSnapshot(sample: PresenceSample, thresholds: IdleThresholds, now: Date): PresenceSnapshot {
   return {
     at: now.toISOString(),
     idleMs: sample.idleMs,
-    atKeyboard: sample.idleMs < Math.max(1000, idleThresholdMs),
+    atKeyboard: sample.idleMs < Math.max(1000, thresholds.idleThresholdMs),
+    appIdleMs: sample.appIdleMs,
+    inApp: sample.appIdleMs < Math.max(1000, thresholds.appIdleThresholdMs),
     activeWindow: sample.activeWindow ? { title: sample.activeWindow.title, app: sample.activeWindow.app, ...(sample.activeWindow.class !== undefined ? { class: sample.activeWindow.class } : {}) } : null,
     screenLocked: sample.screenLocked,
     onBattery: sample.onBattery,
@@ -167,6 +239,8 @@ export function toSnapshot(sample: PresenceSample, idleThresholdMs: number, now:
 export const HOST_SAMPLED_EVENTS: ReadonlySet<HostEventName> = new Set<HostEventName>([
   'user-idle',
   'user-back',
+  'app-idle',
+  'app-back',
   'window-changed',
   'app-launched',
   'battery-low',
@@ -177,9 +251,15 @@ export const HOST_SAMPLED_EVENTS: ReadonlySet<HostEventName> = new Set<HostEvent
 
 export interface PresenceProviderOptions {
   sampler: PresenceSampler;
-  settings(): Promise<{ pollMs: number; idleThresholdMs: number }>;
+  settings(): Promise<{ pollMs: number } & IdleThresholds>;
   logger: Pick<Console, 'warn' | 'debug'>;
   now?: () => Date;
+  /**
+   * Called for every event that goes through `push()`, before the listeners see it. The host uses
+   * it to keep the app idle timer honest: a click on an avatar or a widget message is the user
+   * interacting with rpchat, and only main knows that.
+   */
+  onPush?(event: HostEvent): void;
   /** Cache window for `snapshot()` so prompt building does not re-run commands every call. Default 1000. */
   snapshotCacheMs?: number;
 }
@@ -201,9 +281,9 @@ export class PresenceProvider {
   }
 
   async snapshot(_sessionId?: string): Promise<PresenceSnapshot> {
-    const { idleThresholdMs } = await this.o.settings();
+    const { idleThresholdMs, appIdleThresholdMs } = await this.o.settings();
     const sample = await this.sample(this.o.snapshotCacheMs ?? 1000);
-    return toSnapshot(sample, idleThresholdMs, this.now());
+    return toSnapshot(sample, { idleThresholdMs, appIdleThresholdMs }, this.now());
   }
 
   subscribe(listener: (event: HostEvent) => void): () => void {
@@ -233,6 +313,11 @@ export class PresenceProvider {
 
   /** Push an event from another source (file watcher, Hyprland event socket, overlay pages). */
   push(event: HostEvent): void {
+    try {
+      this.o.onPush?.(event);
+    } catch (err) {
+      this.o.logger.warn('[senses] onPush failed', err);
+    }
     for (const l of [...this.listeners]) {
       try {
         l(event);
@@ -244,7 +329,7 @@ export class PresenceProvider {
 
   /** Instant active-window change (Hyprland `activewindow>>`): runs edge detection so a later poll does not repeat it. */
   pushActiveWindow(window: ActiveWindow | null): void {
-    const base = this.last?.sample ?? { idleMs: 0, screenLocked: null, onBattery: null, batteryPercent: null, activeWindow: null, nowPlaying: null };
+    const base = this.last?.sample ?? { idleMs: 0, appIdleMs: 0, screenLocked: null, onBattery: null, batteryPercent: null, activeWindow: null, nowPlaying: null };
     const sample: PresenceSample = { ...base, activeWindow: window };
     if (this.last) this.last = { at: this.last.at, sample };
     this.applyEdges(sample, { onlyWindow: true });
@@ -266,17 +351,19 @@ export class PresenceProvider {
   private applyEdges(sample: PresenceSample, opts: { onlyWindow?: boolean } = {}): HostEvent[] {
     const settingsPromise = this.o.settings();
     const at = this.now().toISOString();
-    // Edge detection needs the threshold synchronously; use the last known one, refreshed asynchronously.
-    const threshold = this.cachedThreshold;
-    void settingsPromise.then((s) => (this.cachedThreshold = s.idleThresholdMs)).catch(() => undefined);
-    const { state, events } = detectEdges(this.state, sample, { idleThresholdMs: threshold }, at);
+    // Edge detection needs the thresholds synchronously; use the last known ones, refreshed asynchronously.
+    const thresholds = this.cachedThresholds;
+    void settingsPromise
+      .then((s) => (this.cachedThresholds = { idleThresholdMs: s.idleThresholdMs, appIdleThresholdMs: s.appIdleThresholdMs }))
+      .catch(() => undefined);
+    const { state, events } = detectEdges(this.state, sample, thresholds, at);
     this.state = state;
     const out = opts.onlyWindow ? events.filter((e) => e.name === 'window-changed' || e.name === 'app-launched') : events;
     for (const e of out) this.push(e);
     return out;
   }
 
-  private cachedThreshold = 120_000;
+  private cachedThresholds: IdleThresholds = { idleThresholdMs: 120_000, appIdleThresholdMs: 300_000 };
 
   private async sample(maxAgeMs: number): Promise<PresenceSample> {
     const nowMs = this.now().getTime();
@@ -298,8 +385,8 @@ export class PresenceProvider {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     if (this.disposed || this.interest.size === 0) return;
-    const { pollMs, idleThresholdMs } = await this.o.settings();
-    this.cachedThreshold = idleThresholdMs;
+    const { pollMs, idleThresholdMs, appIdleThresholdMs } = await this.o.settings();
+    this.cachedThresholds = { idleThresholdMs, appIdleThresholdMs };
     if (this.disposed || this.interest.size === 0) return;
     const loop = async (): Promise<void> => {
       try {

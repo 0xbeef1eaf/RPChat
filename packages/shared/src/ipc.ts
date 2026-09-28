@@ -106,6 +106,14 @@ export interface IpcApi {
      * the one on screen — being in the app is not the same as watching that conversation.
      */
     setVisibleSession(sessionId: string | null): Promise<void>;
+    /**
+     * The user just did something in a window of ours (a key, a click, a wheel, the window taking
+     * focus): the app's own idle timer, next to the machine-wide one the compositor reports. Sent
+     * throttled, so it is one small call per second of actual use at worst, and never while the
+     * user is only reading somewhere else. Characters see it as `appIdleMs` / `inApp` and the
+     * `app-idle` / `app-back` events.
+     */
+    activity(kind: 'input' | 'focus'): Promise<void>;
     /** Clicking such a notification asks the UI to open that session. */
     onShowSession(listener: (sessionId: string) => void): Unsubscribe;
     /**

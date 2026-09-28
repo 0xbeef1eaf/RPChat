@@ -279,6 +279,61 @@ describe('event matching', () => {
     expect(runs).toHaveLength(2);
   });
 
+  it('runs the app idle timer independently of the system one', async () => {
+    const senses = new FakeSenses();
+    const runs: Array<{ event: string; data: string }> = [];
+    t = await createTestEngine({
+      senses,
+      runnerHandler: async (request) => {
+        const trigger = request.context.trigger;
+        if (trigger.kind === 'event') runs.push({ event: trigger.event, data: request.code.slice(0, request.code.indexOf('; ') + 1) });
+        return null;
+      },
+    });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    const ctx = ctxOf(MINIMAL_ID, 'echo', session.id);
+
+    // "Tell me when they have not looked at the chat for ten minutes" — which can happen while
+    // they type away in another window, so `user-idle` would never fire.
+    await invoke(ctx, 'events', 'on', 'app-idle', 'await sdk.chat.emote("neglected");', { filter: { appIdleMs: 600_000 }, label: 'app idle' });
+    await invoke(ctx, 'events', 'on', 'user-idle', 'await sdk.chat.emote("away");', { label: 'system idle' });
+    expect(senses.interests.at(-1)?.sort()).toEqual(['app-idle', 'time', 'user-idle']);
+
+    // Below the subscription's own threshold: nothing yet.
+    senses.push('app-idle', { appIdleMs: 300_000 });
+    await t.engine.eventService.idle();
+    expect(runs).toEqual([]);
+
+    // Past it: the app subscription fires, and only it — the user is still at the keyboard.
+    t.clock.advance(5000);
+    senses.push('app-idle', { appIdleMs: 900_000 });
+    await t.engine.eventService.idle();
+    expect(runs.map((r) => r.event)).toEqual(['app-idle']);
+    expect(runs[0]!.data).toContain('"event":"app-idle","data":{"appIdleMs":900000}');
+
+    // Coming back to the keyboard is not coming back to the app: the app edge stays armed, so a
+    // further `app-idle` does not fire again.
+    senses.push('user-back', { idleMs: 0 });
+    t.clock.advance(5000);
+    senses.push('app-idle', { appIdleMs: 1_200_000 });
+    await t.engine.eventService.idle();
+    expect(runs.map((r) => r.event)).toEqual(['app-idle']);
+
+    // Touching the app ends that absence; the next one fires again.
+    senses.push('app-back', { appIdleMs: 0 });
+    t.clock.advance(5000);
+    senses.push('app-idle', { appIdleMs: 700_000 });
+    await t.engine.eventService.idle();
+    expect(runs.map((r) => r.event)).toEqual(['app-idle', 'app-idle']);
+
+    // And the system timer still fires on its own, with its own edge.
+    t.clock.advance(5000);
+    senses.push('user-idle', { idleMs: 120_000 });
+    await t.engine.eventService.idle();
+    expect(runs.map((r) => r.event)).toEqual(['app-idle', 'app-idle', 'user-idle']);
+  });
+
   it('fires subscriptions with edges, once, debounce, cap, custom events and onEvent', async () => {
     const senses = new FakeSenses();
     const runs: Array<{ code: string; input: string; trigger: ActionContext['trigger'] }> = [];
@@ -649,8 +704,8 @@ describe('mood', () => {
 // ---------------------------------------------------------------------------------------------
 describe('senses', () => {
   it('renders the senses line and omits missing parts', () => {
-    const base = { at: 't', idleMs: 0, atKeyboard: true, activeWindow: null, screenLocked: null, onBattery: null, batteryPercent: null, nowPlaying: null, sinceLastMessageMs: null, localTime: '21:14', dayPart: 'evening' as const };
-    expect(sensesLine(base)).toBe('Right now: 21:14 (evening); user at keyboard');
+    const base = { at: 't', idleMs: 0, atKeyboard: true, appIdleMs: 0, inApp: true, activeWindow: null, screenLocked: null, onBattery: null, batteryPercent: null, nowPlaying: null, sinceLastMessageMs: null, localTime: '21:14', dayPart: 'evening' as const };
+    expect(sensesLine(base)).toBe('Right now: 21:14 (evening); user at keyboard; in the app');
     expect(
       sensesLine({
         ...base,
@@ -662,7 +717,11 @@ describe('senses', () => {
         onBattery: true,
       }),
     ).toBe('Right now: 21:14 (evening); user away 10 min; active window: "main.rs - Code" (VS Code); playing: Nightcall — Kavinsky; battery 42% (on battery)');
-    expect(sensesLine({ ...base, nowPlaying: { title: 'x', status: 'stopped' }, screenLocked: true })).toBe('Right now: 21:14 (evening); user at keyboard; screen locked');
+    expect(sensesLine({ ...base, nowPlaying: { title: 'x', status: 'stopped' }, screenLocked: true })).toBe('Right now: 21:14 (evening); user at keyboard; in the app; screen locked');
+    // The second idle timer: at the keyboard the whole time, but not in rpchat — where `user-idle` never fires.
+    expect(sensesLine({ ...base, appIdleMs: 1_500_000, inApp: false })).toBe('Right now: 21:14 (evening); user at keyboard; not in the app for 25 min');
+    // Away from the machine says it all; "not in the app" on top of it would be the same news twice.
+    expect(sensesLine({ ...base, idleMs: 600_000, atKeyboard: false, appIdleMs: 900_000, inApp: false })).toBe('Right now: 21:14 (evening); user away 10 min');
   });
 
   it('adds the line only when presence is switched on and the setting is on', async () => {
@@ -674,16 +733,16 @@ describe('senses', () => {
 
     await t.engine.chat.send(session.id, 'hi');
     let system = t.provider.requests.at(-1)!.system;
-    expect(system).toMatch(/Right now: \d{2}:\d{2} \((night|early-morning|morning|afternoon|evening|late-evening)\); user at keyboard; active window: "Inbox" \(Mail\)/);
+    expect(system).toMatch(/Right now: \d{2}:\d{2} \((night|early-morning|morning|afternoon|evening|late-evening)\); user at keyboard; in the app; active window: "Inbox" \(Mail\)/);
     expect(senses.snapshots).toBe(1);
 
-    await t.engine.settings.update({ senses: { includeInPrompt: false, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [] } });
+    await t.engine.settings.update({ senses: { includeInPrompt: false, pollMs: 5000, idleThresholdMs: 120_000, appIdleThresholdMs: 300_000, calendarSources: [], watchDirs: [] } });
     await t.engine.chat.send(session.id, 'again');
     system = t.provider.requests.at(-1)!.system;
     expect(system).not.toContain('Right now:');
     expect(senses.snapshots).toBe(1);
 
-    await t.engine.settings.update({ senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [] }, permissions: { functionAllow: { presence: false } } });
+    await t.engine.settings.update({ senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, appIdleThresholdMs: 300_000, calendarSources: [], watchDirs: [] }, permissions: { functionAllow: { presence: false } } });
     await t.engine.chat.send(session.id, 'once more');
     expect(t.provider.requests.at(-1)!.system).not.toContain('Right now:');
     expect(senses.snapshots).toBe(1);
