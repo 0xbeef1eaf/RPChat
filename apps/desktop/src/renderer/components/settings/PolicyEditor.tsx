@@ -53,8 +53,8 @@ const COMPOSITOR_HINTS: Record<string, string> = {
 };
 
 const IPC_GUARD_HINTS: Record<string, string> = {
-  auto: 'Used where the kernel allows it (booted with lsm=…,bpf). Where it does not, the shell’s socket can still be reached — System shows which you have.',
-  off: 'Never loaded. On a kernel without AppArmor’s unix mediation class — which is most of them — nothing stops the session connecting to the shell’s socket.',
+  auto: 'Used where the kernel allows it (booted with lsm=…,bpf). Unproven — the first machine to enforce it could not reach a login. Check System reports “BPF IPC guard” afterwards, and keep a kernel entry with apparmor=0 to hand.',
+  off: 'Default. Never loaded, so on a kernel without AppArmor’s unix mediation class — which is most of them — nothing stops the session connecting to the shell’s socket.',
 };
 
 /** A small radio group that reads as one control — modes, keys and backends rather than a dropdown. */

@@ -627,7 +627,7 @@ reported to the character); `enforce` is a policy switch.
 | `protectApp` | `true` | Signals and `ptrace` from the session to rpchat. |
 | `wallpaper` | `true` | The shell's IPC socket and config/state files; the shell runs in `rpchat-shell`. Also denies the row's client-only binaries (`swww`, `awww`) to every profile but rpchat's, which is what stops `awww img <path>` from a terminal on a kernel that cannot mediate `connect()`. A shell shipping one binary for both jobs (`noctalia`, `qs`) cannot be denied that way — it would stop the shell starting — so `noctalia msg` survives there and the residual list says so. |
 | `compositorIpc` | `shell-only` | `allow` (nothing), `shell-only` (only the shell and rpchat may talk to the compositor), `deny` (only rpchat). |
-| `ipcGuard` | `auto` | Mediate `connect()` to the shell's sockets with a BPF LSM program where the kernel allows it — the check AppArmor cannot make. `off` never loads it. See [IPC guard](#ipc-guard-bpf-lsm). |
+| `ipcGuard` | `off` | Mediate `connect()` to the shell's sockets with a BPF LSM program where the kernel allows it — the check AppArmor cannot make. **Off by default because it is unproven: the first machine to enforce it could not reach a login.** See [IPC guard](#ipc-guard-bpf-lsm). |
 | `shell` | `auto` | One row or a list. `auto` takes every row whose binary exists. With several (`["noctalia","hyprpaper"]`) each may serve its own socket but none may connect to another's, so a bar cannot set the wallpaper through a wallpaper daemon. |
 | `loginHelpers` | auto-detect | The PAM login helpers whose profile carries the per-user hats (see below). |
 | `extraDenyPaths`, `extraDenySockets`, `allowBinaries` | `[]` | More guarded files/sockets (`~/…` allowed); binaries that leave the confinement entirely when executed. |
@@ -780,8 +780,15 @@ The one check AppArmor cannot make on a mainstream kernel. Design notes and the 
 behind it: `docs/spec/ipc-guard-bpf.md`; the code is `native/rpchatd/src/ipcguard.rs` and the
 program itself `native/rpchatd/src/bpf/ipc_guard.bpf.c` (~150 lines of C, readable in one sitting).
 
-When `guard.ipcGuard` is `auto` (the default) and `guard.mode` is not `off`, the daemon loads a
-BPF program attached to `lsm/unix_stream_connect` and decides from three maps:
+> **Off by default, and treat turning it on as an experiment.** The first machine to run this in
+> `enforce` did not reach a login and had to be booted with `apparmor=0` — which disables this
+> layer too, because the guard does not engage at all without AppArmor. The program has never been
+> observed denying a connection anywhere: the load test skips without `CAP_BPF`, and CI's runners
+> have no `bpf` in `CONFIG_LSM`. Before setting `auto`, make sure you have a kernel entry with
+> `apparmor=0` you can boot, and check `guard-status` afterwards.
+
+When `guard.ipcGuard` is `auto` and `guard.mode` is not `off`, the daemon loads a BPF program
+attached to `lsm/unix_stream_connect` and decides from three maps:
 
 | Map | Holds | Filled from |
 |---|---|---|
@@ -794,7 +801,20 @@ A connection to a socket in `rpchat_targets` from a task in none of `rpchat_allo
 daemon turns into the same `guard-attempt` event an AppArmor denial produces — with
 `profile: "bpf-ipc"` rather than an `rpchat-*` name, so a reader can tell them apart.
 
-Four things are worth knowing before turning it on:
+Two rules keep it from locking the character out of its own desktop, and they are the part to
+understand before turning it on:
+
+- **Nothing is mediated until the allow-list can name the app.** Slot 0 is the app's cgroup,
+  learned from its keepalive registration — and `guard-apply` runs at boot, long before the app
+  starts. A mediated socket in that window is denied to everything except the socket servers,
+  the rpchat app included, which is the opposite of the point. So the map stays empty until the
+  registration arrives; the program is already attached, so nothing reloads when it does.
+- **The allow-list is written before the target map, always.** The other order leaves a window in
+  which sockets are mediated against the previous allow-list, and if the allow-list write then
+  fails the window never closes. Granting first means the worst case is a socket briefly reachable
+  by something it will shortly be denied to. Any failure empties the target map outright.
+
+Four more things are worth knowing:
 
 - **It is keyed on the inode, not the path**, because the hook is handed a `struct sock *` and
   no string. Inodes churn: a shell that restarts unlinks and rebinds, and the map goes stale at
@@ -834,7 +854,7 @@ puts the pins behind `SEALED_PATHS` — a guarded session cannot unlink one, whe
 relied on its `mode=700`.
 
 It **fails open**: a kernel without the `bpf` LSM or without BTF, a build made without `clang`,
-a program the verifier refuses — all of them leave the desktop working, leave `guard-apply`
+a program the verifier refuses, a cgroup that cannot be opened — all of them leave the desktop working, leave `guard-apply`
 succeeding, and set `ipcMediation: "none"` with the reason in the residual list. `bpftool` is
 added to the denied escape binaries for the same reason `apparmor_parser` is: it undoes this
 layer. Checking it on a live box, from a terminal in a guarded session:

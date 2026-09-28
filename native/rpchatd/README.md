@@ -176,7 +176,8 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   `/dev/kmsg`) turns `apparmor="DENIED|ALLOWED|AUDIT"` records with `profile="rpchat-…"` into
   `guard-attempt` events (`blocked` only for `DENIED`, i.e. enforce mode).
 
-- **IPC guard** (`policy.guard.ipcGuard`, `src/ipcguard.rs`): AppArmor cannot deny a `connect()`
+- **IPC guard** (`policy.guard.ipcGuard`, default **off** — unproven, and the first machine to
+  enforce it could not reach a login; `src/ipcguard.rs`): AppArmor cannot deny a `connect()`
   to a filesystem socket on a kernel without its fine-grained `unix` mediation class, which is
   every current one, so where the kernel allows it (`lsm=…,bpf`, BTF, bpffs) the daemon also
   loads a BPF LSM program on `lsm/unix_stream_connect` that mediates the shell's sockets by

@@ -211,13 +211,20 @@ impl CompositorIpc {
 /// kernel without BPF LSM reads like the safe choice and is the opposite: it turns a kernel
 /// update into a desktop that will not confine anything, or will not come up. What is wanted
 /// there is a warning in the app, which `GuardInfo.ipcMediation` already carries.
+///
+/// **The default is `off`, and that is a retreat rather than a design.** The first machine to run
+/// this layer in `enforce` failed to reach a login and had to be booted with `apparmor=0`; the
+/// program has still never been observed denying a connection anywhere. Until it has, a desktop
+/// that cannot be logged into is a worse outcome than a wallpaper lock that only covers `open()`
+/// and the config files — which is exactly where the guard stood before this existed, and which
+/// the residual list reports honestly. Set `auto` to opt in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IpcGuardMode {
     /// Use it when the kernel allows it, report `ipcMediation: "none"` when it does not.
-    #[default]
     Auto,
     /// Never load it. The AppArmor half of the guard is unaffected.
+    #[default]
     Off,
 }
 
@@ -342,7 +349,7 @@ impl Default for GuardRules {
             protect_app: true,
             wallpaper: true,
             compositor_ipc: CompositorIpc::ShellOnly,
-            ipc_guard: IpcGuardMode::Auto,
+            ipc_guard: IpcGuardMode::Off,
             shells: vec![GuardShell::Auto],
             login_helpers: None,
             extra_deny_paths: Vec::new(),

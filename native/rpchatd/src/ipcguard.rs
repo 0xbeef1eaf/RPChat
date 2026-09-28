@@ -526,6 +526,38 @@ pub struct IpcOutcome {
     pub targets: usize,
 }
 
+impl IpcRequest {
+    /// The sockets to actually put in the map — **none, until the allow-list can name the app.**
+    ///
+    /// Slot 0 of `rpchat_allowed` is the app's cgroup, learned from its keepalive registration,
+    /// and at boot there is no registration: `guard-apply` runs long before the app starts. A
+    /// mediated socket in that state is denied to *everything* except the processes serving the
+    /// guarded sockets — including the rpchat app itself, which is the one thing this layer
+    /// exists to keep working. There is no upside to mediating before then, and the downside is
+    /// the character losing the wallpaper it is supposed to own.
+    ///
+    /// So the map stays empty until [`IpcRequest::app_cgroup`] is known. The program is still
+    /// loaded and attached, so nothing has to be reloaded when the registration arrives — the
+    /// refresh that follows it fills the map in.
+    pub fn mediated(&self) -> &[Target] {
+        if self.app_cgroup.is_none() {
+            return &[];
+        }
+        &self.targets
+    }
+
+    /// Why the map is empty although the program is attached, if that is the case.
+    pub fn withheld(&self) -> Option<String> {
+        if self.app_cgroup.is_none() && !self.targets.is_empty() {
+            return Some(format!(
+                "{} socket(s) are not being mediated yet: the rpchat app has not registered, so the allow-list cannot name it and mediating would deny the app along with everyone else",
+                self.targets.len()
+            ));
+        }
+        None
+    }
+}
+
 impl IpcOutcome {
     pub fn unavailable(reason: impl Into<String>) -> IpcOutcome {
         IpcOutcome {
@@ -562,16 +594,23 @@ pub fn residual(outcome: &IpcOutcome, unix_class: bool, shell_guarded: bool) -> 
         // The profiles' `unix (connect) peer=(label=rpchat-shell)` deny is doing the work and
         // there is nothing extra to disclose; `guard.rs` already documents that rule.
         IpcMediation::Apparmor => Vec::new(),
-        IpcMediation::Bpf => vec![
-            format!(
+        IpcMediation::Bpf => {
+            let mut lines = Vec::new();
+            // The program is attached but holding off, which reads as "protected" unless it is
+            // said out loud.
+            if let Some(withheld) = outcome.reason.clone() {
+                lines.push(withheld);
+            }
+            lines.push(format!(
                 "connect() to the shell's sockets is mediated by a BPF LSM program ({} socket(s) right now), not by AppArmor — this kernel has no AppArmor unix mediation class. It is a loaded program and a handful of maps rather than a profile a reviewer can read at /etc/apparmor.d; guard-status prints what is in them",
                 outcome.targets
-            ),
-            "the BPF layer mediates every process on the machine, not only the confined users' sessions, so root and system services are denied the guarded sockets too. Only the guarded users' own sockets go into the map, so another user's shell is untouched".to_string(),
-            "the allow-list is a cgroup, so anything sharing the app's cgroup is allowed: an app started from a terminal shares that terminal's scope, and the wallpaper lock is then open to everything in it. A packaged install started from autostart or the desktop entry gets its own scope and does not have that gap".to_string(),
-            "the processes serving the guarded sockets may reach each other, so a bar can still drive a wallpaper daemon (which is how noctalia sets a wallpaper through swww). A session that moves itself into the shell's cgroup — cgroup delegation makes that the user's own tree — reaches them the same way".to_string(),
-            "a socket bound since the last refresh is unmediated until the next one: the runtime directories are watched with inotify and rescanned, but there is a window between bind() and the refresh".to_string(),
-        ],
+            ));
+            lines.push("the BPF layer mediates every process on the machine, not only the confined users' sessions, so root and system services are denied the guarded sockets too. Only the guarded users' own sockets go into the map, so another user's shell is untouched".to_string());
+            lines.push("the allow-list is a cgroup, so anything sharing the app's cgroup is allowed: an app started from a terminal shares that terminal's scope, and the wallpaper lock is then open to everything in it. A packaged install started from autostart or the desktop entry gets its own scope and does not have that gap".to_string());
+            lines.push("the processes serving the guarded sockets may reach each other, so a bar can still drive a wallpaper daemon (which is how noctalia sets a wallpaper through swww). A session that moves itself into the shell's cgroup — cgroup delegation makes that the user's own tree — reaches them the same way".to_string());
+            lines.push("a socket bound since the last refresh is unmediated until the next one: the runtime directories are watched with inotify and rescanned, but there is a window between bind() and the refresh".to_string());
+            lines
+        }
         IpcMediation::None => vec![format!(
             "this kernel has no AppArmor unix mediation class (only the coarse network_v9/af_unix), so connect() to a filesystem socket cannot be denied by a profile at all, and the BPF LSM program that would do it is not loaded{}: the wallpaper IPC is NOT guarded. What holds is the config files — a wallpaper set through the shell's socket does not persist — and the client binaries being denied. Measured, not assumed: with `deny /run/rpchat/** rwklx` loaded, open() on a socket there is EACCES and connect() to it succeeds",
             outcome
@@ -636,9 +675,6 @@ pub struct Engaged {
     events: Option<RingBuf<MapData>>,
     /// Every mediated inode → the path it was stat'd from.
     pub paths: BTreeMap<TargetKey, String>,
-    /// The cgroups of the processes serving the mediated sockets, remembered so a refresh that
-    /// only learned the app's cgroup does not drop them.
-    pub server_cgroups: Vec<PathBuf>,
 }
 
 impl Engaged {
@@ -710,6 +746,36 @@ impl Engaged {
         failure.map_or(Ok(()), Err)
     }
 
+    /// Apply `req` to the maps: **allow-list first, targets second.**
+    ///
+    /// The order is the safety property, not a detail. Writing the targets first opens a window
+    /// in which sockets are mediated against the *previous* allow-list, and if the allow-list
+    /// write then fails the window never closes: the map keeps denying with a list that names
+    /// nobody. Granting first means the worst case is a socket that is briefly allowed to
+    /// something it will shortly be denied to, which is the direction a guard should fail in.
+    ///
+    /// On any failure the target map is emptied, so a half-written allow-list cannot be left
+    /// mediating. That is the same fail-open rule the rest of this module follows: a confused
+    /// guard must not be a guard that bricks the desktop.
+    pub fn update(&mut self, req: &IpcRequest) -> Result<(), String> {
+        match self.try_update(req) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = self.set_targets(&[]);
+                Err(e)
+            }
+        }
+    }
+
+    fn try_update(&mut self, req: &IpcRequest) -> Result<(), String> {
+        self.set_allowed(&allowed_cgroups(
+            req.app_cgroup.clone(),
+            &req.server_cgroups,
+        ))?;
+        self.set_targets(req.mediated())?;
+        self.set_mode(req.mode)
+    }
+
     pub fn set_mode(&mut self, mode: GuardMode) -> Result<(), String> {
         self.mode
             .set(0, mode_value(mode), 0)
@@ -750,7 +816,7 @@ pub fn engage(req: &IpcRequest) -> (IpcOutcome, Option<Engaged>) {
         Ok(engaged) => (
             IpcOutcome {
                 mediation: IpcMediation::Bpf,
-                reason: None,
+                reason: req.withheld(),
                 targets: engaged.targets(),
             },
             Some(engaged),
@@ -821,17 +887,11 @@ fn load(req: &IpcRequest) -> Result<(Engaged, FdLink), String> {
             RingBuf::try_from(m).map_err(|e| e.to_string())
         })?),
         paths: BTreeMap::new(),
-        server_cgroups: req.server_cgroups.clone(),
     };
     // Fill the maps before the program is authoritative. It is already attached at this point,
     // but with an empty target map it mediates nothing, so there is no moment where it denies
     // something the allow-list has not caught up with yet.
-    engaged.set_allowed(&allowed_cgroups(
-        req.app_cgroup.clone(),
-        &req.server_cgroups,
-    ))?;
-    engaged.set_targets(&req.targets)?;
-    engaged.set_mode(req.mode)?;
+    engaged.update(req)?;
     Ok((engaged, link))
 }
 
@@ -1353,6 +1413,59 @@ mod tests {
         let full = allowed_cgroups(Some(app.clone()), &many);
         assert_eq!(full[APP_CGROUP_SLOT as usize], Some(app));
         assert!(full.iter().all(Option::is_some));
+    }
+
+    /// The rule that keeps the guard from denying the app the character works through.
+    ///
+    /// `guard-apply` runs at boot, long before the app registers, so slot 0 of the allow-list is
+    /// empty for the whole of early startup. Mediating then denies *everything* outside the
+    /// socket servers' own cgroups — the rpchat app included — which is the opposite of the
+    /// point. The map therefore stays empty until the app is known.
+    #[test]
+    fn nothing_is_mediated_until_the_allow_list_can_name_the_app() {
+        let target = Target {
+            path: "/run/user/1000/noctalia-wayland-1.sock".into(),
+            key: TargetKey {
+                dev_major: 0,
+                dev_minor: 76,
+                ino: 167,
+            },
+        };
+        let mut req = IpcRequest {
+            mode: GuardMode::Enforce,
+            setting: IpcGuardMode::Auto,
+            targets: vec![target.clone()],
+            app_cgroup: None,
+            server_cgroups: vec![PathBuf::from("/sys/fs/cgroup/shell")],
+        };
+        assert!(
+            req.mediated().is_empty(),
+            "no app cgroup means nothing may be mediated"
+        );
+        // And it says so, rather than reading as protection that is not there.
+        let withheld = req.withheld().expect("the withholding is reported");
+        assert!(withheld.contains("has not registered"), "{withheld}");
+        let lines = residual(
+            &IpcOutcome {
+                mediation: IpcMediation::Bpf,
+                reason: Some(withheld),
+                targets: 0,
+            },
+            false,
+            true,
+        )
+        .join("\n");
+        assert!(lines.contains("not being mediated yet"), "{lines}");
+
+        // The registration arrives: the map fills in, with no reload.
+        req.app_cgroup = Some(PathBuf::from("/sys/fs/cgroup/app"));
+        assert_eq!(req.mediated(), &[target]);
+        assert!(req.withheld().is_none());
+
+        // Nothing to mediate and no app either: nothing to report.
+        req.app_cgroup = None;
+        req.targets.clear();
+        assert!(req.withheld().is_none());
     }
 
     #[test]

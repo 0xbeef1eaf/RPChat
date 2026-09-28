@@ -245,7 +245,7 @@ export function policyDraftFrom(policy: PolicyFile): PolicyDraft {
       protectApp: policy.guard?.protectApp !== false,
       wallpaper: policy.guard?.wallpaper !== false,
       compositorIpc: policy.guard?.compositorIpc ?? 'shell-only',
-      ipcGuard: policy.guard?.ipcGuard ?? 'auto',
+      ipcGuard: policy.guard?.ipcGuard ?? 'off',
       shell: shell === undefined ? ['auto'] : Array.isArray(shell) ? [...shell] : [shell],
       loginHelpers: [...(policy.guard?.loginHelpers ?? [])],
       extraDenyPaths: [...(policy.guard?.extraDenyPaths ?? [])],
