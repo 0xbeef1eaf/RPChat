@@ -148,6 +148,13 @@ export interface IpcApi {
     install(sourcePath: string): Promise<InstalledPackView>;
     uninstall(packId: string): Promise<void>;
     exportPack(packId: string, destinationFile: string): Promise<void>;
+    /**
+     * A pack was installed, updated or uninstalled — by this window, by another one, or by nobody
+     * (the system policy pulls the packs it pins). The lists the UI holds (packs, characters and
+     * the sessions, whose character an update may have renamed) are stale until it re-reads them,
+     * so an updated character does not wait for a restart to speak with its new name and persona.
+     */
+    onChanged(listener: (packId: string) => void): Unsubscribe;
   };
   capabilities: {
     list(): Promise<CapabilityInfo[]>;
@@ -484,6 +491,7 @@ export const IPC_EVENT_CHANNELS = {
   uiPrompt: 'ui:prompt',
   showSession: 'app:showSession',
   policyChanged: 'app:policyChanged',
+  packsChanged: 'packs:changed',
   updateStatus: 'updates:status',
   browserStatus: 'browser:status',
 } as const;

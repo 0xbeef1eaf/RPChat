@@ -43,6 +43,7 @@ import { EmbeddingService } from './services/embeddings.js';
 import type { Embedder } from './services/embeddings.js';
 import { MemoryService } from './services/memory.js';
 import { PackService } from './services/packs.js';
+import { followPackUpdate } from './services/pack-update.js';
 import { PermissionService } from './services/permissions.js';
 import { SessionService } from './services/sessions.js';
 import { SettingsService } from './services/settings.js';
@@ -316,6 +317,12 @@ export class Engine {
     this.sessions.setAfterRemove((session) => this.eventService.removeForSession(session.id));
     this.sessions.setAfterReset((session) => this.eventService.removeForSession(session.id));
     this.sessions.setAfterCreate(() => this.eventService.updateInterest());
+    // First, so the listeners after it see the sessions as the update left them: an updated pack
+    // reaches its character's open conversation straight away — what the pack says is read per
+    // turn anyway, and the session itself follows a renamed character and a new name.
+    this.packs.onPacksChanged((packId, previous) =>
+      followPackUpdate({ storage: opts.storage, packs: this.packs, timers: this.timers, now, logger }, packId, previous),
+    );
     this.packs.onPacksChanged(() => this.eventService.updateInterest());
     this.packs.onPacksChanged(() => this.library.invalidate());
     const llmHandler = this.dispatcher.handlerFor('llm') as LlmHandler;

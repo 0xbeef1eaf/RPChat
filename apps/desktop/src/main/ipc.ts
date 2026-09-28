@@ -494,6 +494,12 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
   const offChat = engine.events.on('chat', (event) => {
     if (!windows.sendToMain(IPC_EVENT_CHANNELS.chatEvent, event)) logger.debug(`[ipc] dropped chat event ${event.type} (no main window)`);
   });
+  // A pack installed, updated or removed: the UI re-reads its lists, so a character the update
+  // renamed or renewed is in the sidebar and in its open chat without a restart — and so a pack
+  // the policy pulled in by itself shows up at all.
+  const offPacks = engine.packs.onPacksChanged((packId) => {
+    windows.sendToMain(IPC_EVENT_CHANNELS.packsChanged, packId);
+  });
   const offUpdates = services.updates.subscribe((status) => {
     windows.sendToMain(IPC_EVENT_CHANNELS.updateStatus, status);
   });
@@ -511,6 +517,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
   logger.info(`[ipc] ${channels.length} channels registered (app ${opts.version})`);
   return () => {
     offChat();
+    offPacks();
     offUpdates();
     offBrowser();
     offPolicy();
