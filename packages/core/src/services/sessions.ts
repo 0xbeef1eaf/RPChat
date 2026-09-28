@@ -8,6 +8,15 @@ import type { BehaviourHooks, Clock, EngineEmitter, Logger } from '../types.js';
 
 const PREVIEW_CHARS = 120;
 
+/**
+ * The title `create` gives a session the user did not name: character and pack as they read when
+ * the session started. `followPackUpdate` re-renders it after a pack update, and recognises the
+ * one it wrote from the one the user typed over it by comparing against this.
+ */
+export function autoSessionTitle(characterName: string, packName: string): string {
+  return `${characterName} (${packName})`;
+}
+
 export type NewMessage = Omit<ChatMessage, 'id' | 'createdAt'> & Partial<Pick<ChatMessage, 'id' | 'createdAt'>>;
 
 /** Session CRUD plus the single place where messages are appended/updated (persist + event + stats). */
@@ -88,7 +97,7 @@ export class SessionService {
     const session: Session = {
       id: randomUUID(),
       characterRef: input.characterRef,
-      title: input.title?.trim() || `${character.definition.name} (${pack.manifest.name})`,
+      title: input.title?.trim() || autoSessionTitle(character.definition.name, pack.manifest.name),
       createdAt: at,
       updatedAt: at,
       messageCount: 0,

@@ -71,7 +71,7 @@ async function copyPackDir(src: string, dest: string): Promise<void> {
  */
 export class PackService {
   private readonly loaded = new Map<string, LoadedPack>();
-  private readonly changeListeners = new Set<(packId: string) => void | Promise<void>>();
+  private readonly changeListeners = new Set<(packId: string, previous?: LoadedPack) => void | Promise<void>>();
   private installHooks: InstallHookRunner | undefined;
 
   constructor(
@@ -87,16 +87,20 @@ export class PackService {
     this.installHooks = runner;
   }
 
-  /** Called after a pack was installed, replaced or uninstalled. */
-  onPacksChanged(listener: (packId: string) => void | Promise<void>): () => void {
+  /**
+   * Called after a pack was installed, replaced or uninstalled. `previous` is the pack as it was
+   * loaded until now — the version an install replaced, or the one an uninstall just took away —
+   * and is absent for a pack this app had never loaded.
+   */
+  onPacksChanged(listener: (packId: string, previous?: LoadedPack) => void | Promise<void>): () => void {
     this.changeListeners.add(listener);
     return () => this.changeListeners.delete(listener);
   }
 
-  private async notifyChanged(packId: string): Promise<void> {
+  private async notifyChanged(packId: string, previous?: LoadedPack): Promise<void> {
     for (const listener of this.changeListeners) {
       try {
-        await listener(packId);
+        await listener(packId, previous);
       } catch (err) {
         this.logger.warn('[packs] change listener failed', err);
       }
@@ -283,6 +287,9 @@ export class PackService {
       }
       manifest = await readManifestFromArchive(source);
     }
+    // The version this install replaces, for the change listeners (a session follows it, see
+    // `followPackUpdate`). Undefined for a pack this app has not loaded before.
+    const replaced = this.loaded.get(manifest.id);
 
     // 2. Materialise into <packsDir>/<id>/<version>/ (staging dir + rename).
     const dest = path.join(this.packsDir, manifest.id, manifest.version);
@@ -328,7 +335,7 @@ export class PackService {
     this.loaded.set(manifest.id, pack);
     await this.migrateLibraryState(pack);
     await this.storage.state.clear(INSTALL_STATE_SCOPE(manifest.id));
-    await this.notifyChanged(manifest.id);
+    await this.notifyChanged(manifest.id, replaced);
 
     // 4. The onInstall hook runs right now, once: permissions are app-wide, so nothing is ever pending.
     if (this.installHooks && pack.characters.some((c) => c.behaviourSources.onInstall !== undefined)) {
@@ -341,6 +348,7 @@ export class PackService {
   async uninstall(packId: string): Promise<void> {
     const record = await this.storage.packs.get(packId);
     if (!record) throw new RpError('NOT_FOUND', `Pack "${packId}" is not installed`, { packId });
+    const removed = this.loaded.get(packId);
     this.loaded.delete(packId);
     await this.storage.packs.remove(packId);
     await this.timers.removeForPack(packId);
@@ -353,7 +361,7 @@ export class PackService {
       const remaining = await fs.readdir(idDir).catch(() => null);
       if (remaining && remaining.length === 0) await fs.rm(idDir, { recursive: true, force: true }).catch(() => undefined);
     }
-    await this.notifyChanged(packId);
+    await this.notifyChanged(packId, removed);
   }
 
   /** Read a pack directory or `.rppack` without installing it and report what it contains. */

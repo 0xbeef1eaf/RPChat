@@ -135,6 +135,16 @@ export async function refreshSessions(): Promise<void> {
   update((s) => setSessions(s, sessions));
 }
 
+/**
+ * A pack was installed, updated or uninstalled — here, in another window, or by the system policy
+ * pulling the packs it pins. Re-read everything that came out of it: the packs and characters
+ * lists, and the sessions, since an update can rename the character a session talks to and the
+ * title that names it.
+ */
+export async function applyPackChange(): Promise<void> {
+  await Promise.all([refreshPacks(), refreshCharacters(), refreshSessions()]);
+}
+
 let sessionsRefreshTimer: number | null = null;
 function scheduleSessionsRefresh(): void {
   if (sessionsRefreshTimer !== null) return;
@@ -177,6 +187,11 @@ export async function bootstrap(): Promise<void> {
     if (event.type === 'memory-added' && event.sessionId === appStore.getState().activeSessionId) {
       toast('info', `remembered: ${truncate(event.memory.text, 90)}`, 4500);
     }
+  });
+  // A pack that changed under the running app (another window installed it, or the policy did):
+  // the sidebar, the packs view and the open chat follow it without a restart.
+  rp.packs.onChanged(() => {
+    void applyPackChange().catch((err: unknown) => console.warn('refresh after a pack change failed', err));
   });
   // A notification about a character's unprompted message opens that conversation.
   rp.app.onShowSession((sessionId) => void openSession(sessionId));
