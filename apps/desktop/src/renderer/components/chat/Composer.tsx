@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import type { QueuedMessage } from '@rp/shared';
 
 interface ComposerProps {
   disabled: boolean;
@@ -9,9 +10,12 @@ interface ComposerProps {
   canAbort: boolean;
   /** Changes whenever the target session changes so the draft is reset. */
   sessionKey: string;
+  /** Messages already sent that the next turn will deliver, oldest first. */
+  queued: QueuedMessage[];
+  onUnqueue: (messageId: string) => void;
 }
 
-export function Composer({ disabled, running, onSend, onAbort, canAbort, sessionKey }: ComposerProps) {
+export function Composer({ disabled, running, onSend, onAbort, canAbort, sessionKey, queued, onUnqueue }: ComposerProps) {
   const [text, setText] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -29,7 +33,8 @@ export function Composer({ disabled, running, onSend, onAbort, canAbort, session
     el.style.height = `${Math.min(el.scrollHeight, max)}px`;
   }, [text]);
 
-  const canSend = !disabled && !running && text.trim().length > 0;
+  // A reply in flight no longer stops a message: it is queued, and the next turn takes it.
+  const canSend = !disabled && text.trim().length > 0;
 
   const submit = () => {
     if (!canSend) return;
@@ -46,6 +51,24 @@ export function Composer({ disabled, running, onSend, onAbort, canAbort, session
 
   return (
     <div className="composer">
+      {queued.length > 0 ? (
+        <ul className="composer-queue" aria-label="Queued messages">
+          {queued.map((m) => (
+            <li key={m.id}>
+              <span className="composer-queue-text">{m.text}</span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm btn-icon"
+                title="Take this message back before it is sent"
+                aria-label={`Remove queued message: ${m.text}`}
+                onClick={() => onUnqueue(m.id)}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="composer-inner">
         <textarea
           ref={ref}
@@ -67,14 +90,20 @@ export function Composer({ disabled, running, onSend, onAbort, canAbort, session
           >
             Stop
           </button>
-        ) : (
-          <button type="button" className="btn btn-primary" onClick={submit} disabled={!canSend}>
-            Send
-          </button>
-        )}
+        ) : null}
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={submit}
+          disabled={!canSend}
+          title={running ? 'Queue this message; it is answered when this reply is done' : undefined}
+        >
+          {running ? 'Queue' : 'Send'}
+        </button>
       </div>
       <div className="composer-hint">
-        <kbd>Enter</kbd> to send, <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line
+        <kbd>Enter</kbd> to {running ? 'queue' : 'send'}, <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line
+        {running ? ' · queued messages are answered together when this reply ends' : ''}
       </div>
     </div>
   );

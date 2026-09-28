@@ -185,6 +185,8 @@ describe('ChatService turns', () => {
     await t.engine.chat.send(session.id, 'how do I seem?');
 
     expect(t.eventTypes()).toEqual([
+      'queue-changed', // the message queued...
+      'queue-changed', // ...and taken by the turn below
       'message-added', // user message
       'turn-started',
       'message-added', // empty assistant message
@@ -447,10 +449,20 @@ describe('ChatService turns', () => {
     await t.engine.packs.install(MINIMAL_DIR);
     const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
     await Promise.all([t.engine.chat.send(session.id, 'a'), t.engine.chat.send(session.id, 'b')]);
-    const roles = (await t.engine.sessions.messages(session.id)).map((m) => m.role);
-    expect(roles).toEqual(['user', 'assistant', 'user', 'assistant']);
-    const starts = t.events.filter((e): e is Extract<ChatEvent, { type: 'turn-started' }> => e.type === 'turn-started');
-    expect(starts).toHaveLength(2);
+    const messages = await t.engine.sessions.messages(session.id);
+    // Both were sent before any turn could start, so they may be answered in one turn or in two
+    // (see queue.test.ts); either way each is said exactly once, in order, and the last word is
+    // the character's.
+    expect(messages.filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['a', 'b']);
+    expect(messages.at(-1)!.role).toBe('assistant');
+    // The serialisation itself: no turn ever started while another was still running.
+    let open = 0;
+    for (const event of t.events) {
+      if (event.type === 'turn-started') open += 1;
+      if (event.type === 'turn-finished') open -= 1;
+      expect(open).toBeLessThanOrEqual(1);
+    }
+    expect(open).toBe(0);
   });
 });
 

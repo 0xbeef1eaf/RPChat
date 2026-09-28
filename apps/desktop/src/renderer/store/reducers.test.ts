@@ -10,6 +10,7 @@ import {
   pushToast,
   removeSession,
   setMessages,
+  setQueued,
   setSessions,
   upsertSession,
 } from './reducers';
@@ -43,7 +44,7 @@ describe('applyChatEvent', () => {
     s = applyChatEvent(s, { type: 'error', sessionId: S, error: { code: 'INTERNAL', message: 'boom' } });
     expect(runtimeFor(s, S).error?.message).toBe('boom');
     s = applyChatEvent(s, { type: 'turn-started', sessionId: S, turnId: 't1' });
-    expect(runtimeFor(s, S)).toEqual({ turnId: 't1', status: null, error: null, eventMarkers: [], eventsVersion: 0, exchanges: [] });
+    expect(runtimeFor(s, S)).toEqual({ turnId: 't1', status: null, error: null, eventMarkers: [], eventsVersion: 0, exchanges: [], queued: [] });
     s = applyChatEvent(s, { type: 'turn-finished', sessionId: S, turnId: 't1' });
     expect(runtimeFor(s, S).turnId).toBeNull();
   });
@@ -60,6 +61,18 @@ describe('applyChatEvent', () => {
     expect(runtimeFor(s, S).status).toBe('thinking…');
     s = applyChatEvent(s, { type: 'status', sessionId: S, text: null });
     expect(runtimeFor(s, S).status).toBeNull();
+  });
+
+  it('keeps the queue the engine reports, for a loaded session or not', () => {
+    const queued = [{ id: 'q1', sessionId: S, text: 'and one more thing', queuedAt: '2026-01-01T00:00:10Z' }];
+    let s = applyChatEvent(initialState(), { type: 'queue-changed', sessionId: S, queued });
+    expect(runtimeFor(s, S).queued).toEqual(queued);
+    // Emptied when the turn takes the batch; no message of its own is invented for it.
+    s = applyChatEvent(s, { type: 'queue-changed', sessionId: S, queued: [] });
+    expect(runtimeFor(s, S).queued).toEqual([]);
+    expect(s.messages[S]).toBeUndefined();
+    // The snapshot a freshly loaded window starts from takes the same path.
+    expect(runtimeFor(setQueued(initialState(), S, queued), S).queued).toEqual(queued);
   });
 
   it('does not invent a transcript for a session that is not loaded, but still counts it unread', () => {

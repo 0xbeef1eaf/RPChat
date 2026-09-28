@@ -89,6 +89,19 @@ export interface CreateSessionInput {
 }
 
 /**
+ * A message the user has sent that no turn has taken yet, because the character was still
+ * answering when it arrived. It is held by the engine, not in the transcript: it becomes a real
+ * `ChatMessage` only once the turn that delivers it starts, and until then the user may take it
+ * back (`IpcApi.chat.unqueue`).
+ */
+export interface QueuedMessage {
+  id: string;
+  sessionId: SessionId;
+  text: string;
+  queuedAt: string;
+}
+
+/**
  * Streaming events emitted by the engine while a turn is in progress.
  * Delivered to the renderer over IPC and consumed by tests.
  */
@@ -103,6 +116,8 @@ export type ChatEvent =
   | { type: 'messages-cleared'; sessionId: SessionId }
   /** The session's scratch state, timers, event subscriptions, history summary and status were reset (messages stay). */
   | { type: 'session-reset'; sessionId: SessionId }
+  /** What the user has queued for this session, whenever it changes (`QueuedMessage`); the whole list, oldest first. */
+  | { type: 'queue-changed'; sessionId: SessionId; queued: QueuedMessage[] }
   | { type: 'action-started'; sessionId: SessionId; messageId: MessageId; action: ActionRecord }
   | { type: 'action-finished'; sessionId: SessionId; messageId: MessageId; action: ActionRecord }
   | { type: 'status'; sessionId: SessionId; text: string | null }

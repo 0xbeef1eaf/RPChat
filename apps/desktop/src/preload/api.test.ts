@@ -52,6 +52,8 @@ describe('buildApi', () => {
     expect(invokeChannels()).toContain('system:policyTemplate');
     expect(invokeChannels()).toContain('system:guardApply');
     expect(invokeChannels()).toContain('system:guardAttempts');
+    expect(invokeChannels()).toContain('chat:queued');
+    expect(invokeChannels()).toContain('chat:unqueue');
     expect(invokeChannels()).toContain('sandbox:run');
     expect(invokeChannels()).toContain('sandbox:cancel');
     // Encryption: the renderer may look at the key history and rotate it, and that is all —

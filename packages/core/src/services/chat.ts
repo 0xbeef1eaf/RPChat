@@ -1,5 +1,6 @@
 import type { CapabilityRegistry } from '@rp/sdk';
-import type { ChatMessage, LlmProvider, ProviderConfig, ScheduledTimer, Session, Storage } from '@rp/shared';
+import { randomUUID } from 'node:crypto';
+import type { ChatMessage, LlmProvider, ProviderConfig, QueuedMessage, ScheduledTimer, Session, Storage } from '@rp/shared';
 import { RpError, capOf, parseCharacterRef, serializeError } from '@rp/shared';
 import type { ActionLoop } from '../action-loop.js';
 import type { MemoryService } from './memory.js';
@@ -52,6 +53,15 @@ export interface ChatServiceOptions {
 
 export type SelfWakeSource = 'immediate' | 'timer' | 'wake-timer';
 
+/**
+ * A queued message plus the `send` call waiting on it. The call resolves when the turn that
+ * delivered the message has finished, so `await send(...)` still means "said and answered" —
+ * and resolves without a reply when the user takes the message back instead.
+ */
+interface PendingMessage extends QueuedMessage {
+  settle: { resolve: () => void; reject: (err: unknown) => void };
+}
+
 const AUTONOMY_TIMESTAMPS_KEY = 'autonomy.wakeTimestamps';
 const AUTONOMY_CONSECUTIVE_KEY = 'autonomy.consecutive';
 const HOUR_MS = 60 * 60 * 1000;
@@ -60,6 +70,12 @@ const MEMORY_FOCUS_MESSAGES = 6;
 
 /**
  * Serialises turns per session, runs behaviours around the LLM turn, handles timer wake-ups.
+ *
+ * What the user types is never refused for being early: a message that arrives while the
+ * character is answering is held in `pending` and delivered by the next turn, along with
+ * everything else that arrived meanwhile — one reply to the whole batch, rather than one reply
+ * per message chasing the last. The app shows that queue (`queue-changed`) and can take a
+ * message back out of it (`unqueue`) for as long as no turn has started on it.
  *
  * Two queues, deliberately separate. `turns` is the session's conversation: the user's messages,
  * self-wakes, the LLM turns they run, and the edits (retry, reset, clear) that must not race with
@@ -77,6 +93,10 @@ const MEMORY_FOCUS_MESSAGES = 6;
 export class ChatService {
   private readonly turns = new KeyedQueue();
   private readonly background = new KeyedQueue();
+  /** Messages the user has sent that no turn has taken yet, per session, oldest first. */
+  private readonly pending = new Map<string, PendingMessage[]>();
+  /** Sessions whose next drain is on the turn queue but has not taken its batch yet. */
+  private readonly drains = new Set<string>();
   /** The in-flight LLM turn of a session: what Stop aborts and what `isRunning` reports. */
   private readonly controllers = new Map<string, AbortController>();
   /** In-flight background runs, keyed like `background`, so shutdown can cut them short. */
@@ -92,24 +112,105 @@ export class ChatService {
     this.promptBuilder = o.promptBuilder ?? new PromptBuilder();
   }
 
-  /** Persist the user's message, run `onUserMessage`, then an LLM turn. Resolves when the turn is finished. */
+  /**
+   * Take a message from the user: queue it, then persist it, run `onUserMessage` and an LLM turn.
+   * On an idle session that happens straight away; while a reply is in flight the message waits
+   * for it and is delivered by the next turn, together with anything else queued behind it.
+   * Resolves when the turn that delivered it has finished.
+   */
   async send(sessionId: string, text: string): Promise<void> {
     if (typeof text !== 'string' || text.trim().length === 0) {
       throw new RpError('INVALID_ARGUMENT', 'Message text must be a non-empty string');
     }
     const session = await this.o.sessions.require(sessionId);
     this.requireCharacter(session); // fail fast (NOT_FOUND) before queueing
-    await this.enqueue(sessionId, async () => {
-      await this.o.sessions.addMessage({ sessionId, role: 'user', content: text });
-      await this.o.storage.state.set(`session:${sessionId}`, AUTONOMY_CONSECUTIVE_KEY, 0); // a user message resets the consecutive limit
-      const fresh = await this.o.sessions.require(sessionId);
-
-      const hook = await this.runBehaviour(fresh, 'onUserMessage', { text });
-      const skip = hook?.ok === true && isSkipLlm(hook.returnValue);
-      if (skip) return;
-      await this.runLlmTurn(fresh, 'llm');
-      await this.afterTurn(sessionId);
+    return new Promise<void>((resolve, reject) => {
+      const pending = this.pending.get(sessionId) ?? [];
+      pending.push({ id: randomUUID(), sessionId, text, queuedAt: this.o.now().toISOString(), settle: { resolve, reject } });
+      this.pending.set(sessionId, pending);
+      this.emitQueue(sessionId);
+      // One drain per batch. While it is still waiting its turn it collects the messages that
+      // arrive after it, which is what makes them one reply; the first `send` after it has taken
+      // its batch queues a fresh drain behind the turn it is running.
+      if (this.drains.has(sessionId)) return;
+      this.drains.add(sessionId);
+      // `drain` reports a failure to the senders whose messages it took, and never rejects.
+      void this.enqueue(sessionId, () => this.drain(sessionId));
     });
+  }
+
+  /**
+   * Deliver everything queued for the session as one exchange: each message is persisted and put
+   * through `onUserMessage` in the order it was sent, then a single turn answers them all. The
+   * reply is skipped only when *every* message asked for it (`{ skipLlm: true }`), so a pack that
+   * scripts some replies itself does not silence the rest of the batch.
+   */
+  private async drain(sessionId: string): Promise<void> {
+    const batch = this.take(sessionId);
+    if (batch.length === 0) return; // everything in it was taken back while it waited
+    try {
+      let skip = true;
+      for (const message of batch) {
+        await this.o.sessions.addMessage({ sessionId, role: 'user', content: message.text });
+        await this.o.storage.state.set(`session:${sessionId}`, AUTONOMY_CONSECUTIVE_KEY, 0); // a user message resets the consecutive limit
+        const hook = await this.runBehaviour(await this.o.sessions.require(sessionId), 'onUserMessage', { text: message.text });
+        if (!(hook?.ok === true && isSkipLlm(hook.returnValue))) skip = false;
+      }
+      if (!skip) {
+        await this.runLlmTurn(await this.o.sessions.require(sessionId), 'llm');
+        await this.afterTurn(sessionId);
+      }
+    } catch (err) {
+      for (const message of batch) message.settle.reject(err);
+      return;
+    }
+    for (const message of batch) message.settle.resolve();
+  }
+
+  /** Take the session's whole queue; the next `send` starts a new batch behind this one. */
+  private take(sessionId: string): PendingMessage[] {
+    const batch = this.pending.get(sessionId) ?? [];
+    this.pending.delete(sessionId);
+    this.drains.delete(sessionId);
+    if (batch.length > 0) this.emitQueue(sessionId);
+    return batch;
+  }
+
+  /** What the user has queued for this session and no turn has taken yet, oldest first. */
+  queued(sessionId: string): QueuedMessage[] {
+    return (this.pending.get(sessionId) ?? []).map(({ id, sessionId: session, text, queuedAt }) => ({ id, sessionId: session, text, queuedAt }));
+  }
+
+  /**
+   * Take a queued message back before any turn has started on it. The `send` waiting on it
+   * resolves rather than failing: the user asked for this, so there is nothing to report.
+   * Returns `false` when the message is no longer queued — the turn already took it.
+   */
+  async unqueue(sessionId: string, messageId: string): Promise<boolean> {
+    const pending = this.pending.get(sessionId);
+    const at = pending?.findIndex((m) => m.id === messageId) ?? -1;
+    if (!pending || at < 0) return false;
+    const [dropped] = pending.splice(at, 1);
+    if (pending.length === 0) this.pending.delete(sessionId);
+    dropped?.settle.resolve();
+    this.emitQueue(sessionId);
+    return true;
+  }
+
+  /**
+   * Drop the session's queue without delivering it — the conversation it was meant for is gone
+   * (cleared or deleted), so the words have nowhere to land. The waiting `send` calls resolve.
+   */
+  dropQueue(sessionId: string): void {
+    const pending = this.pending.get(sessionId);
+    if (!pending) return;
+    this.pending.delete(sessionId);
+    for (const message of pending) message.settle.resolve();
+    this.emitQueue(sessionId);
+  }
+
+  private emitQueue(sessionId: string): void {
+    this.o.emitter.emit('chat', { type: 'queue-changed', sessionId, queued: this.queued(sessionId) });
   }
 
   /**
@@ -164,9 +265,14 @@ export class ChatService {
     await this.runExclusive(sessionId, () => this.o.sessions.resetState(sessionId));
   }
 
-  /** Clear the whole history of a session; a running or queued turn is aborted first. */
+  /**
+   * Clear the whole history of a session; a running or queued turn is aborted first, and what the
+   * user had queued is dropped — a message waiting to be said belongs to the conversation being
+   * thrown away, not to the empty one left behind.
+   */
   async clearMessages(sessionId: string): Promise<void> {
     await this.abort(sessionId);
+    this.dropQueue(sessionId);
     await this.runExclusive(sessionId, async () => {
       await this.o.sessions.clearMessages(sessionId);
       // The summary describes messages that no longer exist, and so do the prompt's measurements.

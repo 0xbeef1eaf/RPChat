@@ -267,8 +267,10 @@ assistant message (`message.actions[]`) and shown collapsed in the UI.
 
 A character may ship scripts bound to hooks: `onInstall`, `onSessionStart`,
 `onUserMessage`, `onTimer`, `onSessionEnd`. They run in the same sandbox with
-the same permissions, before/after the LLM turn. `onUserMessage` may return
-`{ skipLlm: true }` to fully script a reply. `onTimer` runs when a scheduled
+the same permissions, before/after the LLM turn. `onUserMessage` runs once per
+user message — including once for each message of a queued batch, in the order
+they were sent — and may return `{ skipLlm: true }` to fully script a reply; a
+batch's reply is skipped only when every message in it asked for that. `onTimer` runs when a scheduled
 timer fires; if no `onTimer` script exists the engine instead wakes the LLM
 with a system-authored message describing the timer payload.
 
@@ -454,7 +456,10 @@ version with per-pack grants is ignored and deleted on start.
   collapsible action cards (purpose, code, result/logs), abort button, retry
   (discard the newest reply and generate another from the same history),
   character status line, and a text size the user can zoom (`settings.chatZoom`;
-  the reading column widens with the text).
+  the reading column widens with the text). Typing does not have to wait for the
+  character: a message sent while a reply is in flight is queued (listed above
+  the composer, each with a × that takes it back) and the next turn answers the
+  whole batch at once.
 - **Packs view**: installed packs, install from `.rppack`/folder, uninstall,
   pack README, and a link to Settings → Permissions (nothing is set per pack).
 - **Settings**: LLM providers (add/edit: type, base URL, API key, model),

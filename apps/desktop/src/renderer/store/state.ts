@@ -7,6 +7,7 @@ import type {
   InstalledPackView,
   ModelExchange,
   PermissionRequest,
+  QueuedMessage,
   SerializedError,
   Session,
   SessionId,
@@ -48,6 +49,8 @@ export interface SessionRuntime {
   eventsVersion: number;
   /** Captured provider calls (`model-exchange`, only while `settings.debug.showModelTraffic` is on), newest last (capped). */
   exchanges: ModelExchange[];
+  /** What the user has sent that no turn has taken yet (`queue-changed`), oldest first. */
+  queued: QueuedMessage[];
 }
 
 export interface MemoriesPanelTarget {
@@ -108,7 +111,7 @@ export interface AppState {
   };
 }
 
-export const EMPTY_RUNTIME: SessionRuntime = { turnId: null, status: null, error: null, eventMarkers: [], eventsVersion: 0, exchanges: [] };
+export const EMPTY_RUNTIME: SessionRuntime = { turnId: null, status: null, error: null, eventMarkers: [], eventsVersion: 0, exchanges: [], queued: [] };
 
 export function initialState(): AppState {
   return {

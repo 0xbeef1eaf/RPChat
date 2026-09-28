@@ -1,5 +1,5 @@
 import type { PermissionDecision, PermissionRequest } from './capability.js';
-import type { AuditEntry, ChatEvent, ChatMessage, CreateSessionInput, Session } from './chat.js';
+import type { AuditEntry, ChatEvent, ChatMessage, CreateSessionInput, QueuedMessage, Session } from './chat.js';
 import type { ModelInfo, ProviderConfig } from './llm.js';
 import type { DisplayBackendInfo, MediaCommand, MediaWindowEvent, MonitorInfo } from './media.js';
 import type { CharacterSummary, InstalledPackRecord, MediaManifest, PackManifest, TagSummary } from './pack.js';
@@ -194,6 +194,11 @@ export interface IpcApi {
     resetState(sessionId: string): Promise<void>;
   };
   chat: {
+    /**
+     * Say something to the character. While it is still answering, the message is queued instead
+     * and the next turn takes it — together with anything else queued behind it, so one reply
+     * answers everything that arrived meanwhile. Resolves when that turn has finished.
+     */
     send(sessionId: string, text: string): Promise<void>;
     /**
      * Throw away the character's last reply and generate another one from the same history.
@@ -201,6 +206,10 @@ export interface IpcApi {
      */
     retry(sessionId: string): Promise<void>;
     abort(sessionId: string): Promise<void>;
+    /** What the user has queued for this session and no turn has taken yet, oldest first. */
+    queued(sessionId: string): Promise<QueuedMessage[]>;
+    /** Take a queued message back before it is delivered; `false` when the turn already took it. */
+    unqueue(sessionId: string, messageId: string): Promise<boolean>;
     onEvent(listener: (event: ChatEvent) => void): Unsubscribe;
   };
   permissions: {
