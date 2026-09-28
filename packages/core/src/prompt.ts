@@ -207,10 +207,16 @@ function memory(input: PromptInput): string {
 }
 
 /** One line summarising the presence snapshot; missing parts are omitted. */
-export function sensesLine(s: PresenceSnapshot, idleThresholdMs = 120_000): string {
+export function sensesLine(s: PresenceSnapshot, idleThresholdMs = 120_000, appIdleThresholdMs = 300_000): string {
   const parts: string[] = [`Right now: ${s.localTime} (${s.dayPart})`];
   const away = s.atKeyboard === false || (typeof s.idleMs === 'number' && s.idleMs >= idleThresholdMs);
   if (typeof s.idleMs === 'number') parts.push(away ? `user away ${Math.max(1, Math.round(s.idleMs / 60_000))} min` : 'user at keyboard');
+  // The app timer, but only while they are at the machine at all: someone who left an hour ago is
+  // not "away from the app", they are away, and saying both would be two ways of the same thing.
+  if (!away && typeof s.appIdleMs === 'number') {
+    const inApp = s.inApp === true || (s.inApp === undefined && s.appIdleMs < appIdleThresholdMs);
+    parts.push(inApp ? 'in the app' : `not in the app for ${Math.max(1, Math.round(s.appIdleMs / 60_000))} min`);
+  }
   if (s.activeWindow) parts.push(`active window: "${s.activeWindow.title}" (${s.activeWindow.app})`);
   if (s.nowPlaying && s.nowPlaying.status !== 'stopped') {
     parts.push(`playing: ${s.nowPlaying.title}${s.nowPlaying.artist ? ` — ${s.nowPlaying.artist}` : ''}${s.nowPlaying.status === 'paused' ? ' (paused)' : ''}`);

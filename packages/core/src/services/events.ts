@@ -7,7 +7,7 @@ import type { Clock, EngineEmitter, Logger } from '../types.js';
 import { KeyedQueue } from '../keyed-queue.js';
 
 export const HOST_EVENT_NAMES: readonly HostEventName[] = [
-  'user-idle', 'user-back', 'window-changed', 'app-launched', 'file-added', 'battery-low', 'screen-locked',
+  'user-idle', 'user-back', 'app-idle', 'app-back', 'window-changed', 'app-launched', 'file-added', 'battery-low', 'screen-locked',
   'screen-unlocked', 'song-changed', 'time', 'widget-message', 'avatar-clicked', 'chat-shown', 'chat-hidden',
   'routine-changed', 'browser-navigated', 'media-clicked', 'media-closed', 'guard-attempt',
 ];
@@ -28,6 +28,7 @@ export const EVENT_DEBOUNCE_MS = 2000;
  * threshold (`settings.senses.idleThresholdMs`) is what the user configured.
  * The previous default of five minutes was above that threshold, so with the
  * host reporting the crossing only, such a subscription never fired at all.
+ * The app timer (`app-idle`, `filter.appIdleMs`, `settings.senses.appIdleThresholdMs`) works the same way.
  */
 export const DEFAULT_IDLE_MS = 0;
 export const DEFAULT_BATTERY_PERCENT = 20;
@@ -55,11 +56,13 @@ export interface EventServiceOptions {
 
 interface EdgeState {
   idle?: boolean;
+  /** The app timer's own edge, so `app-idle` and `user-idle` do not clear each other. */
+  appIdle?: boolean;
   lowBattery?: boolean;
 }
 
 /** Events whose repeats an `onEvent` behaviour should not be run for again. */
-const REPEATING_EVENTS: ReadonlySet<string> = new Set(['user-idle']);
+const REPEATING_EVENTS: ReadonlySet<string> = new Set(['user-idle', 'app-idle']);
 
 export function isCustomEvent(name: string): boolean {
   return name.startsWith(CUSTOM_PREFIX) && CUSTOM_NAME_RE.test(name.slice(CUSTOM_PREFIX.length));
@@ -122,6 +125,7 @@ export function matchesFilter(event: string, data: Json, filter: Record<string, 
         if (!includesCi(field(data, key), wanted)) return false;
         break;
       case 'user-idle:idleMs':
+      case 'app-idle:appIdleMs':
       case 'battery-low:percent':
         break; // thresholds are evaluated with edge state
       default:
@@ -287,10 +291,13 @@ export class EventService {
   }
 
   private async dispatch(event: HostEvent, scope: { sessionId?: string; characterRef?: string; runOnEvent: boolean }): Promise<void> {
-    if (event.name === 'user-back') this.resetIdleEdges(); // the user is back: every idle edge may fire again
+    // The user is back — at the machine, or in the app: that timer's idle edges may fire again.
+    if (event.name === 'user-back') this.resetIdleEdges('idle');
+    if (event.name === 'app-back') this.resetIdleEdges('appIdle');
     let subs = await this.o.storage.subscriptions.list(scope.sessionId);
     if (scope.characterRef !== undefined) subs = subs.filter((s) => s.characterRef === scope.characterRef);
     if (event.name === 'user-back') this.behaviourRanFor.delete('user-idle');
+    if (event.name === 'app-back') this.behaviourRanFor.delete('app-idle');
     const bySession = new Map<string, EventSubscription[]>();
     for (const s of subs) {
       if (s.event !== event.name) continue;
@@ -343,15 +350,14 @@ export class EventService {
   matches(sub: EventSubscription, event: HostEvent): boolean {
     const edge = this.edges.get(sub.id) ?? {};
     switch (event.name) {
-      case 'user-idle': {
-        const threshold = Number(sub.filter?.idleMs ?? DEFAULT_IDLE_MS);
-        const idleMs = Number(field(event.data, 'idleMs'));
-        if (!Number.isFinite(idleMs) || idleMs < threshold) return false;
-        if (edge.idle) return false;
-        this.edges.set(sub.id, { ...edge, idle: true });
-        return matchesFilter(event.name, event.data, sub.filter);
-      }
+      // The two idle timers are evaluated the same way over their own field and their own edge:
+      // the machine's (`user-idle`) and the app's (`app-idle`, the user away from rpchat itself).
+      case 'user-idle':
+        return this.matchesIdle(sub, event, edge, { field: 'idleMs', state: 'idle' });
+      case 'app-idle':
+        return this.matchesIdle(sub, event, edge, { field: 'appIdleMs', state: 'appIdle' });
       case 'user-back':
+      case 'app-back':
         return matchesFilter(event.name, event.data, sub.filter);
       case 'battery-low': {
         const threshold = Number(sub.filter?.percent ?? DEFAULT_BATTERY_PERCENT);
@@ -370,9 +376,19 @@ export class EventService {
     }
   }
 
-  /** `user-back` ends the idle period for every subscription (the host event is global). */
-  private resetIdleEdges(): void {
-    for (const [id, edge] of this.edges) if (edge.idle) this.edges.set(id, { ...edge, idle: false });
+  /** One idle timer's threshold + edge for a subscription: fires once per absence, at or above `filter.<field>`. */
+  private matchesIdle(sub: EventSubscription, event: HostEvent, edge: EdgeState, timer: { field: 'idleMs' | 'appIdleMs'; state: 'idle' | 'appIdle' }): boolean {
+    const threshold = Number(sub.filter?.[timer.field] ?? DEFAULT_IDLE_MS);
+    const idleMs = Number(field(event.data, timer.field));
+    if (!Number.isFinite(idleMs) || idleMs < threshold) return false;
+    if (edge[timer.state]) return false;
+    this.edges.set(sub.id, { ...edge, [timer.state]: true });
+    return matchesFilter(event.name, event.data, sub.filter);
+  }
+
+  /** A `*-back` event ends that timer's absence for every subscription (the host event is global). */
+  private resetIdleEdges(state: 'idle' | 'appIdle'): void {
+    for (const [id, edge] of this.edges) if (edge[state]) this.edges.set(id, { ...edge, [state]: false });
   }
 
   private debounced(sub: EventSubscription, event: HostEvent): boolean {

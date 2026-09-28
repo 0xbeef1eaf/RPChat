@@ -1,4 +1,6 @@
 import { useEffect } from 'react';
+import { api } from '../api';
+import { trackAppActivity } from '../lib/activity';
 import { bootstrap, navigate } from '../store/actions';
 import { useAppState } from '../store/store';
 import { ActionLogView } from '../views/ActionLogView';
@@ -25,6 +27,15 @@ export function App() {
   useEffect(() => {
     void bootstrap();
   }, []);
+
+  // The app's own idle timer: main only learns that the user is here if we tell it (see lib/activity).
+  useEffect(
+    () =>
+      trackAppActivity(window, {
+        send: (kind) => void api().app.activity(kind).catch(() => undefined),
+      }),
+    [],
+  );
 
   // Ctrl/Cmd + 1..7 switches views.
   useEffect(() => {

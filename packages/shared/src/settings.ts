@@ -242,8 +242,14 @@ export interface AppSettings {
     includeInPrompt: boolean;
     /** How often the host samples presence, ms. Default 5000. */
     pollMs: number;
-    /** idleMs at or above which the user counts as away. Default 120_000. */
+    /** idleMs at or above which the user counts as away from the machine. Default 120_000. */
     idleThresholdMs: number;
+    /**
+     * appIdleMs at or above which the user counts as away from rpchat itself — they may still be
+     * busy in another window (`app-idle` / `app-back` events). Longer than `idleThresholdMs` by
+     * default: glancing at another app for a minute is not leaving the conversation. Default 300_000.
+     */
+    appIdleThresholdMs: number;
     /** ICS files or http(s) URLs read by `sdk.calendar`. */
     calendarSources: string[];
     /** Directories watched for `file-added` events (e.g. ~/Downloads). */
@@ -373,7 +379,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
     webcamVideo: { command: '' },
   },
   voice: { defaultModel: '', numThreads: 4, disabled: false, autoDownload: true },
-  senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, calendarSources: [], watchDirs: [], liveSnapshotAutoRefresh: false },
+  senses: { includeInPrompt: true, pollMs: 5000, idleThresholdMs: 120_000, appIdleThresholdMs: 300_000, calendarSources: [], watchDirs: [], liveSnapshotAutoRefresh: false },
   web: { allowlist: [], maxBytes: 512 * 1024 },
   desktop: { launchAllowlist: [] },
   browser: { bridgePort: 47821, trustedExtensionIds: [], allowBlocking: true, allowEval: true, allowHistory: true, autoLaunch: true, homePage: '', extraPolicyDirs: [] },

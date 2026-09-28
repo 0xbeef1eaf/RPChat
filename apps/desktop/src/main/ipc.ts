@@ -106,6 +106,12 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       setVisibleSession: async (_e, sessionId) => {
         opts.setVisibleSession?.(typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null);
       },
+      // The app's idle timer, fed by the renderer: keys, clicks, wheel and focus in our own
+      // windows. The machine-wide timer cannot stand in for it — reading the chat without touching
+      // anything looks idle to the compositor, and typing in another app does not look idle at all.
+      activity: async (_e, kind) => {
+        services.senses.activity.mark(kind === 'focus' ? 'window focused' : 'input in the app');
+      },
       restrictions: async () => (await services.policy.current()).restrictions,
       readAsset: async (_e, url) => {
         let target: { file: string; relativePath: string } | undefined;
@@ -198,7 +204,10 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       resetState: (_e, sessionId) => engine.chat.resetState(requireString(sessionId, 'sessionId')),
     },
     chat: {
-      send: (_e, sessionId, text) => engine.chat.send(requireString(sessionId, 'sessionId'), text),
+      send: (_e, sessionId, text) => {
+        services.senses.activity.mark('message sent');
+        return engine.chat.send(requireString(sessionId, 'sessionId'), text);
+      },
       retry: (_e, sessionId) => engine.chat.retry(requireString(sessionId, 'sessionId')),
       abort: (_e, sessionId) => engine.chat.abort(requireString(sessionId, 'sessionId')),
     },
@@ -206,6 +215,9 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       respond: async (_e, requestId, decision: PermissionDecision) => {
         const valid: PermissionDecision[] = ['allow-once', 'allow-session', 'deny'];
         const answer = valid.includes(decision) ? decision : 'deny';
+        // Answering a permission question happens in a window of its own, which the renderer's
+        // activity ping does not cover — and it is unmistakably the user being here.
+        services.senses.activity.mark('permission answered');
         if (!services.permissionPrompts.respond(requireString(requestId, 'requestId'), answer)) {
           logger.debug(`[ipc] permissions.respond for unknown request ${requestId}`);
         }
@@ -415,6 +427,7 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
     ui: {
       respondPrompt: async (_e, promptId, answer: UiPromptAnswer) => {
         const clean: UiPromptAnswer = typeof answer === 'boolean' || typeof answer === 'string' ? answer : null;
+        services.senses.activity.mark('question answered');
         if (!services.uiPrompts.respond(requireString(promptId, 'promptId'), clean)) logger.debug(`[ipc] ui.respondPrompt for unknown prompt ${promptId}`);
       },
     },

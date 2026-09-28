@@ -26,7 +26,7 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
     ],
   },
   input: { permission: 'pack', methods: ['lock', 'unlock', 'status', 'type', 'key', 'click', 'moveMouse'] },
-  presence: { permission: 'pack', methods: ['status', 'nowPlaying', 'activeWindow', 'idleMs'] },
+  presence: { permission: 'pack', methods: ['status', 'nowPlaying', 'activeWindow', 'idleMs', 'appIdleMs'] },
   screen: { permission: 'pack', methods: ['look', 'draw', 'clear'] },
   calendar: { permission: 'pack', methods: ['upcoming', 'today'] },
   web: { permission: 'pack', methods: ['fetch', 'rss', 'weather'] },
@@ -137,6 +137,9 @@ describe('standard modules', () => {
   it('presence docs steer the model to the prompt senses line', () => {
     expect(modules.presenceModule.docs).toMatch(/<senses>/);
     expect(modules.presenceModule.docs).toMatch(/status\(\).*fresh numbers/);
+    // The two idle timers are easy to confuse, so the docs have to say which is which.
+    expect(modules.presenceModule.docs).toMatch(/Two idle timers/);
+    expect(modules.presenceModule.typings).toMatch(/appIdleMs\(\): Promise<number>/);
   });
 
   it('documents every method with parameters and return values where they exist', () => {

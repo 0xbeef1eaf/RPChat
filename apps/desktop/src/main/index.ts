@@ -121,7 +121,13 @@ async function main(): Promise<void> {
    * putting it away.
    */
   const chatVisibility = new ChatVisibility({
-    emit: (event) => services?.engine.hostEvents.emit(event),
+    emit: (event) => {
+      // Bringing the window up is the user reaching for the app: the app idle timer starts over,
+      // even though nothing was typed yet. It goes through `engine.hostEvents`, not the senses
+      // provider, so the provider's own interaction marking never sees it.
+      if (event.name === 'chat-shown') services?.senses.activity.mark('chat shown');
+      services?.engine.hostEvents.emit(event);
+    },
     active: () => !quitting && !stopping,
   });
 

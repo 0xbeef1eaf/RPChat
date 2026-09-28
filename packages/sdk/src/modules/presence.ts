@@ -2,9 +2,9 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const presenceModule: CapabilityModuleSpec = {
   id: 'presence',
-  version: '1.0.0',
+  version: '1.1.0',
   title: 'Presence',
-  summary: "Sense what the user is doing: idle time, active window, now playing, battery, time of day.",
+  summary: "Sense what the user is doing: idle time (the machine's and the app's), active window, now playing, battery, time of day.",
   permission: 'pack',
   apiTypeName: 'PresenceApi',
   typings: `/**
@@ -15,8 +15,9 @@ export const presenceModule: CapabilityModuleSpec = {
  */
 interface PresenceApi {
   /**
-   * A full snapshot: idle time, whether the user is at the keyboard, active window, lock state,
-   * battery, now playing, time since their last message, local time and part of day.
+   * A full snapshot: both idle times (the machine's and the app's), whether the user is at the
+   * keyboard and whether they are in the app, active window, lock state, battery, now playing,
+   * time since their last message, local time and part of day.
    * @example const p = await sdk.presence.status(); if (!p.atKeyboard) return { skip: "away" };
    */
   status(): Promise<PresenceSnapshot>;
@@ -30,13 +31,21 @@ interface PresenceApi {
    * private information: refer to them tactfully and never quote them back verbatim.
    */
   activeWindow(): Promise<{ title: string; app: string; class?: string } | null>;
-  /** Milliseconds since the user's last keyboard/mouse input. */
+  /** Milliseconds since the user's last keyboard/mouse input anywhere on the machine. */
   idleMs(): Promise<number>;
+  /**
+   * Milliseconds since the user last did something in rpchat itself — typed, clicked, scrolled,
+   * brought the window up, clicked your avatar. Independent of \`idleMs\`: this keeps counting while
+   * they work in another window, which is exactly the case where they are there but not with you.
+   * @example if (await sdk.presence.appIdleMs() > 20 * 60_000) return { note: "they have not looked at the chat in a while" };
+   */
+  appIdleMs(): Promise<number>;
 }`,
   docs: `Sense the user's current situation. Requires the \`presence\` capability.
 
 - **Prefer the \`<senses>\` line already in your prompt** — it is refreshed every turn. Call \`status()\` only when you need fresh numbers inside an action (branching on idle time, reacting to the current song).
-- To be *told* when something changes (user goes idle, song changes, window changes) use \`sdk.events.on\` instead of polling.
+- **Two idle timers, on purpose.** \`idleMs\`/\`atKeyboard\` is the machine: no keyboard or mouse anywhere. \`appIdleMs\`/\`inApp\` is rpchat itself: the user can be busy in their editor for an hour — at the keyboard the whole time — with the conversation untouched. "They left" is \`atKeyboard === false\`; "they are here but not with me" is \`atKeyboard && !inApp\`.
+- To be *told* when something changes (user goes idle, leaves the app, song changes, window changes) use \`sdk.events.on\` instead of polling.
 - Window titles may reveal private things: be discreet, do not read them back word for word.
 - \`activeWindow\`/\`nowPlaying\` are null (not an error) when the host cannot sample them: outside Hyprland the user must set the Active window / Now playing commands in Settings → Commands (playerctl is the default when installed).
 
@@ -49,6 +58,7 @@ return { window: p.activeWindow?.app ?? null, playing: p.nowPlaying?.title ?? nu
     status: { description: 'Read a full presence snapshot.' },
     nowPlaying: { description: 'Read what the media player is playing.' },
     activeWindow: { description: 'Read the focused window title and app.' },
-    idleMs: { description: 'Read milliseconds since the last user input.' },
+    idleMs: { description: 'Read milliseconds since the last user input anywhere on the machine.' },
+    appIdleMs: { description: 'Read milliseconds since the user last interacted with rpchat itself.' },
   },
 };

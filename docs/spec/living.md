@@ -22,7 +22,7 @@ all mirroring `@rp/shared` (add them to the structural-identity test where they 
 
 | module | perm | methods |
 |---|---|---|
-| `presence` | pack | `status(): PresenceSnapshot`; `nowPlaying(): NowPlaying \| null`; `activeWindow(): {title,app,class?} \| null`; `idleMs(): number` |
+| `presence` | pack | `status(): PresenceSnapshot`; `nowPlaying(): NowPlaying \| null`; `activeWindow(): {title,app,class?} \| null`; `idleMs(): number` (the machine); `appIdleMs(): number` (rpchat itself — the second idle timer, see §4) |
 | `screen` | pack | `look(opts?: { monitor?: MonitorSelector; question?: string }): { description: string; width; height }` (D) — screenshot described by a vision model; `draw(shapes: DrawShape[], opts?: { monitor?; durationMs? }): { ids: string[] }`; `clear(ids?: string[]): void` |
 | `calendar` | pack | `upcoming(hours?: number): CalendarEvent[]` (default 24 h, max 14 d); `today(): CalendarEvent[]` |
 | `web` | pack | `fetch(url, opts?: { method?: 'GET'\|'POST'; headers?; body?: string; maxBytes? }): { status; headers; text }` (D; restricted to the allowlist when one is set); `rss(url, limit?): Array<{ title; link; published?; summary? }>` (allowlist likewise); `weather(place: string): { place; tempC; feelsLikeC; condition; windKph; humidity; forecast: Array<{ day; minC; maxC; condition }> }` (open-meteo, always allowed) |
@@ -62,7 +62,7 @@ EngineOptions {
 }
 interface SensesProvider {
   snapshot(sessionId?: string): Promise<PresenceSnapshot>;     // host samples; core adds sinceLastMessageMs/localTime/dayPart if missing
-  /** Host pushes raw events (window-changed, user-idle/back, battery-low, screen-locked/unlocked, song-changed, file-added, widget-message, avatar-clicked, chat-shown/chat-hidden, media-clicked, media-started, media-closed). */
+  /** Host pushes raw events (window-changed, user-idle/back, app-idle/back, battery-low, screen-locked/unlocked, song-changed, file-added, widget-message, avatar-clicked, chat-shown/chat-hidden, media-clicked, media-started, media-closed). */
   subscribe(listener: (event: HostEvent) => void): () => void;
   /** Called with the union of event names any live subscription needs, so the host only samples what is used. */
   setInterest?(events: HostEventName[]): void;
@@ -101,7 +101,11 @@ manifest, characters, README and asset summary (no permission information).
   the host says they are idle", i.e. at `settings.senses.idleThresholdMs` — and the subscription is
   not already in the idle state (per-subscription edge detection; `user-back` resets). For this to work
   for longer waits, the host repeats `user-idle` with the grown `idleMs` every `IDLE_REPEAT_MS` (30 s)
-  while the user stays away; an `onEvent` behaviour is only run for the first of them. `battery-low`:
+  while the user stays away; an `onEvent` behaviour is only run for the first of them. `app-idle` is
+  the same rule over the app timer: `data.appIdleMs >= filter.appIdleMs ?? 0`, threshold
+  `settings.senses.appIdleThresholdMs`, its **own** per-subscription edge which only `app-back` resets
+  (`user-back` does not — being at the keyboard again is not being in the app again), the same 30 s
+  repeats and the same one-run-per-absence rule for `onEvent`. `battery-low`:
   edge below `filter.percent ?? 20`. `window-changed`/`app-launched`: optional `filter.app`/`filter.title`
   (case-insensitive substring). `file-added`: optional `filter.dir`, `filter.ext`. `song-changed`: any.
   `widget-message`: `filter.widgetId`. `media-clicked` (data `{ mediaId, asset, packId, kind }`, the user clicked an
@@ -149,8 +153,9 @@ manifest, characters, README and asset summary (no permission information).
 
 When the pack has effective `presence` and `settings.senses.includeInPrompt`, the `<session>` section
 gets one line built from `senses.snapshot(sessionId)`: `Right now: <localTime> (<dayPart>); user
-<at keyboard|away N min>; active window: "<title>" (<app>); playing: <title> — <artist>; battery N%
-(on battery)`. Missing parts omitted. Also the `<mood>` block (§3.5) and `<routine>` state.
+<at keyboard|away N min>; <in the app|not in the app for N min>; active window: "<title>" (<app>);
+playing: <title> — <artist>; battery N% (on battery)`. Missing parts omitted; the app-timer part is
+left out while the user is away from the machine altogether, where it would only repeat the news. Also the `<mood>` block (§3.5) and `<routine>` state.
 
 ### 3.5 Mood (`MoodService`)
 
@@ -196,9 +201,22 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   (JSON or `title\tapp`), now-playing via the `nowPlaying` template (default `playerctl metadata
   --format '{"title":"{{title}}","artist":"{{artist}}","album":"{{album}}","app":"{{playerName}}","status":"{{status}}"}'`
   when `playerctl` is on PATH). Emits edge events (`user-idle`/`user-back` with the threshold
-  `settings.senses.idleThresholdMs`, `battery-low`, `screen-*`, `song-changed`, `window-changed`,
-  `app-launched`; `user-idle` again every 30 s while the absence lasts, so a subscription asking for a
+  `settings.senses.idleThresholdMs`, `app-idle`/`app-back` with `settings.senses.appIdleThresholdMs`,
+  `battery-low`, `screen-*`, `song-changed`, `window-changed`,
+  `app-launched`; `user-idle`/`app-idle` again every 30 s while the absence lasts, so a subscription asking for a
   longer idle than the threshold is reached instead of waiting for an event that never comes).
+  **Two idle timers** run side by side, each with its own threshold and its own edge state, and
+  neither resets the other (`idleEdges` runs both): `idleMs`/`atKeyboard` is the machine, and
+  `appIdleMs`/`inApp` is rpchat itself, from `app-activity.ts`. The app one is not derivable from the
+  system one in either direction — reading a long reply without touching anything is idle to the
+  compositor but present in the app, and typing in another editor for an hour is the reverse, the case
+  `user-idle` can never report. `AppActivity` is a last-interaction clock fed from three places: the
+  renderer's throttled `app.activity` ping (keys, pointer presses, wheel, window focus — `lib/activity.ts`,
+  deliberately not mouse movement), the main-side handlers that are unmistakably the user
+  (`chat.send`, `permissions.respond`, `ui.respondPrompt`, `chat-shown`), and the interaction host
+  events as they pass through `PresenceProvider.push` (`APP_INTERACTION_EVENTS`: avatar clicks, widget
+  messages, media clicks — never `media-started`/`media-closed`, which happen without the user).
+  Nothing a character does on its own marks it.
   `watch.ts`: `fs.watch` on `settings.senses.watchDirs` → `file-added` (debounced,
   ignore dotfiles/partial downloads `.part/.crdownload`). `wayland-idle.ts`: `powerMonitor.getSystemIdleTime()`
   reads X11's screensaver extension, so under a Wayland session it never sees input and answers 0 for

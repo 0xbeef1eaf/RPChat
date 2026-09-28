@@ -4,6 +4,7 @@ import type { AppSettings, HostEvent } from '@rp/shared';
 import type { Logger } from '@rp/core';
 import type { CommandRunner } from '../capabilities/commands-runner.js';
 import type { HyprTransport } from '../display/hyprland.js';
+import { AppActivity } from './app-activity.js';
 import { PresenceProvider } from './presence.js';
 import { CompositeSampler, activeWindowSource, nowPlayingSource, parseHyprActiveWindowEvent, readLinuxBatteryPercent } from './samplers.js';
 import { WaylandIdleMonitor, waylandSocketPath } from './wayland-idle.js';
@@ -21,6 +22,11 @@ export interface SensesDeps {
 export interface Senses {
   provider: PresenceProvider;
   watcher: DirWatcher;
+  /**
+   * The app's idle timer. Whatever else notices the user working in rpchat — an IPC call the
+   * renderer makes on input, a chat message being sent, a prompt being answered — marks it here.
+   */
+  activity: AppActivity;
   /** Re-read `settings.senses`: watched directories and the poll interval. */
   refresh(): Promise<void>;
   dispose(): Promise<void>;
@@ -28,6 +34,7 @@ export interface Senses {
 
 export function createSenses(deps: SensesDeps): Senses {
   const platform = deps.platform ?? process.platform;
+  const activity = new AppActivity({ onMark: (reason) => deps.logger.debug(`[senses] app activity: ${reason}`) });
   let locked: boolean | null = null;
   /**
    * `powerMonitor.getSystemIdleTime()` reads X11's screensaver extension: in a
@@ -42,6 +49,7 @@ export function createSenses(deps: SensesDeps): Senses {
   const sampler = new CompositeSampler(
     {
       idleMs: () => waylandIdle?.idleMs() ?? powerMonitor.getSystemIdleTime() * 1000,
+      appIdleMs: () => activity.idleMs(),
       screenLocked: () => locked,
       onBattery: () => (platform === 'linux' || platform === 'win32' || platform === 'darwin' ? powerMonitor.isOnBatteryPower() : null),
       batteryPercent: () => (platform === 'linux' ? readLinuxBatteryPercent() : null),
@@ -54,9 +62,12 @@ export function createSenses(deps: SensesDeps): Senses {
     sampler,
     settings: async () => {
       const s = await deps.settings();
-      return { pollMs: s.senses.pollMs, idleThresholdMs: s.senses.idleThresholdMs };
+      return { pollMs: s.senses.pollMs, idleThresholdMs: s.senses.idleThresholdMs, appIdleThresholdMs: s.senses.appIdleThresholdMs };
     },
     logger: deps.logger,
+    // Overlay clicks and widget messages reach the characters through `push`; they are also the
+    // user reaching for the app, which is the one thing the renderer's own ping cannot see.
+    onPush: (event) => void activity.markFromEvent(event.name),
   });
   const emit = (event: HostEvent): void => provider.push(event);
   const onLock = (): void => {
@@ -93,6 +104,7 @@ export function createSenses(deps: SensesDeps): Senses {
   return {
     provider,
     watcher,
+    activity,
     refresh,
     async dispose() {
       offHypr?.();

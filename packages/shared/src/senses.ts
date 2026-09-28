@@ -3,10 +3,18 @@ import type { CharacterRef, Json, SessionId } from './ids.js';
 /** What the host can tell about the user right now. Fields are null/undefined when unknown on this platform. */
 export interface PresenceSnapshot {
   at: string;
-  /** Milliseconds since the last keyboard/mouse input. */
+  /** Milliseconds since the last keyboard/mouse input anywhere on the machine. */
   idleMs: number;
   /** idleMs below the configured threshold (default 2 min). */
   atKeyboard: boolean;
+  /**
+   * Milliseconds since the user last did something in rpchat itself (typed, clicked, scrolled,
+   * brought the window up, clicked an avatar or a widget). Counts up while they use other apps,
+   * unlike `idleMs`.
+   */
+  appIdleMs: number;
+  /** appIdleMs below the configured app threshold (default 5 min): the user is with *you*, not just awake. */
+  inApp: boolean;
   activeWindow: { title: string; app: string; class?: string } | null;
   screenLocked: boolean | null;
   onBattery: boolean | null;
@@ -43,6 +51,8 @@ export interface CalendarEvent {
 export type HostEventName =
   | 'user-idle'          // data: { idleMs }        fires once when idle crosses the subscription's idleMs (default 5 min)
   | 'user-back'          // data: { idleMs }        first input after user-idle
+  | 'app-idle'           // data: { appIdleMs }     the user stopped using rpchat (they may well still be at the machine)
+  | 'app-back'           // data: { appIdleMs }     first interaction with rpchat after app-idle
   | 'window-changed'     // data: { title, app, class? }
   | 'app-launched'       // data: { app }           app seen for the first time since the last window-changed sequence
   | 'file-added'         // data: { path, dir, name } in a watched directory

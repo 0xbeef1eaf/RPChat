@@ -21,8 +21,9 @@ export function SensesSection({ settings, onPatch, NumberField }: SensesSectionP
   return (
     <div className="stack" style={{ gap: 16 }}>
       <p className="muted small">
-        What characters with the <code>presence</code> capability can sense: idle time, the active window, what is playing, battery and
-        screen lock. Nothing leaves your machine except through the prompt to your configured LLM provider.
+        What characters with the <code>presence</code> capability can sense: two idle timers (the whole machine, and this app on its
+        own), the active window, what is playing, battery and screen lock. Nothing leaves your machine except through the prompt to
+        your configured LLM provider.
       </p>
       <LiveSnapshot auto={senses.liveSnapshotAutoRefresh} onAutoChange={(liveSnapshotAutoRefresh) => void patch({ liveSnapshotAutoRefresh })} />
       <div className="field-grid">
@@ -44,8 +45,17 @@ export function SensesSection({ settings, onPatch, NumberField }: SensesSectionP
           path="senses.idleThresholdMs"
           value={Math.round(senses.idleThresholdMs / 1000)}
           min={10}
-          hint="No input for this long counts as away (user-idle / user-back events)."
+          hint="No input anywhere on the machine for this long counts as away (user-idle / user-back events)."
           onCommit={(v) => patch({ idleThresholdMs: Math.round(v) * 1000 })}
+        />
+        <NumberField
+          id="senses-app-idle"
+          label="App idle threshold (seconds)"
+          path="senses.appIdleThresholdMs"
+          value={Math.round(senses.appIdleThresholdMs / 1000)}
+          min={10}
+          hint="Nothing done in rpchat itself for this long counts as away from the app, even while you work elsewhere (app-idle / app-back events)."
+          onCommit={(v) => patch({ appIdleThresholdMs: Math.round(v) * 1000 })}
         />
       </div>
       <div className="field">
@@ -111,6 +121,8 @@ function LiveSnapshot({ auto, onAutoChange }: { auto: boolean; onAutoChange: (au
           </dd>
           <dt>User</dt>
           <dd>{snap.atKeyboard ? 'at keyboard' : `away for ${formatDuration(snap.idleMs)}`} · idle {formatDuration(snap.idleMs)}</dd>
+          <dt>In the app</dt>
+          <dd>{snap.inApp ? 'yes' : 'no'} · last used {formatDuration(snap.appIdleMs)} ago</dd>
           <dt>Active window</dt>
           <dd>{snap.activeWindow ? `"${snap.activeWindow.title}" (${snap.activeWindow.app})` : <span className="muted">unknown on this platform</span>}</dd>
           <dt>Playing</dt>

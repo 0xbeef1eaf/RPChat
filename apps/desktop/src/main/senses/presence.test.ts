@@ -8,9 +8,9 @@ import type { PresenceSample } from './presence.js';
 import { parseActiveWindowOutput, parseHyprActiveWindow, parseHyprActiveWindowEvent, parseNowPlayingOutput, readLinuxBatteryPercent } from './samplers.js';
 import { shouldIgnoreFile } from './watch.js';
 
-const base: PresenceSample = { idleMs: 0, screenLocked: false, onBattery: false, batteryPercent: 80, activeWindow: { title: 'zsh', app: 'kitty' }, nowPlaying: null };
+const base: PresenceSample = { idleMs: 0, appIdleMs: 0, screenLocked: false, onBattery: false, batteryPercent: 80, activeWindow: { title: 'zsh', app: 'kitty' }, nowPlaying: null };
 const at = '2026-09-05T12:00:00.000Z';
-const opts = { idleThresholdMs: 120_000 };
+const opts = { idleThresholdMs: 120_000, appIdleThresholdMs: 300_000 };
 
 describe('detectEdges', () => {
   it('emits idle/back once per crossing', () => {
@@ -45,6 +45,34 @@ describe('detectEdges', () => {
     expect(s.events.map((e) => e.name)).toEqual(['user-back']);
     s = detectEdges(s.state, { ...base, idleMs: 130_000 }, opts, at);
     expect(s.events.map((e) => e.name)).toEqual(['user-idle']);
+  });
+
+  it('runs the app timer beside the system one, neither resetting the other', () => {
+    // Reading a long reply: nothing pressed for three minutes, so the machine calls the user away —
+    // but they are right here in the app, and the app timer must not follow.
+    let s = detectEdges(initialEdgeState(), base, opts, at);
+    s = detectEdges(s.state, { ...base, idleMs: 180_000, appIdleMs: 20_000 }, opts, at);
+    expect(s.events.map((e) => e.name)).toEqual(['user-idle']);
+
+    // The other way round: working in another window for six minutes is input the whole time, so
+    // only the app timer fires — this is the case `user-idle` can never report.
+    s = detectEdges(s.state, { ...base, idleMs: 0, appIdleMs: 360_000 }, opts, at);
+    expect(s.events).toEqual([
+      { name: 'user-back', data: { idleMs: 0 }, at },
+      { name: 'app-idle', data: { appIdleMs: 360_000 }, at },
+    ]);
+
+    // Paced repeats, like the system timer's, so a subscription waiting for a longer absence is reached.
+    s = detectEdges(s.state, { ...base, appIdleMs: 370_000 }, opts, at);
+    expect(s.events).toEqual([]);
+    s = detectEdges(s.state, { ...base, appIdleMs: 360_000 + IDLE_REPEAT_MS }, opts, at);
+    expect(s.events.map((e) => e.data)).toEqual([{ appIdleMs: 390_000 }]);
+
+    // Back in the app: one app-back, and the next absence starts over.
+    s = detectEdges(s.state, { ...base, appIdleMs: 0 }, opts, at);
+    expect(s.events).toEqual([{ name: 'app-back', data: { appIdleMs: 0 }, at }]);
+    s = detectEdges(s.state, { ...base, appIdleMs: 300_000 }, opts, at);
+    expect(s.events.map((e) => e.name)).toEqual(['app-idle']);
   });
 
   it('emits battery-low once below the threshold, re-arming when charged', () => {
@@ -84,12 +112,12 @@ describe('PresenceProvider', () => {
     let samples = 0;
     const provider = new PresenceProvider({
       sampler: { sample: async () => (samples += 1, current) },
-      settings: async () => ({ pollMs: 5000, idleThresholdMs: 60_000 }),
+      settings: async () => ({ pollMs: 5000, idleThresholdMs: 60_000, appIdleThresholdMs: 300_000 }),
       logger: { warn: () => undefined, debug: () => undefined },
       snapshotCacheMs: 0,
     });
     const snap = await provider.snapshot();
-    expect(snap).toMatchObject({ idleMs: 0, atKeyboard: true, activeWindow: { title: 'zsh', app: 'kitty' }, batteryPercent: 80, sinceLastMessageMs: null });
+    expect(snap).toMatchObject({ idleMs: 0, atKeyboard: true, appIdleMs: 0, inApp: true, activeWindow: { title: 'zsh', app: 'kitty' }, batteryPercent: 80, sinceLastMessageMs: null });
     expect(snap.localTime).toMatch(/^\w{3} \d\d:\d\d$/);
     const got: string[] = [];
     provider.subscribe((e) => got.push(e.name));
@@ -117,7 +145,7 @@ describe('PresenceProvider', () => {
     let samples = 0;
     const provider = new PresenceProvider({
       sampler: { sample: async () => (samples += 1, { ...base }) },
-      settings: async () => ({ pollMs, idleThresholdMs: 60_000 }),
+      settings: async () => ({ pollMs, idleThresholdMs: 60_000, appIdleThresholdMs: 300_000 }),
       logger: { warn: () => undefined, debug: () => undefined },
       snapshotCacheMs: 0,
     });
@@ -150,7 +178,13 @@ describe('PresenceProvider', () => {
     expect(dayPartOf(new Date(2026, 0, 1, 7))).toBe('early-morning');
     expect(dayPartOf(new Date(2026, 0, 1, 14))).toBe('afternoon');
     expect(dayPartOf(new Date(2026, 0, 1, 22))).toBe('late-evening');
-    expect(toSnapshot({ ...base, idleMs: 200_000 }, 120_000, new Date(2026, 0, 1, 9, 5)).atKeyboard).toBe(false);
+    const thresholds = { idleThresholdMs: 120_000, appIdleThresholdMs: 300_000 };
+    expect(toSnapshot({ ...base, idleMs: 200_000 }, thresholds, new Date(2026, 0, 1, 9, 5)).atKeyboard).toBe(false);
+    // The two timers are read against their own thresholds: busy elsewhere for 6 minutes is at the
+    // keyboard but not in the app.
+    const busyElsewhere = toSnapshot({ ...base, idleMs: 0, appIdleMs: 360_000 }, thresholds, new Date(2026, 0, 1, 9, 5));
+    expect(busyElsewhere).toMatchObject({ atKeyboard: true, inApp: false, appIdleMs: 360_000 });
+    expect(toSnapshot({ ...base, appIdleMs: 60_000 }, thresholds, new Date(2026, 0, 1, 9, 5)).inApp).toBe(true);
   });
 });
 

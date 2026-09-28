@@ -70,7 +70,7 @@ export class FakeSenses implements SensesProvider {
   snapshots = 0;
   async snapshot(): Promise<PresenceSnapshot> {
     this.snapshots += 1;
-    return { at: '', idleMs: 0, atKeyboard: true, activeWindow: null, screenLocked: null, onBattery: null, batteryPercent: null, nowPlaying: null, sinceLastMessageMs: null, localTime: '', dayPart: 'morning', ...this.snapshotValue } as PresenceSnapshot;
+    return { at: '', idleMs: 0, atKeyboard: true, appIdleMs: 0, inApp: true, activeWindow: null, screenLocked: null, onBattery: null, batteryPercent: null, nowPlaying: null, sinceLastMessageMs: null, localTime: '', dayPart: 'morning', ...this.snapshotValue } as PresenceSnapshot;
   }
   subscribe(listener: (event: HostEvent) => void): () => void {
     this.listeners.add(listener);
