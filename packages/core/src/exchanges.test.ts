@@ -82,8 +82,9 @@ describe('model-exchange capture (settings.debug.showModelTraffic)', () => {
     // The snapshot is independent of the provider's own request objects.
     expect(first.request.messages).not.toBe(t.provider.requests[0]!.messages);
 
-    // The rest of the event stream is unchanged apart from the two new events.
-    expect(t.eventTypes().filter((type) => type !== 'model-exchange')).toEqual([
+    // The rest of the event stream is unchanged apart from the two new events (the queue events
+    // that carry every message in and out of the turn are not this test's subject).
+    expect(t.eventTypes().filter((type) => type !== 'model-exchange' && type !== 'queue-changed')).toEqual([
       'message-added',
       'turn-started',
       'message-added',

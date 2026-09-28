@@ -10,7 +10,7 @@ import { ModelTrafficDrawer } from '../components/chat/ModelTrafficDrawer';
 import { SessionPanel } from '../components/chat/SessionPanel';
 import { Avatar } from '../components/common/Avatar';
 import { ZoomControl } from '../components/chat/ZoomControl';
-import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, resetSessionState, retryTurn, saveSession, sendMessage, setChatZoom } from '../store/actions';
+import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, resetSessionState, retryTurn, saveSession, sendMessage, setChatZoom, unqueueMessage } from '../store/actions';
 import { runtimeFor } from '../store/state';
 import { useAppState } from '../store/store';
 
@@ -52,6 +52,12 @@ export function ChatView() {
   const providersConfigured = (settings?.providers.length ?? 0) > 0;
   const onSend = useCallback((text: string) => session && sendMessage(session.id, text), [session]);
   const onAbort = useCallback(() => session && abortTurn(session.id), [session]);
+  const onUnqueue = useCallback(
+    (messageId: string) => {
+      if (session) void unqueueMessage(session.id, messageId);
+    },
+    [session],
+  );
   // Returns void and keeps its identity, so the memoised message it is handed does not re-render.
   const onRetry = useCallback(() => {
     if (session) void retryTurn(session.id);
@@ -193,6 +199,8 @@ export function ChatView() {
         onSend={onSend}
         onAbort={onAbort}
         canAbort={restrictions.allowStopGeneration}
+        queued={runtime.queued}
+        onUnqueue={onUnqueue}
       />
       {confirmReset ? (
         <ConfirmDialog

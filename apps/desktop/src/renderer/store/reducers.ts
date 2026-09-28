@@ -7,6 +7,7 @@ import type {
   ChatEvent,
   ChatMessage,
   PermissionRequest,
+  QueuedMessage,
   Session,
   SessionId,
   UiPromptRequest,
@@ -88,6 +89,8 @@ export function applyChatEvent(state: AppState, event: ChatEvent): AppState {
     }
     case 'status':
       return patchRuntime(state, event.sessionId, { status: event.text });
+    case 'queue-changed':
+      return patchRuntime(state, event.sessionId, { queued: event.queued });
     case 'error':
       return patchRuntime(state, event.sessionId, { error: event.error, turnId: null });
     case 'message-added': {
@@ -161,6 +164,14 @@ export function clearExchanges(state: AppState, sessionId: SessionId): AppState 
 
 export function setMessages(state: AppState, sessionId: SessionId, messages: ChatMessage[]): AppState {
   return { ...state, messages: { ...state.messages, [sessionId]: messages } };
+}
+
+/**
+ * The session's queue as the engine has it. `queue-changed` keeps it current afterwards; this is
+ * the snapshot a freshly loaded window starts from, since it missed the events it was not there for.
+ */
+export function setQueued(state: AppState, sessionId: SessionId, queued: QueuedMessage[]): AppState {
+  return patchRuntime(state, sessionId, { queued });
 }
 
 export function sortSessions(sessions: Session[]): Session[] {

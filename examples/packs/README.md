@@ -234,6 +234,11 @@ same sandbox and with the same permissions as code the model writes:
 
 Each script sees the hook's input as a constant named `input`.
 
+Messages the user sent while your character was still answering are delivered
+together: `onUserMessage` runs once for each of them, in the order they were
+sent, and the single reply that follows is skipped only if every one of them
+returned `{ skipLlm: true }`.
+
 If no `onTimer` script exists, a firing timer instead wakes the model with a
 system message describing the timer payload.
 

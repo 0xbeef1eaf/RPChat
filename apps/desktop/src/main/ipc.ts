@@ -210,6 +210,8 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       },
       retry: (_e, sessionId) => engine.chat.retry(requireString(sessionId, 'sessionId')),
       abort: (_e, sessionId) => engine.chat.abort(requireString(sessionId, 'sessionId')),
+      queued: async (_e, sessionId) => engine.chat.queued(requireString(sessionId, 'sessionId')),
+      unqueue: (_e, sessionId, messageId) => engine.chat.unqueue(requireString(sessionId, 'sessionId'), requireString(messageId, 'messageId')),
     },
     permissions: {
       respond: async (_e, requestId, decision: PermissionDecision) => {

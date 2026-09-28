@@ -314,7 +314,11 @@ export class Engine {
     this.eventService = eventService;
     this.hostEvents = { emit: (event) => void this.eventService.handleHostEvent(event, hostEventScope(event)) };
     this.subscriptions = { list: (sessionId) => this.eventService.list(sessionId), remove: (id) => this.eventService.remove(id) };
-    this.sessions.setAfterRemove((session) => this.eventService.removeForSession(session.id));
+    this.sessions.setAfterRemove(async (session) => {
+      // Nothing the user had queued can be said any more: the conversation it was meant for is gone.
+      this.chat.dropQueue(session.id);
+      await this.eventService.removeForSession(session.id);
+    });
     this.sessions.setAfterReset((session) => this.eventService.removeForSession(session.id));
     this.sessions.setAfterCreate(() => this.eventService.updateInterest());
     // First, so the listeners after it see the sessions as the update left them: an updated pack

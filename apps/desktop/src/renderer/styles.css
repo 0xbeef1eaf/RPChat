@@ -995,6 +995,42 @@ textarea:disabled {
   font-size: 11.5px;
   color: var(--fg-muted);
 }
+/*
+ * Messages the user has sent that the character has not got to yet: they sit above the composer,
+ * in the reading column, until the next turn takes them into the transcript. Dashed and muted, so
+ * they read as not-said-yet rather than as part of the conversation.
+ */
+.composer-queue {
+  max-width: var(--chat-column, 820px);
+  margin: 0 auto 8px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: calc(13px * var(--chat-zoom, 1));
+}
+.composer-queue li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  background: var(--bg);
+}
+.composer-queue-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Two lines of a queued message are enough to recognise it by. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
 
 .session-panel {
   border-bottom: 1px solid var(--border);

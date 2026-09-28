@@ -23,6 +23,7 @@ import {
   removeSession as removeSessionReducer,
   removeToast,
   setMessages,
+  setQueued,
   setSessions,
   upsertSession,
 } from './reducers';
@@ -233,8 +234,10 @@ export async function openSession(sessionId: SessionId): Promise<void> {
   update((s) => clearUnread({ ...s, activeSessionId: sessionId, route: 'chat' }, sessionId));
   if (appStore.getState().messages[sessionId]) return;
   try {
-    const messages = await api().sessions.messages(sessionId);
-    update((s) => setMessages(s, sessionId, messages));
+    // The queue comes along with the transcript: a window that has just loaded missed the
+    // `queue-changed` events, and a message still waiting to be said belongs on screen.
+    const [messages, queued] = await Promise.all([api().sessions.messages(sessionId), api().chat.queued(sessionId)]);
+    update((s) => setQueued(setMessages(s, sessionId, messages), sessionId, queued));
   } catch (err) {
     reportError('Could not load messages', err);
   }
@@ -310,6 +313,18 @@ export async function sendMessage(sessionId: SessionId, text: string): Promise<v
     await api().chat.send(sessionId, text);
   } catch (err) {
     reportError('Send failed', err);
+  }
+}
+
+/**
+ * Take back a message that is still queued. The engine answers `false` when the turn already
+ * took it, which is nothing to report: by then it is in the transcript, where Delete removes it.
+ */
+export async function unqueueMessage(sessionId: SessionId, messageId: string): Promise<void> {
+  try {
+    await api().chat.unqueue(sessionId, messageId);
+  } catch (err) {
+    reportError('Could not remove the queued message', err);
   }
 }
 
