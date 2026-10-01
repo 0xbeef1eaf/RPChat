@@ -515,6 +515,15 @@ export function CreatePolicyDialog({
               <span className="field-label">Block connections to the shell’s socket (BPF)</span>
               <Segmented label="IPC guard" value={draft.guard.ipcGuard} options={['auto', 'off'] as const} disabled={busy} onChange={(ipcGuard) => setDraft({ ...draft, guard: { ...draft.guard, ipcGuard } })} />
               <span className="field-hint">{IPC_GUARD_HINTS[draft.guard.ipcGuard]}</span>
+              {draft.guard.ipcGuard === 'auto' ? (
+                <SwitchRow
+                  label="Let the compositor’s keybinds through"
+                  hint="Keeps shortcuts that drive the shell working — a launcher bound to SUPER+Space is a child of the compositor, so it is refused along with a terminal’s without this. It is also a door: a keybind that sets the wallpaper would be allowed too, and the compositor’s config is a file the session can write (changing it needs a re-login, since the compositor’s own IPC is guarded)."
+                  checked={draft.guard.ipcAllowCompositor}
+                  disabled={busy}
+                  onChange={(v) => setDraft({ ...draft, guard: { ...draft.guard, ipcAllowCompositor: v } })}
+                />
+              ) : null}
             </div>
             <div className="field">
               <span className="field-label">Shell</span>

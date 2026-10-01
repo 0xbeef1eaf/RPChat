@@ -183,6 +183,20 @@ export interface GuardPolicy {
    * `open()` and the config files, with the gap in `residual`.
    */
   ipcGuard?: GuardIpcGuard;
+  /**
+   * Let what the **compositor** launches reach the shell's sockets, so keybinds that drive the
+   * shell keep working. Default false.
+   *
+   * A compositor keybind is how a desktop opens its launcher — `SUPER+Space` running
+   * `qs -c noctalia-shell ipc call launcher toggle` is a plain child of the compositor, so it
+   * lands in the compositor's cgroup, not the shell's and not the app's. Without this it is
+   * refused along with a terminal's and the launcher stops opening.
+   *
+   * The cost: the same door fits a keybind that sets the wallpaper, and the compositor's config
+   * is a file the session can write. Re-reading that config needs the compositor's own IPC, which
+   * is guarded, so in practice it costs a re-login — but it is a door, and `residual` says so.
+   */
+  ipcAllowCompositor?: boolean;
   /** Which shell table row applies. Default `auto` (first whose binary exists). */
   /** One shell, or several: a bar with its own IPC socket and a wallpaper daemon are commonly both present. */
   shell?: GuardShell | GuardShell[];

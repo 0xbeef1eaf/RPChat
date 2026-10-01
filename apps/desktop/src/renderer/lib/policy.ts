@@ -166,6 +166,7 @@ export interface PolicyDraft {
     wallpaper: boolean;
     compositorIpc: GuardCompositorIpc;
     ipcGuard: GuardIpcGuard;
+    ipcAllowCompositor: boolean;
     shell: GuardShell[];
     loginHelpers: string[];
     extraDenyPaths: string[];
@@ -246,6 +247,7 @@ export function policyDraftFrom(policy: PolicyFile): PolicyDraft {
       wallpaper: policy.guard?.wallpaper !== false,
       compositorIpc: policy.guard?.compositorIpc ?? 'shell-only',
       ipcGuard: policy.guard?.ipcGuard ?? 'off',
+      ipcAllowCompositor: policy.guard?.ipcAllowCompositor === true,
       shell: shell === undefined ? ['auto'] : Array.isArray(shell) ? [...shell] : [shell],
       loginHelpers: [...(policy.guard?.loginHelpers ?? [])],
       extraDenyPaths: [...(policy.guard?.extraDenyPaths ?? [])],
@@ -302,6 +304,7 @@ export function policyDraftToFile(draft: PolicyDraft): PolicyFile {
     wallpaper: draft.guard.wallpaper,
     compositorIpc: draft.guard.compositorIpc,
     ipcGuard: draft.guard.ipcGuard,
+    ipcAllowCompositor: draft.guard.ipcAllowCompositor,
     extraDenyPaths: [...draft.guard.extraDenyPaths],
     extraDenySockets: [...draft.guard.extraDenySockets],
     allowBinaries: [...draft.guard.allowBinaries],

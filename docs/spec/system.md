@@ -248,9 +248,15 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   `/sys/kernel/security/lsm` contains `bpf` and `/sys/kernel/btf/vmlinux` exists (`support`). Maps: `rpchat_targets` (hash, key `(dev_major, dev_minor, ino)`, 1024
   entries) from `resolve_targets` — discovery's concrete socket paths plus the table's globs
   expanded by `expand_glob`/`fnmatch` against the real directories, then `stat`ed and filtered to
-  sockets owned by an `app.users` uid and not in `NEVER_GUARD`; `rpchat_allowed`
+  sockets owned by an `app.users` uid and not refused by `never_mediate`, which checks the
+  **concrete** path rather than `NEVER_GUARD`'s generalised globs — generalisation collapses digit
+  runs, so `wayland-1` and `wayland-1-awww-daemon.sock` both match the display-socket pattern and
+  the wallpaper daemon's socket was being vetoed by it; `/var/run/…` is folded to `/run/…` first
+  (`@{run}` expands to both, one inode) and targets are deduplicated by inode; `rpchat_allowed`
   (`BPF_MAP_TYPE_CGROUP_ARRAY`, 8 slots) with slot 0 the app's cgroup from its keepalive
-  registration (`cgroup_dir` of `/proc/<pid>/cgroup`, v2 only) and the rest the socket servers';
+  registration, the compositor's too when `guard.ipcAllowCompositor` is set (a compositor keybind
+  is a plain child of the compositor, so the launcher lands in its cgroup and is otherwise refused
+  like a terminal's; the door is disclosed in `residual`) (`cgroup_dir` of `/proc/<pid>/cgroup`, v2 only) and the rest the socket servers';
   `rpchat_mode` (0 off / 1 audit / 2 enforce); `rpchat_events` (ring buffer). The program returns
   `-EACCES` in enforce, `0` in audit, and `0` for anything it cannot resolve. Records become the
   same `guard-attempt` events with `profile: "bpf-ipc"` and `operation: "connect"`, through the

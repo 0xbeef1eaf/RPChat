@@ -32,10 +32,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::guard::{
-    generalise_socket_path, never_guard, normalise_glob, AttemptKind, GuardAttempt, GuardContext,
-    Owner,
-};
+use crate::guard::{normalise_glob, AttemptKind, GuardAttempt, GuardContext, Owner};
 use crate::policy::{GuardMode, GuardRules, IpcGuardMode};
 
 /// The compiled BPF LSM program, built by `build.rs`. **Empty** when `clang` was not available
@@ -235,9 +232,9 @@ pub fn resolve_targets(
     }
 
     let uids: BTreeSet<u32> = ctx.user_uids.iter().map(|(_, uid)| *uid).collect();
-    let mut out = BTreeSet::new();
+    let mut by_inode: BTreeMap<TargetKey, String> = BTreeMap::new();
     for path in paths {
-        if never_guard(&generalise_socket_path(&path)) {
+        if never_mediate(&path) {
             continue;
         }
         let Some(st) = stat(Path::new(&path)) else {
@@ -248,9 +245,67 @@ pub fn resolve_targets(
         if !st.is_socket || !uids.contains(&st.uid) {
             continue;
         }
-        out.insert(Target { path, key: st.key });
+        // Keyed by inode, so the `/run` and `/var/run` spellings of one socket are one target.
+        // `paths` is sorted and `/run/…` sorts before `/var/run/…`, so the first spelling wins
+        // and reports name the real path rather than the symlink.
+        by_inode.entry(st.key).or_insert(path);
     }
-    out.into_iter().take(MAX_TARGETS).collect()
+    let mut out: Vec<Target> = by_inode
+        .into_iter()
+        .map(|(key, path)| Target { path, key })
+        .collect();
+    out.sort();
+    out.truncate(MAX_TARGETS);
+    out
+}
+
+/// `/var/run/…` → `/run/…`.
+///
+/// `@{run}` expands to **both** spellings, because a machine without `/run` is a case the
+/// profiles have to cover — and on every current distribution `/var/run` is a symlink to `/run`,
+/// so the two reach one inode by two names. Keeping both in play was not harmless: `ipcTargets`
+/// counted one socket twice, reports named the symlinked alias, and [`never_mediate`] is written
+/// against real paths.
+fn canonical_run(path: &str) -> String {
+    match path.strip_prefix("/var/run/") {
+        Some(rest) => format!("/run/{rest}"),
+        None => path.to_string(),
+    }
+}
+
+/// Sockets this layer must never mediate, checked against the **concrete** path.
+///
+/// [`crate::guard::NEVER_GUARD`] matches *generalised* globs. That is right for the profiles and
+/// wrong here, measurably so. Generalisation collapses digit runs, so `wayland-1` becomes
+/// `wayland-*` and `wayland-1-awww-daemon.sock` becomes `wayland-*-awww-daemon.sock` — and the
+/// display-socket pattern `@{run}/user/*/wayland-*` matches **both**, vetoing the wallpaper
+/// daemon's socket, which is the one socket this layer most wants. On the reference box it was in
+/// the map at all only because the `/var/run` spelling slipped past a list written against
+/// `@{run}`, while the `/run` spelling of the same inode was thrown out.
+///
+/// A concrete path needs no guesswork: `wayland-1` is the display socket and
+/// `wayland-1-awww-daemon.sock` plainly is not. Everything listed here is something the session
+/// cannot run without — mediating one takes the desktop down the moment the mode is `enforce`.
+pub fn never_mediate(path: &str) -> bool {
+    let path = canonical_run(path);
+    let mut parts = path.rsplit('/');
+    let name = parts.next().unwrap_or("");
+    let parent = parts.next().unwrap_or("");
+    // The display server: `wayland-<n>` and its lock, and nothing with more name after the digits.
+    let display = name
+        .strip_prefix("wayland-")
+        .map(|rest| rest.strip_suffix(".lock").unwrap_or(rest))
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()));
+    // X11 and XWayland live in a directory (`/tmp/.X11-unix/X0`, `@{run}/user/<uid>/X11-unix/X0`),
+    // so the directory is what identifies them.
+    let x11 = parent.ends_with("-unix") && (parent.starts_with(".X") || parent.starts_with('X'));
+    display
+        || x11
+        || name == "bus"
+        || path == "/run/dbus/system_bus_socket"
+        || name.starts_with("pipewire-")
+        || parent == "pulse"
+        || parent == "systemd"
 }
 
 /// Expand one AppArmor-style socket glob into the concrete paths that exist right now.
@@ -506,6 +561,9 @@ pub fn attempt(event: &Event, paths: &BTreeMap<TargetKey, String>) -> GuardAttem
 pub struct IpcRequest {
     /// `Off` unloads and unpins.
     pub mode: GuardMode,
+    /// `guard.ipcAllowCompositor`: the compositor's cgroup is in `server_cgroups`, so its
+    /// keybinds reach the shell. Carried here only so [`residual`] can disclose the door.
+    pub allow_compositor: bool,
     /// `guard.ipcGuard`: `auto` uses the program when the kernel allows it, `off` never does.
     pub setting: IpcGuardMode,
     pub targets: Vec<Target>,
@@ -519,6 +577,8 @@ pub struct IpcRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IpcOutcome {
     pub mediation: IpcMediation,
+    /// Mirrors [`IpcRequest::allow_compositor`], so the residual list can say so.
+    pub allow_compositor: bool,
     /// Why it is not `bpf`, when it is not. Reported in the guard's residual list, never as
     /// `lastError`: this layer failing must not make `guard-apply` fail.
     pub reason: Option<String>,
@@ -562,6 +622,7 @@ impl IpcOutcome {
     pub fn unavailable(reason: impl Into<String>) -> IpcOutcome {
         IpcOutcome {
             mediation: IpcMediation::None,
+            allow_compositor: false,
             reason: Some(reason.into()),
             targets: 0,
         }
@@ -608,6 +669,9 @@ pub fn residual(outcome: &IpcOutcome, unix_class: bool, shell_guarded: bool) -> 
             lines.push("the BPF layer mediates every process on the machine, not only the confined users' sessions, so root and system services are denied the guarded sockets too. Only the guarded users' own sockets go into the map, so another user's shell is untouched".to_string());
             lines.push("the allow-list is a cgroup, so anything sharing the app's cgroup is allowed: an app started from a terminal shares that terminal's scope, and the wallpaper lock is then open to everything in it. A packaged install started from autostart or the desktop entry gets its own scope and does not have that gap".to_string());
             lines.push("the processes serving the guarded sockets may reach each other, so a bar can still drive a wallpaper daemon (which is how noctalia sets a wallpaper through swww). A session that moves itself into the shell's cgroup — cgroup delegation makes that the user's own tree — reaches them the same way".to_string());
+            if outcome.allow_compositor {
+                lines.push("guard.ipcAllowCompositor is on, so anything the compositor launches directly reaches the shell's sockets: that is what keeps keybinds like the launcher working, and it is also a door — a keybind that drives the wallpaper would be allowed, and the compositor's config is a file the session can write. Re-reading that config needs the compositor's own IPC, which is guarded, so in practice the door costs a re-login".to_string());
+            }
             lines.push("a socket bound since the last refresh is unmediated until the next one: the runtime directories are watched with inotify and rescanned, but there is a window between bind() and the refresh".to_string());
             lines
         }
@@ -816,6 +880,7 @@ pub fn engage(req: &IpcRequest) -> (IpcOutcome, Option<Engaged>) {
         Ok(engaged) => (
             IpcOutcome {
                 mediation: IpcMediation::Bpf,
+                allow_compositor: req.allow_compositor,
                 reason: req.withheld(),
                 targets: engaged.targets(),
             },
@@ -1367,6 +1432,74 @@ mod tests {
         );
     }
 
+    /// The check that decides whether the desktop survives `enforce`, against concrete paths.
+    ///
+    /// The regression it exists for: `guard::NEVER_GUARD`'s `@{run}/user/*/wayland-*` is matched
+    /// against *generalised* globs, where both `wayland-1` and `wayland-1-awww-daemon.sock`
+    /// collapse to something it matches — so the wallpaper daemon's socket, the one this layer
+    /// most wants, was being vetoed by the display-socket rule.
+    #[test]
+    fn the_lifelines_are_refused_and_the_wallpaper_daemon_is_not() {
+        for keep_out in [
+            "/run/user/1000/wayland-1",
+            "/run/user/1000/wayland-1.lock",
+            "/var/run/user/1000/wayland-1", // the symlinked spelling must not slip past
+            "/run/user/1000/bus",
+            "/run/dbus/system_bus_socket",
+            "/run/user/1000/pipewire-0",
+            "/run/user/1000/pipewire-0-manager",
+            "/run/user/1000/pulse/native",
+            "/run/user/1000/systemd/private",
+            "/tmp/.X11-unix/X0",
+            "/run/user/1000/X11-unix/X0",
+        ] {
+            assert!(never_mediate(keep_out), "{keep_out} must never be mediated");
+        }
+        for mediate in [
+            "/run/user/1000/wayland-1-awww-daemon.sock",
+            "/var/run/user/1000/wayland-1-awww-daemon.sock",
+            "/run/user/1000/noctalia-wayland-1.sock",
+            "/run/user/1000/noctalia-dmenu-wayland-1.sock",
+            "/run/user/1000/swww-wayland-1.sock",
+            "/run/user/1000/hypr/abc/.socket.sock",
+        ] {
+            assert!(!never_mediate(mediate), "{mediate} must be mediatable");
+        }
+    }
+
+    /// `@{run}` expands to `/run` *and* `/var/run`, which are the same inode on any current
+    /// machine. One socket, one target, and the real path in the report.
+    #[test]
+    fn the_two_spellings_of_one_socket_are_one_target() {
+        let mut ctx = noctalia_hyprland_ctx(&["work"]);
+        ctx.served = Vec::new();
+        let ls = lister(&[
+            ("/run/user", &["1000"]),
+            ("/run/user/1000", &["noctalia-wayland-1.sock"]),
+            ("/var/run/user", &["1000"]),
+            ("/var/run/user/1000", &["noctalia-wayland-1.sock"]),
+            ("/home", &[]),
+        ]);
+        // Both spellings stat to the same (dev, ino), because they are the same file.
+        let stat = |_: &Path| {
+            Some(SocketStat {
+                uid: 1000,
+                key: TargetKey {
+                    dev_major: 0,
+                    dev_minor: 76,
+                    ino: 167,
+                },
+                is_socket: true,
+            })
+        };
+        let r = rules(
+            serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":"enforce"}}),
+        );
+        let targets = resolve_targets(&r, &ctx, &ls, &stat);
+        assert_eq!(targets.len(), 1, "{targets:?}");
+        assert_eq!(targets[0].path, "/run/user/1000/noctalia-wayland-1.sock");
+    }
+
     #[test]
     fn reads_the_cgroup_v2_path_and_declines_a_v1_only_machine() {
         assert_eq!(
@@ -1434,6 +1567,7 @@ mod tests {
         let mut req = IpcRequest {
             mode: GuardMode::Enforce,
             setting: IpcGuardMode::Auto,
+            allow_compositor: false,
             targets: vec![target.clone()],
             app_cgroup: None,
             server_cgroups: vec![PathBuf::from("/sys/fs/cgroup/shell")],
@@ -1448,6 +1582,7 @@ mod tests {
         let lines = residual(
             &IpcOutcome {
                 mediation: IpcMediation::Bpf,
+                allow_compositor: false,
                 reason: Some(withheld),
                 targets: 0,
             },
@@ -1468,6 +1603,33 @@ mod tests {
         assert!(req.withheld().is_none());
     }
 
+    /// The door `guard.ipcAllowCompositor` opens has to be disclosed, because it is the one that
+    /// makes the wallpaper lock reachable from a keybind.
+    #[test]
+    fn opening_the_compositor_door_is_said_out_loud() {
+        let shut = IpcOutcome {
+            mediation: IpcMediation::Bpf,
+            allow_compositor: false,
+            reason: None,
+            targets: 2,
+        };
+        let lines = residual(&shut, false, true).join("\n");
+        assert!(!lines.contains("ipcAllowCompositor"), "{lines}");
+
+        let open = IpcOutcome {
+            allow_compositor: true,
+            ..shut
+        };
+        let lines = residual(&open, false, true).join("\n");
+        assert!(lines.contains("guard.ipcAllowCompositor is on"), "{lines}");
+        // Both halves: what it buys and what it costs.
+        assert!(
+            lines.contains("keybinds like the launcher working"),
+            "{lines}"
+        );
+        assert!(lines.contains("it is also a door"), "{lines}");
+    }
+
     #[test]
     fn the_modes_line_up_with_the_programs() {
         assert_eq!(mode_value(GuardMode::Off), MODE_OFF);
@@ -1479,6 +1641,7 @@ mod tests {
     fn the_residual_says_which_mechanism_is_live_and_never_two_at_once() {
         let bpf = IpcOutcome {
             mediation: IpcMediation::Bpf,
+            allow_compositor: false,
             reason: None,
             targets: 2,
         };
@@ -1613,6 +1776,7 @@ mod tests {
         let request = IpcRequest {
             mode: GuardMode::Enforce,
             setting: IpcGuardMode::Auto,
+            allow_compositor: false,
             targets: vec![target.clone()],
             app_cgroup: None,
             server_cgroups: Vec::new(),

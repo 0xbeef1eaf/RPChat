@@ -1768,6 +1768,7 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
     ctx.ipc = (hooks.ipc_engage)(&IpcRequest {
         mode: rules.mode,
         setting: rules.ipc_guard,
+        allow_compositor: rules.ipc_allow_compositor,
         targets,
         app_cgroup: (hooks.app_cgroup)(),
         server_cgroups,
@@ -3164,6 +3165,7 @@ garbage line\n";
         // apology in the residual list.
         ctx.ipc = IpcOutcome {
             mediation: IpcMediation::Bpf,
+            allow_compositor: false,
             reason: None,
             targets: 2,
         };

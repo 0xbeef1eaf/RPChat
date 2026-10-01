@@ -3032,7 +3032,13 @@ mod os {
         let mut servers = Vec::new();
         let guarded: Vec<&str> = ctx.shells.iter().map(|s| s.id).collect();
         for s in &ctx.served {
-            if s.owner != guard::Owner::Shell || !guarded.contains(&s.entry.as_str()) {
+            // The shells serving the mediated sockets, so a bar can drive a wallpaper daemon —
+            // and, when the policy asks, the compositor, so its keybinds can drive the shell.
+            let allowed = match s.owner {
+                guard::Owner::Shell => guarded.contains(&s.entry.as_str()),
+                guard::Owner::Compositor => rules.ipc_allow_compositor,
+            };
+            if !allowed {
                 continue;
             }
             if let Some(dir) = cgroup_of_pid(s.pid) {
@@ -3092,6 +3098,7 @@ mod os {
         let request = ipcguard::IpcRequest {
             mode: rules.mode,
             setting: rules.ipc_guard,
+            allow_compositor: rules.ipc_allow_compositor,
             targets,
             app_cgroup: app_cgroup(),
             server_cgroups,
