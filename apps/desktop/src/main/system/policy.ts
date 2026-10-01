@@ -409,7 +409,7 @@ export function parseGuard(raw: unknown, problems: string[]): GuardPolicy | unde
     if (typeof g.mode === 'string' && (GUARD_MODES as readonly string[]).includes(g.mode)) out.mode = g.mode as GuardPolicy['mode'];
     else problems.push('guard.mode must be off, audit or enforce');
   }
-  for (const k of ['protectApp', 'wallpaper'] as const) {
+  for (const k of ['protectApp', 'wallpaper', 'ipcAllowCompositor'] as const) {
     if (g[k] === undefined) continue;
     if (typeof g[k] === 'boolean') out[k] = g[k] as boolean;
     else problems.push(`guard.${k} must be a boolean`);

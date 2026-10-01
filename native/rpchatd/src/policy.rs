@@ -301,6 +301,8 @@ pub struct GuardPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ipc_guard: Option<IpcGuardMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipc_allow_compositor: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<GuardShells>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login_helpers: Option<Vec<String>>,
@@ -324,6 +326,20 @@ pub struct GuardRules {
     /// Whether `connect()` to the shell's sockets is mediated by the BPF LSM program when the
     /// kernel allows it. Default `auto`; nothing else in the guard depends on it.
     pub ipc_guard: IpcGuardMode,
+    /// Let what the **compositor** launches reach the shell's sockets, so the keybinds that drive
+    /// the shell keep working (`guard.ipcAllowCompositor`, default false).
+    ///
+    /// A compositor keybind is how a desktop opens its launcher: `SUPER+Space` runs
+    /// `qs -c noctalia-shell ipc call launcher toggle`, which is a plain child of the compositor
+    /// and so lands in its cgroup — not the shell's, and not the app's. Without this it is denied
+    /// along with a terminal's, and the launcher stops opening.
+    ///
+    /// The cost, because it is real: the same door fits a keybind that runs `… ipc call wallpaper
+    /// set`, and the compositor's config is a file the session can write. It is not a free door —
+    /// the new binding needs the compositor to re-read its config, and `hyprctl reload` is itself
+    /// denied under `compositorIpc: shell-only`, so in practice it costs a re-login — but it is a
+    /// door, and that is why this is off unless asked for.
+    pub ipc_allow_compositor: bool,
     /// Every shell row the policy asks for. `[Auto]` means "every one whose binary is present".
     pub shells: Vec<GuardShell>,
     /// `None`: auto-detect the login helpers present on the box.
@@ -350,6 +366,7 @@ impl Default for GuardRules {
             wallpaper: true,
             compositor_ipc: CompositorIpc::ShellOnly,
             ipc_guard: IpcGuardMode::Off,
+            ipc_allow_compositor: false,
             shells: vec![GuardShell::Auto],
             login_helpers: None,
             extra_deny_paths: Vec::new(),
@@ -371,6 +388,7 @@ impl GuardRules {
             wallpaper: g.wallpaper.unwrap_or(d.wallpaper),
             compositor_ipc: g.compositor_ipc.unwrap_or(d.compositor_ipc),
             ipc_guard: g.ipc_guard.unwrap_or(d.ipc_guard),
+            ipc_allow_compositor: g.ipc_allow_compositor.unwrap_or(d.ipc_allow_compositor),
             shells: g
                 .shell
                 .clone()
@@ -1453,6 +1471,10 @@ mod tests {
         assert_eq!(none.mode, GuardMode::Off);
         assert!(none.protect_app && none.wallpaper);
         assert_eq!(none.compositor_ipc, CompositorIpc::ShellOnly);
+        // Both IPC switches are off unless asked for: the BPF layer is unproven, and letting the
+        // compositor's keybinds through is a door (see `GuardRules::ipc_allow_compositor`).
+        assert_eq!(none.ipc_guard, IpcGuardMode::Off);
+        assert!(!none.ipc_allow_compositor);
         assert_eq!(none.shells, vec![GuardShell::Auto]);
         // An empty block is the defaults; mode off needs no users.
         assert_eq!(
@@ -1464,7 +1486,8 @@ mod tests {
         let full = policy(json!({"version":1,"app":{"users":["alice"]},"guard":{
             "mode":"enforce","protectApp":false,"wallpaper":true,"compositorIpc":"deny","shell":"noctalia",
             "loginHelpers":["/usr/lib/sddm/sddm-helper"],"extraDenyPaths":["~/.config/hypr/hyprpaper.conf","@{HOME}/x"],
-            "extraDenySockets":["/run/user/1000/foo.sock"],"allowBinaries":["/usr/bin/hyprctl"]}}))
+            "extraDenySockets":["/run/user/1000/foo.sock"],"allowBinaries":["/usr/bin/hyprctl"],
+            "ipcGuard":"auto","ipcAllowCompositor":true}}))
         .unwrap();
         let rules = full.guard_rules();
         assert!(rules.enabled());
@@ -1472,6 +1495,8 @@ mod tests {
         assert!(!rules.protect_app);
         assert_eq!(rules.compositor_ipc, CompositorIpc::Deny);
         assert_eq!(rules.shells, vec![GuardShell::Noctalia]);
+        assert_eq!(rules.ipc_guard, IpcGuardMode::Auto);
+        assert!(rules.ipc_allow_compositor);
 
         // The same key takes a list, so a bar and a wallpaper daemon can both be guarded.
         let many = parse_policy(

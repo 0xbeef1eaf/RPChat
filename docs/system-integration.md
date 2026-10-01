@@ -627,6 +627,7 @@ reported to the character); `enforce` is a policy switch.
 | `protectApp` | `true` | Signals and `ptrace` from the session to rpchat. |
 | `wallpaper` | `true` | The shell's IPC socket and config/state files; the shell runs in `rpchat-shell`. Also denies the row's client-only binaries (`swww`, `awww`) to every profile but rpchat's, which is what stops `awww img <path>` from a terminal on a kernel that cannot mediate `connect()`. A shell shipping one binary for both jobs (`noctalia`, `qs`) cannot be denied that way — it would stop the shell starting — so `noctalia msg` survives there and the residual list says so. |
 | `compositorIpc` | `shell-only` | `allow` (nothing), `shell-only` (only the shell and rpchat may talk to the compositor), `deny` (only rpchat). |
+| `ipcAllowCompositor` | `false` | Let what the compositor launches reach the shell's sockets, so keybinds that drive the shell (launchers, session menus) keep working. A door — see [IPC guard](#ipc-guard-bpf-lsm). |
 | `ipcGuard` | `off` | Mediate `connect()` to the shell's sockets with a BPF LSM program where the kernel allows it — the check AppArmor cannot make. **Off by default because it is unproven: the first machine to enforce it could not reach a login.** See [IPC guard](#ipc-guard-bpf-lsm). |
 | `shell` | `auto` | One row or a list. `auto` takes every row whose binary exists. With several (`["noctalia","hyprpaper"]`) each may serve its own socket but none may connect to another's, so a bar cannot set the wallpaper through a wallpaper daemon. |
 | `loginHelpers` | auto-detect | The PAM login helpers whose profile carries the per-user hats (see below). |
@@ -792,7 +793,7 @@ attached to `lsm/unix_stream_connect` and decides from three maps:
 
 | Map | Holds | Filled from |
 |---|---|---|
-| `rpchat_targets` | the socket nodes to mediate, keyed by `(device major, device minor, inode)` | the shell sockets discovery found (`/proc/net/unix` + `/proc/<pid>/fd`) and the table's globs expanded against the real runtime directories, `stat()`ed |
+| `rpchat_targets` | the socket nodes to mediate, keyed by `(device major, device minor, inode)` | the shell sockets discovery found (`/proc/net/unix` + `/proc/<pid>/fd`) and the table's globs expanded against the real runtime directories, `stat()`ed, minus anything `ipcguard::never_mediate` refuses — the display sockets, X11, the buses and audio, checked against the **concrete** path because the generalised form of `wayland-1-awww-daemon.sock` is indistinguishable from the display socket's |
 | `rpchat_allowed` | up to 8 cgroups whose tasks may connect anyway | slot 0 the rpchat app's, from its keepalive registration; the rest the cgroups of the processes serving the mediated sockets |
 | `rpchat_mode` | 0 off, 1 audit, 2 enforce | `guard.mode` |
 
@@ -813,6 +814,23 @@ understand before turning it on:
   which sockets are mediated against the previous allow-list, and if the allow-list write then
   fails the window never closes. Granting first means the worst case is a socket briefly reachable
   by something it will shortly be denied to. Any failure empties the target map outright.
+
+- **The compositor's keybinds are refused unless you say otherwise.** This is the one that bites
+  first. A launcher bound to `SUPER+Space` runs something like
+  `qs -c noctalia-shell ipc call launcher toggle`, and a compositor keybind is a *plain child of
+  the compositor* — so it sits in the compositor's cgroup, not the shell's and not the app's, and
+  is refused exactly like a terminal's. `guard.ipcAllowCompositor: true` puts the compositor's
+  cgroup in the allow-list and the shortcuts work again.
+
+  Say what that costs, because it is a door: the same allowance fits a keybind that runs
+  `… ipc call wallpaper set`, and the compositor's config is a file the session can write. It is
+  not free — the new binding needs the compositor to re-read its config, and `hyprctl reload` goes
+  through the compositor's own IPC, which `compositorIpc: shell-only` already guards, so in
+  practice it costs a re-login. But it is a door, and `residual` says so when it is open.
+
+  There is no finer cut available: noctalia multiplexes the launcher *and* `wallpaper set` over one
+  socket, so mediation at the socket cannot allow one and deny the other. That would need
+  protocol-aware filtering, which an LSM hook on `connect()` cannot do.
 
 Four more things are worth knowing:
 

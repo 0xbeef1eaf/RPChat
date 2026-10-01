@@ -43,7 +43,7 @@ describe('policyDraftFrom', () => {
     const draft = policyDraftFrom({ version: 1 });
     expect(POLICY_SETTINGS.some((s) => draft.forced[s.path])).toBe(false);
     expect(draft.app).toEqual({ allowQuit: true, users: [], restrictions: expect.objectContaining({ allowSandbox: true, requireCharacterSession: false }) });
-    expect(draft.guard).toMatchObject({ mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', ipcGuard: 'off', shell: ['auto'] });
+    expect(draft.guard).toMatchObject({ mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', ipcGuard: 'off', ipcAllowCompositor: false, shell: ['auto'] });
     expect(draft.inputLock).toEqual({ enabled: true, maxDurationMs: 300_000, emergencyKey: 'esc', emergencyHoldMs: 5000 });
   });
 
@@ -143,6 +143,16 @@ describe('policyDraftToFile', () => {
     expect(policyDraftToFile(draft).guard?.ipcGuard).toBe('off');
     draft.guard.ipcGuard = 'auto';
     expect(policyDraftToFile(draft).guard?.ipcGuard).toBe('auto');
+  });
+
+  it('keeps guard.ipcAllowCompositor through an edit', () => {
+    // The switch that makes shell keybinds work; losing it on an unrelated edit breaks the
+    // launcher again and reads as the guard regressing.
+    const draft = policyDraftFrom({ ...POLICY_TEMPLATE, guard: { ...POLICY_TEMPLATE.guard, mode: 'audit', ipcGuard: 'auto', ipcAllowCompositor: true } });
+    expect(draft.guard.ipcAllowCompositor).toBe(true);
+    expect(policyDraftToFile(draft).guard?.ipcAllowCompositor).toBe(true);
+    draft.guard.ipcAllowCompositor = false;
+    expect(policyDraftToFile(draft).guard?.ipcAllowCompositor).toBe(false);
   });
 
   it('survives a second round trip through its own output', () => {
