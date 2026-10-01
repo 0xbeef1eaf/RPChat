@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import { COMMAND_TEMPLATE_INFO } from '@rp/shared';
-import { buildArgv, defaultTemplates, effectiveTemplate, runTemplate, shellQuote, substitute, tokenize, commandFailed, isMissingExecutable, notConfigured, templateLocation } from './commands.js';
+import { buildArgv, defaultTemplates, effectiveTemplate, launchTemplate, runTemplate, shellQuote, substitute, tokenize, commandFailed, isMissingExecutable, notConfigured, templateLocation } from './commands.js';
 
 describe('tokenize', () => {
   it('splits on whitespace and honours quotes', () => {
@@ -125,6 +128,38 @@ describe('runTemplate', () => {
     await expect(runTemplate({ command: 'definitely-not-a-program-xyz {file}' }, { file: 'a' })).rejects.toMatchObject({
       code: 'CAPABILITY_FAILED',
       message: 'Cannot run "definitely-not-a-program-xyz": it is not installed or not on PATH',
+      details: { file: 'definitely-not-a-program-xyz', code: 'ENOENT' },
+    });
+  });
+});
+
+describe('launchTemplate', () => {
+  /** A launcher that hands the program it starts our stdio pipes, the way `xdg-open` hands them to a browser. */
+  const LAUNCHER = `node -e "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(()=>{},3000)'], { stdio: 'inherit' }).unref()"`;
+
+  it('returns as soon as the launcher is done, even while the program it started holds the pipes', async () => {
+    const started = Date.now();
+    const r = await launchTemplate({ command: LAUNCHER }, {});
+    // `runTemplate` would wait here for the grandchild's three seconds — a browser's whole lifetime.
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect({ code: r.code, running: r.running }).toEqual({ code: 0, running: false });
+  });
+
+  it('leaves a program that keeps running alone and reports it as running', async () => {
+    const marker = path.join(os.tmpdir(), `rp-launch-${process.pid}-${Date.now()}.txt`);
+    const r = await launchTemplate({ command: `node -e "setTimeout(() => require('fs').writeFileSync(process.argv[1], 'up'), 250)" {file}` }, { file: marker }, { settleMs: 100 });
+    expect(r).toMatchObject({ code: 0, running: true });
+    // Still alive after we stopped watching: it reaches its own timer and writes the marker.
+    await vi.waitFor(() => expect(fs.existsSync(marker)).toBe(true), { timeout: 2_000 });
+    fs.rmSync(marker, { force: true });
+  });
+
+  it('reports a launcher that refused the URL, and a missing one', async () => {
+    const r = await launchTemplate({ command: `node -e "console.error('no application found'); process.exit(4)" {url}` }, { url: 'https://x.test/' });
+    expect({ code: r.code, running: r.running }).toEqual({ code: 4, running: false });
+    expect(r.stderr.trim()).toBe('no application found');
+    await expect(launchTemplate({ command: 'definitely-not-a-program-xyz {url}' }, { url: 'https://x.test/' })).rejects.toMatchObject({
+      code: 'CAPABILITY_FAILED',
       details: { file: 'definitely-not-a-program-xyz', code: 'ENOENT' },
     });
   });

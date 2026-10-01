@@ -320,6 +320,15 @@ calls arriving together share one launch, and after a launch that brought no ext
 minute of calls fails outright instead of opening more windows. When it does fail the character is
 told: *"rpchat started the browser, but the extension did not connect within 20 s …"*.
 
+The browser command is *launched*, not run to completion: it is watched only long enough to catch
+a failure (half a second), and then left alone. With no browser running yet, the command either
+becomes the browser or hands it the pipes it was given, so waiting for it to finish would mean
+waiting for you to quit your browser — and every later `sdk.browser` call would queue behind that
+first one. A command that does exit badly in that first half second is still reported with its
+exit code and output, as a failing command template always is. The same goes for the **Test**
+button on the browser and launch-app rows of Settings → Commands, and for `sdk.desktop.launch`
+through a launch-app command.
+
 Switch it off with **Start the browser when a character needs it** in Settings → Browser →
 *What characters may do* (`settings.browser.autoLaunch`, also pinnable from the machine policy as
 `browser.autoLaunch`); then a call with no browser open fails as it did before, with "The browser

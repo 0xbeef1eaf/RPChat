@@ -2,8 +2,8 @@
 import type { AppSettings, CommandTemplate, CommandTemplates } from '@rp/shared';
 import { COMMAND_TEMPLATE_INFO, RpError } from '@rp/shared';
 import type { Logger } from '@rp/core';
-import type { CommandResult } from '../commands.js';
-import { commandFailed, defaultTemplates, effectiveTemplate, isConfigured, notConfigured, runTemplate, templateLocation } from '../commands.js';
+import type { CommandResult, LaunchResult } from '../commands.js';
+import { commandFailed, defaultTemplates, effectiveTemplate, isConfigured, launchTemplate, notConfigured, runTemplate, templateLocation } from '../commands.js';
 
 /** Per-call overrides for a template run; `timeoutMs` outranks the template's own and the 30 s default. */
 export interface RunOpts {
@@ -18,6 +18,8 @@ export interface CommandRunnerDeps {
   env?: NodeJS.ProcessEnv;
   /** Injectable for tests. */
   run?: (tpl: CommandTemplate, vars: Record<string, string>, opts?: RunOpts) => Promise<CommandResult>;
+  /** Injectable for tests. */
+  launch?: (tpl: CommandTemplate, vars: Record<string, string>, opts?: { settleMs?: number }) => Promise<LaunchResult>;
 }
 
 /**
@@ -120,6 +122,31 @@ export class CommandRunner {
       throw describeSpawnFailure(err, label.split(' ')[0] ?? label);
     }
     this.deps.logger.info(`[commands] ${label}: "${tpl.command}" → exit ${result.code} in ${Date.now() - started} ms${result.stderr ? ` (stderr: ${result.stderr.trim().slice(0, 200)})` : ''}`);
+    return result;
+  }
+
+  /**
+   * Like `runTemplate`, but for a template whose program is meant to keep running (the browser):
+   * it waits for the program to start, not to finish, and leaves it running. `running: true` says
+   * the program was still up, so its exit code means nothing.
+   */
+  async launchTemplate(tpl: CommandTemplate, vars: Record<string, string>, label: string, opts: { settleMs?: number } = {}): Promise<LaunchResult> {
+    const started = Date.now();
+    let result: LaunchResult;
+    try {
+      result = await (this.deps.launch ??
+        ((t, v, o) =>
+          launchTemplate(t, v, {
+            platform: this.platform,
+            env: this.env,
+            ...(o?.settleMs !== undefined ? { settleMs: o.settleMs } : {}),
+          })))(tpl, vars, opts);
+    } catch (err) {
+      this.deps.logger.warn(`[commands] ${label}: "${tpl.command}" could not start: ${(err as Error).message}`);
+      throw describeSpawnFailure(err, label.split(' ')[0] ?? label);
+    }
+    const outcome = result.running ? 'still running' : `exit ${result.code}`;
+    this.deps.logger.info(`[commands] ${label}: "${tpl.command}" → ${outcome} after ${Date.now() - started} ms${result.stderr ? ` (stderr: ${result.stderr.trim().slice(0, 200)})` : ''}`);
     return result;
   }
 }
