@@ -204,6 +204,24 @@ describe('desktop', () => {
     });
   });
 
+  it('launch through a template: the app is left running, a missing or failing one is reported (real spawn)', async () => {
+    const started = Date.now();
+    // The template's program outlives the call, as a launcher's does; waiting for it would hang here.
+    const keepsRunning = new DesktopHandler({ commands: runner({ launch: { command: `${NODE} -e "setTimeout(()=>{},3000)" {app}` } }), launchAllowlist: async () => [], logger });
+    expect(await keepsRunning.invoke('launch', ['vlc'], ctx)).toEqual({});
+    expect(Date.now() - started).toBeLessThan(2_000);
+    const fails = new DesktopHandler({ commands: runner({ launch: { command: `${NODE} -e "console.error('nope'); process.exit(2)" {app}` } }), launchAllowlist: async () => [], logger });
+    await expect(fails.invoke('launch', ['vlc'], ctx)).rejects.toMatchObject({
+      code: 'CAPABILITY_FAILED',
+      message: expect.stringContaining('exited with 2: nope; check it in Settings → Commands → Launch app'),
+    });
+    const missing = new DesktopHandler({ commands: runner({ launch: { command: `${MISSING} {app}` } }), launchAllowlist: async () => [], logger });
+    await expect(missing.invoke('launch', ['vlc'], ctx)).rejects.toMatchObject({
+      code: 'CAPABILITY_FAILED',
+      message: `The launch command needs "${MISSING}", which is not installed or not on PATH; install it or set another command in Settings → Commands → Launch app`,
+    });
+  });
+
   it('window management outside Hyprland says so instead of pointing at settings', async () => {
     const desktop = new DesktopHandler({ commands: runner(), launchAllowlist: async () => [], logger });
     for (const method of ['listWindows', 'currentWorkspace']) {

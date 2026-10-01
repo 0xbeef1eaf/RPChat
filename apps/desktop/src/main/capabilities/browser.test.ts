@@ -21,13 +21,14 @@ function fakeBridge(connected: boolean, answers: Record<string, Json | ((args: R
   return { bridge, calls };
 }
 
-function fakeCommands(template = 'xdg-open {url}') {
+/** The browser command, which is launched rather than run: `running` says the browser stayed up. */
+function fakeCommands(template = 'xdg-open {url}', result: { code: number; running: boolean; stderr?: string } = { code: 0, running: true }) {
   const runs: Array<{ command: string; vars: Record<string, string> }> = [];
   const commands = {
     resolve: async () => ({ command: template }),
-    runTemplate: async (tpl: { command: string }, vars: Record<string, string>) => {
+    launchTemplate: async (tpl: { command: string }, vars: Record<string, string>) => {
       runs.push({ command: tpl.command, vars });
-      return { code: 0, stdout: '', stderr: '' };
+      return { code: result.code, stdout: '', stderr: result.stderr ?? '', running: result.running };
     },
   } as unknown as CommandRunner;
   return { commands, runs };
@@ -402,6 +403,38 @@ describe('BrowserHandler with no browser running', () => {
     settle(false);
     await expect(first).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: LAUNCH_FAILED_MESSAGE });
     // Within the cooldown the next call fails outright rather than opening another window.
+    await expect(h.invoke('tabs', [], ctx)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: LAUNCH_FAILED_MESSAGE });
+    expect(runs).toHaveLength(1);
+    expect(waits()).toBe(1);
+  });
+
+  it('starts listening for the extension before the browser command comes back', async () => {
+    const { bridge, calls, waits, settle } = sleepingBridge({ 'tabs.list': [] });
+    let launched: (() => void) | undefined;
+    const commands = {
+      resolve: async () => ({ command: 'xdg-open {url}' }),
+      launchTemplate: () =>
+        new Promise((resolve) => {
+          launched = () => resolve({ code: 0, stdout: '', stderr: '', running: true });
+        }),
+    } as unknown as CommandRunner;
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf(true), startUrl: () => START_URL });
+    const tabs = h.invoke('tabs', [], ctx);
+    // The hello can land while the launcher is still working — a browser starts long before its
+    // command returns, and on Linux the command may not return until the browser is closed.
+    await vi.waitFor(() => expect(launched).toBeDefined());
+    expect(waits()).toBe(1);
+    settle(true);
+    launched?.();
+    expect(await tabs).toEqual([]);
+    expect(calls.map((c) => c.op)).toEqual(['tabs.list']);
+  });
+
+  it('reports a browser command that exited badly, and holds off launching again', async () => {
+    const { commands, runs } = fakeCommands('xdg-open {url}', { code: 4, running: false, stderr: 'no application found' });
+    const { bridge, waits } = sleepingBridge();
+    const h = new BrowserHandler({ commands, bridge, allowlist: async () => [], browserSettings: settingsOf(true), startUrl: () => START_URL });
+    await expect(h.invoke('tabs', [], ctx)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: expect.stringContaining('exited with 4: no application found') });
     await expect(h.invoke('tabs', [], ctx)).rejects.toMatchObject({ code: 'CAPABILITY_FAILED', message: LAUNCH_FAILED_MESSAGE });
     expect(runs).toHaveLength(1);
     expect(waits()).toBe(1);

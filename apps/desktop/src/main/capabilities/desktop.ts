@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import type { ActionContext, CapabilityHandler, Json } from '@rp/shared';
 import { RpError } from '@rp/shared';
-import { expandHome, isMissingExecutable } from '../commands.js';
+import { commandFailed, expandHome, isMissingExecutable } from '../commands.js';
 import type { HyprParser } from '../display/hypr-lua.js';
 import { isLuaParserResponse, luaCloseWindowCommand, luaFocusWindowCommand, luaMoveWindowCommand, luaWorkspaceCommand } from '../display/hypr-lua.js';
 import type { HyprClientJson, HyprMonitorJson, HyprTransport } from '../display/hyprland.js';
@@ -220,7 +220,11 @@ export class DesktopHandler implements CapabilityHandler {
     if (!Array.isArray(args) || !args.every((a) => typeof a === 'string')) throw new RpError('INVALID_ARGUMENT', 'args must be an array of strings');
     const app = expandHome(appArg.trim());
     if (await this.deps.commands.isConfigured('launch')) {
-      await this.deps.commands.runChecked('launch', { app, args: (args as string[]).join(' ') });
+      // Launched like the direct spawn below: the app the template starts goes on running, so
+      // waiting for the command to finish would hold this call until the user quits that app.
+      const tpl = await this.deps.commands.resolve('launch');
+      const result = await this.deps.commands.launchTemplate(tpl, { app, args: (args as string[]).join(' ') }, 'launch');
+      if (!result.running && result.code !== 0) throw commandFailed('launch', tpl, result);
       return {};
     }
     const spawnImpl = this.deps.spawnImpl ?? ((file: string, a: string[]) => spawn(file, a, { detached: true, stdio: 'ignore', windowsHide: false }));

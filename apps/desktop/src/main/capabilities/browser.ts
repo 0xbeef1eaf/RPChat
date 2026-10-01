@@ -399,13 +399,16 @@ export class BrowserHandler implements CapabilityHandler {
     if (this.launching) return this.launching;
     if (Date.now() - this.lastLaunchFailedAt < LAUNCH_COOLDOWN_MS) return Promise.resolve(false);
     const started = (async () => {
+      // Listen before the browser can say hello: a slow launcher must not eat the wait, and an
+      // extension that connects while the command is still starting up has to count.
+      const connected = wait(LAUNCH_WAIT_MS).catch(() => false);
       try {
         await this.runBrowserCommand(startUrl, false);
       } catch (err) {
         this.lastLaunchFailedAt = Date.now();
         throw err;
       }
-      const ok = await wait(LAUNCH_WAIT_MS);
+      const ok = await connected;
       if (!ok) this.lastLaunchFailedAt = Date.now();
       return ok;
     })();
@@ -438,7 +441,12 @@ export class BrowserHandler implements CapabilityHandler {
     return null;
   }
 
-  /** Open a URL with the user's browser command — `open` without the extension, and the auto-launch. */
+  /**
+   * Open a URL with the user's browser command — `open` without the extension, and the auto-launch.
+   * Launched, not run: with no browser running yet the command *becomes* the browser (or hands it
+   * the stdio pipes it was given), so waiting for it to finish would mean waiting for the user to
+   * quit their browser, and every later call would queue behind this one.
+   */
   private async runBrowserCommand(url: string, newWindow: boolean): Promise<void> {
     const tpl = await this.deps.commands.resolve('browser');
     if (!isConfigured(tpl)) {
@@ -447,7 +455,8 @@ export class BrowserHandler implements CapabilityHandler {
       return;
     }
     const flag = newWindow && tpl.command.includes('{newWindow}') ? '--new-window' : '';
-    const result = await this.deps.commands.runTemplate(tpl, { url, newWindow: flag }, 'browser');
-    if (result.code !== 0) throw commandFailed('browser', tpl, result);
+    const result = await this.deps.commands.launchTemplate(tpl, { url, newWindow: flag }, 'browser');
+    // A browser that is still up is a success; only a command that exited, badly, is a failure.
+    if (!result.running && result.code !== 0) throw commandFailed('browser', tpl, result);
   }
 }

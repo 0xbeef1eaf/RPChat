@@ -394,6 +394,110 @@ export function spawnCapture(file: string, args: string[], opts: SpawnCaptureOpt
   });
 }
 
+export interface LaunchResult extends CommandResult {
+  /** The program was still running when we stopped watching (its exit code is unknown; `code` is 0). */
+  running: boolean;
+}
+
+export interface LaunchOptions {
+  env?: NodeJS.ProcessEnv;
+  /** Defaults to the user's home directory, as command templates do. */
+  cwd?: string;
+  /** Windows only: pass `args` through without re-quoting (used for `cmd /c "…"` lines). */
+  verbatim?: boolean;
+  /** How long to watch for an early failure before calling the program started. */
+  settleMs?: number;
+}
+
+/** How long a launched program has to fail before `launchCapture` calls it started. */
+export const LAUNCH_SETTLE_MS = 500;
+/**
+ * Templates whose program is meant to keep running once started (a browser, an app), so they are
+ * launched with `launchTemplate` rather than run to completion: waiting for them would mean waiting
+ * for the user to quit what they just opened.
+ */
+export const LAUNCHING_TEMPLATES: ReadonlySet<keyof CommandTemplates> = new Set(['browser', 'launch']);
+/** Output still collected after the program exited; a grandchild can hold the pipes open for ever. */
+const LAUNCH_OUTPUT_GRACE_MS = 50;
+
+/**
+ * Start a long-lived program — the user's browser, an app — and wait only for it to *start*.
+ * `spawnCapture` is the wrong tool for that twice over: it settles when the stdio pipes close, and
+ * a launcher such as `xdg-open` passes them to the browser it starts, so the promise would not
+ * settle until the user quits that browser; its timeout would then SIGKILL a launcher that `exec`s
+ * into the browser, taking the browser with it. Here a program that dies within `settleMs` resolves
+ * with its exit code and output — a launcher that refuses the URL is still reported — and one that
+ * is still up resolves `running: true` and is left alone, in its own process group so it outlives
+ * the app. Rejects only when the program cannot be started.
+ */
+export function launchCapture(file: string, args: string[], opts: LaunchOptions = {}): Promise<LaunchResult> {
+  const verbatim = opts.verbatim ?? false;
+  const settleMs = Math.max(0, opts.settleMs ?? LAUNCH_SETTLE_MS);
+  const cwd = opts.cwd ?? os.homedir();
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const child = spawn(file, args, {
+      cwd,
+      env: opts.env ?? process.env,
+      windowsHide: true,
+      windowsVerbatimArguments: verbatim,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const finish = (result: LaunchResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(settleTimer);
+      // Whatever it does from here is its own business: unref the process and its pipes (sockets
+      // at runtime, whatever `Readable` says) so a browser the user keeps open all day holds
+      // nothing of ours. The listeners stay on, draining and discarding what it writes.
+      child.unref();
+      for (const pipe of [child.stdout, child.stderr]) (pipe as { unref?: () => void } | null)?.unref?.();
+      resolve(result);
+    };
+    const settleTimer = setTimeout(() => finish({ code: 0, stdout, stderr, running: true }), settleMs);
+    const append = (current: string, chunk: Buffer): string =>
+      settled || current.length >= COMMAND_OUTPUT_CAP ? current : (current + chunk.toString('utf8')).slice(0, COMMAND_OUTPUT_CAP);
+    child.stdout?.on('data', (chunk: Buffer) => (stdout = append(stdout, chunk)));
+    child.stderr?.on('data', (chunk: Buffer) => (stderr = append(stderr, chunk)));
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(settleTimer);
+      const missing = isMissingExecutable(err);
+      reject(
+        new RpError(
+          'CAPABILITY_FAILED',
+          missing ? `Cannot run "${file}": it is not installed or not on PATH` : `Cannot run "${file}": ${err.message}`,
+          { file, args, ...(missing ? { code: 'ENOENT' } : {}) },
+          { cause: err },
+        ),
+      );
+    });
+    child.on('exit', (code, signal) => {
+      // Give the last line of a launcher that complained time to arrive, but never wait for the
+      // pipes themselves: the program it started may hold them.
+      const done = (): void => finish({ code: code ?? (signal ? -1 : 0), stdout, stderr, running: false });
+      const grace = setTimeout(done, LAUNCH_OUTPUT_GRACE_MS);
+      grace.unref?.();
+      child.on('close', done);
+    });
+  });
+}
+
+/** `launchCapture` for a command template: `runTemplate` for programs that are meant to keep running. */
+export function launchTemplate(tpl: CommandTemplate, vars: Record<string, string>, opts: LaunchOptions & { platform?: NodeJS.Platform } = {}): Promise<LaunchResult> {
+  const platform = opts.platform ?? process.platform;
+  const { file, args, verbatim } = buildArgv(tpl, vars, platform);
+  return launchCapture(file, args, {
+    ...opts,
+    verbatim,
+    ...(tpl.cwd && tpl.cwd.trim().length > 0 ? { cwd: expandHome(tpl.cwd) } : {}),
+  });
+}
+
 /** `~` and `~/x` → the user's home directory. */
 export function expandHome(p: string, home: string = os.homedir()): string {
   if (p === '~') return home;

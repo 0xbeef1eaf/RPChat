@@ -27,7 +27,7 @@ import type {
 import { IPC_EVENT_CHANNELS, RpError } from '@rp/shared';
 import type { Engine, Logger } from '@rp/core';
 import { resolveAssetUrl } from './asset-protocol.js';
-import { notConfigured } from './commands.js';
+import { LAUNCHING_TEMPLATES, notConfigured } from './commands.js';
 import { fetchTelegramChats } from './capabilities/messaging.js';
 import type { AppServices } from './engine.js';
 import { phase2, unavailable } from './phase2.js';
@@ -272,6 +272,12 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
           rate: '',
           voice: '',
         };
+        // A browser (or an app) the test just opened keeps running: wait for it to start, not to
+        // finish, or the test would hang until the user closes it — and then be SIGKILLed.
+        if (LAUNCHING_TEMPLATES.has(name)) {
+          const launched = await services.commands.launchTemplate(effective, vars, `test:${name}`);
+          return { code: launched.code, stdout: launched.stdout, stderr: launched.stderr };
+        }
         return services.commands.runTemplate(effective, vars, `test:${name}`);
       },
       defaultCommands: async () => services.commands.defaults(),
