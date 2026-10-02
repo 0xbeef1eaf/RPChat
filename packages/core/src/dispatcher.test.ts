@@ -71,6 +71,26 @@ describe('CapabilityDispatcher', () => {
     expect(audit[0]).toMatchObject({ outcome: 'denied', module: 'system', method: 'exec', args: ['rm'] });
   });
 
+  it('audits a library call the sandbox reports, without checking anything', async () => {
+    // lib.<name> runs inside the isolate: there is no handler, no permission and nothing to
+    // return — the dispatcher only has to get it into the log.
+    const { dispatcher, audit } = setup('deny');
+    dispatcher.recordLibCall({ context, name: 'cheer', args: ['happy', 'x'.repeat(5000)], outcome: 'allowed', durationMs: 7 });
+    dispatcher.recordLibCall({
+      context,
+      name: 'pick',
+      args: [],
+      outcome: 'denied',
+      error: { code: 'PERMISSION_DENIED', message: 'lib.pick is an internal helper' },
+      durationMs: 0,
+    });
+    await Promise.resolve();
+    expect(audit).toHaveLength(2);
+    expect(audit[0]).toMatchObject({ module: 'lib', method: 'cheer', outcome: 'allowed', durationMs: 7, sessionId: 's', characterRef: 'com.example.p/c' });
+    expect((audit[0]!.args[1] as string).length).toBeLessThan(1100);
+    expect(audit[1]).toMatchObject({ module: 'lib', method: 'pick', outcome: 'denied', error: { code: 'PERMISSION_DENIED' } });
+  });
+
   it('shortens huge string arguments in the audit log', async () => {
     const { dispatcher, audit } = setup('allow', { moduleId: 'system', invoke: async () => null });
     await dispatcher.invoke({ callId: '1', module: 'system', method: 'writeFile', args: ['/f', 'x'.repeat(5000)], context });

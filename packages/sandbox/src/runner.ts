@@ -15,6 +15,7 @@ import type {
   CodeRunResult,
   CodeRunner,
   Json,
+  LibCall,
   LogEntry,
   LogLevel,
   RunLimits,
@@ -76,6 +77,14 @@ interface Lane {
 
 const LOG_LEVELS: ReadonlySet<string> = new Set<LogLevel>(['debug', 'info', 'warn', 'error']);
 const TRUNCATED_MARKER = '…[truncated]';
+/**
+ * Library calls reported to the invoker in one run. A library call is free — it never
+ * leaves the isolate — so a loop can make thousands of them, and every one of those
+ * would be an entry in an action log that is capped and shared with the sdk calls worth
+ * reading. Past this many the run stops reporting and says so once in its log.
+ */
+const MAX_LIB_CALL_REPORTS = 200;
+const LIB_TRUNCATED_MARKER = `…[library calls past the first ${MAX_LIB_CALL_REPORTS} of this run are not in the action log]`;
 
 /**
  * Executes character code in a QuickJS WebAssembly isolate.
@@ -329,6 +338,7 @@ class RunSession implements TerminationState {
   private readonly onAbort = (): void => this.terminate('aborted');
   private readonly terminationLimits: TerminationLimits;
   private callCount = 0;
+  private libCallCount = 0;
   private logBytes = 0;
   private logsClosed = false;
   private jobError: unknown = undefined;
@@ -450,17 +460,20 @@ class RunSession implements TerminationState {
     const surfaceJson = scope.manage(context.newString(JSON.stringify(this.request.surface)));
     const hostCallFn = scope.manage(context.newFunction('__rp_host_call', (mod, method, argsJson) => this.onHostCall(mod, method, argsJson)));
     const logFn = scope.manage(context.newFunction('__rp_log', (level, message) => this.onLog(level, message)));
+    const libCallFn = scope.manage(context.newFunction('__rp_lib_call', (name, report) => this.onLibCall(name, report)));
 
     // Only code the model wrote is kept out of the library's @internal helpers; the pack's own
     // behaviour hooks, its event handlers and timers, and the Sandbox tab all reach them.
     const restrictInternals = this.request.context.trigger.kind === 'llm' ? context.true : context.false;
 
-    const callResult = this.enter(() => context.callFunction(bootFn, context.undefined, surfaceJson, hostCallFn, logFn, restrictInternals));
+    const callResult = this.enter(() =>
+      context.callFunction(bootFn, context.undefined, surfaceJson, hostCallFn, logFn, restrictInternals, libCallFn),
+    );
     if (callResult.error) {
       throw new RpError('INTERNAL', 'sandbox bootstrap failed', this.dumpAndDispose(callResult.error));
     }
     callResult.value.dispose();
-    for (const h of [bootFn, surfaceJson, hostCallFn, logFn]) if (h.alive) h.dispose();
+    for (const h of [bootFn, surfaceJson, hostCallFn, logFn, libCallFn]) if (h.alive) h.dispose();
   }
 
   /** Runs inside the isolate's call into the host; never suspends the wasm stack. */
@@ -519,6 +532,47 @@ class RunSession implements TerminationState {
     }
     this.logBytes += bytes;
     this.logs.push({ level, message, at });
+  }
+
+  /**
+   * A settled `lib.<name>(...)` call the isolate is telling the host about, for the action log.
+   * Nothing here may throw: this runs inside a wasm entry, where an escaping exception poisons
+   * the module — so a malformed report, or an invoker that throws, is dropped instead.
+   */
+  private onLibCall(nameH: QuickJSHandle | undefined, reportH: QuickJSHandle | undefined): void {
+    const record = this.request.invoker.recordLibCall;
+    if (!record) return;
+    if (this.libCallCount >= MAX_LIB_CALL_REPORTS) return;
+    try {
+      const name = nameH ? String(this.context.dump(nameH)) : '';
+      const parsed = JSON.parse(reportH ? String(this.context.dump(reportH)) : 'null') as {
+        args?: unknown;
+        outcome?: unknown;
+        message?: unknown;
+        durationMs?: unknown;
+      } | null;
+      if (!parsed || typeof parsed !== 'object') return;
+      const outcome = parsed.outcome === 'denied' || parsed.outcome === 'failed' ? parsed.outcome : 'allowed';
+      const call: LibCall = {
+        context: this.request.context,
+        name,
+        args: Array.isArray(parsed.args) ? (parsed.args as Json[]) : [],
+        outcome,
+        durationMs: typeof parsed.durationMs === 'number' && Number.isFinite(parsed.durationMs) ? parsed.durationMs : 0,
+      };
+      if (typeof parsed.message === 'string') {
+        // The isolate reports the message only; the code says how the call ended, which is all
+        // the host can know about a failure it never saw.
+        call.error = { code: outcome === 'denied' ? 'PERMISSION_DENIED' : 'SANDBOX_RUNTIME', message: parsed.message };
+      }
+      this.libCallCount += 1;
+      if (this.libCallCount === MAX_LIB_CALL_REPORTS && !this.logsClosed) {
+        this.logs.push({ level: 'warn', message: LIB_TRUNCATED_MARKER, at: new Date().toISOString() });
+      }
+      record.call(this.request.invoker, call);
+    } catch {
+      // A report the host cannot read is not worth failing the run over.
+    }
   }
 
   private async performHostCall(call: PendingHostCall): Promise<void> {

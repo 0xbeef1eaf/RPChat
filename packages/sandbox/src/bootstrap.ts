@@ -1,6 +1,6 @@
 /**
  * Source of the bootstrap function evaluated inside a fresh isolate before the
- * user's code. Evaluating it yields a function `(surfaceJson, hostCall, log, restrictInternals)`
+ * user's code. Evaluating it yields a function `(surfaceJson, hostCall, log, restrictInternals, libCall)`
  * which the runner calls once with:
  *
  * - `surfaceJson`: `JSON.stringify(SdkSurface)`;
@@ -8,12 +8,14 @@
  *   returning the JSON text of a `CapabilityResult`;
  * - `log(level, message) => void`: host function capturing log output;
  * - `restrictInternals`: true for an LLM-authored run, where the action body may
- *   not call the library's `@internal` helpers (see `__rp_lib` below).
+ *   not call the library's `@internal` helpers (see `__rp_lib` below);
+ * - `libCall(name, reportJson) => void`: host function told about each settled
+ *   `lib.<name>(...)` call so the action log can show it.
  *
  * It installs the frozen globals `sdk` and `console`, plus `__rp_lib`. Nothing
- * else leaks into the isolate: `hostCall` and `log` are captured by closures
- * only, so user code can only reach the host through the methods listed in the
- * surface.
+ * else leaks into the isolate: `hostCall`, `log` and `libCall` are captured by
+ * closures only, so user code can only reach the host through the methods listed
+ * in the surface.
  *
  * `console.*` is synchronous and captured locally; it never crosses to the
  * host as a call.
@@ -26,7 +28,7 @@
  * reads back whatever it last built. `sdk.lib.cheer()` is therefore the same
  * call as `lib.cheer()`, which is what characters kept writing anyway.
  */
-export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log, restrictInternals) {
+export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log, restrictInternals, libCall) {
   'use strict';
   var surface = JSON.parse(surfaceJson);
   var hideInternals = restrictInternals === true;
@@ -132,20 +134,53 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
    * event handlers, timers, the Sandbox tab — reaches them normally. It keeps the model out
    * of the author's plumbing; it is not a security boundary, since every one of these
    * functions is the character's own code running with the same permissions.
+   *
+   * Every saved function is wrapped in every run, whatever the trigger, because the wrapper
+   * is also what reports the call to the host for the action log (reportLibCall).
    */
   var libValue = buildLib({});
   /** Greater than 0 while a library function is on the stack. */
   var libDepth = 0;
 
+  /**
+   * Tell the host a library call settled, so it lands in the action log beside the sdk
+   * calls the same code made. One synchronous crossing per call, like console: nothing is
+   * awaited and the report cannot change what the function already returned, so a host
+   * that chooses not to listen costs the run nothing.
+   */
+  function reportLibCall(name, args, outcome, message, startedAt) {
+    if (typeof libCall !== 'function') return;
+    var report = { args: args, outcome: outcome, durationMs: Date.now() - startedAt };
+    if (message !== undefined) report.message = message;
+    var json;
+    try {
+      json = JSON.stringify(report, function (key, value) {
+        return typeof value === 'function' ? '[function]' : value;
+      });
+    } catch (e) {
+      // A cyclic argument, or one holding a bigint: still log the call, and say so in place of them.
+      report.args = ['[arguments are not JSON-serialisable]'];
+      json = JSON.stringify(report);
+    }
+    libCall(name, json);
+  }
+
+  /** Why a library call failed, in one line and bounded: it reaches the action log as the entry's error. */
+  function failureMessage(e) {
+    var text = e instanceof Error ? e.name + ': ' + e.message : formatArg(e);
+    return text.length > 1024 ? text.slice(0, 1024) + '… (' + text.length + ' chars)' : text;
+  }
+
   function guardInternal(name, fn) {
     var wrapped = function () {
       if (libDepth === 0) {
-        throw new Error(
+        var refusal =
           'lib.' + name + ' is an internal helper of this character: it is not listed in <library> and ' +
-            'an action cannot call it. Call one of the listed functions instead.',
-        );
+          'an action cannot call it. Call one of the listed functions instead.';
+        reportLibCall(name, Array.prototype.slice.call(arguments), 'denied', refusal, Date.now());
+        throw new Error(refusal);
       }
-      return callDeeper(fn, this, arguments);
+      return callDeeper(name, fn, this, arguments);
     };
     // Keep String(lib.<name>) the saved source, which is what the isolate reports and what
     // serialiseArg stores when a library function is handed to sdk.events.on.
@@ -155,9 +190,9 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
     return wrapped;
   }
 
-  function trackDepth(fn) {
+  function trackDepth(name, fn) {
     var wrapped = function () {
-      return callDeeper(fn, this, arguments);
+      return callDeeper(name, fn, this, arguments);
     };
     wrapped.toString = function () {
       return String(fn);
@@ -165,29 +200,35 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
     return wrapped;
   }
 
-  /** Run fn with libDepth raised, lowering it again once it settles. */
-  function callDeeper(fn, self, args) {
+  /** Run fn with libDepth raised, lowering it again once it settles, and report the call. */
+  function callDeeper(name, fn, self, args) {
+    var list = Array.prototype.slice.call(args);
+    var startedAt = Date.now();
     libDepth++;
     var out;
     try {
       out = fn.apply(self, args);
     } catch (e) {
       libDepth--;
+      reportLibCall(name, list, 'failed', failureMessage(e), startedAt);
       throw e;
     }
     if (out !== null && typeof out === 'object' && typeof out.then === 'function') {
       return out.then(
         function (v) {
           libDepth--;
+          reportLibCall(name, list, 'allowed', undefined, startedAt);
           return v;
         },
         function (e) {
           libDepth--;
+          reportLibCall(name, list, 'failed', failureMessage(e), startedAt);
           throw e;
         },
       );
     }
     libDepth--;
+    reportLibCall(name, list, 'allowed', undefined, startedAt);
     return out;
   }
 
@@ -202,9 +243,9 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
     for (i = 0; i < names.length; i++) {
       var name = names[i];
       var fn = functions[name];
-      if (!hideInternals || typeof fn !== 'function') lib[name] = fn;
+      if (typeof fn !== 'function') lib[name] = fn;
       else if (internal[name] === true) lib[name] = guardInternal(name, fn);
-      else lib[name] = trackDepth(fn);
+      else lib[name] = trackDepth(name, fn);
     }
     if (libStatics !== null) {
       // Not overridable by a saved function: register and unregister are reserved names.

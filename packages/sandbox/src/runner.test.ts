@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RpError } from '@rp/shared';
-import type { ActionContext, CapabilityCall, CapabilityInvoker, CapabilityResult, CodeRunRequest, SdkSurface } from '@rp/shared';
+import type { ActionContext, CapabilityCall, CapabilityInvoker, CapabilityResult, CodeRunRequest, LibCall, SdkSurface } from '@rp/shared';
 import { QuickJsRunner } from './runner.js';
 
 const surface: SdkSurface = {
@@ -21,14 +21,19 @@ const context: ActionContext = {
 
 type Handler = (call: CapabilityCall) => Promise<CapabilityResult> | CapabilityResult;
 
-function makeInvoker(handler?: Handler): CapabilityInvoker & { calls: CapabilityCall[] } {
+function makeInvoker(handler?: Handler): CapabilityInvoker & { calls: CapabilityCall[]; libCalls: LibCall[] } {
   const calls: CapabilityCall[] = [];
+  const libCalls: LibCall[] = [];
   return {
     calls,
+    libCalls,
     async invoke(call) {
       calls.push(call);
       if (handler) return handler(call);
       return { ok: true, value: { echo: { module: call.module, method: call.method, args: call.args } } };
+    },
+    recordLibCall(call) {
+      libCalls.push(call);
     },
   };
 }
@@ -525,6 +530,88 @@ describe('QuickJsRunner', () => {
       expect(result.error?.code).toBe('SANDBOX_COMPILE');
       expect(result.error?.details).toMatchObject({ line: 2 });
       expect((result.error?.details as { frame?: string }).frame).toContain('> 2 | const b = ;');
+    });
+
+    // A library call never reaches the invoker, so without this the action log would show
+    // only the part of a run that happened to need the host.
+    describe('reporting library calls for the action log', () => {
+      it('reports each call with its arguments, outcome and duration', async () => {
+        const invoker = makeInvoker();
+        const result = await runner.run(req('return await lib.double(21);', { prelude, invoker }));
+        expect(result.error).toBeUndefined();
+        expect(result.returnValue).toBe(42);
+        expect(invoker.libCalls).toHaveLength(1);
+        expect(invoker.libCalls[0]).toMatchObject({ name: 'double', args: [21], outcome: 'allowed', context });
+        expect(invoker.libCalls[0]!.error).toBeUndefined();
+        expect(invoker.libCalls[0]!.durationMs).toBeGreaterThanOrEqual(0);
+        // the report is not a capability call: nothing was invoked
+        expect(invoker.calls).toEqual([]);
+      });
+
+      it('reports a call one library function makes to another', async () => {
+        const invoker = makeInvoker();
+        const result = await runner.run(req('return await lib.double(2);', { prelude: withInternal, surface: libSurface, invoker }));
+        expect(result.error).toBeUndefined();
+        expect(invoker.libCalls.map((c) => `${c.name}(${c.args.join()})`)).toEqual(['pick(2)', 'double(2)']);
+      });
+
+      it('reports a throwing call as failed, with the message', async () => {
+        const invoker = makeInvoker();
+        const boom = ['const lib = __rp_lib({', '  "boom": (async () => { throw new Error("no"); }),', '});'].join('\n');
+        const result = await runner.run(req('return await lib.boom();', { prelude: boom, invoker }));
+        expect(result.ok).toBe(false);
+        expect(invoker.libCalls[0]).toMatchObject({ name: 'boom', outcome: 'failed', error: { code: 'SANDBOX_RUNTIME', message: 'Error: no' } });
+      });
+
+      it('reports an internal helper an action may not call as denied', async () => {
+        const invoker = makeInvoker();
+        const result = await runner.run(req('return await lib.pick(1);', { prelude: withInternal, surface: libSurface, invoker }));
+        expect(result.ok).toBe(false);
+        expect(invoker.libCalls).toHaveLength(1);
+        expect(invoker.libCalls[0]).toMatchObject({ name: 'pick', args: [1], outcome: 'denied', error: { code: 'PERMISSION_DENIED' } });
+        expect(invoker.libCalls[0]!.error?.message).toContain('internal helper');
+      });
+
+      it('names an argument it cannot serialise rather than dropping the call', async () => {
+        const invoker = makeInvoker();
+        const echo = ['const lib = __rp_lib({', '  "echo": ((x: any) => typeof x),', '});'].join('\n');
+        const callback = await runner.run(req('return await lib.echo(() => 1);', { prelude: echo, invoker }));
+        expect(callback.returnValue).toBe('function');
+        expect(invoker.libCalls[0]!.args).toEqual(['[function]']);
+
+        const cyclic = await runner.run(req('const a: any = {};\na.self = a;\nreturn await lib.echo(a);', { prelude: echo, invoker }));
+        expect(cyclic.returnValue).toBe('object');
+        expect(invoker.libCalls[1]!.args).toEqual(['[arguments are not JSON-serialisable]']);
+      });
+
+      it('stops reporting after 200 calls in one run and says so in the log', async () => {
+        const invoker = makeInvoker();
+        const result = await runner.run(req('for (let i = 0; i < 250; i++) await lib.double(i);\nreturn "done";', { prelude, invoker }));
+        expect(result.returnValue).toBe('done');
+        expect(invoker.libCalls).toHaveLength(200);
+        expect(result.logs.at(-1)?.message).toContain('past the first 200');
+      });
+
+      it('reports library calls from a trigger that is not the model, where nothing is hidden', async () => {
+        const invoker = makeInvoker();
+        const result = await runner.run(
+          req('return await lib.pick(1);', {
+            prelude: withInternal,
+            surface: libSurface,
+            invoker,
+            context: { ...context, trigger: { kind: 'timer', timerId: 't1' } },
+          }),
+        );
+        expect(result.returnValue).toBe(2);
+        expect(invoker.libCalls[0]).toMatchObject({ name: 'pick', outcome: 'allowed' });
+      });
+
+      it('leaves the run alone when the invoker does not take library calls', async () => {
+        const invoker: CapabilityInvoker = { async invoke() { return { ok: true, value: null }; } };
+        const result = await runner.run(req('return await lib.double(4);', { prelude, invoker }));
+        expect(result.error).toBeUndefined();
+        expect(result.returnValue).toBe(8);
+      });
     });
   });
 

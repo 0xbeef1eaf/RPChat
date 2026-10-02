@@ -109,11 +109,40 @@ export interface CapabilityHandler {
 }
 
 /**
+ * One `lib.<name>(...)` call, reported after it settled. A library function is the
+ * character's own saved code and the prelude defines it inside the isolate, so the
+ * call never crosses the boundary the way a capability call does: the sandbox tells
+ * the host about it afterwards so the action log is the whole story and not only the
+ * part that needed the host.
+ */
+export interface LibCall {
+  context: ActionContext;
+  /** Name of the saved function; the action log shows it as `lib.<name>`. */
+  name: string;
+  /** What it was called with, as the isolate could serialise it (a function argument becomes `"[function]"`). */
+  args: Json[];
+  /**
+   * `allowed` when it returned, `failed` when it threw, `denied` for an `@internal`
+   * helper the action body of an LLM-authored run may not call.
+   */
+  outcome: 'allowed' | 'denied' | 'failed';
+  error?: SerializedError;
+  durationMs: number;
+}
+
+/**
  * Entry point the sandbox uses to reach the host. Implemented by core's
  * `CapabilityDispatcher` (permission check → audit → handler).
  */
 export interface CapabilityInvoker {
   invoke(call: CapabilityCall): Promise<CapabilityResult>;
+  /**
+   * Record a library call in the action log. Nothing waits on it and nothing can be
+   * refused here — the function has already run inside the isolate — so this returns
+   * void and must not throw. Optional: a runner whose invoker leaves it out simply
+   * logs no library calls.
+   */
+  recordLibCall?(call: LibCall): void;
 }
 
 /** A pending `prompt`-level confirmation shown to the user. */
