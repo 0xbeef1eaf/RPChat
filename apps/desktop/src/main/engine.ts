@@ -15,6 +15,7 @@ import { IPC_EVENT_CHANNELS, RpError, assetUrl, parseCharacterRef } from '@rp/sh
 import { defaultSettings, mergeSettings } from '@rp/core';
 import { hasExecutable, spawnCapture } from './commands.js';
 import { AvatarHandler } from './capabilities/avatar.js';
+import { AVATAR_STATE_FILENAME, AvatarFileStore } from './capabilities/avatar-store.js';
 import { BrowserHandler } from './capabilities/browser.js';
 import { CalendarHandler } from './capabilities/calendar.js';
 import { DesktopHandler } from './capabilities/desktop.js';
@@ -120,6 +121,11 @@ export interface AppServices {
   setBridgePort(port: number): Promise<void>;
   /** Absolute path of the bundled sample image (copied out of the asar when needed). */
   sampleImage(): Promise<string>;
+  /**
+   * Put back the avatars that were on screen when the app last closed (capabilities/avatar.ts).
+   * Called by index.ts once `rp-asset://` can serve their images, and never fatal.
+   */
+  restoreAvatars(): Promise<void>;
   /** Root directory served for a pack id by rp-asset:// (installed packs + app-generated roots). */
   packRootFor(packId: string): string | undefined;
   stop(): Promise<void>;
@@ -338,7 +344,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     if (ev.event !== 'tab-updated' || ev.data.status !== 'complete' || typeof ev.data.url !== 'string') return;
     emit({ name: 'browser-navigated', data: { tabId: ev.data.tabId, url: ev.data.url, title: ev.data.title ?? '' }, at: new Date().toISOString() });
   });
-  const avatar = new AvatarHandler({ backend: () => backend, packs, emit, logger });
+  const avatar = new AvatarHandler({ backend: () => backend, packs, emit, logger, store: new AvatarFileStore(path.join(dataDir, AVATAR_STATE_FILENAME)) });
   const widgets = new WidgetsHandler({ backend: () => backend, emit, packs, defaultLayer: async () => ((await settingsOf()).mediaAlwaysOnTop ? 'top' : 'bottom') });
   const screenHandler = new ScreenHandler({
     backend: () => backend,
@@ -770,6 +776,11 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       await previous.dispose().catch((err: unknown) => logger.warn('[display] dispose of previous backend failed', err));
     },
     sampleImage,
+    async restoreAvatars() {
+      // Safe to call from the moment `createApp` resolves: the expressions come from the packs, and
+      // `engine.start()` has loaded them by then.
+      await avatar.restore();
+    },
     packRootFor,
     async stop() {
       if (stopped) return;

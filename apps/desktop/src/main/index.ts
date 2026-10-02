@@ -215,6 +215,11 @@ async function main(): Promise<void> {
   const active = services;
   protocol.handle(ASSET_PROTOCOL, (request) => handleAssetRequest(request, { packRootFor: (packId) => active.packRootFor(packId), logger }));
 
+  // An avatar the user left on screen goes back up, now that `rp-asset://` can serve its image.
+  // Not awaited: an overlay that is slow to open must not hold up the window, and a failed one is
+  // logged and forgotten rather than fatal.
+  void active.restoreAvatars();
+
   // `app.allowQuit` from the policy: applied now (before the tray exists so its menu is right from
   // the start), on every window show/close, and whenever the watcher sees the policy change — an
   // edited file included, since the watcher polls for one.

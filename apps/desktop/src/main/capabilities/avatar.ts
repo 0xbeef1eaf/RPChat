@@ -1,7 +1,28 @@
-/** `sdk.avatar`: one animated avatar overlay per character, expressions from the character's `avatarSet`. */
+/**
+ * `sdk.avatar`: one animated avatar overlay per character, expressions from the character's `avatarSet`.
+ *
+ * An avatar on screen is part of the desktop the user left behind, so it is remembered between
+ * launches: every change writes a record through `AvatarStore`, `hide()` drops it, and `restore()`
+ * — called once at startup, after the packs are loaded — puts back what was still up when the app
+ * went away. The app closing down is not a `hide()`: `dispose()` takes the overlays with it and
+ * leaves the records alone, which is what makes a restart show the avatar again.
+ */
 import { randomUUID } from 'node:crypto';
-import type { ActionContext, AvatarAnimation, AvatarState, CapabilityHandler, HostEvent, Json, LoadedCharacter, LoadedPack, MonitorInfo, OverlayOptions } from '@rp/shared';
-import { RpError, assetUrl, characterRef } from '@rp/shared';
+import type {
+  ActionContext,
+  AvatarAnimation,
+  AvatarState,
+  CapabilityHandler,
+  HostEvent,
+  Json,
+  LoadedCharacter,
+  LoadedPack,
+  MediaPosition,
+  MonitorInfo,
+  OverlayLayer,
+  OverlayOptions,
+} from '@rp/shared';
+import { RpError, assetUrl, characterRef, parseCharacterRef } from '@rp/shared';
 import { resolveAssetPath, joinRelative } from '@rp/pack';
 import type { DisplayBackend, OverlayHandle, OverlaySpec, ResolvedOverlayOptions } from '../display/backend.js';
 import { applyOverlayUpdate, resolveOverlayOptions } from '../display/backend.js';
@@ -56,6 +77,93 @@ export function toInfo(state: AvatarState): AvatarStateInfo {
   return info;
 }
 
+/**
+ * What is remembered about an avatar that is on screen: who it belongs to and enough of its state
+ * to show it again. The image URL is not among it — expressions are resolved from the pack as it
+ * is when the avatar comes back, not as it was.
+ */
+export interface AvatarRecord {
+  packId: string;
+  characterId: string;
+  expression: string;
+  size: number;
+  lookAtCursor: boolean;
+  overlay: AvatarState['overlay'];
+}
+
+/** Where the records live between launches (`AvatarFileStore` in avatar-store.ts). */
+export interface AvatarStore {
+  load(): Promise<AvatarRecord[]>;
+  save(records: AvatarRecord[]): Promise<void>;
+}
+
+/** Pure: the record for a shown avatar. */
+export function avatarRecord(ref: string, state: AvatarState): AvatarRecord {
+  const { packId, characterId } = parseCharacterRef(ref);
+  return { packId, characterId, expression: state.expression, size: state.size, lookAtCursor: state.lookAtCursor, overlay: { ...state.overlay } };
+}
+
+/**
+ * Pure: the records in a stored file (`{ avatars: [...] }` or a bare array), skipping an entry that
+ * names no character. Everything else is passed on as it was read — `show` validates each field
+ * the same way it validates a character's own arguments, so a hand-edited file cannot do worse
+ * than put the avatar somewhere unexpected.
+ */
+export function parseAvatarRecords(raw: unknown): AvatarRecord[] {
+  const list = Array.isArray(raw) ? raw : Array.isArray((raw as { avatars?: unknown })?.avatars) ? (raw as { avatars: unknown[] }).avatars : [];
+  const out: AvatarRecord[] = [];
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.packId !== 'string' || e.packId.length === 0) continue;
+    if (typeof e.characterId !== 'string' || e.characterId.length === 0) continue;
+    const o = (e.overlay && typeof e.overlay === 'object' ? e.overlay : {}) as Record<string, unknown>;
+    out.push({
+      packId: e.packId,
+      characterId: e.characterId,
+      expression: typeof e.expression === 'string' ? e.expression : '',
+      size: clampSize(e.size),
+      lookAtCursor: e.lookAtCursor === true,
+      overlay: {
+        layer: (typeof o.layer === 'string' ? o.layer : 'top') as OverlayLayer,
+        opacity: typeof o.opacity === 'number' ? o.opacity : 1,
+        clickThrough: o.clickThrough === true,
+        ...(typeof o.monitorId === 'string' ? { monitorId: o.monitorId } : {}),
+        ...(typeof o.x === 'number' ? { x: o.x } : {}),
+        ...(typeof o.y === 'number' ? { y: o.y } : {}),
+        ...(typeof o.position === 'string' ? { position: o.position as MediaPosition } : {}),
+      },
+    });
+  }
+  return out;
+}
+
+/** A placement offset of 0..1 reads as a fraction of the monitor, so an exact 1 px is passed as 1.001 (it rounds back to 1). */
+function pxOffset(px: number): number {
+  return px === 1 ? 1.001 : px;
+}
+
+/**
+ * Pure: the `show` options that put a remembered avatar back where it was. A monitor that is no
+ * longer connected falls back to the primary one (`selectMonitor`), and an avatar that was placed
+ * at random lands on a fresh random spot — the draw itself is not remembered.
+ */
+export function recordShowOptions(record: AvatarRecord): AvatarShowOptions {
+  const o = record.overlay;
+  return {
+    expression: record.expression,
+    size: record.size,
+    lookAtCursor: record.lookAtCursor,
+    layer: o.layer,
+    opacity: o.opacity,
+    clickThrough: o.clickThrough,
+    monitor: o.monitorId ?? 'primary',
+    ...(o.position !== undefined ? { position: o.position } : {}),
+    ...(o.x !== undefined ? { x: pxOffset(o.x) } : {}),
+    ...(o.y !== undefined ? { y: pxOffset(o.y) } : {}),
+  };
+}
+
 interface Live {
   handle: OverlayHandle;
   state: AvatarState;
@@ -72,6 +180,8 @@ export interface AvatarHandlerDeps {
   emit(event: HostEvent): void;
   logger: Pick<Console, 'warn' | 'debug'>;
   sleep?: (ms: number) => Promise<void>;
+  /** Avatars remembered between launches. Omitted: nothing is written and `restore()` does nothing. */
+  store?: AvatarStore;
 }
 
 export class AvatarHandler implements CapabilityHandler {
@@ -79,6 +189,8 @@ export class AvatarHandler implements CapabilityHandler {
   private readonly live = new Map<string, Live>();
   /** Last state per character, so `state()` after `hide()` still reports what was shown. */
   private readonly remembered = new Map<string, AvatarStateInfo>();
+  /** True from `dispose()`: the app is on its way out, so the store keeps what is on screen. */
+  private closing = false;
 
   constructor(private readonly deps: AvatarHandlerDeps) {}
 
@@ -115,7 +227,47 @@ export class AvatarHandler implements CapabilityHandler {
     }
   }
 
-  private character(context: ActionContext): { pack: LoadedPack; character: LoadedCharacter } {
+  /**
+   * Write what is on screen now, so the next launch can put it back. Fire-and-forget: a store that
+   * cannot be written costs the avatars of a restart and nothing else. Never while closing down.
+   */
+  private persist(): void {
+    const store = this.deps.store;
+    if (!store || this.closing) return;
+    const records = [...this.live.entries()].map(([ref, l]) => avatarRecord(ref, l.state));
+    void store.save(records).catch((err: unknown) => this.deps.logger.warn(`[avatar] could not remember the shown avatars: ${(err as Error).message}`));
+  }
+
+  /**
+   * Show again every avatar that was up when the app last went away. Called once at startup, after
+   * the packs are loaded; never throws. A record whose pack or character is gone — or that the
+   * backend will not show — is dropped, so the store never outlives what it describes.
+   */
+  async restore(): Promise<AvatarStateInfo[]> {
+    const store = this.deps.store;
+    if (!store) return [];
+    const records = await store.load().catch((err: unknown) => {
+      this.deps.logger.warn(`[avatar] could not read the remembered avatars: ${(err as Error).message}`);
+      return [] as AvatarRecord[];
+    });
+    if (records.length === 0) return [];
+    const shown: AvatarStateInfo[] = [];
+    for (const record of records) {
+      const ref = characterRef(record.packId, record.characterId);
+      if (this.live.has(ref)) continue;
+      try {
+        shown.push(await this.show(ref, record, recordShowOptions(record)));
+        this.deps.logger.debug(`[avatar] ${ref}: shown again where it was before the restart`);
+      } catch (err) {
+        this.deps.logger.warn(`[avatar] ${ref} cannot be shown again: ${(err as Error).message}`);
+      }
+    }
+    // What could not be put back is no longer on screen: forget it rather than try again forever.
+    if (shown.length !== records.length) this.persist();
+    return shown;
+  }
+
+  private character(context: Pick<ActionContext, 'packId' | 'characterId'>): { pack: LoadedPack; character: LoadedCharacter } {
     const pack = this.deps.packs.getLoaded(context.packId);
     const character = pack.characters.find((c) => c.definition.id === context.characterId);
     if (!character) throw new RpError('NOT_FOUND', `Character ${context.characterId} not found`);
@@ -134,7 +286,7 @@ export class AvatarHandler implements CapabilityHandler {
     return { expression, url: assetUrl(live.packId, rel) };
   }
 
-  async show(ref: string, context: ActionContext, opts: AvatarShowOptions): Promise<AvatarStateInfo> {
+  async show(ref: string, context: Pick<ActionContext, 'packId' | 'characterId'>, opts: AvatarShowOptions): Promise<AvatarStateInfo> {
     const { pack, character } = this.character(context);
     const map = expressionMap(character);
     if (Object.keys(map.expressions).length === 0) throw new RpError('CAPABILITY_FAILED', 'This character has no avatar image (add `avatar` or `avatarSet` to character.json)');
@@ -181,11 +333,13 @@ export class AvatarHandler implements CapabilityHandler {
           this.remembered.set(ref, { ...toInfo(l.state), visible: false });
           if (l.bubbleTimer) clearTimeout(l.bubbleTimer);
           this.live.delete(ref);
+          this.persist();
         }
       }),
     ];
     const live: Live = { handle, state, options, expressions: map.expressions, packId: context.packId, off: () => offs.forEach((o) => o()) };
     this.live.set(ref, live);
+    this.persist();
     return toInfo(state);
   }
 
@@ -224,6 +378,7 @@ export class AvatarHandler implements CapabilityHandler {
       live.options = applyOverlayUpdate(live.options, overlayPatch, monitors);
       live.state.overlay = { ...live.state.overlay, opacity: live.options.opacity, clickThrough: live.options.clickThrough };
     }
+    if (Object.keys(cmdPatch).length > 0 || Object.keys(overlayPatch).length > 0) this.persist();
     return toInfo(live.state);
   }
 
@@ -280,6 +435,7 @@ export class AvatarHandler implements CapabilityHandler {
     };
     if (next.x === undefined) delete live.state.overlay.x;
     if (next.y === undefined) delete live.state.overlay.y;
+    this.persist();
   }
 
   async hide(ref: string): Promise<void> {
@@ -288,11 +444,14 @@ export class AvatarHandler implements CapabilityHandler {
     this.remembered.set(ref, { ...toInfo(live.state), visible: false });
     if (live.bubbleTimer) clearTimeout(live.bubbleTimer);
     this.live.delete(ref);
+    this.persist();
     live.off();
     await live.handle.close();
   }
 
+  /** The app is closing: take the overlays down, but leave the records for the next launch to put back. */
   async dispose(): Promise<void> {
+    this.closing = true;
     for (const ref of [...this.live.keys()]) await this.hide(ref);
   }
 }

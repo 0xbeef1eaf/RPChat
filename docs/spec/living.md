@@ -242,7 +242,13 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   via open-meteo geocoding + forecast), `avatar` (one overlay per character, kind `avatar`, loads
   `media.html` with `avatar-*` commands; expressions from `avatarSet` (fallback: the `avatar` image as
   `neutral`); `moveTo` animates by re-placing through the backend in steps or via CSS when on the same
-  monitor; persists last state per character in main memory), `widgets` (kind `widget`; `html` sanitised
+  monitor; keeps the last state per character in main memory, so `state()` still answers after
+  `hide()`, and remembers the avatars that are on screen in `<userData>/data/avatars.json`
+  (`AvatarRecord`: character ref, expression, size, `lookAtCursor`, overlay placement — written on
+  every change, dropped by `hide()`, left alone while the app closes down) so `restore()`, called
+  once at startup after the packs are loaded, puts back what the user left up; a record whose pack
+  or character is gone, or that the backend will not show, is logged and forgotten, and an avatar
+  placed at `random` gets a new spot), `widgets` (kind `widget`; `html` sanitised
   only by the iframe sandbox; `postMessage` → page → iframe; iframe messages → `widget-message` events),
   `voice` (four tiers, first available wins: (1) a `tts` template the **user** set (`{text}`/`{file}`:
   if it writes `{file}` play that in the audio window); (2) a neural voice model under
