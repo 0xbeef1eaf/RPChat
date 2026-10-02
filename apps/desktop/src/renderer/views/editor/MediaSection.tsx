@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import type { AddMediaOptions, EditorAsset, MediaManifestEntry, MediaTagSuggestion } from '@rp/shared';
 import { api, errorMessage } from '../../api';
 import { AutoTagDialog } from '../../components/editor/AutoTagDialog';
@@ -8,6 +8,7 @@ import { fromEditModel, toEditModel, undocumentedTags, unusedVocabulary, type Me
 import { formatBytes } from '../../lib/format';
 import { ensureWallpaperVocabulary, isWallpaper, setWallpaperTag, WALLPAPER_TAG, wallpaperSource, wallpaperWarnings } from '../../lib/wallpaper';
 import { frameFor } from '../../lib/frames';
+import { formatMediaMeta, probeMedia, type MediaMeta } from '../../lib/media-meta';
 import { applySuggestions, DEFAULT_TAG_SETTINGS, summarise, tagOptions, type TagRunSettings } from '../../lib/tagging';
 import { reportError, toast } from '../../store/actions';
 import { useDraft, useEditor } from './context';
@@ -33,7 +34,7 @@ export function MediaSection() {
   const [over, setOver] = useState<'media' | 'wallpapers' | null>(null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<AssetFilter>('all');
-  const [resolutions, setResolutions] = useState<Record<string, { w: number; h: number }>>({});
+  const [meta, setMeta] = useState<Record<string, MediaMeta>>({});
   const [removing, setRemoving] = useState<EditorAsset | null>(null);
   const [view, setView] = useState<'assets' | 'rules' | 'vocabulary'>('assets');
   const [autoTag, setAutoTag] = useState(false);
@@ -66,6 +67,31 @@ export function MediaSection() {
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedModel]);
+
+  // Video and audio carry their size and length in the file, so read them in the background —
+  // once per asset, and forget assets that have left the project.
+  const probed = useRef(new Set<string>());
+  useEffect(() => {
+    const paths = new Set(assetPaths);
+    for (const p of probed.current) if (!paths.has(p)) probed.current.delete(p);
+    setMeta((m) => (Object.keys(m).every((p) => paths.has(p)) ? m : Object.fromEntries(Object.entries(m).filter(([p]) => paths.has(p)))));
+    let live = true;
+    void (async () => {
+      for (const asset of project.assets) {
+        if (asset.kind === 'image' || probed.current.has(asset.path)) continue; // images report their size on load
+        probed.current.add(asset.path);
+        const read = await probeMedia(asset);
+        if (!live) {
+          probed.current.delete(asset.path); // a reload cut this one short: let the next run read it
+          return;
+        }
+        if (read) setMeta((m) => ({ ...m, [asset.path]: read }));
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [project.assets, assetPaths]);
 
   const vocabulary = Object.keys(draft.vocabulary);
   const suggestions = useMemo(() => Array.from(new Set([...vocabulary, ...project.tags.map((t) => t.tag)])).sort(), [vocabulary, project.tags]);
@@ -228,8 +254,9 @@ export function MediaSection() {
               const e = draft.perAsset[a.path] ?? { tags: [], description: '' };
               const viaRules = a.manifestTags.filter((t) => !e.tags.includes(t));
               const source = wallpaperSource(wallpaperOf(a));
-              const res = resolutions[a.path];
-              const warnings = source && res ? wallpaperWarnings(res.w, res.h) : [];
+              const read = meta[a.path];
+              const dimensions = formatMediaMeta(read);
+              const warnings = source && read?.width && read.height ? wallpaperWarnings(read.width, read.height) : [];
               return (
                 <div key={a.path} className="asset-card">
                   {a.kind === 'image' ? (
@@ -239,7 +266,8 @@ export function MediaSection() {
                       alt=""
                       onLoad={(ev) => {
                         const img = ev.currentTarget;
-                        if (img.naturalWidth > 0) setResolutions((r) => (r[a.path]?.w === img.naturalWidth && r[a.path]?.h === img.naturalHeight ? r : { ...r, [a.path]: { w: img.naturalWidth, h: img.naturalHeight } }));
+                        if (img.naturalWidth === 0) return;
+                        setMeta((m) => (m[a.path]?.width === img.naturalWidth && m[a.path]?.height === img.naturalHeight ? m : { ...m, [a.path]: { width: img.naturalWidth, height: img.naturalHeight } }));
                       }}
                     />
                   ) : (
@@ -256,9 +284,9 @@ export function MediaSection() {
                           </span>
                         ) : null}
                       </span>
-                      {source && (filter === 'wallpaper' || warnings.length > 0) ? (
+                      {dimensions || warnings.length > 0 ? (
                         <span className="item-sub">
-                          {res ? `${res.w} × ${res.h}` : 'reading size…'}
+                          {dimensions}
                           {warnings.map((w) => (
                             <span key={w} className="badge badge-warning" style={{ marginLeft: 6 }}>
                               {w}

@@ -2013,6 +2013,10 @@ textarea.code.invalid {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+/* The card is narrow: let the type, size and dimensions wrap rather than be cut off. */
+.asset-card .item-sub {
+  white-space: normal;
+}
 .rule-row {
   display: grid;
   grid-template-columns: 1.2fr 1.4fr 1.4fr auto;
