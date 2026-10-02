@@ -58,7 +58,8 @@ export function ActionLogView() {
         </div>
       </div>
       <p className="muted small" style={{ marginBottom: 10 }}>
-        Every SDK call a character made, whether it was allowed, denied or failed. Click a row for the full arguments.
+        Every SDK call a character made and every function of its own library it called, whether each was allowed, denied or
+        failed. Click a row for the full arguments.
       </p>
       {error ? <div className="callout callout-danger">{error}</div> : null}
       {entries === null ? (

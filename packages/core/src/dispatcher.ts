@@ -8,6 +8,7 @@ import type {
   CapabilityInvoker,
   CapabilityResult,
   Json,
+  LibCall,
   LoadedPack,
   SerializedError,
 } from '@rp/shared';
@@ -71,7 +72,8 @@ function auditArgs(args: unknown[]): unknown[] {
 /**
  * Routes `sdk.<module>.<method>` calls from the sandbox to handlers:
  * registry check → permission check (with prompt) → argument normalisation →
- * handler → JSON-clean result. Every outcome (allowed / denied / failed) is audited.
+ * handler → JSON-clean result. Every outcome (allowed / denied / failed) is audited, as is
+ * each `lib.<name>(...)` the sandbox reports (`recordLibCall`), which never gets this far.
  */
 export class CapabilityDispatcher implements CapabilityInvoker {
   private readonly handlers = new Map<string, CapabilityHandler>();
@@ -220,6 +222,27 @@ export class CapabilityDispatcher implements CapabilityInvoker {
       const rp = err instanceof RpError ? err : RpError.from(err, 'CAPABILITY_FAILED');
       return fail(rp, 'failed', finalArgs);
     }
+  }
+
+  /**
+   * Audit a library call the sandbox reports. `lib.<name>(...)` runs inside the isolate and has
+   * already returned by the time this is called, so there is nothing to check and nothing to
+   * return: the entry is appended in the background (`AuditService.record` never throws) and the
+   * run is not held up by the write.
+   */
+  recordLibCall(call: LibCall): void {
+    const context = call.context;
+    const entry: Omit<AuditEntry, 'id' | 'at'> = {
+      sessionId: context.sessionId,
+      characterRef: characterRef(context.packId, context.characterId),
+      module: 'lib',
+      method: call.name,
+      args: auditArgs(call.args),
+      outcome: call.outcome,
+      durationMs: call.durationMs,
+    };
+    if (call.error) entry.error = call.error;
+    void this.audit.record(entry);
   }
 
   async dispose(): Promise<void> {

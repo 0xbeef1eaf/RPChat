@@ -348,7 +348,9 @@ Threat model: pack authors and the LLM are **untrusted**. The user is trusted.
   `rp-asset://home-<12 hex>/<relative>`, which the dispatcher registers when a
   call names it (`HomeAssetRoots`). No other path reaches a media window.
 - **Audit**: every capability call (allowed or denied) is an `AuditEntry` in
-  storage, visible in the UI's action log.
+  storage, visible in the UI's action log, and so is every `lib.<name>(...)` the
+  sandbox reports — a library call runs inside the isolate, so it is logged after
+  the fact rather than mediated.
 - **Renderer**: context isolation, sandboxed preload, strict CSP, no remote
   content. The media window only receives commands with `rp-asset://` URLs.
 - Packs are never executed on install except the optional `onInstall` hook,
