@@ -15,6 +15,10 @@ export const ASSET_KIND_BY_EXTENSION: Readonly<Record<string, AssetKind>> = {
   mp4: 'video', webm: 'video', mkv: 'video', mov: 'video', m4v: 'video',
   mp3: 'audio', wav: 'audio', ogg: 'audio', m4a: 'audio', flac: 'audio', aac: 'audio', opus: 'audio',
   txt: 'text', md: 'text', json: 'text', csv: 'text',
+  // A Qwen3-TTS speaker profile is not audio — it is an opaque graft the engine speaks from — so it
+  // has no kind of its own. It is listed here only so `mimeFor` can name it instead of calling it
+  // an unknown stream; `indexAssets` gives it `role: 'voice'` so nothing offers it as media.
+  qvoice: 'other',
 };
 
 /** Extension → MIME type for every extension with a known kind. */
@@ -25,6 +29,7 @@ export const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', flac: 'audio/flac',
   aac: 'audio/aac', opus: 'audio/opus',
   txt: 'text/plain', md: 'text/markdown', json: 'application/json', csv: 'text/csv',
+  qvoice: 'application/x-qvoice',
 };
 
 export const DEFAULT_MIME = 'application/octet-stream';
@@ -39,6 +44,18 @@ export function extensionOf(filePath: string): string {
 
 export function assetKindFor(filePath: string): AssetKind {
   return ASSET_KIND_BY_EXTENSION[extensionOf(filePath)] ?? 'other';
+}
+
+/** Extension (no dot) of a Qwen3-TTS speaker profile. */
+export const VOICE_PROFILE_EXTENSION = 'qvoice';
+
+/**
+ * Whether a path is a `.qvoice` speaker profile: a voice the engine speaks from, opaque to
+ * everything else, and therefore never media to show, play or tag. A `.wav` reference is not one —
+ * that is a real recording, and an author may well use the same file as a sound effect.
+ */
+export function isVoiceProfile(filePath: string): boolean {
+  return extensionOf(filePath) === VOICE_PROFILE_EXTENSION;
 }
 
 export function mimeFor(filePath: string): string {
@@ -77,7 +94,11 @@ export async function walkFiles(rootAbs: string, dirAbs: string, out: string[] =
 async function entryFor(rootAbs: string, rel: string): Promise<AssetEntry | null> {
   const st = await statOrNull(path.join(rootAbs, ...rel.split('/')));
   if (!st || !st.isFile()) return null;
-  return { path: rel, kind: assetKindFor(rel), bytes: st.size, mime: mimeFor(rel), tags: [] };
+  const entry: AssetEntry = { path: rel, kind: assetKindFor(rel), bytes: st.size, mime: mimeFor(rel), tags: [] };
+  // Wherever an author keeps it — the character directory or the media root — a profile is a voice,
+  // so it is marked here rather than only where `voice.reference` names it.
+  if (isVoiceProfile(rel)) entry.role = 'voice';
+  return entry;
 }
 
 /**
@@ -165,14 +186,24 @@ export function summariseTags(assets: readonly AssetEntry[], tagDescriptions?: R
   return out.sort((a, b) => b.count - a.count || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0));
 }
 
+/** A file a `character.json` points at, and what it is to the character. */
+interface CharacterAsset {
+  /** Relative to the pack root. */
+  path: string;
+  role: 'avatar' | 'voice';
+}
+
 /**
- * Best-effort discovery of character avatar and `avatarSet` expression paths
- * (relative to the pack root) by reading `pack.json` and each `character.json`.
- * Any unreadable or malformed file is ignored here; the loader reports such
- * problems separately.
+ * Best-effort discovery of the files a character names: its avatar and `avatarSet` expression
+ * frames, and the `.qvoice` profile `voice.reference` points at (relative to the pack root), by
+ * reading `pack.json` and each `character.json`. Any unreadable or malformed file is ignored here;
+ * the loader reports such problems separately.
+ *
+ * A `.wav` reference is left out: it is a recording like any other, so it is only an asset when the
+ * author keeps it under the media root, where the walk above finds it.
  */
-async function discoverAvatarPaths(rootAbs: string): Promise<string[]> {
-  const out: string[] = [];
+async function discoverCharacterAssets(rootAbs: string): Promise<CharacterAsset[]> {
+  const out: CharacterAsset[] = [];
   let manifest: unknown;
   try {
     manifest = JSON.parse(await fs.readFile(path.join(rootAbs, PACK_MANIFEST_FILENAME), 'utf8'));
@@ -188,13 +219,20 @@ async function discoverAvatarPaths(rootAbs: string): Promise<string[]> {
       const def = JSON.parse(await fs.readFile(defPath, 'utf8')) as {
         avatar?: unknown;
         avatarSet?: { expressions?: unknown };
+        voice?: { reference?: unknown };
       };
-      if (typeof def.avatar === 'string' && isSafeRelativePath(def.avatar)) out.push(joinRelative(dir, def.avatar));
+      if (typeof def.avatar === 'string' && isSafeRelativePath(def.avatar)) {
+        out.push({ path: joinRelative(dir, def.avatar), role: 'avatar' });
+      }
       const expressions = def.avatarSet?.expressions;
       if (expressions && typeof expressions === 'object') {
         for (const rel of Object.values(expressions as Record<string, unknown>)) {
-          if (typeof rel === 'string' && isSafeRelativePath(rel)) out.push(joinRelative(dir, rel));
+          if (typeof rel === 'string' && isSafeRelativePath(rel)) out.push({ path: joinRelative(dir, rel), role: 'avatar' });
         }
+      }
+      const reference = def.voice?.reference;
+      if (typeof reference === 'string' && isSafeRelativePath(reference) && isVoiceProfile(reference)) {
+        out.push({ path: joinRelative(dir, reference), role: 'voice' });
       }
     } catch {
       // ignored: reported by validatePack/loadPack
@@ -205,7 +243,8 @@ async function discoverAvatarPaths(rootAbs: string): Promise<string[]> {
 
 /**
  * Indexes every file under `mediaRoot` (recursively) plus each character's avatar and
- * expression frames (marked `role: 'avatar'`), then assigns tags from folder names and `media.json`. A missing media directory
+ * expression frames (marked `role: 'avatar'`) and its `.qvoice` speaker profile (marked
+ * `role: 'voice'`), then assigns tags from folder names and `media.json`. A missing media directory
  * yields no media entries (a pack may have no media). Entries are sorted by path.
  *
  * `manifest`: the validated `media.json`; `undefined` reads it from the pack root
@@ -228,14 +267,14 @@ export async function indexAssets(
     }
   }
 
-  // Avatars and expression frames are indexed (resolvable by path) but marked, so listings can skip them
-  // even when an author keeps them under the media root.
-  for (const avatar of await discoverAvatarPaths(rootAbs)) {
-    const n = normalizeRelativePath(avatar);
+  // A character's own files — avatar, expression frames, voice profile — are indexed (resolvable by
+  // path) but marked, so listings can skip them even when an author keeps them under the media root.
+  for (const { path: rel, role } of await discoverCharacterAssets(rootAbs)) {
+    const n = normalizeRelativePath(rel);
     if (!n.ok) continue;
     const existing = byPath.get(n.path);
     if (existing) {
-      existing.role = 'avatar';
+      existing.role = role;
       continue;
     }
     try {
@@ -244,7 +283,7 @@ export async function indexAssets(
       continue;
     }
     const entry = await entryFor(rootAbs, n.path);
-    if (entry) byPath.set(entry.path, { ...entry, role: 'avatar' });
+    if (entry) byPath.set(entry.path, { ...entry, role });
   }
 
   const resolvedManifest = manifest === undefined ? await discoverMediaManifest(rootAbs) : manifest;

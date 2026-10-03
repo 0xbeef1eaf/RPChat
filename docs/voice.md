@@ -203,6 +203,13 @@ on the floor. A profile starts with the ASCII magic `QVCE` and a little-endian v
 only check available on an otherwise opaque file. Building a profile needs the **Base** model — a second
 2.4 GB download — and is therefore fetched only when an author actually builds one.
 
+Because it is opaque, a profile is a voice everywhere else too, never media. `indexAssets` indexes
+the one `voice.reference` names — wherever the author keeps it — but marks it `role: 'voice'`, so
+`sdk.pack` listings and searches never offer a character its own voice as something to show, and
+neither auto-tagging path (the editor's dialog or `tag-media.ts`) spends a model call guessing at it
+from its file name. A `.wav` reference is not treated this way: it is a real recording, and an author
+may well use the same file as a sound effect.
+
 ### Distribution
 
 Upstream (`gabriele-mastrapasqua/qwen3-tts`, MIT) publishes **no releases or tags** — source only,

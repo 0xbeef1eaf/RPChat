@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { applyMediaTags, assetKindFor, extensionOf, folderTagsFor, indexAssets, mimeFor, summariseTags } from './index.js';
+import { applyMediaTags, assetKindFor, extensionOf, folderTagsFor, indexAssets, isVoiceProfile, mimeFor, summariseTags } from './index.js';
 import { LUNA_DIR, MINIMAL_DIR, makeTempDir, minimalPackFiles, writeTree } from './test/helpers.js';
 
 describe('assetKindFor / mimeFor', () => {
@@ -30,6 +30,22 @@ describe('assetKindFor / mimeFor', () => {
     expect(mimeFor('a.xyz')).toBe('application/octet-stream');
     expect(extensionOf('a\\b.Jpeg')).toBe('jpeg');
   });
+
+  it('names a .qvoice profile without giving it a media kind', () => {
+    expect(assetKindFor('luna.qvoice')).toBe('other');
+    expect(mimeFor('luna.qvoice')).toBe('application/x-qvoice');
+  });
+});
+
+describe('isVoiceProfile', () => {
+  it('is true for a .qvoice, case-insensitively, and for nothing else', () => {
+    expect(isVoiceProfile('characters/luna/luna.qvoice')).toBe(true);
+    expect(isVoiceProfile('luna.QVoice')).toBe(true);
+    // A wav reference is a real recording the author may also use as a sound.
+    expect(isVoiceProfile('characters/luna/luna.wav')).toBe(false);
+    expect(isVoiceProfile('qvoice')).toBe(false);
+    expect(isVoiceProfile('dir.qvoice/file.png')).toBe(false);
+  });
 });
 
 describe('indexAssets', () => {
@@ -53,6 +69,62 @@ describe('indexAssets', () => {
 
   it('returns an empty index when there is no media directory and no avatar', async () => {
     expect(await indexAssets(MINIMAL_DIR)).toEqual([]);
+  });
+
+  describe('voice references', () => {
+    let tmp: string;
+    beforeAll(async () => {
+      tmp = await makeTempDir();
+      await writeTree(tmp, {
+        ...minimalPackFiles(),
+        'characters/a/character.json': JSON.stringify({
+          id: 'a',
+          name: 'A',
+          persona: 'persona.md',
+          avatar: 'avatar.png',
+          voice: { model: 'qwen3-tts', reference: 'a.qvoice' },
+        }),
+        'characters/a/persona.md': 'You are A.',
+        'characters/a/avatar.png': 'p',
+        'characters/a/a.qvoice': 'QVCE....',
+        'media/images/card.png': 'c',
+        'media/audio/spare.qvoice': 'QVCE....',
+      });
+    });
+    afterAll(async () => {
+      await fs.rm(tmp, { recursive: true, force: true });
+    });
+
+    it("indexes the character's .qvoice profile as role 'voice'", async () => {
+      const assets = await indexAssets(tmp);
+      expect(assets.find((a) => a.path === 'characters/a/a.qvoice')).toMatchObject({
+        kind: 'other',
+        mime: 'application/x-qvoice',
+        role: 'voice',
+      });
+      expect(assets.find((a) => a.path === 'characters/a/avatar.png')).toMatchObject({ role: 'avatar' });
+    });
+
+    it("marks a profile the author keeps under the media root 'voice' too", async () => {
+      const assets = await indexAssets(tmp);
+      expect(assets.find((a) => a.path === 'media/audio/spare.qvoice')).toMatchObject({ role: 'voice' });
+      expect(assets.find((a) => a.path === 'media/images/card.png')!.role).toBeUndefined();
+    });
+
+    it('leaves a .wav reference out: it is a recording, not a profile', async () => {
+      const dir = await makeTempDir();
+      try {
+        await writeTree(dir, {
+          ...minimalPackFiles(),
+          'characters/a/character.json': JSON.stringify({ id: 'a', name: 'A', persona: 'persona.md', voice: { reference: 'a.wav' } }),
+          'characters/a/a.wav': 'RIFF',
+          'media/images/card.png': 'c',
+        });
+        expect((await indexAssets(dir)).map((a) => a.path)).toEqual(['media/images/card.png']);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('with a temp pack', () => {

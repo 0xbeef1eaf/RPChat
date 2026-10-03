@@ -37,6 +37,7 @@ import {
   globToRegExp,
   indexAssets,
   inspectPack,
+  isVoiceProfile,
   matchesGlob,
   validateMediaManifest,
   writeMediaManifest,
@@ -59,6 +60,7 @@ const USAGE = `Usage: tag-media.ts <pack-dir> [asset …] [options]
 
 Assets may be pack-relative paths, absolute paths inside the pack, directories or globs
 ("media/images/**"). With none given, every untagged asset is tagged (--scope all for all).
+A character's .qvoice voice profile is never tagged: it is a voice, not media.
 
 Model
   --model <id>           default: ${DEFAULTS.model}
@@ -312,11 +314,17 @@ async function readPack(dir: string): Promise<PackState> {
  * The assets to tag: the ones named on the command line (paths, directories or globs), or — with
  * none named — the untagged ones. "Untagged" is the editor's own notion: no tags or description of
  * its own in the draft, so a file that only a glob rule covers still counts as untagged.
+ *
+ * A `.qvoice` speaker profile is never among them. It is the character's voice, not media: an
+ * opaque graft with nothing to look at or read, so a model could only guess at it from its name,
+ * and nothing reads tags on it afterwards. A directory or glob that happens to cover one drops it
+ * silently; naming one says so, rather than spending a call on it.
  */
 function selectAssets(state: PackState, model: MediaEditModel, wanted: string[], scope: string): AssetEntry[] {
+  const taggable = state.assets.filter((a) => !isVoiceProfile(a.path));
   if (wanted.length === 0) {
-    if (scope === 'all') return [...state.assets];
-    return state.assets.filter((a) => {
+    if (scope === 'all') return taggable;
+    return taggable.filter((a) => {
       const edit = model.perAsset[a.path];
       return (edit?.tags.length ?? 0) === 0 && (edit?.description.trim().length ?? 0) === 0;
     });
@@ -326,8 +334,16 @@ function selectAssets(state: PackState, model: MediaEditModel, wanted: string[],
     const rel = (path.isAbsolute(raw) ? path.relative(state.dir, raw) : raw).split(path.sep).join('/').replace(/^\.\//, '');
     if (rel.startsWith('..')) throw new Error(`"${raw}" is outside the pack`);
     const dir = `${rel.replace(/\/$/, '')}/`;
-    const hits = state.assets.filter((a) => a.path === rel || a.path.startsWith(dir) || matchesGlob(rel, a.path));
-    if (hits.length === 0) throw new Error(`"${raw}" matches no asset of this pack`);
+    const matches = (a: AssetEntry): boolean => a.path === rel || a.path.startsWith(dir) || matchesGlob(rel, a.path);
+    const hits = taggable.filter(matches);
+    if (hits.length === 0) {
+      const profiles = state.assets.filter((a) => isVoiceProfile(a.path) && matches(a));
+      if (profiles.length > 0) {
+        const which = profiles.length === 1 && profiles[0]!.path === rel ? `"${raw}" is a voice profile` : `"${raw}" matches only voice profiles (${profiles.map((a) => a.path).join(', ')})`;
+        throw new Error(`${which}, not media. A .qvoice is the character's voice; there is nothing in it to tag.`);
+      }
+      throw new Error(`"${raw}" matches no asset of this pack`);
+    }
     for (const hit of hits) out.set(hit.path, hit);
   }
   return [...out.values()].sort((a, b) => (a.path < b.path ? -1 : 1));
