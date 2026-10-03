@@ -20,7 +20,7 @@ export function tagsOf(entry: Pick<AssetEntry, 'tags'>): string[] {
   return Array.isArray(entry.tags) ? entry.tags : [];
 }
 
-/** The assets a character may list, search and browse: everything but its own avatar/expression frames. */
+/** The assets a character may list, search and browse: everything but its own avatar/expression frames and voice profile. */
 export function showableAssets<T extends Pick<AssetEntry, 'role'>>(assets: readonly T[]): T[] {
   return assets.filter((a) => a.role === undefined);
 }

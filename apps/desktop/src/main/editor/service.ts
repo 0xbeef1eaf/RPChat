@@ -42,6 +42,7 @@ import {
   globToRegExp,
   indexAssets,
   inspectPack,
+  isVoiceProfile,
   joinRelative,
   libraryFunctionTemplate,
   libraryNameProblem,
@@ -756,7 +757,12 @@ export class EditorService {
       pack = absorbSuggestion(pack, { tags, vocabulary });
     }
     const frames = o.frames && typeof o.frames === 'object' ? o.frames : {};
-    const assets: TagAsset[] = paths.map((p) => {
+    // A `.qvoice` is the character's voice, not media: opaque, with nothing to look at or read, and
+    // nothing reads tags on it afterwards. It is dropped from the batch rather than failing it, so
+    // "Auto-tag…" over a whole list still tags the list.
+    const wanted = paths.filter((p) => !isVoiceProfile(String(p ?? '')));
+    if (wanted.length === 0) throw new RpError('INVALID_ARGUMENT', 'A .qvoice voice profile has nothing to tag');
+    const assets: TagAsset[] = wanted.map((p) => {
       const n = normalizeRelativePath(String(p ?? ''));
       if (!n.ok) throw new RpError('PATH_ESCAPE', `Unsafe asset path "${String(p)}"`);
       const asset = project.assets.find((a) => a.path === n.path);

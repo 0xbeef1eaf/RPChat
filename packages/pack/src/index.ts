@@ -30,11 +30,13 @@ export {
   DEFAULT_MIME,
   KIND_FOLDER_NAMES,
   MIME_BY_EXTENSION,
+  VOICE_PROFILE_EXTENSION,
   applyMediaTags,
   assetKindFor,
   extensionOf,
   folderTagsFor,
   indexAssets,
+  isVoiceProfile,
   mimeFor,
   summariseTags,
 } from './assets.js';
