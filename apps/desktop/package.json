@@ -21,7 +21,7 @@
     "@rp/sandbox": "workspace:*",
     "@rp/sdk": "workspace:*",
     "@rp/shared": "workspace:*",
-    "dompurify": "^3.4.15",
+    "dompurify": "^3.4.16",
     "electron-updater": "^6.8.9",
     "esbuild": "^0.28.2",
     "fflate": "^0.8.3",
