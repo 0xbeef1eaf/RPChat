@@ -35,9 +35,11 @@ export interface PolicySettingSpec {
   placeholder?: string;
 }
 
-export type PolicyGroupId = 'autonomy' | 'access' | 'memory' | 'senses' | 'browser' | 'updates' | 'display' | 'media';
+export type PolicyGroupId = 'general' | 'sandbox' | 'autonomy' | 'access' | 'memory' | 'senses' | 'browser' | 'updates' | 'display' | 'media';
 
 export const POLICY_GROUPS: ReadonlyArray<{ id: PolicyGroupId; title: string; hint: string }> = [
+  { id: 'general', title: 'General', hint: 'Conversation debugging, and how the app’s own windows behave.' },
+  { id: 'sandbox', title: 'Sandbox limits', hint: 'The bounds every piece of code a character runs is held to. Each has a floor; there is no unlimited.' },
   { id: 'access', title: 'What characters may reach', hint: 'The allowlists and capability switches every character on this machine is held to.' },
   { id: 'autonomy', title: 'Autonomy limits', hint: 'How much a character may act on its own, so one cannot run away with the session.' },
   { id: 'memory', title: 'Memory', hint: 'What characters remember between conversations and how much of it reaches the prompt.' },
@@ -53,6 +55,17 @@ export const POLICY_GROUPS: ReadonlyArray<{ id: PolicyGroupId; title: string; hi
  * `parsePolicy`'s accepted keys exactly: anything missing here cannot be forced at all.
  */
 export const POLICY_SETTINGS: readonly PolicySettingSpec[] = [
+  { path: 'debug.showModelTraffic', group: 'general', kind: 'boolean', label: 'Show model traffic', hint: 'Capture every request and response sent to the model, system prompt included, for the chat’s Model traffic view.', fallback: false },
+  { path: 'closeToTray', group: 'general', kind: 'boolean', label: 'Close to the tray', hint: 'Closing the main window keeps rpchat running in the tray instead of quitting.', fallback: true },
+  { path: 'mediaAlwaysOnTop', group: 'general', kind: 'boolean', label: 'Media windows on top', hint: 'Media windows open above other windows; off opens them below.', fallback: true },
+
+  { path: 'runLimits.timeoutMs', group: 'sandbox', kind: 'duration', label: 'Timeout', hint: 'Wall-clock time one run may take, not counting time spent waiting on SDK calls.', fallback: 10_000, min: 100 },
+  { path: 'runLimits.cpuMs', group: 'sandbox', kind: 'duration', label: 'CPU budget', hint: 'CPU time one run may use.', fallback: 2_000, min: 50 },
+  { path: 'runLimits.memoryBytes', group: 'sandbox', kind: 'number', label: 'Memory (bytes)', hint: 'Memory one run may allocate. At least 8 MiB (8388608).', fallback: 64 * 1024 * 1024, min: 8 * 1024 * 1024 },
+  { path: 'runLimits.maxHostCalls', group: 'sandbox', kind: 'number', label: 'SDK calls per run', hint: 'How many SDK calls one run may make.', fallback: 50, min: 1 },
+  { path: 'runLimits.maxLogBytes', group: 'sandbox', kind: 'number', label: 'Log output (bytes)', hint: 'Console output one run may capture.', fallback: 16 * 1024, min: 1024 },
+  { path: 'runLimits.maxResultBytes', group: 'sandbox', kind: 'number', label: 'Result size (bytes)', hint: 'Size of the value one run may return.', fallback: 16 * 1024, min: 1024 },
+
   { path: 'permissions.functionAllow', group: 'access', kind: 'functions', label: 'SDK functions', hint: 'Pin which SDK functions every character may call, whole modules or one function at a time. Anything left off the list stays the user’s choice.', fallback: {} },
   { path: 'web.allowlist', group: 'access', kind: 'list', label: 'Web allowlist', hint: 'Hosts sdk.web may fetch. An empty list allows nothing.', fallback: [], placeholder: 'example.com' },
   { path: 'desktop.launchAllowlist', group: 'access', kind: 'list', label: 'Launchable apps', hint: 'Programs sdk.desktop.launch may start. An empty list allows nothing.', fallback: [], placeholder: 'firefox' },
@@ -71,6 +84,9 @@ export const POLICY_SETTINGS: readonly PolicySettingSpec[] = [
 
   { path: 'senses.includeInPrompt', group: 'senses', kind: 'boolean', label: 'Presence line in prompts', hint: 'Off keeps idle time, the active window and now-playing out of every prompt.', fallback: true },
   { path: 'senses.watchDirs', group: 'senses', kind: 'list', label: 'Watched directories', hint: 'Folders that raise file-added events. An empty list watches nothing.', fallback: [], placeholder: '~/Downloads' },
+  { path: 'senses.pollMs', group: 'senses', kind: 'duration', label: 'Poll interval', hint: 'How often the host samples presence while something needs it.', fallback: 5000, min: 1000 },
+  { path: 'senses.idleThresholdMs', group: 'senses', kind: 'duration', label: 'Idle threshold', hint: 'No input anywhere on the machine for this long counts as away.', fallback: 120_000, min: 10_000 },
+  { path: 'senses.appIdleThresholdMs', group: 'senses', kind: 'duration', label: 'App idle threshold', hint: 'Nothing done in rpchat itself for this long counts as away from the app.', fallback: 300_000, min: 10_000 },
   { path: 'senses.calendarSources', group: 'senses', kind: 'list', label: 'Calendar sources', hint: 'ICS files or URLs sdk.calendar may read.', fallback: [], placeholder: 'https://example.com/cal.ics' },
 
   { path: 'browser.allowBlocking', group: 'browser', kind: 'boolean', label: 'Block pages', hint: 'sdk.browser.block may keep a page shut for a while.', fallback: true },
@@ -79,6 +95,7 @@ export const POLICY_SETTINGS: readonly PolicySettingSpec[] = [
 
   { path: 'updates.enabled', group: 'updates', kind: 'boolean', label: 'Update checks', hint: 'Off switches updating off entirely — no check, no download, no install.', fallback: true },
   { path: 'updates.automatic', group: 'updates', kind: 'boolean', label: 'Check in the background', hint: 'Pins the background-check switch users see in Settings → Updates.', fallback: true },
+  { path: 'updates.checkIntervalHours', group: 'updates', kind: 'number', label: 'Check interval (hours)', hint: 'Hours between background checks.', fallback: 6, min: 1 },
   { path: 'updates.allowDowngrade', group: 'updates', kind: 'boolean', label: 'Allow downgrades', hint: 'Lets the daemon install a version older than the one on the system. Refused unless this is on.', fallback: false },
 
   { path: 'displayBackend', group: 'display', kind: 'choice', label: 'Display backend', hint: 'How character windows are drawn.', fallback: 'auto', choices: ['auto', 'electron', 'hyprland'] },
@@ -97,6 +114,7 @@ export const POLICY_RESTRICTIONS: ReadonlyArray<{ key: keyof AppRestrictions; la
   { key: 'allowPackInstall', label: 'Install packs', hint: 'Add, replace or rewrite packs in the store. Off freezes what is installed.' },
   { key: 'allowPackRemove', label: 'Remove packs', hint: 'Uninstall a pack.' },
   { key: 'allowSandbox', label: 'Sandbox', hint: 'Run code by hand in the Sandbox tab. Off hides the tab.' },
+  { key: 'allowActionLog', label: 'Action log', hint: 'Read what characters did in the Action log tab. Off hides the tab; actions are still recorded.' },
   { key: 'allowStopGeneration', label: 'Stop a reply', hint: 'Cut a reply short while it is being written. Off also blocks retrying, resetting or editing the history while one is running, since those stop it too.' },
   { key: 'allowDeleteSession', label: 'Delete conversations', hint: 'Remove a whole conversation.' },
   { key: 'allowDeleteHistory', label: 'Delete chat history', hint: 'Clear a conversation or remove single messages from it.' },
@@ -405,7 +423,7 @@ export function policyDraftProblems(draft: PolicyDraft): string[] {
     if (spec.kind === 'number' || spec.kind === 'duration') {
       if (typeof value !== 'number' || !Number.isFinite(value)) problems.push(`${spec.label} needs a number.`);
       else if (spec.min !== undefined && value < spec.min && !(spec.unlimited && value === UNLIMITED)) {
-        problems.push(`${spec.label} must be at least ${spec.min >= 1000 ? `${spec.min / 1000} s` : spec.min}${spec.unlimited ? ', or -1 for unlimited' : ''}.`);
+        problems.push(`${spec.label} must be at least ${spec.kind === 'duration' ? `${spec.min / 1000} s` : spec.min}${spec.unlimited ? ', or -1 for unlimited' : ''}.`);
       }
     }
     if (spec.kind === 'choice' && !(spec.choices ?? []).includes(String(value))) problems.push(`${spec.label} must be one of ${(spec.choices ?? []).join(', ')}.`);

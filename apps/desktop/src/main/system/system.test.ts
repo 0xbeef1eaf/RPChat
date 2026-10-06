@@ -546,6 +546,52 @@ describe('policy', () => {
     });
   });
 
+  it('pins the sandbox limits, debug, window, senses-timing and update-interval settings', () => {
+    const policy = parsePolicy({
+      version: 1,
+      settings: {
+        runLimits: { timeoutMs: 5000, memoryBytes: 32 * 1024 * 1024 },
+        debug: { showModelTraffic: false },
+        closeToTray: false,
+        mediaAlwaysOnTop: false,
+        senses: { pollMs: 2000, idleThresholdMs: 60_000, appIdleThresholdMs: 600_000 },
+        updates: { checkIntervalHours: 24 },
+      },
+    });
+    expect(managedPaths(policy)).toEqual([
+      'closeToTray',
+      'debug.showModelTraffic',
+      'mediaAlwaysOnTop',
+      'runLimits.memoryBytes',
+      'runLimits.timeoutMs',
+      'senses.appIdleThresholdMs',
+      'senses.idleThresholdMs',
+      'senses.pollMs',
+      'updates.checkIntervalHours',
+    ]);
+    const user: AppSettings = { ...base, closeToTray: true, mediaAlwaysOnTop: true, debug: { showModelTraffic: true }, updates: { automatic: true, checkIntervalHours: 1 } };
+    const applied = applyPolicy(user, policy).settings;
+    // Each limit is pinned on its own: the four the policy leaves out stay the user's.
+    expect(applied.runLimits).toEqual({ ...base.runLimits, timeoutMs: 5000, memoryBytes: 32 * 1024 * 1024 });
+    expect(applied.debug.showModelTraffic).toBe(false);
+    expect(applied.closeToTray).toBe(false);
+    expect(applied.mediaAlwaysOnTop).toBe(false);
+    expect(applied.senses).toEqual({ ...base.senses, pollMs: 2000, idleThresholdMs: 60_000, appIdleThresholdMs: 600_000 });
+    expect(applied.updates).toEqual({ automatic: true, checkIntervalHours: 24 });
+    // A settings patch cannot move any of them.
+    expect(
+      stripManagedPatch({ closeToTray: true, theme: 'dark', runLimits: { ...base.runLimits, timeoutMs: 1, cpuMs: 9 }, updates: { automatic: false, checkIntervalHours: 1 } }, managedPaths(policy)),
+    ).toEqual({ theme: 'dark', runLimits: { ...base.runLimits, cpuMs: 9, memoryBytes: undefined, timeoutMs: undefined }, updates: { automatic: false } });
+    // Floors, not caps: below one, or -1, is refused.
+    expect(() => parsePolicy({ version: 1, settings: { runLimits: { timeoutMs: 99 } } })).toThrow(/runLimits\.timeoutMs must be a number ≥ 100/);
+    expect(() => parsePolicy({ version: 1, settings: { runLimits: { maxHostCalls: -1 } } })).toThrow(/runLimits\.maxHostCalls must be a number ≥ 1/);
+    expect(() => parsePolicy({ version: 1, settings: { runLimits: 5 } })).toThrow(/runLimits must be an object/);
+    expect(() => parsePolicy({ version: 1, settings: { senses: { pollMs: 10 } } })).toThrow(/senses\.pollMs must be a number ≥ 1000/);
+    expect(() => parsePolicy({ version: 1, settings: { updates: { checkIntervalHours: 0 } } })).toThrow(/checkIntervalHours must be a number ≥ 1/);
+    expect(() => parsePolicy({ version: 1, settings: { debug: { showModelTraffic: 'yes' } } })).toThrow(/debug\.showModelTraffic must be a boolean/);
+    expect(() => parsePolicy({ version: 1, settings: { closeToTray: 'no' } })).toThrow(/closeToTray must be a boolean/);
+  });
+
   it('takes -1 as unlimited on every cap, and as no floor on the autonomy floors', () => {
     const policy = parsePolicy({
       version: 1,
@@ -734,10 +780,18 @@ describe('SystemIntegration.createPolicy', () => {
     // Every restriction is present at its permissive default, so a new policy changes nothing until edited.
     expect(JSON.parse(policyTemplate(settings)).app).toEqual({ allowQuit: true, ...DEFAULT_APP_RESTRICTIONS });
     expect(json.settings).toMatchObject({ maxInputLockMs: 42_000, autonomy: base.autonomy, permissions: { functionAllow: { desktop: false } }, web: { allowlist: ['a.example'] }, desktop: { launchAllowlist: [] }, memory: base.memory, displayBackend: 'electron', updates: { enabled: true, automatic: false } });
-    expect((json.settings as { senses: object }).senses).toEqual({ includeInPrompt: base.senses.includeInPrompt, watchDirs: base.senses.watchDirs, calendarSources: base.senses.calendarSources });
+    expect((json.settings as { senses: object }).senses).toEqual({
+      includeInPrompt: base.senses.includeInPrompt,
+      watchDirs: base.senses.watchDirs,
+      calendarSources: base.senses.calendarSources,
+      pollMs: base.senses.pollMs,
+      idleThresholdMs: base.senses.idleThresholdMs,
+      appIdleThresholdMs: base.senses.appIdleThresholdMs,
+    });
+    expect(json.settings).toMatchObject({ runLimits: base.runLimits, debug: base.debug, closeToTray: base.closeToTray, mediaAlwaysOnTop: base.mediaAlwaysOnTop, updates: { checkIntervalHours: 6 } });
     // Round-trips through the app's parser without problems, with every key managed.
     const parsed = parsePolicy(json);
-    expect(managedPaths(parsed)).toEqual(expect.arrayContaining(['maxInputLockMs', 'autonomy.maxSelfWakesPerHour', 'permissions.functionAllow.desktop', 'web.allowlist', 'desktop.launchAllowlist', 'memory.enabled', 'senses.watchDirs', 'displayBackend', 'updates.automatic', 'updates.enabled']));
+    expect(managedPaths(parsed)).toEqual(expect.arrayContaining(['maxInputLockMs', 'autonomy.maxSelfWakesPerHour', 'permissions.functionAllow.desktop', 'web.allowlist', 'desktop.launchAllowlist', 'memory.enabled', 'senses.watchDirs', 'displayBackend', 'updates.automatic', 'updates.enabled', 'updates.checkIntervalHours', 'runLimits.timeoutMs', 'debug.showModelTraffic', 'closeToTray', 'mediaAlwaysOnTop', 'senses.pollMs']));
   });
 
   it('parses, calls the daemon, refreshes the watcher and maps daemon errors', async () => {

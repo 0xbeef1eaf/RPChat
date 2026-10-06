@@ -17,11 +17,15 @@ const POLICY_TEMPLATE: PolicyFile = {
     web: { allowlist: ['example.com'] },
     desktop: { launchAllowlist: [] },
     memory: { enabled: true, consolidateEveryTurns: 8, maxEntriesPerCharacter: 300, promptBudgetTokens: 600 },
-    senses: { includeInPrompt: true, watchDirs: [], calendarSources: [] },
+    senses: { includeInPrompt: true, watchDirs: [], calendarSources: [], pollMs: 5000, idleThresholdMs: 120_000, appIdleThresholdMs: 300_000 },
     displayBackend: 'auto',
-    updates: { enabled: true, automatic: true },
+    updates: { enabled: true, automatic: true, checkIntervalHours: 6 },
     browser: { allowBlocking: true, allowEval: true, allowHistory: true },
     media: { maxConcurrent: { image: 0, video: 0, audio: 0 }, maxQueued: { image: 8, video: 8, audio: 8 } },
+    runLimits: { timeoutMs: 10_000, cpuMs: 2_000, memoryBytes: 64 * 1024 * 1024, maxHostCalls: 50, maxLogBytes: 16 * 1024, maxResultBytes: 16 * 1024 },
+    debug: { showModelTraffic: false },
+    closeToTray: true,
+    mediaAlwaysOnTop: true,
   },
   inputLock: { enabled: true, maxDurationMs: 300_000, emergencyKey: 'esc', emergencyHoldMs: 5000 },
   app: { allowQuit: true, users: ['alice'] },
@@ -190,6 +194,13 @@ describe('policyDraftProblems', () => {
     draft.values['autonomy.maxSelfWakesPerHour'] = 'often';
     draft.forced['autonomy.maxSelfWakesPerHour'] = false;
     expect(policyDraftProblems(draft)).toEqual([]);
+  });
+
+  it('words a floor in the unit the field is edited in', () => {
+    const draft = policyDraftFrom(POLICY_TEMPLATE);
+    draft.values['runLimits.memoryBytes'] = 1024;
+    draft.values['runLimits.timeoutMs'] = 10;
+    expect(policyDraftProblems(draft)).toEqual(['Timeout must be at least 0.1 s.', 'Memory (bytes) must be at least 8388608.']);
   });
 
   it('has no home page to force: only a character sets one (sdk.browser.setHomePage)', () => {

@@ -185,9 +185,25 @@ describe('the policy form', () => {
       draft.forced[spec.path] = true;
       draft.values[spec.path] = UNLIMITED;
     }
-    // `consolidateEveryTurns` is a cadence, not a cap: -1 there is refused on both sides.
-    expect(policyDraftProblems(draft)).toEqual([expect.stringContaining('Consolidate every')]);
-    expect(() => parsePolicy(policyDraftToFile(draft))).toThrow(/memory\.consolidateEveryTurns must be a non-negative number$/);
+    // `consolidateEveryTurns` is a cadence, not a cap, and the sandbox limits, senses timings and
+    // update interval are floors with no "unlimited": -1 there is refused on both sides.
+    const floors = POLICY_SETTINGS.filter((s) => (s.kind === 'number' || s.kind === 'duration') && !s.unlimited);
+    expect(floors.map((s) => s.path)).toEqual([
+      'runLimits.timeoutMs',
+      'runLimits.cpuMs',
+      'runLimits.memoryBytes',
+      'runLimits.maxHostCalls',
+      'runLimits.maxLogBytes',
+      'runLimits.maxResultBytes',
+      'memory.consolidateEveryTurns',
+      'senses.pollMs',
+      'senses.idleThresholdMs',
+      'senses.appIdleThresholdMs',
+      'updates.checkIntervalHours',
+    ]);
+    expect(policyDraftProblems(draft)).toEqual(floors.map((s) => expect.stringContaining(s.label)));
+    expect(() => parsePolicy(policyDraftToFile(draft))).toThrow(/memory\.consolidateEveryTurns must be a non-negative number$/m);
+    expect(() => parsePolicy(policyDraftToFile(draft))).toThrow(/runLimits\.timeoutMs must be a number ≥ 100$/m);
     draft.inputLock = { ...draft.inputLock, emergencyHoldMs: UNLIMITED };
     expect(policyDraftProblems(draft)).toContainEqual(expect.stringContaining('emergency-unlock hold'));
   });

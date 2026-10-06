@@ -1,3 +1,4 @@
+import type { RunLimits } from './action.js';
 import type { AppSettings } from './settings.js';
 
 /**
@@ -21,15 +22,16 @@ export interface PolicyFile {
     web?: { allowlist?: string[] };
     desktop?: { launchAllowlist?: string[] };
     memory?: Partial<AppSettings['memory']>;
-    senses?: Partial<Pick<AppSettings['senses'], 'includeInPrompt' | 'watchDirs' | 'calendarSources'>>;
+    senses?: Partial<Pick<AppSettings['senses'], 'includeInPrompt' | 'watchDirs' | 'calendarSources' | 'pollMs' | 'idleThresholdMs' | 'appIdleThresholdMs'>>;
     displayBackend?: AppSettings['displayBackend'];
     /**
      * `enabled: false` switches update checks off entirely; `automatic` pins the background check
-     * toggle; `allowDowngrade` lets the daemon's `apply-update` install an older version than the
-     * current system install (refused by default). `enabled`/`allowDowngrade` are daemon/updater
-     * rules rather than user settings, so only `automatic` is reported as a managed path.
+     * toggle and `checkIntervalHours` the schedule it runs on; `allowDowngrade` lets the daemon's
+     * `apply-update` install an older version than the current system install (refused by
+     * default). `enabled`/`allowDowngrade` are daemon/updater rules rather than user settings, so
+     * only `automatic` and `checkIntervalHours` are reported as managed paths.
      */
-    updates?: { automatic?: boolean; enabled?: boolean; allowDowngrade?: boolean };
+    updates?: { automatic?: boolean; checkIntervalHours?: number; enabled?: boolean; allowDowngrade?: boolean };
     /**
      * Browser extension limits: what characters may do in the browser. The home page is not one of
      * them — only a character sets it, through `sdk.browser.setHomePage`.
@@ -42,6 +44,14 @@ export interface PolicyFile {
      * without saying anything about images.
      */
     media?: { maxConcurrent?: Partial<AppSettings['media']['maxConcurrent']>; maxQueued?: Partial<AppSettings['media']['maxQueued']> };
+    /** The sandbox limits every character's code runs under, each pinned on its own. */
+    runLimits?: Partial<RunLimits>;
+    /** `showModelTraffic` pins the Conversation → Debug switch (capturing every model exchange). */
+    debug?: Partial<AppSettings['debug']>;
+    /** Closing the main window hides it to the tray instead of quitting. */
+    closeToTray?: boolean;
+    /** The default layer of media windows: above other windows (`true`) or below them. */
+    mediaAlwaysOnTop?: boolean;
   };
   /** Input-lock hard limits enforced by the daemon regardless of app settings. */
   inputLock?: {
@@ -352,6 +362,8 @@ export interface AppRestrictions {
   allowCloseMedia: boolean;
   /** `false` closes the Sandbox tab: `sandbox.run`/`sandbox.cancel` are refused and the nav entry is gone. */
   allowSandbox: boolean;
+  /** `false` closes the Action log tab: `audit.list` is refused and the nav entry is gone. */
+  allowActionLog: boolean;
   /**
    * `true` keeps the app inside a conversation: the UI always opens a session with a character
    * (creating one for the first installed character when none exists) and offers no way to sit on
@@ -374,6 +386,7 @@ export const DEFAULT_APP_RESTRICTIONS: AppRestrictions = {
   allowRemoveEvents: true,
   allowCloseMedia: true,
   allowSandbox: true,
+  allowActionLog: true,
   requireCharacterSession: false,
 };
 
@@ -390,6 +403,7 @@ export const APP_ALLOW_KEYS = [
   'allowRemoveEvents',
   'allowCloseMedia',
   'allowSandbox',
+  'allowActionLog',
 ] as const satisfies readonly (keyof AppRestrictions)[];
 
 /** The `require*` restriction keys (all default `false`). */

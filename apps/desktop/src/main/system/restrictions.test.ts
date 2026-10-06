@@ -68,6 +68,7 @@ describe('app restrictions — which channels they close', () => {
     expect(refusalFor('media:closeAll', withOff('allowCloseMedia'))).toMatch(/Closing a character’s media/);
     expect(refusalFor('sandbox:run', withOff('allowSandbox'))).toMatch(/sandbox script/);
     expect(refusalFor('sandbox:cancel', withOff('allowSandbox'))).toMatch(/sandbox script/);
+    expect(refusalFor('audit:list', withOff('allowActionLog'))).toMatch(/The action log/);
   });
 
   it('keeps reading operations open when only the writing ones are closed', () => {
