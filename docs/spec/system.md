@@ -188,7 +188,7 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
 - **Session guard** (`src/guard.rs`, pure + tested; OS glue in `main.rs::os`; user guide
   `docs/system-integration.md` "Session guard"): `policy.guard` (`GuardPolicy`, `deny_unknown_fields`;
   `mode` off|audit|enforce, `protectApp`, `protectAppData`, `wallpaper`, `compositorIpc` allow|shell-only|deny,
-  `ipcGuard` auto|off, `shell`
+  `ipcGuard` auto|off, `ipcAllowCompositor`, `ipcAllowSockets`, `shell`
   auto|noctalia|quickshell|hyprpaper|swww|none, `loginHelpers`, `extraDenyPaths`, `extraDenySockets`,
   `allowBinaries`; path entries absolute or `~/`/`@{HOME}/`, no whitespace/quotes; a mode other than
   off requires `app.users`) → `GuardRules` with defaults. A **table** (`NOCTALIA`, `QUICKSHELL`,
@@ -254,9 +254,12 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   the wallpaper daemon's socket was being vetoed by it; `/var/run/…` is folded to `/run/…` first
   (`@{run}` expands to both, one inode) and targets are deduplicated by inode; `rpchat_allowed`
   (`BPF_MAP_TYPE_CGROUP_ARRAY`, 8 slots) with slot 0 the app's cgroup from its keepalive
-  registration, the compositor's too when `guard.ipcAllowCompositor` is set (a compositor keybind
-  is a plain child of the compositor, so the launcher lands in its cgroup and is otherwise refused
-  like a terminal's; the door is disclosed in `residual`) (`cgroup_dir` of `/proc/<pid>/cgroup`, v2 only) and the rest the socket servers';
+  registration, the compositor's too when `guard.ipcAllowCompositor` is set — which does **nothing** on
+  Hyprland, because it puts each process it spawns in its own `app-Hyprland-<cmd>-<hash>.scope`, so
+  a keybind is a sibling of the shell and of every terminal rather than a child of the compositor;
+  what works there is `guard.ipcAllowSockets`, which drops named sockets from `rpchat_targets`
+  (`spared_sockets`) so a shell multiplexing its launcher with `wallpaper set` over one socket
+  keeps its keybinds while the row's *files* stay denied. Both are disclosed in `residual` (`cgroup_dir` of `/proc/<pid>/cgroup`, v2 only) and the rest the socket servers';
   `rpchat_mode` (0 off / 1 audit / 2 enforce); `rpchat_events` (ring buffer). The program returns
   `-EACCES` in enforce, `0` in audit, and `0` for anything it cannot resolve. Records become the
   same `guard-attempt` events with `profile: "bpf-ipc"` and `operation: "connect"`, through the
@@ -573,7 +576,7 @@ sets `deny_unknown_fields` — it does not act on them.
 
 ### Policy `guard` block
 
-`GuardPolicy` in `@rp/shared/system.ts`; validated identically by `parseGuard` (app) and `validate_guard` (daemon). `mode` `off` (default) \| `audit` \| `enforce`; `protectApp`, `protectAppData`, `wallpaper` booleans (default true); `compositorIpc` `allow` \| `shell-only` (default) \| `deny`; `ipcGuard` `auto` \| `off` (default) (the BPF LSM IPC guard; see the *IPC guard* bullet above); `shell` `auto` (default) \| `noctalia` \| `quickshell` \| `hyprpaper` \| `swww` \| `none`; `loginHelpers` (non-empty, absolute), `extraDenyPaths`/`extraDenySockets` (absolute, `~/…` or `@{HOME}/…`), `allowBinaries` (absolute) — no whitespace or quotes anywhere (they become AppArmor rules). A `mode` other than `off` without `app.users` is invalid; the listed users are the ones confined. Not a settings key; reported as `SystemIntegrationStatus.guard`.
+`GuardPolicy` in `@rp/shared/system.ts`; validated identically by `parseGuard` (app) and `validate_guard` (daemon). `mode` `off` (default) \| `audit` \| `enforce`; `protectApp`, `protectAppData`, `wallpaper` booleans (default true); `compositorIpc` `allow` \| `shell-only` (default) \| `deny`; `ipcGuard` `auto` \| `off` (default), `ipcAllowCompositor` boolean (default false) and `ipcAllowSockets` (absolute, `~/…` or `@{HOME}/…`) — the BPF LSM IPC guard, see the *IPC guard* bullet above; `shell` `auto` (default) \| `noctalia` \| `quickshell` \| `hyprpaper` \| `swww` \| `none`; `loginHelpers` (non-empty, absolute), `extraDenyPaths`/`extraDenySockets` (absolute, `~/…` or `@{HOME}/…`), `allowBinaries` (absolute) — no whitespace or quotes anywhere (they become AppArmor rules). A `mode` other than `off` without `app.users` is invalid; the listed users are the ones confined. Not a settings key; reported as `SystemIntegrationStatus.guard`.
 
 ### Policy `dev` block
 

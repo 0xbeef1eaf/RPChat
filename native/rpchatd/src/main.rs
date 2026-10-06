@@ -632,6 +632,19 @@ impl Daemon {
             .is_ok()
     }
 
+    /// Keep `status.guard.ipcTargets` honest between engages: the refresh loop fills the map in
+    /// after the app registers, long after the apply whose result `guard_status` hands out.
+    pub fn set_ipc_targets(&self, targets: usize) {
+        if let Some(info) = self
+            .guard_info
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
+            info.ipc_targets = Some(targets);
+        }
+    }
+
     /// The same for the IPC guard's reporting and refresh threads.
     pub fn claim_ipc_threads(&self) -> bool {
         self.ipc_threads_started
@@ -3024,11 +3037,9 @@ mod os {
 
     /// The sockets the IPC guard should mediate, and the cgroups of the processes serving them
     /// (which stay allowed, so a bar can still drive a wallpaper daemon).
-    pub fn ipc_targets(
-        rules: &policy::GuardRules,
-        ctx: &guard::GuardContext,
-    ) -> (Vec<ipcguard::Target>, Vec<PathBuf>) {
+    pub fn ipc_targets(rules: &policy::GuardRules, ctx: &guard::GuardContext) -> ipcguard::IpcPlan {
         let targets = ipcguard::resolve_targets(rules, ctx, &list_dir, &stat_socket);
+        let spared = ipcguard::spared_sockets(rules, &list_dir).len();
         let mut servers = Vec::new();
         let guarded: Vec<&str> = ctx.shells.iter().map(|s| s.id).collect();
         for s in &ctx.served {
@@ -3047,7 +3058,11 @@ mod os {
                 }
             }
         }
-        (targets, servers)
+        ipcguard::IpcPlan {
+            targets,
+            server_cgroups: servers,
+            spared,
+        }
     }
 
     /// The `ipc_engage` hook: load or unload, and keep the maps for the refresh loop.
@@ -3094,15 +3109,21 @@ mod os {
             &daemon.guard_paths,
             &[],
         );
-        let (targets, server_cgroups) = ipc_targets(&rules, &ctx);
+        let plan = ipc_targets(&rules, &ctx);
         let request = ipcguard::IpcRequest {
             mode: rules.mode,
             setting: rules.ipc_guard,
             allow_compositor: rules.ipc_allow_compositor,
-            targets,
+            spared: plan.spared,
+            targets: plan.targets,
             app_cgroup: app_cgroup(),
-            server_cgroups,
+            server_cgroups: plan.server_cgroups,
         };
+        // `guard-status` reports the cached `GuardInfo` from the last engage, so without this
+        // the count is frozen at whatever the boot-time apply saw — which is zero, because the
+        // app has not registered then (`IpcRequest::mediated`). It read as "mediating nothing"
+        // on a machine that was mediating three sockets and denying a keybind.
+        daemon.set_ipc_targets(request.mediated().len());
         match engaged(|e| e.update(&request)) {
             Some(Err(e)) => log_warn!("IPC guard refresh: {e}"),
             _ => {

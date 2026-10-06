@@ -438,6 +438,8 @@ export function parseGuard(raw: unknown, problems: string[]): GuardPolicy | unde
   if (denyPaths) out.extraDenyPaths = denyPaths;
   const denySockets = guardPathList(g.extraDenySockets, 'guard.extraDenySockets', true, problems);
   if (denySockets) out.extraDenySockets = denySockets;
+  const allowSockets = guardPathList(g.ipcAllowSockets, 'guard.ipcAllowSockets', true, problems);
+  if (allowSockets) out.ipcAllowSockets = allowSockets;
   const allow = guardPathList(g.allowBinaries, 'guard.allowBinaries', false, problems);
   if (allow) out.allowBinaries = allow;
   return out;

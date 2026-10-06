@@ -208,6 +208,20 @@ export interface GuardPolicy {
   extraDenyPaths?: string[];
   /** More unix socket paths the session may not connect to. */
   extraDenySockets?: string[];
+  /**
+   * Sockets the **IPC guard** must leave alone, even though the shell table lists them. The
+   * inverse of `extraDenySockets`, and the only knob that can split the two halves of a shell's
+   * guarding.
+   *
+   * It exists because a shell multiplexes: noctalia carries its launcher *and* `wallpaper set`
+   * over one socket, so mediating `connect()` to it either breaks `SUPER+Space` or leaves the
+   * wallpaper reachable. No choice of allow-list identity fixes that — Hyprland gives every
+   * process it spawns its own sibling scope, so the launcher and a terminal are indistinguishable
+   * by cgroup. Naming the socket here keeps the keybinds working while the row's **files** stay
+   * denied, which is the half that stops a wallpaper persisting, and leaves a separate wallpaper
+   * daemon's socket (`swww`, `awww`) mediated, where nothing is multiplexed and nothing is lost.
+   */
+  ipcAllowSockets?: string[];
   /** Absolute paths that leave the confinement entirely when executed. */
   allowBinaries?: string[];
 }

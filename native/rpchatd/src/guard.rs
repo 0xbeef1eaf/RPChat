@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::ipcguard::{IpcMediation, IpcOutcome, IpcRequest, Target};
+use crate::ipcguard::{IpcMediation, IpcOutcome, IpcPlan, IpcRequest};
 use crate::policy::{CompositorIpc, GuardMode, GuardRules, GuardShell, PolicyFile};
 
 /// Where the generated profiles go.
@@ -1518,8 +1518,7 @@ pub type Discover = Box<dyn Fn(&[String]) -> Vec<ServedSocket> + Send + Sync>;
 pub type IpcEngage = Box<dyn Fn(&IpcRequest) -> IpcOutcome + Send + Sync>;
 /// The IPC guard's view of the machine: which sockets to mediate and which cgroups to allow,
 /// resolved from the context. Also a hook, for the same reason — it stats and lists directories.
-pub type IpcTargets =
-    Box<dyn Fn(&GuardRules, &GuardContext) -> (Vec<Target>, Vec<PathBuf>) + Send + Sync>;
+pub type IpcTargets = Box<dyn Fn(&GuardRules, &GuardContext) -> IpcPlan + Send + Sync>;
 /// The cgroup directory of the rpchat app, so the IPC guard can let the character's own
 /// `<shell> msg …` through. `None` until the app registers for keepalive.
 pub type AppCgroup = Box<dyn Fn() -> Option<PathBuf> + Send + Sync>;
@@ -1791,14 +1790,15 @@ pub fn apply(policy: Option<&PolicyFile>, hooks: &GuardHooks, paths: &GuardPaths
     // has to say which mechanism is mediating `connect()`, and guessing is how the guard came to
     // claim a wallpaper lock it did not have. Failure here is never `lastError` — the AppArmor
     // half must still engage, and the desktop must still work.
-    let (targets, server_cgroups) = (hooks.ipc_targets)(&rules, &ctx);
+    let plan = (hooks.ipc_targets)(&rules, &ctx);
     ctx.ipc = (hooks.ipc_engage)(&IpcRequest {
         mode: rules.mode,
         setting: rules.ipc_guard,
         allow_compositor: rules.ipc_allow_compositor,
-        targets,
+        spared: plan.spared,
+        targets: plan.targets,
         app_cgroup: (hooks.app_cgroup)(),
-        server_cgroups,
+        server_cgroups: plan.server_cgroups,
     });
     let mediation = crate::ipcguard::effective_mediation(&ctx.ipc, ctx.unix_class);
     info.ipc_mediation = Some(mediation);
@@ -2065,7 +2065,7 @@ pub mod tests {
                     Ok(())
                 }),
                 discover: Box::new(move |_| g.discovered.lock().unwrap().clone()),
-                ipc_targets: Box::new(|_, _| (Vec::new(), Vec::new())),
+                ipc_targets: Box::new(|_, _| IpcPlan::default()),
                 app_cgroup: Box::new(|| None),
                 ipc_engage: Box::new(move |_| l.ipc.lock().unwrap().clone()),
                 unconfined_helpers: Box::new(move |_| Vec::new()),
@@ -3249,6 +3249,7 @@ garbage line\n";
         ctx.ipc = IpcOutcome {
             mediation: IpcMediation::Bpf,
             allow_compositor: false,
+            spared: 0,
             reason: None,
             targets: 2,
         };

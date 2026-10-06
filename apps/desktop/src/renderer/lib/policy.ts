@@ -172,6 +172,7 @@ export interface PolicyDraft {
     loginHelpers: string[];
     extraDenyPaths: string[];
     extraDenySockets: string[];
+    ipcAllowSockets: string[];
     allowBinaries: string[];
   };
   remote: PolicyRemoteDraft;
@@ -254,6 +255,7 @@ export function policyDraftFrom(policy: PolicyFile): PolicyDraft {
       loginHelpers: [...(policy.guard?.loginHelpers ?? [])],
       extraDenyPaths: [...(policy.guard?.extraDenyPaths ?? [])],
       extraDenySockets: [...(policy.guard?.extraDenySockets ?? [])],
+      ipcAllowSockets: [...(policy.guard?.ipcAllowSockets ?? [])],
       allowBinaries: [...(policy.guard?.allowBinaries ?? [])],
     },
     remote: {
@@ -310,6 +312,7 @@ export function policyDraftToFile(draft: PolicyDraft): PolicyFile {
     ipcAllowCompositor: draft.guard.ipcAllowCompositor,
     extraDenyPaths: [...draft.guard.extraDenyPaths],
     extraDenySockets: [...draft.guard.extraDenySockets],
+    ipcAllowSockets: [...draft.guard.ipcAllowSockets],
     allowBinaries: [...draft.guard.allowBinaries],
   };
   if (draft.guard.shell.length === 1) guard.shell = draft.guard.shell[0] as GuardShell;
