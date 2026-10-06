@@ -51,6 +51,7 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const automaticManaged = useManaged('updates.automatic');
+  const intervalManaged = useManaged('updates.checkIntervalHours');
 
   const load = useCallback(async () => {
     try {
@@ -234,11 +235,14 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
             />
           </div>
           <div className="field" style={{ maxWidth: 260 }}>
-            <label htmlFor="update-interval">Check interval</label>
+            <label htmlFor="update-interval">
+              Check interval
+              <ManagedBadge show={intervalManaged} />
+            </label>
             <select
               id="update-interval"
               value={String(settings.updates.checkIntervalHours)}
-              disabled={disabledByPolicy || !settings.updates.automatic}
+              disabled={intervalManaged || disabledByPolicy || !settings.updates.automatic}
               onChange={(e) => void onPatch({ updates: { ...settings.updates, checkIntervalHours: Number(e.target.value) } })}
             >
               {INTERVALS.some((i) => i.hours === settings.updates.checkIntervalHours) ? null : (

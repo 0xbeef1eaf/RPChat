@@ -3,7 +3,7 @@
  * operations a household admin can take away from this machine — the pack editor, removing or
  * rewriting packs, stopping a reply mid-generation, deleting sessions/history/memories, resetting
  * a session's runtime state, unsubscribing event handlers, closing a character's media, the
- * sandbox — plus `requireCharacterSession`, which keeps the app inside a conversation.
+ * sandbox, the action log — plus `requireCharacterSession`, which keeps the app inside a conversation.
  *
  * The `guard` block confines the session *around* the app with AppArmor; this confines the app
  * itself. Enforcement is one table consulted in `registerIpc`'s dispatch loop, so every guarded
@@ -51,6 +51,8 @@ export const RESTRICTED_CHANNELS: Readonly<Record<string, ChannelRule>> = {
   // 8. The sandbox.
   'sandbox:run': { key: 'allowSandbox', what: 'Running a sandbox script' },
   'sandbox:cancel': { key: 'allowSandbox', what: 'Running a sandbox script' },
+  // 9. The action log, whole namespace.
+  'audit:*': { key: 'allowActionLog', what: 'The action log' },
 } as const;
 
 /** Pure: every rule that applies to `channel` — its namespace wildcard first, then its own. */

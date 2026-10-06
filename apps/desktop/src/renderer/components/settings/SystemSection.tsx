@@ -606,6 +606,7 @@ const RESTRICTION_LABELS: Record<keyof AppRestrictions, string> = {
   allowRemoveEvents: 'event handlers cannot be removed',
   allowCloseMedia: 'media cannot be closed by hand',
   allowSandbox: 'sandbox disabled',
+  allowActionLog: 'action log disabled',
   requireCharacterSession: 'a conversation stays open',
 };
 

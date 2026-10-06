@@ -29,6 +29,7 @@
     "allowRemoveEvents": false,
     "allowCloseMedia": false,
     "allowSandbox": false,
+    "allowActionLog": false,
     "requireCharacterSession": true
   },
   "dev": {

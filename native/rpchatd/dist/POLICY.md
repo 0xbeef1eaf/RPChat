@@ -251,11 +251,15 @@ on a floor (`minRepeatIntervalMs`, `minDelayMs`) `-1` means no floor.
 | `web` | `{ "allowlist": string[] }` | Hostname patterns (`example.com`, `*.example.com`) `sdk.web` may fetch. Empty = any host. |
 | `desktop` | `{ "launchAllowlist": string[] }` | Executables `sdk.desktop.launch` may start. Empty = any. |
 | `memory` | object | Any field of the app's memory settings. `maxEntriesPerCharacter` and `promptBudgetTokens` take `-1` for no limit. |
-| `senses` | object | `includeInPrompt` (boolean), `watchDirs` (string[]), `calendarSources` (string[]). |
+| `senses` | object | `includeInPrompt` (boolean), `watchDirs` (string[]), `calendarSources` (string[]), `pollMs` (number ≥ 1000), `idleThresholdMs` and `appIdleThresholdMs` (numbers ≥ 10000): how often presence is sampled, and how long without input counts as away from the machine and from the app. |
 | `displayBackend` | `"auto"` \| `"electron"` \| `"hyprland"` | Which overlay backend the app uses. |
-| `updates` | `{ "automatic": boolean, "enabled": boolean, "allowDowngrade": boolean }` | In-place app updates. `enabled: false` switches update checks off entirely (the Updates tab shows "disabled by policy" and hides the token field); `automatic` pins the "check automatically" toggle. `allowDowngrade: true` lets the daemon's `apply-update` (system install) install a version older than the current one; by default such requests are refused. All optional. |
-| `browser` | `{ "allowBlocking": boolean, "allowEval": boolean, "allowHistory": boolean }` | What characters may do through the browser extension: block pages for a while, run JavaScript in pages, read the browser history. All optional. The home page the extension opens in new tabs is not here — only a character sets it, with `sdk.browser.setHomePage`. |
+| `updates` | `{ "automatic": boolean, "checkIntervalHours": number, "enabled": boolean, "allowDowngrade": boolean }` | In-place app updates. `enabled: false` switches update checks off entirely (the Updates tab shows "disabled by policy" and hides the token field); `automatic` pins the "check automatically" toggle and `checkIntervalHours` (≥ 1) the interval between background checks. `allowDowngrade: true` lets the daemon's `apply-update` (system install) install a version older than the current one; by default such requests are refused. All optional. |
+| `browser` | `{ "allowBlocking": boolean, "allowEval": boolean, "allowHistory": boolean, "autoLaunch": boolean }` | What characters may do through the browser extension: block pages for a while, run JavaScript in pages, read the browser history, start a closed browser to reach it. All optional. The home page the extension opens in new tabs is not here — only a character sets it, with `sdk.browser.setHomePage`. |
 | `media` | `{ "maxConcurrent": { "image": n, "video": n, "audio": n }, "maxQueued": { … } }` | How much of `sdk.media` may run at once, counted per kind. `maxConcurrent` is the cap (`0` or `-1` = no cap, the default); `maxQueued` is how many further calls may wait behind it (`0` refuses an over-cap call instead of queueing it, `-1` lets any number wait). A queued call is not blocked or failed: it returns a handle straight away and opens by itself when one of its kind closes. Every number is optional and pinned on its own. |
+| `runLimits` | `{ "timeoutMs": n, "cpuMs": n, "memoryBytes": n, "maxHostCalls": n, "maxLogBytes": n, "maxResultBytes": n }` | The sandbox limits every character's code runs under (Settings → General → Sandbox limits). Each is optional and has a floor: `timeoutMs` ≥ 100, `cpuMs` ≥ 50, `memoryBytes` ≥ 8388608 (8 MiB), `maxHostCalls` ≥ 1, `maxLogBytes` and `maxResultBytes` ≥ 1024. No `-1`: every run needs a bound. |
+| `debug` | `{ "showModelTraffic": boolean }` | Pins the Conversation → Debug switch that captures every request and response sent to the model (system prompt included) for the chat's *Model traffic* view. |
+| `closeToTray` | boolean | Closing the main window keeps the app running in the tray instead of quitting. |
+| `mediaAlwaysOnTop` | boolean | Media windows open above other windows (`true`) or below them (`false`). |
 
 The daemon only validates that these are objects/numbers/strings of the right kind; the app
 validates the inner values against its settings schema and ignores what it cannot apply.
@@ -320,6 +324,7 @@ operation is refused whoever asks: a devtools console or a character's own scrip
 | `allowRemoveEvents` | boolean | `true` | `false` removes *Remove* from the events drawer and refuses `events.remove`, so a character's `sdk.events.on` subscriptions cannot be unsubscribed by hand. |
 | `allowCloseMedia` | boolean | `true` | `false` removes *Close media* from the chat header and refuses `media.closeAll`, so a character's overlays cannot be swept off the screen by hand. The character's own `sdk.media.close` / `sdk.media.closeAll` are unaffected — this is only the by-hand button. |
 | `allowSandbox` | boolean | `true` | `false` closes the Sandbox tab: the entry disappears and `sandbox.run` / `sandbox.cancel` are refused. Characters' own scripts are unaffected — this is only the by-hand runner. |
+| `allowActionLog` | boolean | `true` | `false` closes the Action log tab: the entry disappears and `audit.list` is refused. Actions are still recorded; only reading them back in the app is taken away. |
 | `requireCharacterSession` | boolean | `false` | `true` keeps the app inside a conversation: it opens straight into the most recent session (starting one with the first installed character when there is none) instead of an empty chat, and the **last** remaining session cannot be deleted even when `allowDeleteSession` is true. |
 
 Settings → System lists whichever of these are in force, next to the forced settings. They are
@@ -346,6 +351,7 @@ it can be taken apart:
     "allowRemoveEvents": false,
     "allowCloseMedia": false,
     "allowSandbox": false,
+    "allowActionLog": false,
     "requireCharacterSession": true
   }
 }

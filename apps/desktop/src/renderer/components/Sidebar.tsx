@@ -12,7 +12,7 @@ const NAV: Array<{ route: RouteName; label: string; needs?: keyof AppRestriction
   { route: 'packs', label: 'Packs' },
   { route: 'editor', label: 'Pack editor', needs: 'allowPackEditor' },
   { route: 'settings', label: 'Settings' },
-  { route: 'log', label: 'Action log' },
+  { route: 'log', label: 'Action log', needs: 'allowActionLog' },
   { route: 'sdk', label: 'SDK reference' },
   { route: 'sandbox', label: 'Sandbox', needs: 'allowSandbox' },
 ];

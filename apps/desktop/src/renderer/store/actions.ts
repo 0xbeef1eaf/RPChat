@@ -47,7 +47,7 @@ export function reportError(context: string, err: unknown): void {
 }
 
 /** Routes the policy can withhold, and the restriction each needs. */
-const ROUTE_NEEDS: Partial<Record<RouteName, keyof AppRestrictions>> = { editor: 'allowPackEditor', sandbox: 'allowSandbox' };
+const ROUTE_NEEDS: Partial<Record<RouteName, keyof AppRestrictions>> = { editor: 'allowPackEditor', sandbox: 'allowSandbox', log: 'allowActionLog' };
 
 export function navigate(route: RouteName): void {
   update((s) => {

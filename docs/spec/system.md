@@ -568,6 +568,7 @@ when a reply is genuinely being cut short, and retry/reset/delete keep working o
 | `allowRemoveEvents` | `true` | No *Remove* in the events drawer. | `events:remove` |
 | `allowCloseMedia` | `true` | No *Close media* in the chat header. Characters' own `sdk.media.close`/`closeAll` still work — they never cross this channel. | `media:closeAll` |
 | `allowSandbox` | `true` | Sandbox tab closed; nav entry hidden. Characters' own scripts unaffected. | `sandbox:run`, `sandbox:cancel` |
+| `allowActionLog` | `true` | Action log tab closed; nav entry hidden, `navigate('log')` is a no-op. Actions are still recorded. | `audit:*` |
 | `requireCharacterSession` | `false` | `enterRequiredSession()` opens the newest session at boot, or creates one with the first installed character, and pins the route to `chat`. The **last** session cannot be deleted — checked in the `sessions.remove` handler (conditional, so not in the table) and mirrored in `ChatView`. | — |
 
 `AppPolicy` (`{ allowQuit, users }`) stays the daemon's half; the restrictions travel separately so
@@ -657,11 +658,15 @@ Dotted paths as shown by `settings.managed()`; both the app (`parsePolicy`) and 
 | `web` | `web.allowlist` | string[] |
 | `desktop` | `desktop.launchAllowlist` | string[] |
 | `memory` | `memory.enabled`, `memory.semanticRanking`, `memory.consolidateEveryTurns`, `memory.maxEntriesPerCharacter`, `memory.promptBudgetTokens` | the last two take `-1` for no limit; `consolidateEveryTurns` is a cadence and does not |
-| `senses` | `senses.includeInPrompt`, `senses.watchDirs`, `senses.calendarSources` | |
+| `senses` | `senses.includeInPrompt`, `senses.watchDirs`, `senses.calendarSources`, `senses.pollMs`, `senses.idleThresholdMs`, `senses.appIdleThresholdMs` | `pollMs` ≥ 1000, the two thresholds ≥ 10000 (ms) |
 | `displayBackend` | `displayBackend` | `auto` \| `electron` \| `hyprland` |
-| `updates` | `updates.automatic`, `updates.enabled` (`allowDowngrade` accepted, never managed) | booleans. `enabled: false` switches update checks off entirely (`UpdateStatus.state === 'disabled'`, token field hidden, `automatic` forced off); `automatic` pins the background-check toggle; `allowDowngrade: true` lets the daemon's `apply-update` install an older version (daemon-enforced, default false). |
+| `updates` | `updates.automatic`, `updates.checkIntervalHours`, `updates.enabled` (`allowDowngrade` accepted, never managed) | booleans, except `checkIntervalHours` (a number ≥ 1, the hours between background checks). `enabled: false` switches update checks off entirely (`UpdateStatus.state === 'disabled'`, token field hidden, `automatic` forced off); `automatic` pins the background-check toggle; `allowDowngrade: true` lets the daemon's `apply-update` install an older version (daemon-enforced, default false). |
 | `browser` | `browser.allowBlocking`, `browser.allowEval`, `browser.allowHistory`, `browser.autoLaunch` | booleans. What characters may do through the browser extension (docs/browser-extension.md), `autoLaunch` whether the app may start a closed browser to reach it. The home page is not managed: only a character sets it, with `sdk.browser.setHomePage`. |
 | `media` | `media.maxConcurrent.image`, `media.maxConcurrent.video`, `media.maxConcurrent.audio`, `media.maxQueued.image`, `media.maxQueued.video`, `media.maxQueued.audio` | non-negative numbers or `-1`, each pinned on its own. How many `sdk.media` items of a kind may run at once (`0` or `-1` = no cap) and how many more may wait behind them (`0` = an over-cap call is refused rather than queued, `-1` = no limit on the queue). Enforced by `MediaManager` (docs/spec/desktop.md "Media limits and the queue"); each kind is counted separately. |
+| `runLimits` | `runLimits.timeoutMs`, `runLimits.cpuMs`, `runLimits.memoryBytes`, `runLimits.maxHostCalls`, `runLimits.maxLogBytes`, `runLimits.maxResultBytes` | numbers, each pinned on its own and held to a floor (100 ms, 50 ms, 8 MiB, 1, 1 KiB, 1 KiB); no `-1`, since every run needs a bound |
+| `debug` | `debug.showModelTraffic` | boolean |
+| `closeToTray` | `closeToTray` | boolean |
+| `mediaAlwaysOnTop` | `mediaAlwaysOnTop` | boolean |
 
 ## Renderer
 

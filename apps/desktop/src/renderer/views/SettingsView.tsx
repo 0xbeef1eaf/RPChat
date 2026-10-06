@@ -318,6 +318,9 @@ export function SettingsView() {
   const [restoreFile, setRestoreFile] = useState<string | null>(null);
   const displayBackendManaged = useManaged('displayBackend');
   const memoryEnabledManaged = useManaged('memory.enabled');
+  const modelTrafficManaged = useManaged('debug.showModelTraffic');
+  const closeToTrayManaged = useManaged('closeToTray');
+  const mediaOnTopManaged = useManaged('mediaAlwaysOnTop');
 
   if (!settings) {
     return (
@@ -469,11 +472,15 @@ export function SettingsView() {
             <span className="field-hint">Otherwise actions are exchanged as fenced ```action blocks.</span>
           </div>
           <div className="field">
-            <span className="field-label">Debug</span>
+            <span className="field-label">
+              Debug
+              <ManagedBadge show={modelTrafficManaged} />
+            </span>
             <label className="check">
               <input
                 type="checkbox"
                 checked={settings.debug.showModelTraffic}
+                disabled={modelTrafficManaged}
                 onChange={(e) => patchSettings({ debug: { ...settings.debug, showModelTraffic: e.target.checked } })}
               />
               Show model traffic
@@ -492,19 +499,21 @@ export function SettingsView() {
           Apply to every code run by a character. Defaults are sensible; raise them only for packs you trust.
         </p>
         <div className="field-grid">
-          <NumberField id="lim-timeout" label="Timeout (ms)" value={limits.timeoutMs} min={100} step={100} onCommit={(v) => patchLimits({ timeoutMs: v })} />
-          <NumberField id="lim-cpu" label="CPU budget (ms)" value={limits.cpuMs} min={50} step={50} onCommit={(v) => patchLimits({ cpuMs: v })} />
+          <NumberField id="lim-timeout" label="Timeout (ms)" path="runLimits.timeoutMs" value={limits.timeoutMs} min={100} step={100} onCommit={(v) => patchLimits({ timeoutMs: v })} />
+          <NumberField id="lim-cpu" label="CPU budget (ms)" path="runLimits.cpuMs" value={limits.cpuMs} min={50} step={50} onCommit={(v) => patchLimits({ cpuMs: v })} />
           <NumberField
             id="lim-mem"
             label="Memory (MiB)"
+            path="runLimits.memoryBytes"
             value={Math.round(limits.memoryBytes / (1024 * 1024))}
             min={8}
             onCommit={(v) => patchLimits({ memoryBytes: Math.round(v) * 1024 * 1024 })}
           />
-          <NumberField id="lim-calls" label="Max SDK calls per run" value={limits.maxHostCalls} min={1} onCommit={(v) => patchLimits({ maxHostCalls: Math.round(v) })} />
+          <NumberField id="lim-calls" label="Max SDK calls per run" path="runLimits.maxHostCalls" value={limits.maxHostCalls} min={1} onCommit={(v) => patchLimits({ maxHostCalls: Math.round(v) })} />
           <NumberField
             id="lim-log"
             label="Max log output (KiB)"
+            path="runLimits.maxLogBytes"
             value={Math.round(limits.maxLogBytes / 1024)}
             min={1}
             onCommit={(v) => patchLimits({ maxLogBytes: Math.round(v) * 1024 })}
@@ -512,6 +521,7 @@ export function SettingsView() {
           <NumberField
             id="lim-result"
             label="Max result size (KiB)"
+            path="runLimits.maxResultBytes"
             value={Math.round(limits.maxResultBytes / 1024)}
             min={1}
             onCommit={(v) => patchLimits({ maxResultBytes: Math.round(v) * 1024 })}
@@ -639,13 +649,16 @@ export function SettingsView() {
             </span>
           </div>
           <div className="field">
-            <span className="field-label">Media windows</span>
+            <span className="field-label">
+              Media windows
+              <ManagedBadge show={closeToTrayManaged || mediaOnTopManaged} />
+            </span>
             <label className="check">
-              <input type="checkbox" checked={settings.closeToTray} onChange={(e) => patchSettings({ closeToTray: e.target.checked })} />
+              <input type="checkbox" checked={settings.closeToTray} disabled={closeToTrayManaged} onChange={(e) => patchSettings({ closeToTray: e.target.checked })} />
               Closing the window keeps rpchat running in the tray (timers, self-wakes and the browser bridge stay active; quit from the tray menu)
             </label>
             <label className="check">
-              <input type="checkbox" checked={settings.mediaAlwaysOnTop} onChange={(e) => patchSettings({ mediaAlwaysOnTop: e.target.checked })} />
+              <input type="checkbox" checked={settings.mediaAlwaysOnTop} disabled={mediaOnTopManaged} onChange={(e) => patchSettings({ mediaAlwaysOnTop: e.target.checked })} />
               Keep media windows above other windows
             </label>
             <span className="field-hint">Default overlay layer: above (top) or below (bottom) normal windows.</span>

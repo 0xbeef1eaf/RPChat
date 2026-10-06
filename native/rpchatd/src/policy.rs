@@ -86,7 +86,7 @@ pub struct InputLockPolicy {
 ///
 /// The `allow*`/`require*` keys below are the app-enforced restrictions (the pack editor, pack
 /// installs and removals, deleting sessions/history/memories, resetting a session's runtime
-/// state, event handlers, the sandbox, and keeping a conversation open). The daemon does not act on them — the app refuses those
+/// state, event handlers, the sandbox, the action log, and keeping a conversation open). The daemon does not act on them — the app refuses those
 /// operations on its own IPC boundary — but this struct denies unknown fields, so they are
 /// declared here to keep a policy that uses them loadable, and round-trip through `policy`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -118,6 +118,8 @@ pub struct AppPolicy {
     pub allow_close_media: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_sandbox: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_action_log: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub require_character_session: Option<bool>,
 }
@@ -469,7 +471,7 @@ pub struct PolicyFile {
 }
 
 /// Keys allowed under `settings` (documented in `docs/spec/system.md`).
-pub const SETTINGS_KEYS: [&str; 11] = [
+pub const SETTINGS_KEYS: [&str; 15] = [
     "autonomy",
     "maxInputLockMs",
     "permissions",
@@ -481,6 +483,28 @@ pub const SETTINGS_KEYS: [&str; 11] = [
     "updates",
     "browser",
     "media",
+    "runLimits",
+    "debug",
+    "closeToTray",
+    "mediaAlwaysOnTop",
+];
+
+/// `settings.runLimits` keys and the smallest value each accepts. There is no -1: every run needs
+/// a bound.
+const RUN_LIMITS: [(&str, f64); 6] = [
+    ("timeoutMs", 100.0),
+    ("cpuMs", 50.0),
+    ("memoryBytes", 8.0 * 1024.0 * 1024.0),
+    ("maxHostCalls", 1.0),
+    ("maxLogBytes", 1024.0),
+    ("maxResultBytes", 1024.0),
+];
+
+/// `settings.senses` timing keys and the smallest value each accepts.
+const SENSES_TIMINGS: [(&str, f64); 3] = [
+    ("pollMs", 1000.0),
+    ("idleThresholdMs", 10_000.0),
+    ("appIdleThresholdMs", 10_000.0),
 ];
 
 impl PolicyFile {
@@ -520,6 +544,8 @@ impl PolicyFile {
                 "updates",
                 "browser",
                 "media",
+                "runLimits",
+                "debug",
             ] {
                 if let Some(v) = map.get(key) {
                     if !v.is_object() {
@@ -529,18 +555,31 @@ impl PolicyFile {
             }
             if let Some(updates) = map.get("updates").and_then(Value::as_object) {
                 for (key, value) in updates {
-                    if !matches!(key.as_str(), "automatic" | "enabled" | "allowDowngrade") {
-                        return Err(format!("settings.updates.{key} is not a managed setting"));
-                    }
-                    if !value.is_boolean() {
-                        return Err(format!("settings.updates.{key} must be a boolean"));
+                    match key.as_str() {
+                        "automatic" | "enabled" | "allowDowngrade" => {
+                            if !value.is_boolean() {
+                                return Err(format!("settings.updates.{key} must be a boolean"));
+                            }
+                        }
+                        "checkIntervalHours" => match value.as_f64() {
+                            Some(n) if n.is_finite() && n >= 1.0 => {}
+                            _ => {
+                                return Err(
+                                    "settings.updates.checkIntervalHours must be a number ≥ 1"
+                                        .into(),
+                                )
+                            }
+                        },
+                        _ => {
+                            return Err(format!("settings.updates.{key} is not a managed setting"))
+                        }
                     }
                 }
             }
             if let Some(browser) = map.get("browser").and_then(Value::as_object) {
                 for (key, value) in browser {
                     match key.as_str() {
-                        "allowBlocking" | "allowEval" | "allowHistory" => {
+                        "allowBlocking" | "allowEval" | "allowHistory" | "autoLaunch" => {
                             if !value.is_boolean() {
                                 return Err(format!("settings.browser.{key} must be a boolean"));
                             }
@@ -579,6 +618,58 @@ impl PolicyFile {
                                 ))
                             }
                         }
+                    }
+                }
+            }
+            if let Some(run_limits) = map.get("runLimits").and_then(Value::as_object) {
+                for (key, value) in run_limits {
+                    let floor = RUN_LIMITS
+                        .iter()
+                        .find(|(k, _)| k == key)
+                        .map(|(_, floor)| *floor)
+                        .ok_or_else(|| {
+                            format!("settings.runLimits.{key} is not a managed setting")
+                        })?;
+                    match value.as_f64() {
+                        Some(n) if n.is_finite() && n >= floor => {}
+                        _ => {
+                            return Err(format!(
+                                "settings.runLimits.{key} must be a number ≥ {floor}"
+                            ))
+                        }
+                    }
+                }
+            }
+            // Only the timings are checked here: the other senses keys predate this validation and
+            // the app checks them on its own.
+            if let Some(senses) = map.get("senses").and_then(Value::as_object) {
+                for (key, floor) in SENSES_TIMINGS {
+                    if let Some(value) = senses.get(key) {
+                        match value.as_f64() {
+                            Some(n) if n.is_finite() && n >= floor => {}
+                            _ => {
+                                return Err(format!(
+                                    "settings.senses.{key} must be a number ≥ {floor}"
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(debug) = map.get("debug").and_then(Value::as_object) {
+                for (key, value) in debug {
+                    if key != "showModelTraffic" {
+                        return Err(format!("settings.debug.{key} is not a managed setting"));
+                    }
+                    if !value.is_boolean() {
+                        return Err(format!("settings.debug.{key} must be a boolean"));
+                    }
+                }
+            }
+            for key in ["closeToTray", "mediaAlwaysOnTop"] {
+                if let Some(v) = map.get(key) {
+                    if !v.is_boolean() {
+                        return Err(format!("settings.{key} must be a boolean"));
                     }
                 }
             }
@@ -1080,11 +1171,15 @@ mod tests {
                 "web": {"allowlist": ["example.com"]},
                 "desktop": {"launchAllowlist": []},
                 "memory": {},
-                "senses": {"includeInPrompt": false},
+                "senses": {"includeInPrompt": false, "pollMs": 2000, "idleThresholdMs": 60000, "appIdleThresholdMs": 600000},
                 "displayBackend": "electron",
-                "updates": {"automatic": false, "enabled": true, "allowDowngrade": true},
-                "browser": {"allowBlocking": false, "allowEval": true, "allowHistory": false},
-                "media": {"maxConcurrent": {"image": 3, "video": 1, "audio": 0}, "maxQueued": {"video": 4}}
+                "updates": {"automatic": false, "enabled": true, "allowDowngrade": true, "checkIntervalHours": 24},
+                "browser": {"allowBlocking": false, "allowEval": true, "allowHistory": false, "autoLaunch": false},
+                "media": {"maxConcurrent": {"image": 3, "video": 1, "audio": 0}, "maxQueued": {"video": 4}},
+                "runLimits": {"timeoutMs": 5000, "memoryBytes": 33554432},
+                "debug": {"showModelTraffic": false},
+                "closeToTray": true,
+                "mediaAlwaysOnTop": false
             },
             "inputLock": {"maxDurationMs": 60000, "emergencyKey": "f12", "emergencyHoldMs": 2000, "enabled": true}
         }))
@@ -1128,7 +1223,17 @@ mod tests {
             json!({"version": 1, "settings": {"displayBackend": "wayland"}}),
             json!({"version": 1, "settings": {"updates": true}}),
             json!({"version": 1, "settings": {"updates": {"enabled": "no"}}}),
-            json!({"version": 1, "settings": {"updates": {"checkIntervalHours": 1}}}),
+            json!({"version": 1, "settings": {"updates": {"checkIntervalHours": 0}}}),
+            json!({"version": 1, "settings": {"updates": {"checkIntervalHours": "6"}}}),
+            json!({"version": 1, "settings": {"runLimits": 5}}),
+            json!({"version": 1, "settings": {"runLimits": {"timeoutMs": 10}}}),
+            json!({"version": 1, "settings": {"runLimits": {"timeoutMs": -1}}}),
+            json!({"version": 1, "settings": {"runLimits": {"wallMs": 1000}}}),
+            json!({"version": 1, "settings": {"senses": {"pollMs": 100}}}),
+            json!({"version": 1, "settings": {"debug": {"showModelTraffic": "yes"}}}),
+            json!({"version": 1, "settings": {"debug": {"verbose": true}}}),
+            json!({"version": 1, "settings": {"closeToTray": "no"}}),
+            json!({"version": 1, "settings": {"mediaAlwaysOnTop": 1}}),
             json!({"version": 1, "settings": {"browser": "x"}}),
             json!({"version": 1, "settings": {"browser": {"allowEval": "no"}}}),
             json!({"version": 1, "settings": {"browser": {"allowEval": "yes"}}}),
@@ -1280,6 +1385,7 @@ mod tests {
             "allowRemoveEvents": false,
             "allowCloseMedia": false,
             "allowSandbox": false,
+            "allowActionLog": false,
             "requireCharacterSession": true
         }});
         let loaded = policy(doc.clone()).unwrap();
@@ -1291,6 +1397,7 @@ mod tests {
         assert_eq!(app.allow_reset_state, Some(false));
         assert_eq!(app.allow_close_media, Some(false));
         assert_eq!(app.allow_sandbox, Some(false));
+        assert_eq!(app.allow_action_log, Some(false));
         assert_eq!(app.require_character_session, Some(true));
         // Handed back to the app verbatim.
         assert_eq!(serde_json::to_value(&loaded).unwrap(), doc);

@@ -13,10 +13,18 @@ import { policyHash } from './seal-cache.js';
 
 const AUTONOMY_KEYS = ['maxSelfWakesPerHour', 'maxConsecutiveSelfWakes', 'maxTimersPerSession', 'minRepeatIntervalMs', 'minDelayMs'] as const;
 const MEMORY_KEYS = ['enabled', 'semanticRanking', 'consolidateEveryTurns', 'maxEntriesPerCharacter', 'promptBudgetTokens'] as const;
-const SENSES_KEYS = ['includeInPrompt', 'watchDirs', 'calendarSources'] as const;
-const UPDATES_KEYS = ['automatic', 'enabled', 'allowDowngrade'] as const;
+const SENSES_KEYS = ['includeInPrompt', 'watchDirs', 'calendarSources', 'pollMs', 'idleThresholdMs', 'appIdleThresholdMs'] as const;
+/** The senses timings and the smallest value each accepts, the floors Settings → Senses offers. */
+const SENSES_TIMINGS = { pollMs: 1000, idleThresholdMs: 10_000, appIdleThresholdMs: 10_000 } as const;
+const UPDATES_FLAGS = ['automatic', 'enabled', 'allowDowngrade'] as const;
 /** `updates.enabled` and `updates.allowDowngrade` are updater/daemon rules, not settings the UI pins. */
-const UPDATES_MANAGED_KEYS = ['automatic', 'enabled'] as const;
+const UPDATES_MANAGED_KEYS = ['automatic', 'checkIntervalHours', 'enabled'] as const;
+/** The sandbox limits and the smallest value each accepts, the floors Settings → Sandbox limits offers. */
+const RUN_LIMITS = { timeoutMs: 100, cpuMs: 50, memoryBytes: 8 * 1024 * 1024, maxHostCalls: 1, maxLogBytes: 1024, maxResultBytes: 1024 } as const;
+const RUN_LIMIT_KEYS = Object.keys(RUN_LIMITS) as Array<keyof typeof RUN_LIMITS>;
+const DEBUG_KEYS = ['showModelTraffic'] as const;
+/** Top-level boolean settings a policy may pin: the Media windows switches. */
+const WINDOW_KEYS = ['closeToTray', 'mediaAlwaysOnTop'] as const;
 const BROWSER_KEYS = ['allowBlocking', 'allowEval', 'allowHistory', 'autoLaunch'] as const;
 /** The two halves of `settings.media`, each holding one number per `MediaKind`. */
 const MEDIA_SIDES = ['maxConcurrent', 'maxQueued'] as const;
@@ -118,6 +126,12 @@ export function parsePolicy(json: unknown): PolicyFile {
       if (wd) se.watchDirs = wd;
       const cs = stringList(raw2.calendarSources, 'settings.senses.calendarSources', problems);
       if (cs) se.calendarSources = cs;
+      for (const [k, floor] of Object.entries(SENSES_TIMINGS) as Array<[keyof typeof SENSES_TIMINGS, number]>) {
+        const v = raw2[k];
+        if (v === undefined) continue;
+        if (isNumber(v) && v >= floor) se[k] = Math.round(v);
+        else problems.push(`settings.senses.${k} must be a number ≥ ${floor}`);
+      }
       settings.senses = se;
     }
     if (s.displayBackend !== undefined) {
@@ -126,11 +140,16 @@ export function parsePolicy(json: unknown): PolicyFile {
     }
     if (s.updates && typeof s.updates === 'object') {
       const u: NonNullable<NonNullable<PolicyFile['settings']>['updates']> = {};
-      for (const k of UPDATES_KEYS) {
+      for (const k of UPDATES_FLAGS) {
         const v = (s.updates as Record<string, unknown>)[k];
         if (v === undefined) continue;
         if (typeof v === 'boolean') u[k] = v;
         else problems.push(`settings.updates.${k} must be a boolean`);
+      }
+      const hours = (s.updates as Record<string, unknown>).checkIntervalHours;
+      if (hours !== undefined) {
+        if (isNumber(hours) && hours >= 1) u.checkIntervalHours = Math.round(hours);
+        else problems.push('settings.updates.checkIntervalHours must be a number ≥ 1');
       }
       settings.updates = u;
     }
@@ -164,6 +183,38 @@ export function parsePolicy(json: unknown): PolicyFile {
         m[side] = limits;
       }
       settings.media = m;
+    }
+    if (s.runLimits !== undefined) {
+      if (!s.runLimits || typeof s.runLimits !== 'object' || Array.isArray(s.runLimits)) problems.push('settings.runLimits must be an object');
+      else {
+        const r: Partial<AppSettings['runLimits']> = {};
+        for (const k of RUN_LIMIT_KEYS) {
+          const v = (s.runLimits as Record<string, unknown>)[k];
+          if (v === undefined) continue;
+          // No -1 here: every run needs a bound, and the runner has no notion of an unlimited one.
+          if (isNumber(v) && v >= RUN_LIMITS[k]) r[k] = Math.round(v);
+          else problems.push(`settings.runLimits.${k} must be a number ≥ ${RUN_LIMITS[k]}`);
+        }
+        settings.runLimits = r;
+      }
+    }
+    if (s.debug !== undefined) {
+      if (!s.debug || typeof s.debug !== 'object' || Array.isArray(s.debug)) problems.push('settings.debug must be an object');
+      else {
+        const d: Partial<AppSettings['debug']> = {};
+        for (const k of DEBUG_KEYS) {
+          const v = (s.debug as Record<string, unknown>)[k];
+          if (v === undefined) continue;
+          if (typeof v === 'boolean') d[k] = v;
+          else problems.push(`settings.debug.${k} must be a boolean`);
+        }
+        settings.debug = d;
+      }
+    }
+    for (const k of WINDOW_KEYS) {
+      if (s[k] === undefined) continue;
+      if (typeof s[k] === 'boolean') settings[k] = s[k] as boolean;
+      else problems.push(`settings.${k} must be a boolean`);
     }
     out.settings = settings;
   }
@@ -483,6 +534,9 @@ export function managedPaths(policy: PolicyFile | null | undefined): ManagedSett
   for (const k of UPDATES_MANAGED_KEYS) if (s.updates?.[k] !== undefined) out.add(`updates.${k}`);
   for (const k of BROWSER_KEYS) if (s.browser?.[k] !== undefined) out.add(`browser.${k}`);
   for (const side of MEDIA_SIDES) for (const kind of MEDIA_KINDS) if (s.media?.[side]?.[kind] !== undefined) out.add(`media.${side}.${kind}`);
+  for (const k of RUN_LIMIT_KEYS) if (s.runLimits?.[k] !== undefined) out.add(`runLimits.${k}`);
+  for (const k of DEBUG_KEYS) if (s.debug?.[k] !== undefined) out.add(`debug.${k}`);
+  for (const k of WINDOW_KEYS) if (s[k] !== undefined) out.add(k);
   return [...out].sort();
 }
 
@@ -513,6 +567,7 @@ export function applyPolicy(settings: AppSettings, policy: PolicyFile | null | u
   // `updates.enabled` has no settings counterpart (the update service reads it from the policy);
   // `enabled: false` also switches the background toggle off so the UI reflects the effective state.
   if (s.updates?.automatic !== undefined) next.updates = { ...settings.updates, automatic: s.updates.automatic };
+  if (s.updates?.checkIntervalHours !== undefined) next.updates = { ...next.updates, checkIntervalHours: s.updates.checkIntervalHours };
   if (s.updates?.enabled === false) next.updates = { ...next.updates, automatic: false };
   if (s.browser) next.browser = { ...settings.browser, ...definedOnly(s.browser) };
   // Per kind, so a policy that caps video leaves the user's image and audio numbers alone.
@@ -522,6 +577,9 @@ export function applyPolicy(settings: AppSettings, policy: PolicyFile | null | u
       maxQueued: { ...settings.media.maxQueued, ...definedOnly(s.media.maxQueued ?? {}) },
     };
   }
+  if (s.runLimits) next.runLimits = { ...settings.runLimits, ...definedOnly(s.runLimits) };
+  if (s.debug) next.debug = { ...settings.debug, ...definedOnly(s.debug) };
+  for (const k of WINDOW_KEYS) if (s[k] !== undefined) next[k] = s[k];
   const hardMax = policy.inputLock?.maxDurationMs;
   if (hardMax !== undefined && hardMax !== UNLIMITED && capOf(next.maxInputLockMs) > hardMax) next.maxInputLockMs = hardMax;
   if (policy.inputLock?.enabled === false) next.maxInputLockMs = Math.min(capOf(next.maxInputLockMs), 1000);
