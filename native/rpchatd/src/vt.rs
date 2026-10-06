@@ -160,7 +160,13 @@ impl VtEngine {
         if current == vt {
             return Ok(false);
         }
-        let relock = self.lock_info(now).is_some();
+        // A lock whose time is up but which the ticker has not reached yet still holds the
+        // kernel flag: let it go now rather than trying to switch against it (`VT_ACTIVATE`
+        // would fail with EINVAL for the few milliseconds until the next tick).
+        if self.active.as_ref().is_some_and(|a| now >= a.until) {
+            self.unlock(VtUnlockCause::Timer);
+        }
+        let relock = self.active.is_some();
         if relock {
             // A failure here means the lock is still on and the switch cannot work; say so
             // rather than reporting a switch that did not happen.
@@ -509,6 +515,26 @@ mod tests {
         );
         drop(s);
         assert!(vt.is_locked());
+    }
+
+    #[test]
+    fn a_switch_in_the_moment_between_expiry_and_the_tick_still_works() {
+        let t0 = Instant::now();
+        let (mut vt, state) = engine(2);
+        vt.lock(t0, 1_000, None, 7).unwrap();
+        state.lock().unwrap().active = 3;
+        // The deadline has passed but `tick` has not run yet, so the kernel flag is still set.
+        let after = t0 + Duration::from_millis(1_500);
+        assert_eq!(vt.activate(2, after), Ok(true));
+        let s = state.lock().unwrap();
+        assert_eq!(s.active, 2);
+        assert!(
+            !s.locked,
+            "the expired lock was let go rather than re-applied"
+        );
+        drop(s);
+        assert!(!vt.is_locked());
+        assert_eq!(vt.tick(after), None, "nothing left for the ticker to do");
     }
 
     #[test]
