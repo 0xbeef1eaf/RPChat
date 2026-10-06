@@ -198,6 +198,8 @@ pub struct SessionInfo {
     /// `wayland`, `x11`, `tty`, …
     pub kind: String,
     pub seat: String,
+    /// The virtual terminal the session owns (`VTNR=`), when it is on one at all.
+    pub vtnr: Option<u16>,
 }
 
 impl SessionInfo {
@@ -205,6 +207,27 @@ impl SessionInfo {
     pub fn is_active_graphical(&self) -> bool {
         self.active && matches!(self.kind.as_str(), "wayland" | "x11") && !self.seat.is_empty()
     }
+
+    /// A graphical session on a seat, whether or not it currently holds the foreground VT.
+    /// This is what "the session rpchat runs in" means once the user has switched away from it.
+    fn is_graphical(&self) -> bool {
+        matches!(self.kind.as_str(), "wayland" | "x11") && !self.seat.is_empty()
+    }
+}
+
+/// The virtual terminal `uid`'s session is on: its graphical session's `VTNR`, or — for a user
+/// with no graphical session on a VT — the only VT any of its sessions owns. `None` when the
+/// user has no session on a VT at all (a container, an ssh login, a seatless remote desktop),
+/// which is exactly when switching back to it would be meaningless.
+pub fn session_vt(sessions: &[SessionInfo], uid: u32) -> Option<u16> {
+    let mine = || sessions.iter().filter(|s| s.uid == Some(uid));
+    // The active graphical one first (the ordinary case), then any graphical one (the user has
+    // switched away from it, which is the case this whole feature exists for), then anything.
+    mine()
+        .find(|s| s.is_active_graphical() && s.vtnr.is_some())
+        .or_else(|| mine().find(|s| s.is_graphical() && s.vtnr.is_some()))
+        .or_else(|| mine().find(|s| s.vtnr.is_some()))
+        .and_then(|s| s.vtnr)
 }
 
 /// Parse a `/run/systemd/sessions/<id>` state file (`KEY=value` lines; `USER=` is the name,
@@ -235,6 +258,7 @@ pub fn parse_session_file(id: &str, text: &str) -> SessionInfo {
             "NAME" => s.user = Some(v.to_string()),
             "TYPE" => s.kind = v.to_ascii_lowercase(),
             "SEAT" => s.seat = v.to_string(),
+            "VTNR" => s.vtnr = v.parse().ok().filter(|n| *n > 0),
             _ => {}
         }
     }
@@ -254,8 +278,8 @@ pub fn parse_loginctl_list(text: &str) -> Vec<(String, Option<u32>, String)> {
         .collect()
 }
 
-/// Parse `loginctl show-session <id> -p Active -p Name -p Type -p Seat -p User` output
-/// (`Active=yes`, `Name=alice`, `Type=wayland`, `Seat=seat0`, `User=1000`).
+/// Parse `loginctl show-session <id> -p Active -p Name -p Type -p Seat -p User -p VTNr` output
+/// (`Active=yes`, `Name=alice`, `Type=wayland`, `Seat=seat0`, `User=1000`, `VTNr=2`).
 pub fn parse_loginctl_show(id: &str, text: &str) -> SessionInfo {
     let mut s = SessionInfo {
         id: id.to_string(),
@@ -271,6 +295,7 @@ pub fn parse_loginctl_show(id: &str, text: &str) -> SessionInfo {
             "Type" => s.kind = v.to_ascii_lowercase(),
             "Seat" => s.seat = v.to_string(),
             "User" => s.uid = v.parse().ok(),
+            "VTNr" => s.vtnr = v.parse().ok().filter(|n| *n > 0),
             _ => {}
         }
     }
@@ -715,7 +740,7 @@ mod tests {
     fn logind_session_files_and_loginctl_output() {
         let wayland = parse_session_file(
             "2",
-            "# This is private data. Do not parse.\nUID=1000\nUSER=alice\nACTIVE=1\nIS_DISPLAY=1\nSTATE=active\nTYPE=wayland\nCLASS=user\nSEAT=seat0\nDESKTOP=Hyprland\n",
+            "# This is private data. Do not parse.\nUID=1000\nUSER=alice\nACTIVE=1\nIS_DISPLAY=1\nSTATE=active\nTYPE=wayland\nCLASS=user\nSEAT=seat0\nVTNR=2\nDESKTOP=Hyprland\n",
         );
         assert_eq!(
             wayland,
@@ -726,6 +751,7 @@ mod tests {
                 user: Some("alice".into()),
                 kind: "wayland".into(),
                 seat: "seat0".into(),
+                vtnr: Some(2),
             }
         );
         assert!(wayland.is_active_graphical());
@@ -770,13 +796,65 @@ mod tests {
         assert!(parse_loginctl_list("No sessions.").is_empty());
         let show = parse_loginctl_show(
             "2",
-            "Active=yes\nName=alice\nType=wayland\nSeat=seat0\nUser=1000\n",
+            "Active=yes\nName=alice\nType=wayland\nSeat=seat0\nUser=1000\nVTNr=2\n",
         );
         assert_eq!(show.uid, Some(1000));
         assert_eq!(show.user.as_deref(), Some("alice"));
+        assert_eq!(show.vtnr, Some(2));
         assert!(show.is_active_graphical());
         let show_no = parse_loginctl_show("5", "Active=no\nName=bob\nType=tty\nSeat=\nUser=1001\n");
         assert!(!show_no.is_active_graphical());
+        assert_eq!(show_no.vtnr, None, "VTNr=0 and a missing one are both None");
+    }
+
+    #[test]
+    fn session_vt_prefers_the_graphical_session_on_a_vt() {
+        let graphical = |id: &str, uid: u32, active: bool, vt: Option<u16>| SessionInfo {
+            id: id.into(),
+            active,
+            uid: Some(uid),
+            user: None,
+            kind: "wayland".into(),
+            seat: "seat0".into(),
+            vtnr: vt,
+        };
+        let text = |id: &str, uid: u32, vt: Option<u16>| SessionInfo {
+            id: id.into(),
+            active: true,
+            uid: Some(uid),
+            user: None,
+            kind: "tty".into(),
+            seat: "seat0".into(),
+            vtnr: vt,
+        };
+        // The ordinary case: one graphical session holding the foreground VT.
+        assert_eq!(
+            session_vt(&[graphical("2", 1000, true, Some(2))], 1000),
+            Some(2)
+        );
+        // The case this exists for: the user pressed ctrl+alt+F3, so the session is no longer
+        // active — but it still owns VT 2, which is where the character lives.
+        assert_eq!(
+            session_vt(
+                &[
+                    graphical("2", 1000, false, Some(2)),
+                    text("3", 1000, Some(3))
+                ],
+                1000
+            ),
+            Some(2),
+            "the graphical session wins over the text login the user switched to"
+        );
+        // Another user's session is never ours.
+        assert_eq!(
+            session_vt(&[graphical("2", 1001, true, Some(2))], 1000),
+            None
+        );
+        // A session on no VT at all (ssh, a seatless remote desktop, a container).
+        assert_eq!(session_vt(&[graphical("2", 1000, true, None)], 1000), None);
+        assert_eq!(session_vt(&[], 1000), None);
+        // No graphical session, but a text login on a VT: that is still where the app runs.
+        assert_eq!(session_vt(&[text("3", 1000, Some(4))], 1000), Some(4));
     }
 
     #[test]

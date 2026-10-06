@@ -311,7 +311,10 @@ interface CalendarEvent {
  * went away: reason 'click' | 'timeout' | 'ended' | 'api' | 'error'; filter { mediaId?, asset?, reason? });
  * 'guard-attempt' { kind: 'ipc' | 'config' | 'signal' | 'ptrace' | 'exec', target, command, pid, blocked } (the
  * session guard on Linux saw the user's own terminal, keybind or picker try to reach the compositor/shell IPC,
- * edit the wallpaper config or kill/trace rpchat; blocked only in enforce mode; filter { kind?, target?, command?, blocked? }).
+ * edit the wallpaper config or kill/trace rpchat; blocked only in enforce mode; filter { kind?, target?, command?, blocked? });
+ * 'vt-changed' { vt, previous, ourVt, ours } (the user pressed ctrl+alt+F<n> and the machine switched virtual
+ * terminal — ours says whether the console rpchat is on is the one in front now, so { ours: false } is "they left
+ * for a text console" and { ours: true } is "they came back"; Linux, filter { ours?, vt? }).
  */
 type HostEventName =
   | 'user-idle'
@@ -335,7 +338,8 @@ type HostEventName =
   | 'media-clicked'
   | 'media-started'
   | 'media-closed'
-  | 'guard-attempt';
+  | 'guard-attempt'
+  | 'vt-changed';
 
 /** A host event or one of your own custom events ('custom:<name>', raised with sdk.events.emit()). */
 type EventName = HostEventName | \`custom:\${string}\`;

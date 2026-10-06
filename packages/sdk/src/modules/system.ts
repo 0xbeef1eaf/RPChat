@@ -2,9 +2,9 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const systemModule: CapabilityModuleSpec = {
   id: 'system',
-  version: '1.1.0',
+  version: '1.2.0',
   title: 'System access',
-  summary: 'Open links, run commands, read/write files and read/write the clipboard on the host PC.',
+  summary: 'Open links, run commands, read/write files, read/write the clipboard and control the virtual terminals on the host PC.',
   permission: 'pack',
   apiTypeName: 'SystemApi',
   typings: `/**
@@ -55,6 +55,33 @@ interface SystemApi {
    * @example const clip = await sdk.system.clipboardRead(); return { chars: clip.length };
    */
   clipboardRead(): Promise<string>;
+  /**
+   * Which virtual terminal (the text consoles behind ctrl+alt+F1…F12) is in front, which one
+   * rpchat is on, and whether switching is locked. Linux only, and needs the rpchat system
+   * integration; without it "available" is false and the rest is empty rather than an error.
+   * @example const vt = await sdk.system.vtStatus(); if (!vt.ours) await sdk.system.vtSwitchBack();
+   */
+  vtStatus(): Promise<{ available: boolean; vt?: number; ourVt?: number; ours: boolean; locked: boolean; until?: string }>;
+  /**
+   * Bring the virtual terminal rpchat is on back to the front, undoing a ctrl+alt+F<n> the user
+   * pressed. You cannot switch them anywhere else: the target is always rpchat's own console.
+   * @returns The VT switched to, and whether it had to switch at all (false = already there).
+   * @example await sdk.system.vtSwitchBack();   // "come back, I was talking to you"
+   */
+  vtSwitchBack(): Promise<{ vt: number; switched: boolean }>;
+  /**
+   * Stop the user leaving for another virtual terminal for a while: ctrl+alt+F<n> does nothing
+   * until it ends. Heavy-handed — it takes away the way out of a frozen desktop — so ask first
+   * or keep it short, and say what you did. It always ends by itself (durationMs is clamped by
+   * the user's limit, 5 min by default), and ends early if rpchat stops or the emergency key
+   * (hold esc) releases an input lock.
+   * @param durationMs How long to hold it, 1000..the configured maximum.
+   * @param opts reason shown in the action log and in Settings → System.
+   * @example await sdk.system.vtPreventSwitching(30000, { reason: "finishing the story" });
+   */
+  vtPreventSwitching(durationMs: number, opts?: { reason?: string }): Promise<{ until: string; durationMs: number }>;
+  /** Allow switching virtual terminals again, before the lock would have ended. */
+  vtAllowSwitching(): Promise<void>;
 }`,
   docs: `Reach outside the app: open a link, run a program, read or write a file, copy to the clipboard. Requires the \`system\` capability; calls are logged, not confirmed, so be deliberate.
 
@@ -62,6 +89,7 @@ interface SystemApi {
 - \`exec\` throws CAPABILITY_FAILED when the program is not installed or not on PATH (the message says so); unreadable or unwritable paths likewise — report it, do not retry.
 - One system call per action is the norm. \`exec\` is not a shell: give the program and its arguments separately.
 - File paths are absolute (or \`~/...\`). Never touch files the user did not mention.
+- The \`vt*\` functions are the virtual terminals (ctrl+alt+F1…F12) and need the system integration on Linux; without it they fail with CAPABILITY_FAILED. \`vtSwitchBack\` pulls the user back to rpchat's console; \`vtPreventSwitching\` keeps them there for a bounded time and is the one to be careful with — subscribe to the \`vt-changed\` event rather than polling \`vtStatus\`.
 
 \`\`\`ts
 await sdk.system.writeFile("~/Desktop/shopping-list.txt", list.join("\\n"));
@@ -74,5 +102,9 @@ return { saved: true };
     writeFile: { description: 'Write a text file on the host.', dangerous: true },
     clipboardWrite: { description: 'Write text to the system clipboard.', dangerous: true },
     clipboardRead: { description: 'Read text from the system clipboard.', dangerous: true },
+    vtStatus: { description: 'Which virtual terminal is in front, and whether switching is locked.' },
+    vtSwitchBack: { description: "Switch back to the virtual terminal rpchat's session is on.", dangerous: true },
+    vtPreventSwitching: { description: 'Refuse virtual-terminal switching for a bounded time.', dangerous: true },
+    vtAllowSwitching: { description: 'Allow virtual-terminal switching again.', dangerous: true },
   },
 };

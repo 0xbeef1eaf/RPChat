@@ -5,7 +5,7 @@
  *
  * A settings key that is absent from the file is left to each user, so every forcible key carries
  * its own switch (`forced`) next to the value that would be written (`values`). The `app`,
- * `inputLock` and `guard` blocks have meaningful defaults of their own and are always written.
+ * `inputLock`, `vtLock` and `guard` blocks have meaningful defaults of their own and are always written.
  */
 import type { AppRestrictions, DevRules, GuardCompositorIpc, GuardIpcGuard, GuardMode, GuardShell, PackSource, PolicyFile } from '@rp/shared';
 import { DEFAULT_APP_RESTRICTIONS, DEFAULT_DEV_RULES, UNLIMITED } from '@rp/shared';
@@ -176,6 +176,8 @@ export interface PolicyDraft {
   /** Dotted path under `settings` → the value written when it is forced. */
   values: Record<string, PolicyValue>;
   inputLock: { enabled: boolean; maxDurationMs: number; emergencyKey: PolicyEmergencyKey; emergencyHoldMs: number };
+  /** The virtual terminals: whether a character may lock console switching, and for how long. */
+  vtLock: { enabled: boolean; maxDurationMs: number };
   app: { allowQuit: boolean; users: string[]; restrictions: AppRestrictions };
   dev: DevRules;
   guard: {
@@ -259,6 +261,10 @@ export function policyDraftFrom(policy: PolicyFile): PolicyDraft {
       emergencyKey: policy.inputLock?.emergencyKey ?? 'esc',
       emergencyHoldMs: policy.inputLock?.emergencyHoldMs ?? 5000,
     },
+    vtLock: {
+      enabled: policy.vtLock?.enabled !== false,
+      maxDurationMs: policy.vtLock?.maxDurationMs ?? 300_000,
+    },
     app: { allowQuit: policy.app?.allowQuit !== false, users: [...(policy.app?.users ?? [])], restrictions },
     dev,
     guard: {
@@ -316,6 +322,7 @@ export function policyDraftToFile(draft: PolicyDraft): PolicyFile {
   if (Object.keys(settings).length > 0) out.settings = settings as PolicyFile['settings'];
 
   out.inputLock = { ...draft.inputLock };
+  out.vtLock = { ...draft.vtLock };
   out.app = { allowQuit: draft.app.allowQuit, ...draft.app.restrictions };
   if (draft.app.users.length > 0) out.app.users = [...draft.app.users];
   out.dev = { allow: draft.dev.allow, devTools: draft.dev.devTools };
@@ -430,6 +437,7 @@ export function policyDraftProblems(draft: PolicyDraft): string[] {
   }
   if (draft.inputLock.maxDurationMs < 1000 && draft.inputLock.maxDurationMs !== UNLIMITED) problems.push('The daemon’s input-lock limit must be at least 1 s, or -1 for unlimited.');
   if (draft.inputLock.emergencyHoldMs < 500) problems.push('The emergency-unlock hold must be at least 0.5 s.');
+  if (draft.vtLock.maxDurationMs < 1000 && draft.vtLock.maxDurationMs !== UNLIMITED) problems.push('The daemon’s console-switch limit must be at least 1 s, or -1 for unlimited.');
   for (const user of draft.app.users) {
     const problem = userNameProblem(user);
     if (problem) problems.push(problem);
@@ -513,6 +521,7 @@ export function policyEffects(draft: PolicyDraft): Array<{ text: string; strict:
   if (!draft.dev.allow) out.push({ text: draft.dev.devTools ? 'development switches off, DevTools kept' : 'development switches and DevTools off', strict: true });
   else if (!draft.dev.devTools) out.push({ text: 'DevTools off', strict: true });
   if (!draft.inputLock.enabled) out.push({ text: 'input locking refused', strict: true });
+  if (!draft.vtLock.enabled) out.push({ text: 'virtual-terminal control refused', strict: true });
   if (draft.guard.mode !== 'off') out.push({ text: `session guard: ${draft.guard.mode}`, strict: draft.guard.mode === 'enforce' });
   if (draft.remote.enabled && draft.remote.url.trim()) out.push({ text: `policy fetched from ${hostOf(draft.remote.url)} every ${draft.remote.intervalMinutes} min`, strict: true });
   if (draft.packs.sources.length > 0) out.push({ text: `${draft.packs.sources.length} pack${draft.packs.sources.length === 1 ? '' : 's'} installed by policy${draft.packs.removeUnlisted ? ', others removed' : ''}`, strict: draft.packs.removeUnlisted });

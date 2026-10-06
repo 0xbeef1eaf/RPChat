@@ -8,6 +8,7 @@ import { AppActivity } from './app-activity.js';
 import { PresenceProvider } from './presence.js';
 import { CompositeSampler, activeWindowSource, nowPlayingSource, parseHyprActiveWindowEvent, readLinuxBatteryPercent } from './samplers.js';
 import { WaylandIdleMonitor, waylandSocketPath } from './wayland-idle.js';
+import { VtMonitor } from './vt.js';
 import { DirWatcher } from './watch.js';
 
 export interface SensesDeps {
@@ -95,6 +96,16 @@ export function createSenses(deps: SensesDeps): Senses {
     }
   }
   const watcher = new DirWatcher({ emit, logger: deps.logger });
+  /**
+   * The user switching to a text console (ctrl+alt+F3) is invisible to everything above: the
+   * compositor keeps running and the idle timer carries on. Watching the kernel's own
+   * `tty0/active` is what turns it into a `vt-changed` event.
+   */
+  let vt: VtMonitor | undefined;
+  if (platform === 'linux') {
+    vt = new VtMonitor({ emit, logger: deps.logger, ...(deps.env ? { env: deps.env } : {}) });
+    vt.start();
+  }
   const refresh = async (): Promise<void> => {
     const s = await deps.settings();
     watcher.setDirs(s.senses.watchDirs);
@@ -115,6 +126,7 @@ export function createSenses(deps: SensesDeps): Senses {
         /* ignore */
       }
       waylandIdle?.stop();
+      vt?.stop();
       watcher.dispose();
       await provider.dispose();
     },

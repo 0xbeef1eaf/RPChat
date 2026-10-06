@@ -161,7 +161,7 @@ Characters, their behaviours and their media are distributed as shareable
 | `packages/sandbox`   | `@rp/sandbox`  | QuickJS runner and host bridge                   |
 | `packages/core`      | `@rp/core`     | Chat engine, action loop, permissions, storage   |
 | `native/overlay-wlr` | `rp-overlay-wlr` | Rust wlr-layer-shell overlay helper (Hyprland, Sway, river, KDE Wayland) |
-| `native/rpchatd`     | `rpchatd`      | Rust root daemon: input locking, injection, locked policy, `sdk.crypto` keys; installer and udev/systemd files |
+| `native/rpchatd`     | `rpchatd`      | Rust root daemon: input locking, injection, virtual terminals, locked policy, `sdk.crypto` keys; installer and udev/systemd files |
 | `examples/packs`     |                | Sample packs and the pack-author guide           |
 | `docs`               |                | Architecture and per-package specs               |
 
@@ -237,7 +237,7 @@ StatusNotifier item: install `libayatana-appindicator3-1` (Debian/Ubuntu; the `.
 it) or `libayatana-appindicator` (Arch) and make sure your bar has a tray module (Waybar:
 `"tray"`). Without both, no icon appears and closing the window quits.
 
-### System integration (input locking, run on login, locked settings)
+### System integration (input locking, virtual terminals, run on login, locked settings)
 
 Locking the keyboard or mouse needs access to `/dev/input`, which desktop users
 do not have. The `rpchatd` daemon (built alongside the helper and shipped under
@@ -265,6 +265,16 @@ characters as the `guard-attempt` event, and `enforce` blocks them. Reaching the
 IPC (`hyprctl`, `noctalia msg`) is blocked only on a kernel with AppArmor's fine-grained `unix`
 mediation class; without it a `connect()` to a filesystem socket cannot be denied at all, and the
 app says so under **Settings → System** rather than implying otherwise.
+The daemon also owns the **virtual terminals** — the text consoles behind `Ctrl+Alt+F1`…`F12`,
+which only root may switch between. A character can read which one is in front
+(`sdk.system.vtStatus`), pull the user back to RPChat's own console
+(`sdk.system.vtSwitchBack`) and refuse switching for a bounded time
+(`sdk.system.vtPreventSwitching`) — released by its timer, by the character, when RPChat goes
+away, by the input lock's emergency key, or when the daemon stops, so it can never strand you;
+`"vtLock": { "enabled": false }` in the policy takes both away and keeps `Ctrl+Alt+F<n>` yours.
+*Noticing* a switch needs none of that: the app watches the kernel's own `tty0/active` and raises
+the `vt-changed` event, so a character can tell when you walk off to a console and when you come
+back.
 The app shows the daemon and policy state under **Settings → System**,
 where you can also create the policy once without a root password (afterwards only
 root can change it).

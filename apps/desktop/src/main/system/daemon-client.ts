@@ -4,7 +4,7 @@
  * 10 s timeout (`apply-update`: 5 min), reconnect on the next request after the socket drops.
  */
 import * as net from 'node:net';
-import type { DaemonRequest, DaemonResponse, DaemonStatus, GuardInfo, PolicyFile, RemoteInfo, RpErrorCode, RuntimeInfo, SealInfo, SealMode, TotpConfig } from '@rp/shared';
+import type { DaemonRequest, DaemonResponse, DaemonStatus, GuardInfo, PolicyFile, RemoteInfo, RpErrorCode, RuntimeInfo, SealInfo, SealMode, TotpConfig, VtInfo } from '@rp/shared';
 import { DAEMON_SOCKET_PATH, RpError } from '@rp/shared';
 
 export type HelloResponse = Extract<DaemonResponse, { op: 'hello' }>;
@@ -18,6 +18,9 @@ export type RemoteApplyResponse = Extract<DaemonResponse, { op: 'remote-apply' }
 export type SetRemoteLinkResponse = Extract<DaemonResponse, { op: 'set-remote-link' }>;
 export type VerifyPackResponse = Extract<DaemonResponse, { op: 'verify-pack' }>;
 export type PolicyResponse = Extract<DaemonResponse, { op: 'policy' }>;
+export type VtStatusResponse = Extract<DaemonResponse, { op: 'vt-status' }>;
+export type VtActivateResponse = Extract<DaemonResponse, { op: 'vt-activate' }>;
+export type VtLockResponse = Extract<DaemonResponse, { op: 'vt-lock' }>;
 export type ApplyUpdateResponse = Extract<DaemonResponse, { op: 'apply-update' }>;
 
 /** `apply-update` extracts a few hundred MB and may copy the daemon: give it minutes, not seconds. */
@@ -57,6 +60,29 @@ export function rpErrorCodeFor(code: DaemonErrorResponse['code']): RpErrorCode {
 export function toRpError(err: unknown, op: DaemonRequest['op']): unknown {
   if (err instanceof DaemonError) return new RpError(rpErrorCodeFor(err.code), `rpchatd refused ${op}: ${err.message}`, { daemonCode: err.code });
   return err;
+}
+
+/**
+ * How an older daemon rejects an op it has never heard of: serde's own message for an unknown
+ * variant of the request enum. The protocol version does not move when an op is added (both
+ * sides still speak 1), so this is what tells the app it is ahead of the daemon.
+ */
+const UNKNOWN_OP = /unknown variant/;
+
+/**
+ * `toRpError` for the ops added after the protocol was pinned: an op the daemon has never heard
+ * of is a missing capability, not a bad argument. The call was fine — the installed daemon is
+ * simply older than this app, and saying "durationMs must be a number" about it would send the
+ * caller looking in the wrong place.
+ */
+export function toRpErrorOrOutdated(err: unknown, op: DaemonRequest['op']): unknown {
+  if (err instanceof DaemonError && err.code === 'INVALID' && UNKNOWN_OP.test(err.message)) {
+    return new RpError('CAPABILITY_FAILED', `the installed rpchatd is older than this app and does not support "${op}"; update the system integration under Settings → System`, {
+      daemonCode: err.code,
+      op,
+    });
+  }
+  return toRpError(err, op);
 }
 
 export interface DaemonClientOptions {
@@ -171,6 +197,50 @@ export class DaemonClient {
       return (await this.request<GuardResponse>({ op: 'guard-apply' })).guard;
     } catch (err) {
       throw toRpError(err, 'guard-apply');
+    }
+  }
+
+  /**
+   * Virtual terminals: which one is in front, which one this user's session owns, and whether
+   * switching is locked. Reports state only, so it is not gated by the policy.
+   */
+  async vtStatus(): Promise<VtInfo> {
+    try {
+      return (await this.request<VtStatusResponse>({ op: 'vt-status' })).vt;
+    } catch (err) {
+      throw toRpErrorOrOutdated(err, 'vt-status');
+    }
+  }
+
+  /**
+   * Switch back to the VT this user's session owns. The daemon resolves that VT itself — there
+   * is no way to ask it for another one — and answers with it plus whether it had to switch.
+   */
+  async vtActivate(): Promise<{ vt: number; switched: boolean }> {
+    try {
+      const res = await this.request<VtActivateResponse>({ op: 'vt-activate' });
+      return { vt: res.vt, switched: res.switched };
+    } catch (err) {
+      throw toRpErrorOrOutdated(err, 'vt-activate');
+    }
+  }
+
+  /** Refuse console switching for `durationMs` (the daemon clamps it and releases it by itself). */
+  async vtLock(durationMs: number, reason?: string): Promise<{ until: string; durationMs: number }> {
+    try {
+      const res = await this.request<VtLockResponse>(reason ? { op: 'vt-lock', durationMs, reason } : { op: 'vt-lock', durationMs });
+      return { until: res.until, durationMs: res.durationMs };
+    } catch (err) {
+      throw toRpErrorOrOutdated(err, 'vt-lock');
+    }
+  }
+
+  /** Allow console switching again. */
+  async vtUnlock(): Promise<void> {
+    try {
+      await this.request({ op: 'vt-unlock' });
+    } catch (err) {
+      throw toRpErrorOrOutdated(err, 'vt-unlock');
     }
   }
 

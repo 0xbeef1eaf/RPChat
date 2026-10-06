@@ -128,6 +128,10 @@ created it. Unknown fields in requests are ignored; a malformed line gets
 | `{ "op": "register", "exec", "args", "cwd", "env" }` | `{ "ok": true, "op": "register" }` — keepalive registration on this connection (see below) |
 | `{ "op": "unregister" }` | `{ "ok": true, "op": "unregister" }` — forget it (also when nothing was registered) |
 | `{ "op": "apply-update", "file", "version", "sha512" }` | `{ "ok": true, "op": "apply-update", "version", "restartDaemon" }` — system install: verify, extract as the user, swap in, self-update (see below; may take a minute) |
+| `{ "op": "vt-status" }` | `{ "ok": true, "op": "vt-status", "vt": VtInfo }` — `{ "available", "active"?, "session"?, "locked"? { "until", "reason"? }, "unavailable"? }`: which virtual terminal is in front, which one the **asking user's** session owns, and the switch lock. Never gated by the policy |
+| `{ "op": "vt-activate" }` | `{ "ok": true, "op": "vt-activate", "vt", "switched" }` — bring the asking user's own VT to the front (`VT_ACTIVATE`). Carries no VT number on purpose: the daemon resolves `VTNR` from that user's logind session, so this can switch to rpchat's console and nowhere else. `NO_DEVICES` when the session is on no VT, `POLICY` when `vtLock.enabled` is false |
+| `{ "op": "vt-lock", "durationMs", "reason"? }` | `{ "ok": true, "op": "vt-lock", "until", "durationMs" }` — refuse every console switch (`VT_LOCKSWITCH`: ctrl+alt+F<n>, and what logind and the compositor ask for) for the clamped `durationMs` (see below) |
+| `{ "op": "vt-unlock" }` | `{ "ok": true, "op": "vt-unlock" }` (also when nothing was locked) |
 | `{ "op": "guard-apply" }` | `{ "ok": true, "op": "guard-apply", "guard": GuardInfo }` — session guard: (re)generate and load the profiles from the policy now (see below) |
 | `{ "op": "guard-status" }` | `{ "ok": true, "op": "guard-status", "guard": GuardInfo }` — what is engaged, without touching anything |
 | `{ "op": "subscribe", "events": ["guard-attempt", "policy-tamper", "policy-changed"] }` | `{ "ok": true, "op": "subscribe", "events": [...] }` — receive pushed `{ "ev": … }` lines on this connection (see below); `[]` unsubscribes |
@@ -147,12 +151,20 @@ inside a line.
 `until` is RFC 3339 UTC with milliseconds (`2026-01-02T03:04:05.678Z`), the same shape as
 `Date.prototype.toISOString()`. `devices` is `"keyboard"`, `"mouse"` or `"both"` (default).
 
+**The VT switch lock** is a kernel-wide flag, so the daemon treats it as something that must not
+be able to outlive the app that asked for it. It is released by the timer (`durationMs`, clamped
+to `vtLock.maxDurationMs`, 5 min by default), by `vt-unlock`, when **the connection that took it
+closes**, when the input lock's emergency chord fires, and when the daemon stops — and
+`vt-activate` lifts it around the switch and puts it back, because the kernel refuses
+`VT_ACTIVATE` while it is set (even for root), which would otherwise mean locking the user in
+place also took away the way to bring them home.
+
 Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 
 | Code | When |
 |---|---|
 | `REFUSED` | `hello` with a version other than 1; any request while the daemon shuts down; `register` from uid 0; `apply-update` from uid 0, without a system install, for a downgrade the policy does not allow, for a file that is not a regular file owned by the peer under their home (or not readable), or while a self-update restart is pending |
-| `POLICY` | `lock` while `inputLock.enabled` is `false`; `policy`/`lock` while the policy file is unreadable or invalid (fail closed) |
+| `POLICY` | `lock` while `inputLock.enabled` is `false`, `vt-lock`/`vt-activate` while `vtLock.enabled` is `false`; `policy`/`lock`/`vt-*` while the policy file is unreadable or invalid (fail closed) |
 | `NO_DEVICES` | `lock` found no device of the requested class; injection without a uinput device |
 | `BUSY` | every matching device is `EVIOCGRAB`bed by another process (EBUSY); uinput write would block; a second `apply-update` while one is running |
 | `INVALID` | malformed JSON / unknown op / wrong field types; `durationMs` ≤ 0 or non-finite; empty or > 2000-char `text`; unparsable `combo`; non-finite coordinates; a `register` whose `exec` is not an absolute existing executable, with > 32 `args`, a relative `cwd`, an env key outside the whitelist or a value > 4 KiB, or from a uid without a passwd entry; an `apply-update` whose `version` is not semver, whose `sha512` is not a digest or does not match the file, or whose extracted tree fails the checks |
@@ -201,6 +213,13 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
   emergency chord (`inputLock.emergencyKey` held `emergencyHoldMs`, default Esc for 5 s, read
   from the grabbed keyboards — so not available for `devices: "mouse"`), or daemon shutdown.
 - **Injection while locked works**: the uinput device is never grabbed.
+- **Virtual terminals**: `vt-activate` resolves the asking user's `VTNR` from logind
+  (`/run/systemd/sessions/*`, `loginctl` as a fallback) and does `VT_ACTIVATE` on `/dev/tty0`;
+  `vt-lock` is `VT_LOCKSWITCH`, clamped to `[1000, vtLock.maxDurationMs]` (default max 300 000)
+  and released by the timer (checked with the same 50 ms tick), `vt-unlock`, the closing of the
+  connection that took it, the input lock's emergency chord, or shutdown. Both are refused with
+  `POLICY` while `vtLock.enabled` is `false`, and the switch lock is lifted and re-applied
+  around a `vt-activate` because the kernel refuses `VT_ACTIVATE` while it is set.
 - **`type`**: US-QWERTY scancodes; Shift for capitals and symbols; `\n` → Enter, `\t` → Tab,
   `\r\n` → one Enter. Each press/release is its own event frame; presses are held 1 ms, so the
   2000-character maximum takes about 2–4 s (well inside the app's 10 s request timeout). The

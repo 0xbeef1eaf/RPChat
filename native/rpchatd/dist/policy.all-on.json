@@ -15,6 +15,10 @@
     "emergencyKey": "esc",
     "emergencyHoldMs": 5000
   },
+  "vtLock": {
+    "enabled": true,
+    "maxDurationMs": 300000
+  },
   "app": {
     "allowQuit": false,
     "users": ["alice"],

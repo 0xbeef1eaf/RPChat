@@ -8,13 +8,15 @@ itself would mean any pack — or any bug — could hold your input indefinitely
 set in Settings could be changed by the same app that is being limited.
 
 So the privileged part lives in a tiny separate program, **`rpchatd`**, that runs as root under
-systemd and does exactly five things:
+systemd and does exactly six things:
 
 1. Lock input (grab keyboards/pointers) for at most the time a **root-owned policy file** allows.
 2. Release it on a timer, on request, when you hold the **emergency key**, or when it stops.
 3. Inject keystrokes, key combos, clicks and pointer moves through one virtual device.
-4. Tell the app what the policy says so the Settings UI can show which values are managed.
-5. When the policy says the app may not be quit, **relaunch it** in the user's session if its
+4. Switch back to the virtual terminal the app's own session is on, and refuse console
+   switching for a bounded time (see [Virtual terminals](#virtual-terminals-sdksystemvt)).
+5. Tell the app what the policy says so the Settings UI can show which values are managed.
+6. When the policy says the app may not be quit, **relaunch it** in the user's session if its
    process is killed anyway (see [Keeping the app running](#keeping-the-app-running-appallowquit)).
 
 The app talks to it over a unix socket that only members of the `rpchat` group can open.
@@ -22,7 +24,8 @@ Nothing else in rpchat needs elevated rights. `sdk.input` is **daemon-only**: th
 fallback through user-configured tools, so while the daemon is not installed or not connected
 every `sdk.input` call fails with `CAPABILITY_FAILED` ("Input control needs the rpchat system
 integration (Settings → System → Install); the daemon is not connected") and the rest of the app
-keeps working.
+keeps working. The three `sdk.system.vt*` functions that *act* are daemon-only in the same way;
+`sdk.system.vtStatus()` and the `vt-changed` event work without it.
 
 ## Installing
 
@@ -220,12 +223,46 @@ the keyboard is not grabbed at all, so you keep full keyboard control instead.
 Last resorts that always work: switch to a virtual console (`Ctrl+Alt+F3`) and run
 `sudo systemctl stop rpchatd`, or unplug and replug the keyboard (the new device is grabbed
 again within a second, so type quickly), or wait — a lock can never exceed
-`inputLock.maxDurationMs`.
+`inputLock.maxDurationMs`. A character that also locked console switching does not take the
+first one away for long: holding the emergency key releases **both** locks at once, and the
+console lock can never exceed `vtLock.maxDurationMs` either.
+
+## Virtual terminals (`sdk.system.vt*`)
+
+The text consoles behind `Ctrl+Alt+F1`…`F12` are the one part of the desktop a character cannot
+reach from user space: `/dev/tty0` is root-only, so switching between them and refusing a switch
+both need `CAP_SYS_TTY_CONFIG`. Three `sdk.system` functions go through the daemon for it:
+
+- **`vtSwitchBack()`** brings the console rpchat's own session is on back to the front. The
+  request carries **no VT number**: the daemon looks up `VTNR` for the *asking user's* logind
+  session, so a character can pull you back to rpchat and cannot send you to anybody else's
+  console. It answers with that VT and whether it had to switch at all.
+- **`vtPreventSwitching(durationMs)`** sets `VT_LOCKSWITCH`, which makes the kernel refuse every
+  console switch — `Ctrl+Alt+F<n>`, and the ones logind and the compositor ask for. It is
+  bounded, and the daemon releases it when the time is up, when the character calls
+  `vtAllowSwitching()`, when the **app's connection closes** (so an rpchat that crashed or was
+  killed never leaves your machine stuck), when the input lock's emergency chord fires, and when
+  the daemon stops. There is deliberately no way to hold it indefinitely.
+- **`vtStatus()`** reports which console is in front, which one is ours and whether switching is
+  locked. It needs nothing privileged, so it answers `{ available: false }` rather than failing
+  on a machine without the system integration.
+
+While the console lock is on, your way out is: wait (at most `vtLock.maxDurationMs`, 5 minutes by
+default), quit or kill rpchat from your own session — which releases it with the connection —
+hold the emergency key if an input lock is running too, or `sudo systemctl stop rpchatd`. If you
+would rather characters never had this at all, set `vtLock: { "enabled": false }` in the policy:
+that refuses the lock *and* the switch-back, and `Ctrl+Alt+F<n>` stays yours.
+
+Noticing a switch needs none of this. The kernel publishes the foreground console in
+`/sys/class/tty/tty0/active`, which anyone can read, so the app watches it once a second and
+raises the `vt-changed` host event — `{ vt, previous, ourVt, ours }` — whether or not the daemon
+is installed. A character subscribing with `{ ours: false }` hears "they went to a text console",
+and `{ ours: true }` is "they came back".
 
 ## The policy file
 
 `/etc/rpchat/policy.json` is optional. When present it must be owned by root and is read by
-both the daemon (`inputLock`, enforced whatever the app asks) and the app (`settings`, forced
+both the daemon (`inputLock` and `vtLock`, enforced whatever the app asks) and the app (`settings`, forced
 over your own settings and shown as *managed by policy* in the UI). It is re-read whenever it
 changes; no restart needed. Full reference with every field and defaults:
 `native/rpchatd/dist/POLICY.md` (installed to `/usr/local/libexec/rpchat/POLICY.md`).
@@ -235,7 +272,8 @@ changes; no restart needed. Full reference with every field and defaults:
   "version": 1,
   "managedBy": "shared family PC",
   "settings": { "maxInputLockMs": 60000, "permissions": { "functionAllow": { "desktop": false, "web.fetch": false } } },
-  "inputLock": { "enabled": true, "maxDurationMs": 60000, "emergencyKey": "esc", "emergencyHoldMs": 5000 }
+  "inputLock": { "enabled": true, "maxDurationMs": 60000, "emergencyKey": "esc", "emergencyHoldMs": 5000 },
+  "vtLock": { "enabled": true, "maxDurationMs": 60000 }
 }
 ```
 
@@ -250,11 +288,14 @@ Points worth knowing:
   saved functions, is not subject to the policy. `moduleAllow` is the name this map had while
   permissions were per module; policy files that still use it keep working unchanged.
 - `inputLock.enabled: false` refuses every lock request; injection is unaffected.
+- `vtLock.enabled: false` refuses both virtual-terminal operations (`sdk.system.vtPreventSwitching`
+  and `vtSwitchBack`), so `Ctrl+Alt+F<n>` is yours alone; `vtStatus` and the `vt-changed` event
+  keep working, since neither changes anything.
 - A broken policy file (invalid JSON, unknown keys) makes the daemon refuse locks until it is
   fixed — it fails closed rather than falling back to defaults. `journalctl -u rpchatd` names
   the problem.
-- No policy file at all means the daemon defaults (5 min max, Esc for 5 s) and no managed
-  settings.
+- No policy file at all means the daemon defaults (5 min max for both locks, Esc for 5 s) and no
+  managed settings.
 - `settings.updates` controls the in-app updater: `{ "enabled": false }` switches update checks
   off on this machine (Settings → Updates shows "disabled by policy" and hides the token field),
   `{ "automatic": false }` only pins the "check automatically" toggle so users still update by hand,

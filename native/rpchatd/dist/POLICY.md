@@ -2,9 +2,9 @@
 
 The policy file is owned by root (`root:root 0644`) and read by two parties:
 
-- **`rpchatd`** (the root daemon) reads `inputLock` and enforces it regardless of what the app
-  asks for. It re-reads the file whenever its mtime or size changes, so edits apply to the next
-  `lock` without a restart.
+- **`rpchatd`** (the root daemon) reads `inputLock` and `vtLock` and enforces them regardless of
+  what the app asks for. It re-reads the file whenever its mtime or size changes, so edits apply
+  to the next `lock` / `vt-lock` without a restart.
 - **The desktop app** reads `settings` and forces those values over the user's own settings;
   the affected controls show a "managed by policy" badge and cannot be changed from the UI.
 
@@ -13,7 +13,7 @@ all-zero placeholders, so replace them with real ones (`rp-policy-chain.mjs pack
 the pack entry. Delete the keys you do not want to
 manage — anything absent keeps the user's own setting / the daemon default. The file must be
 strict JSON (no comments, no trailing commas) and at most 256 KiB. **Unknown top-level or
-`inputLock` keys make the whole file invalid**, and an invalid or unreadable file makes the
+`inputLock`/`vtLock` keys make the whole file invalid**, and an invalid or unreadable file makes the
 daemon refuse `lock` (`code: "POLICY"`) until it is fixed — it never falls back to defaults
 silently once a file exists. `rpchatd --check-devices` does not validate the policy; check
 with `python3 -m json.tool /etc/rpchat/policy.json` or by watching `journalctl -u rpchatd`.
@@ -230,6 +230,7 @@ about the person at the machine, not about the policy.
 | `managedBy` | string (≤ 500 chars) | Free text shown in Settings → System ("Managed by …"). |
 | `settings` | object | Forced app settings, see below. |
 | `inputLock` | object | Daemon-enforced lock limits, see below. |
+| `vtLock` | object | Whether characters may touch the virtual terminals, and for how long, see below. |
 | `app` | object | How the app itself may behave: `allowQuit`/`users` keep it running, and the `allow*`/`require*` keys take operations away from it. See below. |
 | `guard` | object | The session guard: AppArmor confinement of the `app.users` login sessions, see below. |
 | `dev` | object | Whether the app honours its own development switches, see below. |
@@ -282,6 +283,30 @@ Notes:
   keyboard free, so the chord is not needed (and not available) there.
 - The daemon logs every lock with the requesting uid/pid to the journal
   (`journalctl -u rpchatd`).
+
+## `vtLock` — the virtual terminals
+
+What a character may do with the text consoles behind ctrl+alt+F1…F12
+(`sdk.system.vtSwitchBack`, `sdk.system.vtPreventSwitching`). Both need root, so both go through
+the daemon and this block is the only thing that bounds them.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | boolean | `true` | `false` refuses `vt-lock` **and** `vt-activate` with `code: "POLICY"` — characters cannot lock the console or pull the user back to it. `vt-status` still reports state. |
+| `maxDurationMs` | number | `300000` (5 min) | Longest single switch lock. Requests above are clamped, not refused; the response's `durationMs` says what was applied. Values below 1000 are raised to 1000; `-1` means unlimited (held to a hundred years). |
+
+Notes:
+
+- The switch lock is a **kernel-wide** flag (`VT_LOCKSWITCH`), so the daemon never lets one
+  outlive the app that asked for it: it is released by the timer, by `vt-unlock`, when the
+  connection that took it closes, when the input lock's emergency chord fires, and when the
+  daemon stops. There is deliberately no way to hold it indefinitely.
+- `vt-activate` has no VT number in the request. The daemon resolves `VTNR` from the **asking
+  user's own** logind session, so a character can bring the user back to rpchat's console and
+  cannot send them to anyone else's.
+- Set `enabled: false` on a machine where the text consoles are someone's way in to fix things —
+  it is the user's escape hatch from a frozen desktop, and this is the switch that keeps it theirs.
+- Every lock, unlock and switch is logged with the requesting uid/pid (`journalctl -u rpchatd`).
 
 ## `app` — keeping the app running
 
