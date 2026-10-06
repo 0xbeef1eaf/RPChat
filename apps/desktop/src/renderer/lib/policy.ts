@@ -163,6 +163,7 @@ export interface PolicyDraft {
   guard: {
     mode: GuardMode;
     protectApp: boolean;
+    protectAppData: boolean;
     wallpaper: boolean;
     compositorIpc: GuardCompositorIpc;
     ipcGuard: GuardIpcGuard;
@@ -244,6 +245,7 @@ export function policyDraftFrom(policy: PolicyFile): PolicyDraft {
     guard: {
       mode: policy.guard?.mode ?? 'off',
       protectApp: policy.guard?.protectApp !== false,
+      protectAppData: policy.guard?.protectAppData !== false,
       wallpaper: policy.guard?.wallpaper !== false,
       compositorIpc: policy.guard?.compositorIpc ?? 'shell-only',
       ipcGuard: policy.guard?.ipcGuard ?? 'off',
@@ -301,6 +303,7 @@ export function policyDraftToFile(draft: PolicyDraft): PolicyFile {
   const guard: NonNullable<PolicyFile['guard']> = {
     mode: draft.guard.mode,
     protectApp: draft.guard.protectApp,
+    protectAppData: draft.guard.protectAppData,
     wallpaper: draft.guard.wallpaper,
     compositorIpc: draft.guard.compositorIpc,
     ipcGuard: draft.guard.ipcGuard,

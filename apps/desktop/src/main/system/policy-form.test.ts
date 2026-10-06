@@ -33,6 +33,7 @@ function drafts(): Array<[string, PolicyDraft]> {
   strict.guard = {
     mode: 'enforce',
     protectApp: true,
+    protectAppData: true,
     wallpaper: true,
     compositorIpc: 'deny',
     shell: ['noctalia', 'awww'],

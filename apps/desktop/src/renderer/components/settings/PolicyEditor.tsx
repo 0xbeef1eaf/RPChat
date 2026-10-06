@@ -504,6 +504,7 @@ export function CreatePolicyDialog({
             ) : null}
             <div className="stack" style={{ gap: 2 }}>
               <SwitchRow label="Protect rpchat" hint="Signals and ptrace from the session to rpchat are refused, so the session cannot kill or attach to it." checked={draft.guard.protectApp} disabled={busy} onChange={(v) => setDraft({ ...draft, guard: { ...draft.guard, protectApp: v } })} />
+              <SwitchRow label="Protect rpchat’s data" hint="The session may read ~/.config/@rp but not write it, so characters, packs and settings change only through rpchat." checked={draft.guard.protectAppData} disabled={busy} onChange={(v) => setDraft({ ...draft, guard: { ...draft.guard, protectAppData: v } })} />
               <SwitchRow label="Protect the wallpaper and shell" hint="The shell’s IPC socket and its config and state files are guarded from the session." checked={draft.guard.wallpaper} disabled={busy} onChange={(v) => setDraft({ ...draft, guard: { ...draft.guard, wallpaper: v } })} />
             </div>
             <div className="field">

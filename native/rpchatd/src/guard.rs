@@ -428,6 +428,18 @@ pub const SEALED_PATHS: [&str; 6] = [
     "/etc/systemd/system/rpchatd.service.d/**",
 ];
 
+/// rpchat's own data: Electron's `userData` for the `@rp/desktop` app (`~/.config/@rp/desktop` —
+/// characters, packs, settings, the conversation store, the crypto log), and the `@rp` directory
+/// around it. `guard.protectAppData` lets the session read all of it and write none of it; only
+/// `rpchat-app`, which is `file,` and so untouched by these rules, may change it.
+///
+/// `@{HOME}/.config/` is here for one permission only: without it, `mv ~/.config ~/c`, an edit
+/// under `~/c/@rp/`, and `mv ~/c ~/.config` walks around every rule below it, because AppArmor
+/// mediates the path a file has *now*. Creating things inside `~/.config` checks the new file's
+/// path, not this one, so the rest of the session's config stays writable; what is lost is
+/// renaming, removing or `chmod`ing the directory itself.
+pub const APP_DATA_PATHS: [&str; 2] = ["@{HOME}/.config/", "@{HOME}/.config/@rp/**"];
+
 /// The binaries that would put a shell outside this profile, or undo the lock from inside it.
 ///
 /// `sudo` is deliberately **not** here: a `sudo` child is a child, so it stays in the profile and
@@ -592,6 +604,15 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     for p in &rules.extra_deny_paths {
         deny_files.insert(normalise_glob(p));
     }
+    // Kept apart from `deny_files` until the profiles are written: the shell may keep its own
+    // config writable, but it has no more business in rpchat's data than a terminal does.
+    let mut deny_app_data: BTreeSet<String> = BTreeSet::new();
+    if rules.protect_app_data {
+        for p in APP_DATA_PATHS {
+            deny_app_data.insert((*p).to_string());
+        }
+    }
+    deny_files.extend(deny_app_data.iter().cloned());
     // A sealed policy: the session loses the directories the seal lives in outright — read as
     // well as write, because the secret is in there and reading it is enough to mint codes.
     let mut deny_all: BTreeSet<String> = BTreeSet::new();
@@ -789,6 +810,9 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
         for s in &rules.extra_deny_sockets {
             shell.push_str(&guarded(mode, &format!("{} rw", normalise_glob(s))));
         }
+        for f in &deny_app_data {
+            shell.push_str(&guarded(mode, &format!("{f} wl")));
+        }
         if rules.protect_app {
             shell.push_str(&guarded(mode, "signal (send) peer=rpchat-app"));
             shell.push_str(&guarded(mode, "ptrace (trace) peer=rpchat-app"));
@@ -979,6 +1003,9 @@ pub fn render(rules: &GuardRules, ctx: &GuardContext) -> GuardPlan {
     residual.push(
         "processes the character launches through rpchat run with the app's rights".to_string(),
     );
+    if rules.protect_app_data {
+        residual.push("rpchat's data is guarded at ~/.config/@rp only: an app started with RP_USER_DATA or XDG_CONFIG_HOME pointing elsewhere keeps its data there, unguarded. A checkout of the app (`pnpm dev`) is not rpchat-app, so it cannot write that directory either; neither can `rpchat-decrypt-all` record what it decrypted in the crypto log there".to_string());
+    }
     residual.push(
         "sessions that were already open when the guard engaged are confined at their next login"
             .to_string(),
@@ -2301,6 +2328,62 @@ pub mod tests {
             "the login profile never enforces"
         );
         assert!(!plan.residual[0].starts_with("audit mode"));
+    }
+
+    #[test]
+    fn the_apps_data_is_read_only_to_everything_but_the_app() {
+        let r = rules(
+            serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":"enforce","compositorIpc":"deny"}}),
+        );
+        // `systemd-run` only has a profile of its own once escapes are denied.
+        let mut sealed = r.clone();
+        sealed.deny_escapes = true;
+        let plan = render(&sealed, &noctalia_hyprland_ctx(&["work"]));
+        let data = "  audit deny @{HOME}/.config/@rp/** wl,\n";
+        let parent = "  audit deny @{HOME}/.config/ wl,\n";
+        // Every profile the session can be in — the shell included, though its own files stay
+        // writable — and never the app's, which is the one that has to write it.
+        for name in [
+            "rpchat-session",
+            "rpchat-shell",
+            "rpchat-compositor",
+            "rpchat-systemd-run",
+        ] {
+            let text = text_of(&plan, name);
+            assert!(text.contains(data), "{name} may not write rpchat's data");
+            assert!(text.contains(parent), "{name} may not move ~/.config away");
+        }
+        assert!(!text_of(&plan, "rpchat-app").contains("@rp"));
+        assert!(!text_of(&plan, "rpchat-shell")
+            .contains("@{HOME}/.local/state/noctalia/settings.toml wl"));
+        // Writes only: reading it is how the session shows a character's files.
+        assert!(!text_of(&plan, "rpchat-session").contains("@rp/** r"));
+        assert!(plan
+            .residual
+            .iter()
+            .any(|l| l.starts_with("rpchat's data is guarded at ~/.config/@rp only")));
+
+        // Audit mode logs the same writes; `protectAppData: false` writes nothing for it.
+        let audit = rules(
+            serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":"audit"}}),
+        );
+        assert!(text_of(
+            &render(&audit, &noctalia_hyprland_ctx(&["work"])),
+            "rpchat-session"
+        )
+        .contains("  audit @{HOME}/.config/@rp/** wl,\n"));
+        let off = rules(
+            serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":"enforce","protectAppData":false}}),
+        );
+        let plan = render(&off, &noctalia_hyprland_ctx(&["work"]));
+        assert!(plan
+            .files
+            .iter()
+            .all(|f| !f.text.contains("@rp") && !f.text.contains("@{HOME}/.config/ wl")));
+        assert!(!plan
+            .residual
+            .iter()
+            .any(|l| l.starts_with("rpchat's data is guarded")));
     }
 
     #[test]

@@ -187,7 +187,7 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   `KillMode=process`.
 - **Session guard** (`src/guard.rs`, pure + tested; OS glue in `main.rs::os`; user guide
   `docs/system-integration.md` "Session guard"): `policy.guard` (`GuardPolicy`, `deny_unknown_fields`;
-  `mode` off|audit|enforce, `protectApp`, `wallpaper`, `compositorIpc` allow|shell-only|deny,
+  `mode` off|audit|enforce, `protectApp`, `protectAppData`, `wallpaper`, `compositorIpc` allow|shell-only|deny,
   `ipcGuard` auto|off, `shell`
   auto|noctalia|quickshell|hyprpaper|swww|none, `loginHelpers`, `extraDenyPaths`, `extraDenySockets`,
   `allowBinaries`; path entries absolute or `~/`/`@{HOME}/`, no whitespace/quotes; a mode other than
@@ -573,7 +573,7 @@ sets `deny_unknown_fields` — it does not act on them.
 
 ### Policy `guard` block
 
-`GuardPolicy` in `@rp/shared/system.ts`; validated identically by `parseGuard` (app) and `validate_guard` (daemon). `mode` `off` (default) \| `audit` \| `enforce`; `protectApp`, `wallpaper` booleans (default true); `compositorIpc` `allow` \| `shell-only` (default) \| `deny`; `ipcGuard` `auto` \| `off` (default) (the BPF LSM IPC guard; see the *IPC guard* bullet above); `shell` `auto` (default) \| `noctalia` \| `quickshell` \| `hyprpaper` \| `swww` \| `none`; `loginHelpers` (non-empty, absolute), `extraDenyPaths`/`extraDenySockets` (absolute, `~/…` or `@{HOME}/…`), `allowBinaries` (absolute) — no whitespace or quotes anywhere (they become AppArmor rules). A `mode` other than `off` without `app.users` is invalid; the listed users are the ones confined. Not a settings key; reported as `SystemIntegrationStatus.guard`.
+`GuardPolicy` in `@rp/shared/system.ts`; validated identically by `parseGuard` (app) and `validate_guard` (daemon). `mode` `off` (default) \| `audit` \| `enforce`; `protectApp`, `protectAppData`, `wallpaper` booleans (default true); `compositorIpc` `allow` \| `shell-only` (default) \| `deny`; `ipcGuard` `auto` \| `off` (default) (the BPF LSM IPC guard; see the *IPC guard* bullet above); `shell` `auto` (default) \| `noctalia` \| `quickshell` \| `hyprpaper` \| `swww` \| `none`; `loginHelpers` (non-empty, absolute), `extraDenyPaths`/`extraDenySockets` (absolute, `~/…` or `@{HOME}/…`), `allowBinaries` (absolute) — no whitespace or quotes anywhere (they become AppArmor rules). A `mode` other than `off` without `app.users` is invalid; the listed users are the ones confined. Not a settings key; reported as `SystemIntegrationStatus.guard`.
 
 ### Policy `dev` block
 
