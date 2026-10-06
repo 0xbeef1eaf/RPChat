@@ -295,6 +295,8 @@ pub struct GuardPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protect_app: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protect_app_data: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallpaper: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compositor_ipc: Option<CompositorIpc>,
@@ -314,13 +316,17 @@ pub struct GuardPolicy {
     pub allow_binaries: Option<Vec<String>>,
 }
 
-/// Effective `guard` block with defaults: off, app protected, wallpaper guarded, compositor
+/// Effective `guard` block with defaults: off, app and its data protected, wallpaper guarded, compositor
 /// IPC for the shell only, the BPF IPC guard on when the kernel allows it, shell auto-detected,
 /// login helpers auto-detected, no extras.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuardRules {
     pub mode: GuardMode,
     pub protect_app: bool,
+    /// rpchat's own data directory (`guard::APP_DATA_PATHS`) may be read by the session but
+    /// written only by rpchat, so characters, packs, settings and the conversation store cannot
+    /// be edited behind the app's back. Default true.
+    pub protect_app_data: bool,
     pub wallpaper: bool,
     pub compositor_ipc: CompositorIpc,
     /// Whether `connect()` to the shell's sockets is mediated by the BPF LSM program when the
@@ -363,6 +369,7 @@ impl Default for GuardRules {
         GuardRules {
             mode: GuardMode::Off,
             protect_app: true,
+            protect_app_data: true,
             wallpaper: true,
             compositor_ipc: CompositorIpc::ShellOnly,
             ipc_guard: IpcGuardMode::Off,
@@ -385,6 +392,7 @@ impl GuardRules {
         GuardRules {
             mode: g.mode.unwrap_or(d.mode),
             protect_app: g.protect_app.unwrap_or(d.protect_app),
+            protect_app_data: g.protect_app_data.unwrap_or(d.protect_app_data),
             wallpaper: g.wallpaper.unwrap_or(d.wallpaper),
             compositor_ipc: g.compositor_ipc.unwrap_or(d.compositor_ipc),
             ipc_guard: g.ipc_guard.unwrap_or(d.ipc_guard),
@@ -1469,7 +1477,7 @@ mod tests {
         assert_eq!(none, GuardRules::default());
         assert!(!none.enabled());
         assert_eq!(none.mode, GuardMode::Off);
-        assert!(none.protect_app && none.wallpaper);
+        assert!(none.protect_app && none.protect_app_data && none.wallpaper);
         assert_eq!(none.compositor_ipc, CompositorIpc::ShellOnly);
         // Both IPC switches are off unless asked for: the BPF layer is unproven, and letting the
         // compositor's keybinds through is a door (see `GuardRules::ipc_allow_compositor`).
@@ -1484,7 +1492,7 @@ mod tests {
             GuardRules::default()
         );
         let full = policy(json!({"version":1,"app":{"users":["alice"]},"guard":{
-            "mode":"enforce","protectApp":false,"wallpaper":true,"compositorIpc":"deny","shell":"noctalia",
+            "mode":"enforce","protectApp":false,"protectAppData":false,"wallpaper":true,"compositorIpc":"deny","shell":"noctalia",
             "loginHelpers":["/usr/lib/sddm/sddm-helper"],"extraDenyPaths":["~/.config/hypr/hyprpaper.conf","@{HOME}/x"],
             "extraDenySockets":["/run/user/1000/foo.sock"],"allowBinaries":["/usr/bin/hyprctl"],
             "ipcGuard":"auto","ipcAllowCompositor":true}}))
@@ -1493,6 +1501,7 @@ mod tests {
         assert!(rules.enabled());
         assert_eq!(rules.mode, GuardMode::Enforce);
         assert!(!rules.protect_app);
+        assert!(!rules.protect_app_data);
         assert_eq!(rules.compositor_ipc, CompositorIpc::Deny);
         assert_eq!(rules.shells, vec![GuardShell::Noctalia]);
         assert_eq!(rules.ipc_guard, IpcGuardMode::Auto);

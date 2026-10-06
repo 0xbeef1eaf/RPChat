@@ -200,7 +200,7 @@ export function policyTemplate(settings: AppSettings, userName?: string): string
     inputLock: { enabled: true, maxDurationMs: settings.maxInputLockMs, emergencyKey: 'esc', emergencyHoldMs: 5000 },
     // Off by default so a freshly created policy changes nothing; every key is present to edit.
     app: { allowQuit: true, ...(userName ? { users: [userName] } : {}), ...DEFAULT_APP_RESTRICTIONS },
-    guard: { mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', shell: 'auto', extraDenyPaths: [], extraDenySockets: [], allowBinaries: [] },
+    guard: { mode: 'off', protectApp: true, protectAppData: true, wallpaper: true, compositorIpc: 'shell-only', shell: 'auto', extraDenyPaths: [], extraDenySockets: [], allowBinaries: [] },
   };
   return `${JSON.stringify(policy, null, 2)}\n`;
 }

@@ -164,6 +164,8 @@ export interface GuardPolicy {
   mode?: GuardMode;
   /** Signals and ptrace from the session to rpchat are guarded. Default true. */
   protectApp?: boolean;
+  /** rpchat's data directory (`~/.config/@rp`) may be read by the session but written only by rpchat. Default true. */
+  protectAppData?: boolean;
   /** The shell's IPC socket and its config/state files are guarded. Default true. */
   wallpaper?: boolean;
   /** Who may reach the compositor's control socket. Default `shell-only`. */

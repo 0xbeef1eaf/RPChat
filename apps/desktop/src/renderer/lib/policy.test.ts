@@ -43,7 +43,7 @@ describe('policyDraftFrom', () => {
     const draft = policyDraftFrom({ version: 1 });
     expect(POLICY_SETTINGS.some((s) => draft.forced[s.path])).toBe(false);
     expect(draft.app).toEqual({ allowQuit: true, users: [], restrictions: expect.objectContaining({ allowSandbox: true, requireCharacterSession: false }) });
-    expect(draft.guard).toMatchObject({ mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', ipcGuard: 'off', ipcAllowCompositor: false, shell: ['auto'] });
+    expect(draft.guard).toMatchObject({ mode: 'off', protectApp: true, protectAppData: true, wallpaper: true, compositorIpc: 'shell-only', ipcGuard: 'off', ipcAllowCompositor: false, shell: ['auto'] });
     expect(draft.inputLock).toEqual({ enabled: true, maxDurationMs: 300_000, emergencyKey: 'esc', emergencyHoldMs: 5000 });
   });
 
