@@ -44,7 +44,10 @@ const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   messaging: { permission: 'pack', methods: ['send', 'channels'] },
   webcam: { permission: 'pack', methods: ['takeImage', 'takeVideo'] },
   crypto: { permission: 'pack', methods: ['encrypt', 'decrypt'] },
-  system: { permission: 'pack', methods: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead'] },
+  system: {
+    permission: 'pack',
+    methods: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead', 'vtStatus', 'vtSwitchBack', 'vtPreventSwitching', 'vtAllowSwitching'],
+  },
 };
 
 /** Method-level overrides required by docs/spec/living.md §1: (P) = permission 'prompt', (D) = dangerous. */
@@ -60,7 +63,9 @@ const OVERRIDES: Record<string, { prompt?: string[]; dangerous?: string[] }> = {
   input: { dangerous: ['lock', 'unlock', 'type', 'key', 'click', 'moveMouse'] },
   webcam: { dangerous: ['takeImage', 'takeVideo'] },
   crypto: { dangerous: ['encrypt', 'decrypt'] },
-  system: { dangerous: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead'] },
+  system: {
+    dangerous: ['openExternal', 'exec', 'readFile', 'writeFile', 'clipboardWrite', 'clipboardRead', 'vtSwitchBack', 'vtPreventSwitching', 'vtAllowSwitching'],
+  },
 };
 
 describe('standard modules', () => {
@@ -119,13 +124,16 @@ describe('standard modules', () => {
       for (const name of exp.prompt ?? []) expect(r.permissionFor(spec.id, name)).toBe('prompt');
     }
     expect(modules.inputModule.version).toBe('1.2.1');
-    expect(modules.systemModule.version).toBe('1.1.0');
+    expect(modules.systemModule.version).toBe('1.2.0');
   });
 
   it('marks every system method dangerous and pack-level (nothing built-in prompts per call)', () => {
     const r = createStandardRegistry();
+    // `vtStatus` only reports which console is in front, like `input.status` reports the lock:
+    // reads of state the character may already have from an event are not marked dangerous.
+    const reads = new Set(['vtStatus']);
     for (const [name, m] of Object.entries(modules.systemModule.methods)) {
-      expect(m.dangerous, name).toBe(true);
+      expect(m.dangerous, name).toBe(reads.has(name) ? undefined : true);
       expect(r.permissionFor('system', name)).toBe('pack');
     }
     for (const spec of r.list()) {

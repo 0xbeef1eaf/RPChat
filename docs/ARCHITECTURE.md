@@ -195,7 +195,7 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `input`  | pack       | `lock(durationMs, { reason?, devices? })`, `unlock()`, `status()`, `type`, `key`, `click`, `moveMouse` — daemon-only (`rpchatd`, Linux), duration capped; `CAPABILITY_FAILED` without the daemon |
 | `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — via the user's camera command templates; the capture is saved under `webcam/` in the character home and returned as a `source: 'home'` AssetRef, which `sdk.media` can show |
 | `crypto` | pack       | `encrypt(path)`, `decrypt(path)` — one of the user's own files, in place, under an app-managed AES-256-GCM key; refuses anything outside the home directory or that looks like a system/session file, and logs every encryption so it stays recoverable (docs/spec/system.md) |
-| `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)`, `clipboardRead()` |
+| `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)`, `clipboardRead()`, and the virtual terminals: `vtStatus()`, `vtSwitchBack()`, `vtPreventSwitching(durationMs, { reason? })`, `vtAllowSwitching()` — the last three daemon-only (`rpchatd`, Linux) and bounded by the policy, like `input` |
 
 Adding a module = write a spec (typings+docs+methods) and a host handler,
 register both. Third-party modules can later be shipped by packs or plugins;

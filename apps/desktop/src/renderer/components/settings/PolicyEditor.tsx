@@ -653,6 +653,24 @@ export function CreatePolicyDialog({
 
             <hr className="rule" />
             <p className="field-hint" style={{ margin: 0 }}>
+              <strong>The virtual terminals.</strong> The text consoles behind <code>Ctrl+Alt+F1…F12</code>: whether a character may pull the user back to rpchat&rsquo;s console
+              (<code>sdk.system.vtSwitchBack</code>) and refuse switching for a while (<code>sdk.system.vtPreventSwitching</code>). Reading which console is in front is never restricted.
+            </p>
+            <SwitchRow
+              label="Virtual-terminal control allowed at all"
+              hint="Off refuses both, so Ctrl+Alt+F<n> stays the user’s own way out of a frozen desktop."
+              checked={draft.vtLock.enabled}
+              disabled={busy}
+              onChange={(enabled) => setDraft({ ...draft, vtLock: { ...draft.vtLock, enabled } })}
+            />
+            <div className="field">
+              <label htmlFor="policy-vt-max">Longest switch lock</label>
+              <DurationInput ms={draft.vtLock.maxDurationMs} min={1000} unlimited disabled={busy || !draft.vtLock.enabled} label="Longest switch lock" onChange={(maxDurationMs) => setDraft({ ...draft, vtLock: { ...draft.vtLock, maxDurationMs } })} />
+              <span className="field-hint">At least 1 s, or -1 for unlimited. The daemon also releases it if rpchat goes away, so a crash never leaves the console locked.</span>
+            </div>
+
+            <hr className="rule" />
+            <p className="field-hint" style={{ margin: 0 }}>
               <strong>The policy lock.</strong> These decide how hard the policy holds once you lock it behind an authenticator code (Settings → System → <em>Lock policy</em>).
               Locking adds this block by itself if you leave it off, so it is here to change the defaults, not to turn the lock on.
             </p>
@@ -736,6 +754,7 @@ export function CreatePolicyDialog({
           </span>
         ))}
         {draft && draft.inputLock.enabled ? <span className="badge">{draft.inputLock.maxDurationMs === UNLIMITED ? 'locks of any length' : `locks up to ${briefDuration(draft.inputLock.maxDurationMs)}`}</span> : null}
+        {draft && !draft.vtLock.enabled ? <span className="badge">no console switching control</span> : null}
       </div>
 
       {problems.length > 0 ? (

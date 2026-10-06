@@ -45,6 +45,15 @@ describe('policyDraftFrom', () => {
     expect(draft.app).toEqual({ allowQuit: true, users: [], restrictions: expect.objectContaining({ allowSandbox: true, requireCharacterSession: false }) });
     expect(draft.guard).toMatchObject({ mode: 'off', protectApp: true, wallpaper: true, compositorIpc: 'shell-only', ipcGuard: 'off', ipcAllowCompositor: false, shell: ['auto'] });
     expect(draft.inputLock).toEqual({ enabled: true, maxDurationMs: 300_000, emergencyKey: 'esc', emergencyHoldMs: 5000 });
+    expect(draft.vtLock).toEqual({ enabled: true, maxDurationMs: 300_000 });
+  });
+
+  it('round-trips the vtLock block instead of dropping it', () => {
+    // The form writes the whole file, so a block it did not model would be lost on re-write.
+    const draft = policyDraftFrom({ version: 1, vtLock: { enabled: false, maxDurationMs: 60_000 } });
+    expect(draft.vtLock).toEqual({ enabled: false, maxDurationMs: 60_000 });
+    expect(policyDraftToFile(draft).vtLock).toEqual({ enabled: false, maxDurationMs: 60_000 });
+    expect(policyDraftToFile(policyDraftFrom({ version: 1 })).vtLock).toEqual({ enabled: true, maxDurationMs: 300_000 });
   });
 
   it('reads the app restrictions and a shell list back out of a policy', () => {
@@ -182,7 +191,13 @@ describe('policyDraftProblems', () => {
     draft.values['maxInputLockMs'] = 500;
     draft.inputLock.maxDurationMs = 10;
     draft.inputLock.emergencyHoldMs = 100;
-    expect(policyDraftProblems(draft)).toEqual([expect.stringContaining('Longest input lock'), expect.stringContaining('input-lock limit'), expect.stringContaining('emergency-unlock hold')]);
+    draft.vtLock.maxDurationMs = 10;
+    expect(policyDraftProblems(draft)).toEqual([
+      expect.stringContaining('Longest input lock'),
+      expect.stringContaining('input-lock limit'),
+      expect.stringContaining('emergency-unlock hold'),
+      expect.stringContaining('console-switch limit'),
+    ]);
   });
 
   it('ignores a bad value on a key that is switched off', () => {
@@ -240,12 +255,14 @@ describe('policyEffects', () => {
     draft.app.restrictions.allowSandbox = false;
     draft.app.restrictions.requireCharacterSession = true;
     draft.inputLock.enabled = false;
+    draft.vtLock.enabled = false;
     draft.guard.mode = 'enforce';
     expect(policyEffects(draft)).toEqual([
       { text: `${POLICY_SETTINGS.length - 1} settings forced`, strict: true },
       { text: 'cannot be quit, relaunched for alice', strict: true },
       { text: '2 app restrictions', strict: true },
       { text: 'input locking refused', strict: true },
+      { text: 'virtual-terminal control refused', strict: true },
       { text: 'session guard: enforce', strict: true },
     ]);
   });

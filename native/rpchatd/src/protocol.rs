@@ -182,6 +182,28 @@ pub enum Request {
         version: String,
         sha512: String,
     },
+    /// Virtual terminals: the foreground VT, the one the requesting user's session owns, and
+    /// the switch lock. Readable whatever the policy says — it reports state, it changes none.
+    #[serde(rename = "vt-status")]
+    VtStatus,
+    /// Bring the VT the requesting user's session owns back to the foreground. Deliberately
+    /// takes no VT number: the daemon resolves the caller's own session (`VTNR` from logind),
+    /// so this can switch the user back to rpchat and nowhere else.
+    #[serde(rename = "vt-activate")]
+    VtActivate,
+    /// Refuse every console switch (`VT_LOCKSWITCH`) for at most `durationMs`, clamped by
+    /// `vtLock.maxDurationMs`. Released by the timer, `vt-unlock`, the loss of this connection,
+    /// the input lock's emergency chord, or the daemon stopping.
+    #[serde(rename = "vt-lock")]
+    VtLock {
+        #[serde(rename = "durationMs")]
+        duration_ms: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// Allow console switching again.
+    #[serde(rename = "vt-unlock")]
+    VtUnlock,
     /// Session guard: (re)generate and load the AppArmor profiles from the policy now (also
     /// done at start and whenever the policy file changes).
     #[serde(rename = "guard-apply")]
@@ -227,6 +249,10 @@ impl Request {
             Request::Register { .. } => "register",
             Request::Unregister => "unregister",
             Request::ApplyUpdate { .. } => "apply-update",
+            Request::VtStatus => "vt-status",
+            Request::VtActivate => "vt-activate",
+            Request::VtLock { .. } => "vt-lock",
+            Request::VtUnlock => "vt-unlock",
             Request::GuardApply => "guard-apply",
             Request::GuardStatus => "guard-status",
             Request::Subscribe { .. } => "subscribe",
@@ -303,6 +329,35 @@ pub struct LockInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub devices: LockDevices,
+}
+
+/// `vt-status.vt.locked` (`VtLockInfo` in `@rp/shared`): the switch lock in place right now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VtLockInfo {
+    /// ISO-8601 (RFC 3339, UTC, millisecond precision) time the lock ends by itself.
+    pub until: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// `vt-status.vt` (`VtInfo` in `@rp/shared`): the virtual terminals as the daemon sees them.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VtInfo {
+    /// The console could be read at all (false in a container, or on a kernel without VTs).
+    pub available: bool,
+    /// The VT in the foreground right now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<u16>,
+    /// The VT the requesting user's session owns — where rpchat is. `None` for a session that
+    /// is on no VT (ssh, a seatless remote desktop), which is when `vt-activate` has no target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked: Option<VtLockInfo>,
+    /// Why the console could not be read, when `available` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<String>,
 }
 
 /// `status.keepalive` (`KeepaliveInfo` in `@rp/shared`): relaunch registration state.
@@ -515,6 +570,25 @@ pub enum Ok {
         #[serde(rename = "restartDaemon")]
         restart_daemon: bool,
     },
+    #[serde(rename = "vt-status")]
+    VtStatus {
+        vt: VtInfo,
+    },
+    /// `switched` is false when the session's VT was in the foreground already — nothing was
+    /// done, which is not a failure. `vt` is the VT the daemon resolved for the caller.
+    #[serde(rename = "vt-activate")]
+    VtActivate {
+        vt: u16,
+        switched: bool,
+    },
+    #[serde(rename = "vt-lock")]
+    VtLock {
+        until: String,
+        #[serde(rename = "durationMs")]
+        duration_ms: u64,
+    },
+    #[serde(rename = "vt-unlock")]
+    VtUnlock,
     #[serde(rename = "guard-apply")]
     GuardApply {
         guard: GuardInfo,
@@ -920,6 +994,44 @@ mod tests {
             "events required"
         );
         assert!(parse_line(r#"{"op":"subscribe","events":"guard-attempt"}"#).is_err());
+        assert_eq!(
+            round_trip_request(json!({"op":"vt-status"})),
+            Request::VtStatus
+        );
+        assert_eq!(
+            round_trip_request(json!({"op":"vt-activate"})),
+            Request::VtActivate
+        );
+        assert_eq!(
+            round_trip_request(
+                json!({"op":"vt-lock","durationMs":30000,"reason":"reading to you"})
+            ),
+            Request::VtLock {
+                duration_ms: 30000.0,
+                reason: Some("reading to you".into()),
+            }
+        );
+        assert_eq!(
+            round_trip_request(json!({"op":"vt-lock","durationMs":1000})),
+            Request::VtLock {
+                duration_ms: 1000.0,
+                reason: None,
+            }
+        );
+        assert_eq!(
+            round_trip_request(json!({"op":"vt-unlock"})),
+            Request::VtUnlock
+        );
+        assert!(
+            parse_line(r#"{"op":"vt-lock"}"#).is_err(),
+            "durationMs required"
+        );
+        assert_eq!(
+            parse_line(r#"{"op":"vt-activate","vt":3}"#),
+            std::result::Result::Ok(Some(Request::VtActivate)),
+            "vt-activate has no target: the daemon resolves the caller's own session, so a VT \
+             number on the wire is ignored rather than obeyed"
+        );
     }
 
     #[test]
@@ -949,6 +1061,10 @@ mod tests {
             ),
             (json!({"op":"crypto-keys"}), "crypto-keys"),
             (json!({"op":"crypto-rotate-key"}), "crypto-rotate-key"),
+            (json!({"op":"vt-status"}), "vt-status"),
+            (json!({"op":"vt-activate"}), "vt-activate"),
+            (json!({"op":"vt-lock","durationMs":1}), "vt-lock"),
+            (json!({"op":"vt-unlock"}), "vt-unlock"),
         ] {
             let req: Request = serde_json::from_value(v).unwrap();
             assert_eq!(req.op(), name);
@@ -1066,6 +1182,49 @@ mod tests {
                 events: vec!["guard-attempt".into()],
             }),
             json!({"ok":true,"op":"subscribe","events":["guard-attempt"]}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::VtStatus {
+                vt: VtInfo {
+                    available: true,
+                    active: Some(3),
+                    session: Some(2),
+                    locked: Some(VtLockInfo {
+                        until: "2026-09-14T12:00:05.000Z".into(),
+                        reason: Some("reading to you".into()),
+                    }),
+                    unavailable: None,
+                },
+            }),
+            json!({"ok":true,"op":"vt-status","vt":{"available":true,"active":3,"session":2,"locked":{"until":"2026-09-14T12:00:05.000Z","reason":"reading to you"}}}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::VtStatus {
+                vt: VtInfo {
+                    available: false,
+                    unavailable: Some("No such file or directory (os error 2)".into()),
+                    ..VtInfo::default()
+                },
+            }),
+            json!({"ok":true,"op":"vt-status","vt":{"available":false,"unavailable":"No such file or directory (os error 2)"}}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::VtActivate {
+                vt: 2,
+                switched: true,
+            }),
+            json!({"ok":true,"op":"vt-activate","vt":2,"switched":true}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::VtLock {
+                until: "2026-09-14T12:00:05.000Z".into(),
+                duration_ms: 5000,
+            }),
+            json!({"ok":true,"op":"vt-lock","until":"2026-09-14T12:00:05.000Z","durationMs":5000}),
+        );
+        round_trip_response(
+            &Response::ok(Ok::VtUnlock),
+            json!({"ok":true,"op":"vt-unlock"}),
         );
         // Pushed events carry `ev` instead of `ok`/`op`.
         let ev = Event::GuardAttempt {

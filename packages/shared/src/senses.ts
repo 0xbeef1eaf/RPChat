@@ -70,7 +70,8 @@ export type HostEventName =
   | 'media-clicked'      // data: { mediaId, asset, packId, kind }          the user clicked a shown image/video overlay
   | 'media-started'      // data: { mediaId, asset, packId, kind }          a queued media item reached the front of its queue and started
   | 'media-closed'       // data: { mediaId, asset, packId, kind, reason }  a media item went away (reason: MediaCloseReason)
-  | 'guard-attempt';     // data: GuardAttempt { kind, target, command, pid, blocked, … }  the session guard logged/blocked an attempt (Linux, rpchatd)
+  | 'guard-attempt'      // data: GuardAttempt { kind, target, command, pid, blocked, … }  the session guard logged/blocked an attempt (Linux, rpchatd)
+  | 'vt-changed';        // data: { vt, previous, ourVt, ours }  the user switched virtual terminal (ctrl+alt+F<n>); `ours` is whether rpchat's VT is the one in front now (Linux)
 
 /** Subscribable event names: host events plus character-raised `custom:<name>` events. */
 export type EventName = HostEventName | `custom:${string}`;

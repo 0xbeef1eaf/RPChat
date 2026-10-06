@@ -23,6 +23,9 @@ pub const DEFAULT_POLICY_PATH: &str = "/etc/rpchat/policy.json";
 pub const MIN_LOCK_MS: u64 = 1000;
 /// `inputLock.maxDurationMs` default.
 pub const DEFAULT_MAX_LOCK_MS: u64 = 300_000;
+/// `vtLock.maxDurationMs` default. Same five minutes as the input lock: long enough for a
+/// character to hold the user's attention, short enough that a forgotten lock is not a reboot.
+pub const DEFAULT_MAX_VT_LOCK_MS: u64 = 300_000;
 /// What a cap of `-1` ("unlimited", `UNLIMITED` in `@rp/shared`) stands for.
 pub const UNLIMITED: f64 = -1.0;
 /// The longest lock "unlimited" can still mean: a hundred years, so `until` never overflows.
@@ -76,6 +79,19 @@ pub struct InputLockPolicy {
     pub emergency_key: Option<EmergencyKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emergency_hold_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+/// `PolicyFile.vtLock`: whether characters may touch the virtual terminals, and for how long
+/// one switch lock may hold. `enabled: false` refuses `vt-lock` *and* `vt-activate` — one knob
+/// for "characters do not get to decide which console the user is looking at". `vt-status`
+/// stays readable either way; it changes nothing.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VtLockPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_duration_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
 }
@@ -421,6 +437,10 @@ pub struct PolicyFile {
     pub settings: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_lock: Option<InputLockPolicy>,
+    /// The virtual-terminal limits (`vt.rs`): whether a character may lock console switching
+    /// or switch the user back, and for how long one lock may hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vt_lock: Option<VtLockPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -582,6 +602,16 @@ impl PolicyFile {
                 }
             }
         }
+        if let Some(vt) = &self.vt_lock {
+            if let Some(n) = vt.max_duration_ms {
+                if !is_limit(n) {
+                    return Err(
+                        "vtLock.maxDurationMs must be a non-negative number, or -1 for unlimited"
+                            .into(),
+                    );
+                }
+            }
+        }
         if let Some(m) = &self.managed_by {
             if m.chars().count() > 500 {
                 return Err("managedBy is longer than 500 characters".into());
@@ -628,6 +658,11 @@ impl PolicyFile {
     /// The `inputLock` limits with defaults and clamping applied.
     pub fn lock_limits(&self) -> LockLimits {
         LockLimits::from_policy(self.input_lock.as_ref())
+    }
+
+    /// The `vtLock` limits with defaults and clamping applied.
+    pub fn vt_limits(&self) -> VtLimits {
+        VtLimits::from_policy(self.vt_lock.as_ref())
     }
 
     /// `settings.updates.allowDowngrade`: whether `apply-update` may install a version older
@@ -763,6 +798,51 @@ impl LockLimits {
 
     /// Clamp a requested duration into `[MIN_LOCK_MS, max_duration_ms]`. Non-finite or
     /// non-positive requests are rejected (the caller maps that to `INVALID`).
+    pub fn clamp_duration(&self, requested_ms: f64) -> Option<u64> {
+        if !requested_ms.is_finite() || requested_ms <= 0.0 {
+            return None;
+        }
+        let rounded = requested_ms.round().min(u64::MAX as f64) as u64;
+        Some(rounded.clamp(MIN_LOCK_MS, self.max_duration_ms.max(MIN_LOCK_MS)))
+    }
+}
+
+/// Effective `vtLock` limits (defaults filled in, values clamped to sane ranges).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VtLimits {
+    pub enabled: bool,
+    pub max_duration_ms: u64,
+}
+
+impl Default for VtLimits {
+    fn default() -> Self {
+        VtLimits {
+            enabled: true,
+            max_duration_ms: DEFAULT_MAX_VT_LOCK_MS,
+        }
+    }
+}
+
+impl VtLimits {
+    pub fn from_policy(vt: Option<&VtLockPolicy>) -> VtLimits {
+        let d = VtLimits::default();
+        let Some(vt) = vt else { return d };
+        VtLimits {
+            enabled: vt.enabled.unwrap_or(d.enabled),
+            max_duration_ms: vt
+                .max_duration_ms
+                .map(|n| {
+                    if n == UNLIMITED {
+                        UNLIMITED_LOCK_MS
+                    } else {
+                        (n.round() as u64).clamp(MIN_LOCK_MS, UNLIMITED_LOCK_MS)
+                    }
+                })
+                .unwrap_or(d.max_duration_ms),
+        }
+    }
+
+    /// Clamp a requested duration into `[MIN_LOCK_MS, max_duration_ms]`, as `LockLimits` does.
     pub fn clamp_duration(&self, requested_ms: f64) -> Option<u64> {
         if !requested_ms.is_finite() || requested_ms <= 0.0 {
             return None;
@@ -984,6 +1064,11 @@ impl PolicyStore {
     /// fails closed (`Err`) so a broken policy never grants more than the administrator wrote.
     pub fn lock_limits(&mut self) -> Result<LockLimits, PolicyError> {
         Ok(self.load()?.map(|p| p.lock_limits()).unwrap_or_default())
+    }
+
+    /// Effective `vtLock` limits, failing closed on a broken file like `lock_limits`.
+    pub fn vt_limits(&mut self) -> Result<VtLimits, PolicyError> {
+        Ok(self.load()?.map(|p| p.vt_limits()).unwrap_or_default())
     }
 
     /// Effective `app` rules: defaults (quit allowed) without a file; a broken file also means

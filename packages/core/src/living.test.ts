@@ -466,6 +466,50 @@ describe('event matching', () => {
     expect(matchesFilter('guard-attempt', { kind: 'config', target: '/x', command: 'vim' }, { kind: 'ipc' })).toBe(false);
   });
 
+  it('routes vt-changed with the ours/vt filters', async () => {
+    const senses = new FakeSenses();
+    const runs: string[] = [];
+    t = await createTestEngine({
+      senses,
+      runnerHandler: async (request) => {
+        if (request.context.trigger.kind === 'event') runs.push(request.code.slice(0, request.code.indexOf('; ')));
+        return null;
+      },
+    });
+    await t.engine.packs.install(MINIMAL_DIR);
+    const session = await t.engine.sessions.create({ characterRef: ECHO_REF });
+    const ctx = ctxOf(MINIMAL_ID, 'echo', session.id);
+    expect(HOST_EVENT_NAMES).toContain('vt-changed');
+    // "they walked off to a console" and "they came back", the two things worth reacting to.
+    const left = await invoke(ctx, 'events', 'on', 'vt-changed', 'return "left";', { filter: { ours: false } });
+    expect(left).toMatchObject({ ok: true, value: { event: 'vt-changed' } });
+    expect((await invoke(ctx, 'events', 'on', 'vt-changed', 'return "back";', { filter: { ours: true } })).ok).toBe(true);
+    expect((await invoke(ctx, 'events', 'on', 'vt-changed', 'return "tty4";', { filter: { vt: 4 } })).ok).toBe(true);
+    expect(senses.interests.at(-1)?.sort()).toEqual(['time', 'vt-changed']);
+    // Awaited one at a time with the clock moving in between: dispatch is asynchronous, so
+    // pushing all three in one go would hand them the same timestamp and the 2 s debounce
+    // would swallow the second departure.
+    senses.push('vt-changed', { vt: 3, previous: 2, ourVt: 2, ours: false });
+    await t.engine.eventService.idle();
+    t.clock.advance(3000);
+    senses.push('vt-changed', { vt: 2, previous: 3, ourVt: 2, ours: true });
+    await t.engine.eventService.idle();
+    t.clock.advance(3000);
+    senses.push('vt-changed', { vt: 4, previous: 2, ourVt: 2, ours: false });
+    await t.engine.eventService.idle();
+    expect(runs).toEqual([
+      'const input = {"event":"vt-changed","data":{"vt":3,"previous":2,"ourVt":2,"ours":false}}',
+      'const input = {"event":"vt-changed","data":{"vt":2,"previous":3,"ourVt":2,"ours":true}}',
+      // The switch to tty4 matches both the `ours: false` handler and the `vt: 4` one.
+      'const input = {"event":"vt-changed","data":{"vt":4,"previous":2,"ourVt":2,"ours":false}}',
+      'const input = {"event":"vt-changed","data":{"vt":4,"previous":2,"ourVt":2,"ours":false}}',
+    ]);
+    expect(matchesFilter('vt-changed', { vt: 3, previous: 2, ourVt: 2, ours: false }, { ours: false })).toBe(true);
+    expect(matchesFilter('vt-changed', { vt: 3, previous: 2, ourVt: 2, ours: false }, { ours: true })).toBe(false);
+    expect(matchesFilter('vt-changed', { vt: 3, previous: 2, ourVt: null, ours: false }, { vt: 3 })).toBe(true);
+    expect(matchesFilter('vt-changed', { vt: 3, previous: 2, ourVt: null, ours: false }, { vt: 2 })).toBe(false);
+  });
+
   it('routes the chat window appearing and going away, without debouncing a quick toggle', async () => {
     const runs: string[] = [];
     t = await createTestEngine({

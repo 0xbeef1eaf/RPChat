@@ -485,7 +485,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     hostHandlers: [
       new MediaHandler(media),
       ui,
-      new SystemHandler({ home: os.homedir() }),
+      new SystemHandler({ home: os.homedir(), logger, ...(process.platform === 'linux' ? { daemon } : {}) }),
       new CryptoHandler(cryptoManager),
       new DisplayHandler(() => backend),
       wallpaper,

@@ -22,7 +22,23 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   members of the `rpchat` group can talk to it. JSON lines, one request per line, one response.
 - **Policy**: reads `/etc/rpchat/policy.json` at start and on every `policy` request (mtime cache);
   validates shape; refuses `lock` when `inputLock.enabled === false`; clamps `lock` durations to
-  `inputLock.maxDurationMs` (default 300 000). Never trusts the app's numbers.
+  `inputLock.maxDurationMs` (default 300 000). Never trusts the app's numbers. The same for the
+  virtual terminals: `vtLock.enabled === false` refuses `vt-lock`/`vt-activate`, and `vt-lock`
+  durations are clamped to `vtLock.maxDurationMs` (default 300 000, floor 1000, `-1` unlimited).
+- **Virtual terminals** (`src/vt.rs`): `vt-status`, `vt-activate`, `vt-lock`, `vt-unlock` behind
+  the `VtConsole` trait (`VT_GETSTATE` / `VT_ACTIVATE` / `VT_LOCKSWITCH` / `VT_UNLOCKSWITCH` on
+  `/dev/tty0`, opened per call; a fake in tests, exported as `vt::testing` for `main.rs`'s
+  socket-level test). `VtEngine` owns no thread and no clock, like `LockEngine`: the daemon
+  `tick`s it every 50 ms. `vt-activate` carries **no VT number** — `keepalive::session_vt` picks
+  the asking uid's session `VTNR` from the logind state files (graphical and active first, then
+  graphical, then any), so the op can only switch to that user's own console, and answers
+  `NO_DEVICES` when they are on none. It lifts an own lock around the switch and re-applies it
+  afterwards, because the kernel's `set_console` refuses while `vt_dont_switch` is set, even for
+  root. The lock is released by the timer, `vt-unlock`, `connection_lost` for the connection
+  that took it (`conn_id`), `UnlockCause::Emergency` from the input lock's chord, and
+  `shutdown()` — a kernel-wide flag must not outlive the app that asked for it. `unlock` clears
+  the console flag even with no lock recorded, so a daemon that restarted while it was set can
+  still get out of it.
 - **The policy seal** (`src/seal.rs`, `src/totp.rs`, `src/runtime.rs`, `src/remote.rs`; user guide
   `native/rpchatd/dist/POLICY.md` "Locking the policy behind a code"): sealing turns the
   write-once policy into one that can be replaced and removed with a TOTP code and nothing else.
@@ -386,9 +402,14 @@ with `pkexec` for the current user.
   `guardApply()`/`guardStatus()` → `GuardInfo`,
   `applyUpdate({ file, version, sha512 })` → `{ version, restartDaemon }` (errors mapped like the
   other ops), `waitForHello(timeoutMs)` (fresh handshake retried with a growing delay, 500 ms → 5 s;
-  resolves with whether the daemon is back)), unit-tested with a fake socket server. `rpErrorCodeFor`/`toRpError` map daemon codes for every caller: `REFUSED`/`POLICY` →
+  resolves with whether the daemon is back), `vtStatus()` → `VtInfo`, `vtActivate()` →
+  `{ vt, switched }`, `vtLock(durationMs, reason?)` → `{ until, durationMs }`, `vtUnlock()`),
+  unit-tested with a fake socket server. `rpErrorCodeFor`/`toRpError` map daemon codes for every caller: `REFUSED`/`POLICY` →
   `PERMISSION_DENIED`, `INVALID`/`EXISTS` → `INVALID_ARGUMENT` (`details.daemonCode` keeps the
-  original), others → `CAPABILITY_FAILED`.
+  original), others → `CAPABILITY_FAILED`. The four `vt-*` ops use `toRpErrorOrOutdated`
+  instead, which turns serde's `unknown variant` rejection — how a daemon older than the app
+  refuses an op added after the protocol was pinned at 1 — into `CAPABILITY_FAILED` naming the
+  outdated system integration, rather than an `INVALID_ARGUMENT` about the arguments.
 - `src/main/system/policy.ts`: `loadPolicy(path, sources)` reads, in order, the daemon's runtime
   filesystem (`/run/rpchat/policy/policy.json`), the policy file, the seal's world-readable
   marker (`/etc/rpchat/policy.sealed`) and the app's own cache of a sealed policy, reporting
@@ -571,6 +592,17 @@ when a reply is genuinely being cut short, and retry/reset/delete keep working o
 `QuitGuard` is unaffected. The daemon's `AppPolicy` struct declares the same keys only because it
 sets `deny_unknown_fields` — it does not act on them.
 
+### Policy `vtLock` block
+
+| Key | Type | Effect |
+|---|---|---|
+| `vtLock.enabled` | boolean, default `true` | `false`: `vt-lock` **and** `vt-activate` answer `POLICY`, so no character locks the console or pulls the user back to it. `vt-status` is never gated — it only reports. |
+| `vtLock.maxDurationMs` | number ≥ 1000, or `-1` | Longest single switch lock; requests above are clamped and the response says what was applied. Default 300 000. |
+
+Modelled by the policy form (`PolicyDraft.vtLock`, written on every save like `inputLock`, so a
+file that carries the block round-trips through Settings → System instead of being dropped), and
+present in both shipped templates.
+
 ### Policy `guard` block
 
 `GuardPolicy` in `@rp/shared/system.ts`; validated identically by `parseGuard` (app) and `validate_guard` (daemon). `mode` `off` (default) \| `audit` \| `enforce`; `protectApp`, `wallpaper` booleans (default true); `compositorIpc` `allow` \| `shell-only` (default) \| `deny`; `ipcGuard` `auto` \| `off` (default) (the BPF LSM IPC guard; see the *IPC guard* bullet above); `shell` `auto` (default) \| `noctalia` \| `quickshell` \| `hyprpaper` \| `swww` \| `none`; `loginHelpers` (non-empty, absolute), `extraDenyPaths`/`extraDenySockets` (absolute, `~/…` or `@{HOME}/…`), `allowBinaries` (absolute) — no whitespace or quotes anywhere (they become AppArmor rules). A `mode` other than `off` without `app.users` is invalid; the listed users are the ones confined. Not a settings key; reported as `SystemIntegrationStatus.guard`.
@@ -721,6 +753,21 @@ notes (group membership means "may lock input and inject keys", so treat `rpchat
 subscribes to all three: `policy-tamper` goes into `SystemIntegration.noteTamper` (Settings →
 System → *Tamper log*), `policy-changed` invalidates the policy watcher and re-reads settings, so a
 remote configuration or a restore from the seal reaches the managed badges at once.
+
+## Host event `vt-changed`
+
+`HostEventName` gains `vt-changed` (`packages/shared/src/senses.ts`, `HOST_EVENT_NAMES`, the SDK
+preamble and `sdk.events`' filter docs); data is `{ vt, previous, ourVt, ours }`, all matched by
+the generic JSON comparison, so `{ ours: false }` ("they left for a console") and `{ vt: 3 }` work
+without a filter case of their own.
+
+Produced by `apps/desktop/src/main/senses/vt.ts` (`VtMonitor`, wired in `senses/index.ts` on
+Linux): it reads `/sys/class/tty/tty0/active` — world-readable, so no daemon and no root — every
+`VT_POLL_MS` (1 s; sysfs has no inotify and its `poll()` is out of reach from Node) and emits only
+on a change, the first read being the baseline. `ourVt` is the app's own VT from `XDG_VTNR`, or
+`VTNR` in `/run/systemd/sessions/<XDG_SESSION_ID>` when the environment has none (an app started
+through a systemd user unit does not get `XDG_VTNR`), or `null` for a session on no VT at all.
+A machine without VTs never starts the timer. Subject to the usual 2 s debounce per subscription.
 
 ## Host event `guard-attempt`
 

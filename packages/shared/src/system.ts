@@ -53,6 +53,17 @@ export interface PolicyFile {
     /** When false, `lock` is refused entirely. */
     enabled?: boolean;
   };
+  /**
+   * Virtual terminals (`sdk.system.vt*`, Linux, daemon): whether a character may lock console
+   * switching or pull the user back to rpchat's own VT, and for how long one lock may hold.
+   * `enabled: false` refuses both — the user's way out to a text console is theirs again.
+   */
+  vtLock?: {
+    /** Absolute maximum for one switch lock, ms. Default 300_000; `-1` for unlimited. */
+    maxDurationMs?: number;
+    /** When false, `vt-lock` **and** `vt-activate` are refused (`vt-status` still reads). */
+    enabled?: boolean;
+  };
   /** Free text shown in Settings → System explaining who manages this machine. */
   managedBy?: string;
   /**
@@ -272,6 +283,29 @@ export interface GuardAttempt {
 /** One entry of the app's guard-attempt log (Settings → System → Audit log): the event plus when it arrived. */
 export interface GuardAttemptRecord extends GuardAttempt {
   at: string;
+}
+
+/** The switch lock in place right now (`VtInfo.locked`). */
+export interface VtLockInfo {
+  /** When it ends by itself; the daemon releases it then whatever the app does. */
+  until: string;
+  reason?: string;
+}
+
+/**
+ * `vt-status.vt`: the virtual terminals (the consoles behind ctrl+alt+F1…F12) as the daemon
+ * sees them. `active` is whichever is in the foreground; `session` is the one the asking
+ * user's session owns — where rpchat is — which is `undefined` for a session on no VT at all
+ * (ssh, a container, a seatless remote desktop).
+ */
+export interface VtInfo {
+  /** The console could be read at all (false in a container, or on a kernel without VTs). */
+  available: boolean;
+  active?: number;
+  session?: number;
+  locked?: VtLockInfo;
+  /** Why the console could not be read, when `available` is false. */
+  unavailable?: string;
 }
 
 /** A pushed daemon line (`{ ev: … }`), received on a connection that sent `subscribe`. */
@@ -596,6 +630,26 @@ export type DaemonRequest =
    * `updates.allowDowngrade`. May take minutes; the client uses a long timeout.
    */
   | { op: 'apply-update'; file: string; version: string; sha512: string }
+  /**
+   * Virtual terminals: the foreground VT, the one the asking user's session owns, and the
+   * switch lock. Readable whatever the policy says — it reports state and changes none.
+   */
+  | { op: 'vt-status' }
+  /**
+   * Bring the VT the asking user's session owns back to the foreground. Deliberately carries
+   * no VT number: the daemon resolves the caller's own logind session (`VTNR`), so this can
+   * switch the user back to rpchat and nowhere else. `NO_DEVICES` when that session is on no VT.
+   */
+  | { op: 'vt-activate' }
+  /**
+   * Refuse every console switch (`VT_LOCKSWITCH` — ctrl+alt+F<n>, and the switches logind and
+   * the compositor ask for) for at most `durationMs`, clamped to `vtLock.maxDurationMs`. The
+   * daemon releases it on the timer, on `vt-unlock`, when this connection drops, when the input
+   * lock's emergency chord fires, and when it stops: a lock can never outlive the app that took it.
+   */
+  | { op: 'vt-lock'; durationMs: number; reason?: string }
+  /** Allow console switching again. */
+  | { op: 'vt-unlock' }
   /** Session guard: (re)generate and load the profiles from the policy now. */
   | { op: 'guard-apply' }
   /** Session guard: what is engaged, without touching anything. */
@@ -627,6 +681,11 @@ export type DaemonResponse =
   | { ok: true; op: 'verify-pack'; signed: boolean }
   /** `restartDaemon`: the daemon updated itself and restarts right after answering (wait for it before relaunching). */
   | { ok: true; op: 'apply-update'; version: string; restartDaemon: boolean }
+  | { ok: true; op: 'vt-status'; vt: VtInfo }
+  /** `switched` is false when that VT was in the foreground already — nothing to do, not a failure. */
+  | { ok: true; op: 'vt-activate'; vt: number; switched: boolean }
+  | { ok: true; op: 'vt-lock'; until: string; durationMs: number }
+  | { ok: true; op: 'vt-unlock' }
   | { ok: true; op: 'guard-apply' | 'guard-status'; guard: GuardInfo }
   | { ok: true; op: 'subscribe'; events: DaemonEventName[] }
   /** `keys` oldest first; `activeKeyId` is what `sdk.crypto.encrypt` should use from now on. */

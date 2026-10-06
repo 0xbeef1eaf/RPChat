@@ -9,7 +9,7 @@ import { KeyedQueue } from '../keyed-queue.js';
 export const HOST_EVENT_NAMES: readonly HostEventName[] = [
   'user-idle', 'user-back', 'app-idle', 'app-back', 'window-changed', 'app-launched', 'file-added', 'battery-low', 'screen-locked',
   'screen-unlocked', 'song-changed', 'time', 'widget-message', 'avatar-clicked', 'chat-shown', 'chat-hidden',
-  'routine-changed', 'browser-navigated', 'media-clicked', 'media-closed', 'guard-attempt',
+  'routine-changed', 'browser-navigated', 'media-clicked', 'media-closed', 'guard-attempt', 'vt-changed',
 ];
 /**
  * Discrete user interactions: every one of them is meaningful (a second click, the next widget

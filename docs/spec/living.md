@@ -39,6 +39,7 @@ all mirroring `@rp/shared` (add them to the structural-identity test where they 
 | `webcam` | pack | `takeImage(): AssetRef` (D); `takeVideo(seconds: number): AssetRef` (D; 1..60) — both write into the character home under `webcam/` and return a `source: 'home'` ref, which `sdk.media` takes as `home:<path>` |
 | `crypto` | pack | `encrypt(path: string): void` (D); `decrypt(path: string): void` (D) — one of the user's own files, in place, under an app-managed AES-256-GCM key (`docs/spec/system.md` "`sdk.crypto` key storage"); paths outside the home directory or that look like a system/session file (`.service`, `.desktop`, `.conf`, ...) are refused before anything is touched |
 | `system` (v1.1) | pack | + `clipboardRead(): string` (D) |
+| `system` (v1.2) | pack | + the virtual terminals (Linux, daemon-only except the first): `vtStatus(): { available; vt?; ourVt?; ours; locked; until? }`; `vtSwitchBack(): { vt; switched }` (D); `vtPreventSwitching(durationMs, opts?: { reason? }): { until; durationMs }` (D); `vtAllowSwitching(): void` (D) |
 
 `presence` docs must say: prefer the `<senses>` line already in the prompt; call `status()` only for
 fresh numbers inside an action.
@@ -118,7 +119,9 @@ manifest, characters, README and asset summary (no permission information).
   (data `{ shownMs? }`): the rpchat window itself became visible or went away — shown at startup, from the tray,
   a notification click or a second `rpchat`; hidden to the tray, or closed for real with `closeToTray` off. No
   filter keys; the duration says how long it had been away or up and is absent for the first transition after a
-  start. Generic: any other filter key must equal `data[key]`.
+  start. `vt-changed` (data `{ vt, previous, ourVt, ours }`, the user switched virtual terminal):
+  no special keys either, so `{ ours: false }` / `{ ours: true }` / `{ vt }` match through the
+  generic path. Generic: any other filter key must equal `data[key]`.
 - Firing: run `code` via `BehaviourRunner.runScript` with `input = { event, data, ...input }`, trigger
   `{ kind: 'event', subscriptionId, event }`; if the character has an `onEvent` behaviour it also runs
   (input `{ event, data }`) for events with no matching subscription; audit as `events.fire`.
@@ -228,7 +231,15 @@ transitions + wake, mood decay/nudge/prompt words, senses line rendering.
   and reconnects if the compositor restarts. The poll loop captures `pollMs` when it is
   scheduled, so a `settings.senses` patch calls `senses.refresh()` → `provider.refreshSettings()`,
   which reschedules the running loop (and stays idle when nothing is interested). Widget/avatar page events → `widget-message` /
-  `avatar-clicked`.
+  `avatar-clicked`. `vt.ts`: `VtMonitor` reads the kernel's `/sys/class/tty/tty0/active` every
+  second (Linux; world-readable, so neither root nor the rpchatd daemon is involved) and emits
+  `vt-changed` `{ vt, previous, ourVt, ours }` when the foreground console moves — the user
+  pressing ctrl+alt+F<n> is otherwise invisible here, since the compositor keeps running and both
+  idle timers carry on. `ourVt` comes from `XDG_VTNR`, else `VTNR` in
+  `/run/systemd/sessions/<XDG_SESSION_ID>` (an app started by a systemd user unit has no
+  `XDG_VTNR`), else `null`; the first read is the baseline and a machine with no VTs never starts
+  the timer. Acting on it is `sdk.system.vtSwitchBack` / `vtPreventSwitching`, which are
+  privileged and live in the daemon (`docs/spec/system.md` "Virtual terminals").
 - **Handlers** (`src/main/capabilities/`): `presence` (from the provider), `screen` (`look`: screenshot
   via `desktopCapturer` on X11/Windows/macOS, `screenshot` template on Wayland (Hyprland default
   `grim -o {monitor} {file}`), downscale to ≤ 1280 px PNG, then a vision call through the session's

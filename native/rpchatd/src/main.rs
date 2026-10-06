@@ -76,6 +76,7 @@ mod runtime;
 mod seal;
 mod sysinstall;
 mod totp;
+mod vt;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -108,6 +109,7 @@ use seal::{ChainState, LockRules, Seal, SealError, SealMode, SealPaths, SealStor
 use serde_json::Value;
 use sysinstall::{ApplyHooks, ApplyRequest, DEFAULT_INSTALL_ROOT};
 use totp::TotpConfig;
+use vt::{VtEngine, VtUnlockCause};
 
 /// `DAEMON_SOCKET_PATH` in `@rp/shared`.
 pub const DEFAULT_SOCKET_PATH: &str = "/run/rpchat/daemon.sock";
@@ -273,6 +275,10 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
 /// peer uid's user name, and the spawn itself.
 pub struct KeepaliveHooks {
     pub active_uids: Box<dyn Fn() -> Vec<u32> + Send + Sync>,
+    /// Every logind session, for resolving which virtual terminal a uid's session owns
+    /// (`vt-activate`). Separate from `active_uids` because the session this looks for is
+    /// precisely the one that is *not* active any more.
+    pub sessions: Box<dyn Fn() -> Vec<keepalive::SessionInfo> + Send + Sync>,
     pub process_alive: Box<dyn Fn(i32, Option<u64>) -> bool + Send + Sync>,
     pub user_name: Box<dyn Fn(u32) -> Option<String> + Send + Sync>,
     pub is_executable: Box<dyn Fn(&Path) -> bool + Send + Sync>,
@@ -286,8 +292,10 @@ pub type Spawner = Box<dyn Fn(&CommandSpec) -> io::Result<u32> + Send + Sync>;
 impl KeepaliveHooks {
     /// The real thing: logind state files (or `loginctl`), `/proc`, getpwuid, `Command::spawn`.
     pub fn real(sessions_dir: PathBuf) -> KeepaliveHooks {
+        let for_sessions = sessions_dir.clone();
         KeepaliveHooks {
             active_uids: Box::new(move || os::active_graphical_uids(&sessions_dir)),
+            sessions: Box::new(move || os::sessions(&for_sessions)),
             process_alive: Box::new(os::process_alive),
             user_name: Box::new(os::user_name),
             is_executable: Box::new(os::is_executable),
@@ -351,6 +359,8 @@ impl RestartPlan {
 /// Everything the connection threads share.
 pub struct Daemon {
     engine: Mutex<LockEngine>,
+    /// Virtual terminals: the switch lock and switching back to the app's own VT (`vt.rs`).
+    vt: Mutex<VtEngine>,
     injector: Mutex<Box<dyn Injector>>,
     policy: Mutex<PolicyStore>,
     keepalive: Mutex<Keepalive>,
@@ -418,6 +428,7 @@ impl Daemon {
         let scratch = test_scratch();
         Daemon {
             engine: Mutex::new(LockEngine::new(source)),
+            vt: Mutex::new(VtEngine::new(Box::new(vt::RealConsole::default_path()))),
             injector: Mutex::new(injector),
             policy: Mutex::new(PolicyStore::new(policy_path)),
             keepalive: Mutex::new(Keepalive::default()),
@@ -486,12 +497,23 @@ impl Daemon {
         self
     }
 
+    /// A fake console, so the VT ops are exercised without `/dev/tty0` (tests).
+    #[cfg(test)]
+    fn with_vt(mut self, vt: VtEngine) -> Self {
+        self.vt = Mutex::new(vt);
+        self
+    }
+
     fn keepalive(&self) -> std::sync::MutexGuard<'_, Keepalive> {
         self.keepalive.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn engine(&self) -> std::sync::MutexGuard<'_, LockEngine> {
         self.engine.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn vt(&self) -> std::sync::MutexGuard<'_, VtEngine> {
+        self.vt.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn injector(&self) -> std::sync::MutexGuard<'_, Box<dyn Injector>> {
@@ -508,8 +530,21 @@ impl Daemon {
 
     /// Periodic tick from the timer thread.
     pub fn tick(&self) {
-        if let Some(cause) = self.engine().tick(Instant::now()) {
+        // Bound to a local first: a guard in an `if let` scrutinee lives until the end of the
+        // whole statement, and the body below takes the VT lock.
+        let input_cause = self.engine().tick(Instant::now());
+        if let Some(cause) = input_cause {
             log_info!("lock ended: {cause}");
+            // Whoever held the emergency key down wants everything back, not just the
+            // keyboard: a locked console would leave them looking at a screen they cannot
+            // leave with ctrl+alt+F2 either.
+            if cause == UnlockCause::Emergency {
+                self.vt().unlock(VtUnlockCause::Emergency);
+            }
+        }
+        let vt_cause = self.vt().tick(Instant::now());
+        if let Some(cause) = vt_cause {
+            log_info!("VT switch lock ended: {cause}");
         }
         self.keepalive_tick(Instant::now());
         // Every ~5 s: put back what was taken away and re-engage the guard when the policy
@@ -770,6 +805,15 @@ impl Daemon {
     /// A connection with a registration went away without `unregister`: treat it as a crash
     /// and, when the policy and the session say so, schedule a relaunch with backoff.
     pub fn connection_lost(&self, ctx: &mut ConnCtx, now: Instant) {
+        // A VT switch lock dies with the connection that took it, whether or not that
+        // connection had a registration: an app that crashed while holding one must not leave
+        // the user unable to reach another console.
+        if self.vt().release_for_conn(ctx.conn_id) {
+            log_warn!(
+                "{} went away holding the VT switch lock; switching is allowed again",
+                ctx.label
+            );
+        }
         let Some(reg) = ctx.registration.take() else {
             return;
         };
@@ -822,9 +866,11 @@ impl Daemon {
         }
     }
 
-    /// Release the lock and stop accepting requests.
+    /// Release the locks and stop accepting requests. The VT lock is a kernel-wide flag, so
+    /// leaving it behind would outlive the daemon: it goes first.
     pub fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::SeqCst);
+        self.vt().unlock(VtUnlockCause::Shutdown);
         self.engine().unlock(UnlockCause::Shutdown);
     }
 
@@ -1004,6 +1050,57 @@ impl Daemon {
                 version,
                 sha512,
             } => self.apply_update(ctx, &file, &version, &sha512),
+            Request::VtStatus => {
+                // Resolved before the engine lock is taken: reading logind's state files is I/O.
+                let session = self.session_vt(ctx.peer.uid);
+                Ok(OkPayload::VtStatus {
+                    vt: self.vt().status(Instant::now(), session),
+                })
+            }
+            Request::VtActivate => {
+                self.require_vt_allowed()?;
+                let Some(target) = self.session_vt(ctx.peer.uid) else {
+                    return Err(DaemonError::new(
+                        ErrorCode::NoDevices,
+                        "cannot tell which virtual terminal this session is on (no logind session with a VTNR)",
+                    ));
+                };
+                let switched = self.vt().activate(target, Instant::now())?;
+                if switched {
+                    log_info!("switched back to VT {target} for {peer}");
+                }
+                Ok(OkPayload::VtActivate {
+                    vt: target,
+                    switched,
+                })
+            }
+            Request::VtLock {
+                duration_ms,
+                reason,
+            } => {
+                let limits = self.require_vt_allowed()?;
+                let duration = limits.clamp_duration(duration_ms).ok_or_else(|| {
+                    DaemonError::invalid("durationMs must be a positive finite number")
+                })?;
+                let outcome =
+                    self.vt()
+                        .lock(Instant::now(), duration, reason.clone(), ctx.conn_id)?;
+                log_info!(
+                    "VT switching locked for {} ms (requested {duration_ms}) by {peer}{}",
+                    outcome.duration_ms,
+                    reason.map(|r| format!(" ({r})")).unwrap_or_default()
+                );
+                Ok(OkPayload::VtLock {
+                    until: protocol::iso_millis(outcome.until_unix_ms),
+                    duration_ms: outcome.duration_ms,
+                })
+            }
+            Request::VtUnlock => {
+                if self.vt().unlock(VtUnlockCause::Request) {
+                    log_info!("VT switching unlocked by {peer}");
+                }
+                Ok(OkPayload::VtUnlock)
+            }
             Request::GuardApply => {
                 log_info!("guard-apply from {peer}");
                 Ok(OkPayload::GuardApply {
@@ -1265,6 +1362,36 @@ impl Daemon {
                 .map(|p| p.lock_limits())
                 .map_err(|e| policy::PolicyError::Invalid(e.to_string())),
             _ => self.policy().lock_limits(),
+        }
+    }
+
+    /// The virtual terminal `uid`'s session owns, or `None` when it is on none (ssh, a
+    /// container, a seatless remote desktop). This is what `vt-activate` switches to: the
+    /// request carries no VT number, so a character can bring the user back to rpchat and
+    /// cannot send them anywhere else.
+    fn session_vt(&self, uid: u32) -> Option<u16> {
+        keepalive::session_vt(&(self.hooks.sessions)(), uid)
+    }
+
+    /// The VT limits, or the policy error when the policy switched this off altogether.
+    fn require_vt_allowed(&self) -> DaemonResult<policy::VtLimits> {
+        let limits = self
+            .effective_vt_limits()
+            .map_err(|e| DaemonError::new(ErrorCode::Policy, e.to_string()))?;
+        match VtEngine::disabled_error(&limits) {
+            Some(e) => Err(e),
+            None => Ok(limits),
+        }
+    }
+
+    /// The virtual-terminal limits of the policy currently in force, read the same way as
+    /// `effective_lock_limits` and for the same reason.
+    fn effective_vt_limits(&self) -> Result<policy::VtLimits, policy::PolicyError> {
+        match self.effective_policy() {
+            (Some(value), "seal") => serde_json::from_value::<PolicyFile>(value)
+                .map(|p| p.vt_limits())
+                .map_err(|e| policy::PolicyError::Invalid(e.to_string())),
+            _ => self.policy().vt_limits(),
         }
     }
 
@@ -2316,9 +2443,9 @@ mod os {
     use super::*;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-    /// Uids owning an active graphical session: logind's state files first, `loginctl` when
-    /// the directory is unreadable or empty. No logind at all → nobody (no relaunch).
-    pub fn active_graphical_uids(sessions_dir: &Path) -> Vec<u32> {
+    /// Every logind session: the state files first, `loginctl` when the directory is
+    /// unreadable or empty. No logind at all → nothing.
+    pub fn sessions(sessions_dir: &Path) -> Vec<keepalive::SessionInfo> {
         let mut sessions = Vec::new();
         if let Ok(entries) = fs::read_dir(sessions_dir) {
             for entry in entries.flatten() {
@@ -2331,7 +2458,12 @@ mod os {
         if sessions.is_empty() {
             sessions = loginctl_sessions();
         }
-        keepalive::active_graphical_uids(&sessions)
+        sessions
+    }
+
+    /// Uids owning an active graphical session. No logind at all → nobody (no relaunch).
+    pub fn active_graphical_uids(sessions_dir: &Path) -> Vec<u32> {
+        keepalive::active_graphical_uids(&sessions(sessions_dir))
     }
 
     fn loginctl_sessions() -> Vec<keepalive::SessionInfo> {
@@ -2357,6 +2489,8 @@ mod os {
                     "Seat",
                     "-p",
                     "User",
+                    "-p",
+                    "VTNr",
                 ])
                 .env_clear()
                 .env("PATH", "/usr/bin:/bin")
@@ -3327,7 +3461,8 @@ mod os {
 // ---------------------------------------------------------------------------
 
 /// Serve one connection: one JSON request per line, one response line each. When it ends
-/// (EOF or error) a registration it still holds is handed to the keepalive logic.
+/// (EOF or error) a registration it still holds is handed to the keepalive logic and a VT
+/// switch lock it took is released.
 fn serve_connection(stream: UnixStream, daemon: &Arc<Daemon>) -> io::Result<()> {
     let mut ctx = ConnCtx::new(peer_creds(&stream));
     log_debug!("connection from {}", ctx.label);
@@ -4780,6 +4915,8 @@ mod tests {
     /// Fake OS hooks: who is active, whether the process lives, what was spawned.
     struct FakeOs {
         active: Arc<Mutex<Vec<u32>>>,
+        /// The logind sessions `vt-activate` resolves its target from.
+        sessions: Arc<Mutex<Vec<keepalive::SessionInfo>>>,
         alive: Arc<AtomicBool>,
         spawned: Arc<Mutex<Vec<CommandSpec>>>,
         fail_spawn: Arc<AtomicBool>,
@@ -4789,19 +4926,36 @@ mod tests {
         fn new(active: Vec<u32>) -> FakeOs {
             FakeOs {
                 active: Arc::new(Mutex::new(active)),
+                sessions: Arc::new(Mutex::new(Vec::new())),
                 alive: Arc::new(AtomicBool::new(false)),
                 spawned: Arc::new(Mutex::new(Vec::new())),
                 fail_spawn: Arc::new(AtomicBool::new(false)),
             }
         }
 
+        /// A graphical session for `uid` on `vt` (what logind would report).
+        fn with_session(self, uid: u32, vt: u16) -> FakeOs {
+            self.sessions.lock().unwrap().push(keepalive::SessionInfo {
+                id: format!("s{uid}"),
+                active: true,
+                uid: Some(uid),
+                user: None,
+                kind: "wayland".into(),
+                seat: "seat0".into(),
+                vtnr: Some(vt),
+            });
+            self
+        }
+
         fn hooks(&self) -> KeepaliveHooks {
             let active = self.active.clone();
+            let sessions = self.sessions.clone();
             let alive = self.alive.clone();
             let spawned = self.spawned.clone();
             let fail = self.fail_spawn.clone();
             KeepaliveHooks {
                 active_uids: Box::new(move || active.lock().unwrap().clone()),
+                sessions: Box::new(move || sessions.lock().unwrap().clone()),
                 process_alive: Box::new(move |_, _| alive.load(Ordering::SeqCst)),
                 user_name: Box::new(|uid| match uid {
                     1000 => Some("alice".into()),
@@ -4842,6 +4996,146 @@ mod tests {
         std::time::Duration::from_millis(n)
     }
 
+    /// The virtual-terminal ops end to end through `handle`: who the target VT is resolved
+    /// for, the switch back, the bounded lock and every way it is released.
+    #[test]
+    fn vt_ops_switch_back_and_lock_switching_for_the_callers_own_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy_path = dir.path().join("policy.json");
+        // alice's session is on VT 2; the user has switched to the text console on VT 3.
+        let os = FakeOs::new(vec![1000]).with_session(1000, 2);
+        let (console, state) = vt::testing::FakeConsole::new(3);
+        let daemon = Daemon::new(
+            Box::new(fake_devices()),
+            Box::new(FakeInjector::default()),
+            &policy_path,
+        )
+        .with_keepalive_hooks(os.hooks())
+        .with_vt(VtEngine::new(Box::new(console)));
+        let mut alice = ConnCtx::test(1000, 7);
+        let t0 = Instant::now();
+
+        // vt-status: the foreground VT and the one alice's session owns.
+        let status = serde_json::to_value(daemon.handle(Request::VtStatus, &mut alice)).unwrap();
+        assert_eq!(status["vt"]["active"], 3);
+        assert_eq!(status["vt"]["session"], 2);
+        assert_eq!(status["vt"]["locked"], Value::Null);
+
+        // vt-activate takes no argument: it switches to the caller's own VT and nowhere else.
+        let back = serde_json::to_value(daemon.handle(Request::VtActivate, &mut alice)).unwrap();
+        assert_eq!(back["vt"], 2);
+        assert_eq!(back["switched"], true);
+        assert_eq!(state.lock().unwrap().active, 2);
+        let again = serde_json::to_value(daemon.handle(Request::VtActivate, &mut alice)).unwrap();
+        assert_eq!(
+            again["switched"], false,
+            "already there, so nothing was done"
+        );
+
+        // A user with no session on a VT (ssh, a container) has nothing to switch back to.
+        let mut nobody = ConnCtx::test(5555, 9);
+        assert!(matches!(
+            daemon.handle(Request::VtActivate, &mut nobody),
+            Response::Err(ref e) if e.code == ErrorCode::NoDevices && e.error.contains("VTNR")
+        ));
+
+        // vt-lock is clamped to the policy's default maximum and reported as locked.
+        let locked = serde_json::to_value(daemon.handle(
+            Request::VtLock {
+                duration_ms: 9_999_999.0,
+                reason: Some("reading to you".into()),
+            },
+            &mut alice,
+        ))
+        .unwrap();
+        assert_eq!(locked["durationMs"], policy::DEFAULT_MAX_VT_LOCK_MS);
+        assert!(state.lock().unwrap().locked);
+        let status = serde_json::to_value(daemon.handle(Request::VtStatus, &mut alice)).unwrap();
+        assert_eq!(status["vt"]["locked"]["reason"], "reading to you");
+        assert!(matches!(
+            daemon.handle(
+                Request::VtLock {
+                    duration_ms: 0.0,
+                    reason: None,
+                },
+                &mut alice,
+            ),
+            Response::Err(ref e) if e.code == ErrorCode::Invalid
+        ));
+
+        // The lock does not take away our own way of bringing the user back.
+        state.lock().unwrap().active = 3;
+        let back = serde_json::to_value(daemon.handle(Request::VtActivate, &mut alice)).unwrap();
+        assert_eq!(back["switched"], true);
+        let s = state.lock().unwrap();
+        assert_eq!(s.active, 2);
+        assert!(s.locked, "and the lock is still in place afterwards");
+        drop(s);
+
+        // vt-unlock, then the timer, then the loss of the connection that took it.
+        assert!(daemon.handle(Request::VtUnlock, &mut alice).is_ok());
+        assert!(!state.lock().unwrap().locked);
+        daemon.handle(
+            Request::VtLock {
+                duration_ms: 1000.0,
+                reason: None,
+            },
+            &mut alice,
+        );
+        assert!(state.lock().unwrap().locked);
+        daemon.tick();
+        assert!(state.lock().unwrap().locked, "not expired yet");
+        assert_eq!(
+            daemon.vt().tick(t0 + ms(2000)),
+            Some(VtUnlockCause::Timer),
+            "the timer releases it on its own"
+        );
+        assert!(!state.lock().unwrap().locked);
+
+        daemon.handle(
+            Request::VtLock {
+                duration_ms: 300_000.0,
+                reason: None,
+            },
+            &mut alice,
+        );
+        assert!(state.lock().unwrap().locked);
+        daemon.connection_lost(&mut alice, t0);
+        assert!(
+            !state.lock().unwrap().locked,
+            "an app that went away does not leave the console locked behind it"
+        );
+
+        // The emergency chord of the input lock releases this one too.
+        let mut alice = ConnCtx::test(1000, 7);
+        daemon.handle(
+            Request::VtLock {
+                duration_ms: 300_000.0,
+                reason: None,
+            },
+            &mut alice,
+        );
+        assert!(state.lock().unwrap().locked);
+        daemon.vt().unlock(VtUnlockCause::Emergency);
+        assert!(!state.lock().unwrap().locked);
+
+        // And a policy that switches the whole thing off refuses both ops, while status still reads.
+        fs::write(&policy_path, r#"{"version":1,"vtLock":{"enabled":false}}"#).unwrap();
+        for req in [
+            Request::VtActivate,
+            Request::VtLock {
+                duration_ms: 1000.0,
+                reason: None,
+            },
+        ] {
+            assert!(matches!(
+                daemon.handle(req, &mut alice),
+                Response::Err(ref e) if e.code == ErrorCode::Policy && e.error.contains("vtLock.enabled")
+            ));
+        }
+        assert!(daemon.handle(Request::VtStatus, &mut alice).is_ok());
+        assert!(!state.lock().unwrap().locked);
+    }
     #[test]
     fn relaunch_pipeline_with_fake_os() {
         let dir = tempfile::tempdir().unwrap();
