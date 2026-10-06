@@ -17,7 +17,8 @@ export type WindowKind = 'main' | 'media' | 'prompt';
 
 /** The id a `PromptWindowPayload` is answered by (`permissions.respond` / `ui.respondPrompt`). */
 export function promptIdOf(payload: PromptWindowPayload): string {
-  return payload.kind === 'permission' ? payload.request.requestId : payload.prompt.promptId;
+  if (payload.kind === 'permission') return payload.request.requestId;
+  return payload.kind === 'restart' ? payload.promptId : payload.prompt.promptId;
 }
 
 /**
@@ -26,8 +27,19 @@ export function promptIdOf(payload: PromptWindowPayload): string {
  */
 function promptWindowChrome(payload: PromptWindowPayload): { title: string; width: number; height: number } {
   if (payload.kind === 'permission') return { title: `${payload.characterName} needs permission`, width: 620, height: 660 };
+  if (payload.kind === 'restart') return { title: 'rpchat is restarting to update', width: 480, height: 300 };
   const roomy = payload.prompt.kind === 'choose' || payload.prompt.multiline === true;
   return { title: `${payload.prompt.characterName} asks`, width: 520, height: roomy ? 460 : 380 };
+}
+
+/** The main window's smallest size (also what a restored size is held to). */
+export const MAIN_WINDOW_MIN = { width: 760, height: 520 } as const;
+
+/** Where a main window opens: the last one's place (session-state.ts), or the defaults when there is none. */
+export interface MainWindowPlacement {
+  bounds: { x?: number; y?: number; width: number; height: number };
+  maximized: boolean;
+  fullScreen: boolean;
 }
 
 export interface WindowManagerOptions {
@@ -49,6 +61,8 @@ export interface WindowManagerOptions {
    * that belong to the window itself go here, so no path that reopens it can forget them.
    */
   onMainCreated?: (win: BrowserWindow) => void;
+  /** Asked each time a main window is created: open it where the last one was. */
+  mainWindowPlacement?: () => MainWindowPlacement | undefined;
   /** Runs in the main window when it is about to close (reject pending prompts, …). */
   onMainClosed?: () => void;
   /**
@@ -241,11 +255,13 @@ export class WindowManager {
       }
       return this.main;
     }
+    const placement = this.opts.mainWindowPlacement?.();
     const win = new BrowserWindow({
       width: 1180,
       height: 800,
-      minWidth: 760,
-      minHeight: 520,
+      ...(placement?.bounds ?? {}),
+      minWidth: MAIN_WINDOW_MIN.width,
+      minHeight: MAIN_WINDOW_MIN.height,
       show: false,
       frame: true,
       autoHideMenuBar: true,
@@ -254,6 +270,16 @@ export class WindowManager {
       webPreferences: this.webPreferences(),
     });
     this.main = win;
+    const applyPlacement = (): void => {
+      if (placement?.maximized) win.maximize();
+      if (placement?.fullScreen) win.setFullScreen(true);
+    };
+    // `maximize()` shows the window it is called on: wait until it has something to show (registered
+    // before the `ready-to-show` that shows it), or, for one starting in the tray, until it is shown.
+    if (placement?.maximized || placement?.fullScreen) {
+      if (options.hidden) win.once('show', applyPlacement);
+      else win.once('ready-to-show', applyPlacement);
+    }
     this.track(win, 'main');
     this.opts.onMainCreated?.(win);
     if (!options.hidden) win.once('ready-to-show', () => win.show());

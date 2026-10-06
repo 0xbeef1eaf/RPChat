@@ -5,7 +5,7 @@
  */
 import * as fs from 'node:fs/promises';
 import type { AppPolicy, AppRestrictions, AppSettings, GuardPolicy, ManagedSettingsPaths, PackSource, PacksPolicy, PolicyFile, PolicyLock, RemotePolicy } from '@rp/shared';
-import { APP_ALLOW_KEYS, APP_REQUIRE_KEYS, DEFAULT_APP_RESTRICTIONS, GUARD_COMPOSITOR_IPC, GUARD_IPC_GUARD, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RUNTIME_POLICY_FILE, RpError, SEAL_MARKER_PATH, UNLIMITED, capOf, parseFunctionKey } from '@rp/shared';
+import { APP_ALLOW_KEYS, APP_REQUIRE_KEYS, DEFAULT_APP_RESTRICTIONS, GUARD_COMPOSITOR_IPC, GUARD_IPC_GUARD, GUARD_MODES, GUARD_SHELLS, POLICY_FILE_PATH, RESTART_COUNTDOWN_MAX_SECONDS, RESTART_COUNTDOWN_MIN_SECONDS, RUNTIME_POLICY_FILE, RpError, SEAL_MARKER_PATH, UNLIMITED, capOf, parseFunctionKey } from '@rp/shared';
 import type { GuardShell } from '@rp/shared';
 import { activeRestrictions } from './restrictions.js';
 import type { SealCache } from './seal-cache.js';
@@ -16,9 +16,9 @@ const MEMORY_KEYS = ['enabled', 'semanticRanking', 'consolidateEveryTurns', 'max
 const SENSES_KEYS = ['includeInPrompt', 'watchDirs', 'calendarSources', 'pollMs', 'idleThresholdMs', 'appIdleThresholdMs'] as const;
 /** The senses timings and the smallest value each accepts, the floors Settings → Senses offers. */
 const SENSES_TIMINGS = { pollMs: 1000, idleThresholdMs: 10_000, appIdleThresholdMs: 10_000 } as const;
-const UPDATES_FLAGS = ['automatic', 'enabled', 'allowDowngrade'] as const;
-/** `updates.enabled` and `updates.allowDowngrade` are updater/daemon rules, not settings the UI pins. */
-const UPDATES_MANAGED_KEYS = ['automatic', 'checkIntervalHours', 'enabled'] as const;
+const UPDATES_FLAGS = ['automatic', 'forceRestart', 'enabled', 'allowDowngrade'] as const;
+/** `updates.allowDowngrade` is a daemon rule, not a setting the UI pins. */
+const UPDATES_MANAGED_KEYS = ['automatic', 'checkIntervalHours', 'forceRestart', 'restartCountdownSeconds', 'enabled'] as const;
 /** The sandbox limits and the smallest value each accepts, the floors Settings → Sandbox limits offers. */
 const RUN_LIMITS = { timeoutMs: 100, cpuMs: 50, memoryBytes: 8 * 1024 * 1024, maxHostCalls: 1, maxLogBytes: 1024, maxResultBytes: 1024 } as const;
 const RUN_LIMIT_KEYS = Object.keys(RUN_LIMITS) as Array<keyof typeof RUN_LIMITS>;
@@ -150,6 +150,11 @@ export function parsePolicy(json: unknown): PolicyFile {
       if (hours !== undefined) {
         if (isNumber(hours) && hours >= 1) u.checkIntervalHours = Math.round(hours);
         else problems.push('settings.updates.checkIntervalHours must be a number ≥ 1');
+      }
+      const countdown = (s.updates as Record<string, unknown>).restartCountdownSeconds;
+      if (countdown !== undefined) {
+        if (isNumber(countdown) && countdown >= RESTART_COUNTDOWN_MIN_SECONDS && countdown <= RESTART_COUNTDOWN_MAX_SECONDS) u.restartCountdownSeconds = Math.round(countdown);
+        else problems.push(`settings.updates.restartCountdownSeconds must be a number from ${RESTART_COUNTDOWN_MIN_SECONDS} to ${RESTART_COUNTDOWN_MAX_SECONDS}`);
       }
       settings.updates = u;
     }
@@ -568,6 +573,8 @@ export function applyPolicy(settings: AppSettings, policy: PolicyFile | null | u
   // `enabled: false` also switches the background toggle off so the UI reflects the effective state.
   if (s.updates?.automatic !== undefined) next.updates = { ...settings.updates, automatic: s.updates.automatic };
   if (s.updates?.checkIntervalHours !== undefined) next.updates = { ...next.updates, checkIntervalHours: s.updates.checkIntervalHours };
+  if (s.updates?.forceRestart !== undefined) next.updates = { ...next.updates, forceRestart: s.updates.forceRestart };
+  if (s.updates?.restartCountdownSeconds !== undefined) next.updates = { ...next.updates, restartCountdownSeconds: s.updates.restartCountdownSeconds };
   if (s.updates?.enabled === false) next.updates = { ...next.updates, automatic: false };
   if (s.browser) next.browser = { ...settings.browser, ...definedOnly(s.browser) };
   // Per kind, so a policy that caps video leaves the user's image and audio numbers alone.

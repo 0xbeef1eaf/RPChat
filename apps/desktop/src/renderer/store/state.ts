@@ -63,6 +63,10 @@ export interface AppState {
   route: RouteName;
   /** A tab the Settings view should switch to on its next render (`openSettings`); it clears the request once adopted. */
   settingsTab: SettingsTab | null;
+  /** The tab the Settings view is showing (or last showed), remembered across a restart. */
+  settingsTabShown: SettingsTab | null;
+  /** Unsent composer text per session, so switching chats or restarting does not lose it. */
+  drafts: Record<SessionId, string>;
   appVersion: string;
   /** True until the first data load finished (or failed). */
   booting: boolean;
@@ -117,6 +121,8 @@ export function initialState(): AppState {
   return {
     route: 'chat',
     settingsTab: null,
+    settingsTabShown: null,
+    drafts: {},
     appVersion: '',
     booting: true,
     bootError: null,

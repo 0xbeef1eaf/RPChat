@@ -28,10 +28,11 @@ export interface PolicyFile {
      * `enabled: false` switches update checks off entirely; `automatic` pins the background check
      * toggle and `checkIntervalHours` the schedule it runs on; `allowDowngrade` lets the daemon's
      * `apply-update` install an older version than the current system install (refused by
-     * default). `enabled`/`allowDowngrade` are daemon/updater rules rather than user settings, so
-     * only `automatic` and `checkIntervalHours` are reported as managed paths.
+     * default). `forceRestart` restarts into a downloaded update after a countdown of
+     * `restartCountdownSeconds` instead of asking. `enabled`/`allowDowngrade` are daemon/updater
+     * rules rather than user settings, so they are not reported as managed paths; the rest are.
      */
-    updates?: { automatic?: boolean; checkIntervalHours?: number; enabled?: boolean; allowDowngrade?: boolean };
+    updates?: { automatic?: boolean; checkIntervalHours?: number; forceRestart?: boolean; restartCountdownSeconds?: number; enabled?: boolean; allowDowngrade?: boolean };
     /**
      * Browser extension limits: what characters may do in the browser. The home page is not one of
      * them — only a character sets it, through `sdk.browser.setHomePage`.

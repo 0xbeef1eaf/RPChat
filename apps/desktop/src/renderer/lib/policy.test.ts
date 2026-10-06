@@ -19,7 +19,7 @@ const POLICY_TEMPLATE: PolicyFile = {
     memory: { enabled: true, consolidateEveryTurns: 8, maxEntriesPerCharacter: 300, promptBudgetTokens: 600 },
     senses: { includeInPrompt: true, watchDirs: [], calendarSources: [], pollMs: 5000, idleThresholdMs: 120_000, appIdleThresholdMs: 300_000 },
     displayBackend: 'auto',
-    updates: { enabled: true, automatic: true, checkIntervalHours: 6 },
+    updates: { enabled: true, automatic: true, checkIntervalHours: 6, forceRestart: false, restartCountdownSeconds: 60 },
     browser: { allowBlocking: true, allowEval: true, allowHistory: true },
     media: { maxConcurrent: { image: 0, video: 0, audio: 0 }, maxQueued: { image: 8, video: 8, audio: 8 } },
     runLimits: { timeoutMs: 10_000, cpuMs: 2_000, memoryBytes: 64 * 1024 * 1024, maxHostCalls: 50, maxLogBytes: 16 * 1024, maxResultBytes: 16 * 1024 },

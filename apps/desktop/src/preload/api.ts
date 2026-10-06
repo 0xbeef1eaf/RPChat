@@ -17,7 +17,7 @@ type Namespaces = keyof IpcApi;
 
 /** Every request/response method, per namespace (event subscriptions are listed in `EVENT_METHODS`). */
 export const INVOKE_METHODS: { [K in Namespaces]: ReadonlyArray<keyof IpcApi[K] & string> } = {
-  app: ['version', 'windowKind', 'openPath', 'setVisibleSession', 'activity', 'restrictions', 'readAsset'],
+  app: ['version', 'windowKind', 'openPath', 'setVisibleSession', 'activity', 'restrictions', 'readAsset', 'uiState', 'saveUiState'],
   packs: ['list', 'pickInstallSource', 'inspect', 'install', 'uninstall', 'exportPack'],
   capabilities: ['list', 'typings'],
   characters: ['list', 'status'],

@@ -211,6 +211,7 @@ function SettingRow({ spec, draft, onDraft, disabled }: { spec: PolicySettingSpe
       <input
         type="number"
         min={spec.unlimited ? UNLIMITED : spec.min}
+        max={spec.max}
         style={{ width: 96 }}
         value={typeof value === 'number' ? value : ''}
         disabled={!on || disabled}

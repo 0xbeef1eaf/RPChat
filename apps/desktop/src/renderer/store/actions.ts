@@ -9,6 +9,7 @@ import { api, errorMessage } from '../api';
 import { truncate } from '../lib/format';
 import { applyTheme } from '../lib/theme';
 import { newId } from '../lib/ids';
+import { ROUTE_NEEDS, applyUiSnapshot, uiSnapshotOf } from '../lib/ui-snapshot';
 import {
   applyChatEvent,
   clearExchanges,
@@ -46,8 +47,6 @@ export function reportError(context: string, err: unknown): void {
   toast('error', `${context}: ${msg}`);
 }
 
-/** Routes the policy can withhold, and the restriction each needs. */
-const ROUTE_NEEDS: Partial<Record<RouteName, keyof AppRestrictions>> = { editor: 'allowPackEditor', sandbox: 'allowSandbox', log: 'allowActionLog' };
 
 export function navigate(route: RouteName): void {
   update((s) => {
@@ -66,6 +65,22 @@ export function navigate(route: RouteName): void {
 export function openSettings(tab: SettingsTab): void {
   update((s) => ({ ...s, settingsTab: tab }));
   navigate('settings');
+}
+
+/** The Settings view switched tabs (remembered across a restart). */
+export function setSettingsTabShown(tab: SettingsTab): void {
+  update((s) => (s.settingsTabShown === tab ? s : { ...s, settingsTabShown: tab }));
+}
+
+/** The composer's unsent text for a session changed. */
+export function setDraft(sessionId: SessionId, text: string): void {
+  update((s) => {
+    if ((s.drafts[sessionId] ?? '') === text) return s;
+    const drafts = { ...s.drafts };
+    if (text.length > 0) drafts[sessionId] = text;
+    else delete drafts[sessionId];
+    return { ...s, drafts };
+  });
 }
 
 export function setEditorLocation(patch: Partial<Omit<AppState['editor'], 'visited'>>): void {
@@ -204,8 +219,11 @@ export async function bootstrap(): Promise<void> {
 
   try {
     const [version] = await Promise.all([rp.app.version(), refreshSettings(), refreshPacks(), refreshCharacters(), refreshSessions(), refreshCapabilities(), refreshRestrictions()]);
+    // Back where the UI was before the last quit or update restart, now that there is something to check it against.
+    await restoreUiSnapshot();
     update((s) => ({ ...s, appVersion: version, booting: false, bootError: null }));
     await enterRequiredSession();
+    watchUiSnapshot();
   } catch (err) {
     update((s) => ({ ...s, booting: false, bootError: errorMessage(err) }));
   }
@@ -230,8 +248,47 @@ export async function enterRequiredSession(): Promise<void> {
   if (first) await createSession(first.ref);
 }
 
+/** Put back where the UI was (`app.uiState`); a failure leaves the usual fresh start. */
+async function restoreUiSnapshot(): Promise<void> {
+  const snapshot = await api()
+    .app.uiState()
+    .catch((err: unknown) => {
+      console.warn('app.uiState failed', err);
+      return null;
+    });
+  if (!snapshot) return;
+  update((s) => applyUiSnapshot(s, snapshot));
+  const active = appStore.getState().activeSessionId;
+  if (active) await loadMessages(active);
+}
+
+/** Hand main where the UI is whenever that changes, a moment after it settles, so a quit at any time finds it there. */
+let uiSnapshotWatched = false;
+function watchUiSnapshot(): void {
+  if (uiSnapshotWatched) return;
+  uiSnapshotWatched = true;
+  let sent = JSON.stringify(uiSnapshotOf(appStore.getState()));
+  let timer: number | null = null;
+  const flush = (): void => {
+    timer = null;
+    const snapshot = uiSnapshotOf(appStore.getState());
+    const json = JSON.stringify(snapshot);
+    if (json === sent) return;
+    sent = json;
+    void api().app.saveUiState(snapshot).catch((err: unknown) => console.warn('app.saveUiState failed', err));
+  };
+  appStore.subscribe(() => {
+    if (timer === null) timer = window.setTimeout(flush, 300);
+  });
+}
+
 export async function openSession(sessionId: SessionId): Promise<void> {
   update((s) => clearUnread({ ...s, activeSessionId: sessionId, route: 'chat' }, sessionId));
+  await loadMessages(sessionId);
+}
+
+/** Load a session's transcript and queue into the store, unless they are there already. */
+async function loadMessages(sessionId: SessionId): Promise<void> {
   if (appStore.getState().messages[sessionId]) return;
   try {
     // The queue comes along with the transcript: a window that has just loaded missed the

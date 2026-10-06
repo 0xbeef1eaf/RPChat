@@ -317,6 +317,14 @@ export interface AppSettings {
     automatic: boolean;
     /** Hours between automatic checks. Default 6. */
     checkIntervalHours: number;
+    /**
+     * Restart into a downloaded update without asking: a countdown window announces it and the app
+     * restarts when it runs out (or when "Restart now" is pressed). Off (the default) asks with
+     * "Restart now / Later" instead. What was on screen comes back after the restart either way.
+     */
+    forceRestart: boolean;
+    /** Seconds the forced-restart countdown runs before the app restarts. Default 60, 10..3600. */
+    restartCountdownSeconds: number;
   };
   /**
    * Limits on autonomous activity (self-wakes, code timers, prompt timers) so a character
@@ -389,7 +397,7 @@ export const DEFAULT_SETTINGS: Omit<AppSettings, 'runLimits'> & { runLimits?: Ru
   wallpaperRestoreFile: '',
   memory: DEFAULT_MEMORY_SETTINGS,
   history: DEFAULT_HISTORY_SETTINGS,
-  updates: { automatic: true, checkIntervalHours: 6 },
+  updates: { automatic: true, checkIntervalHours: 6, forceRestart: false, restartCountdownSeconds: 60 },
   autonomy: {
     maxSelfWakesPerHour: 30,
     maxConsecutiveSelfWakes: 10,
@@ -415,4 +423,15 @@ export const CHAT_ZOOM_STEP = 0.1;
 export function clampChatZoom(value: unknown): number {
   const n = typeof value === 'number' && Number.isFinite(value) ? value : 1;
   return Math.round(Math.min(CHAT_ZOOM_MAX, Math.max(CHAT_ZOOM_MIN, n)) * 100) / 100;
+}
+
+/** Shortest forced-restart countdown: long enough to read the window and press "Restart now". */
+export const RESTART_COUNTDOWN_MIN_SECONDS = 10;
+/** Longest forced-restart countdown (an hour). */
+export const RESTART_COUNTDOWN_MAX_SECONDS = 3600;
+
+/** `updates.restartCountdownSeconds` as the app uses it: whole seconds in range, 60 when it is not a number. */
+export function clampRestartCountdown(value: unknown): number {
+  const n = typeof value === 'number' && Number.isFinite(value) ? value : 60;
+  return Math.round(Math.min(RESTART_COUNTDOWN_MAX_SECONDS, Math.max(RESTART_COUNTDOWN_MIN_SECONDS, n)));
 }

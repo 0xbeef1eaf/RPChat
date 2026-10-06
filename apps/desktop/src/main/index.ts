@@ -5,9 +5,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BrowserWindow, Menu, Notification, Tray, app, dialog, nativeImage, protocol, session } from 'electron';
+import { BrowserWindow, Menu, Notification, Tray, app, dialog, nativeImage, powerMonitor, protocol, screen, session } from 'electron';
 import { ASSET_PROTOCOL, IPC_EVENT_CHANNELS } from '@rp/shared';
-import type { ChatMessage, UpdateStatus } from '@rp/shared';
+import type { ChatMessage, UiSnapshot, UpdateStatus } from '@rp/shared';
 import { handleAssetRequest } from './asset-protocol.js';
 import { ChatVisibility } from './chat-visibility.js';
 import { detectWindowSystem, isHyprland } from './display/layers.js';
@@ -18,8 +18,11 @@ import { isBrowserSmokeRun, isSmokeRun, runBrowserSmoke, runSmokeTurn, smokeEnab
 import { registerIpc } from './ipc.js';
 import { createLogger } from './logger.js';
 import { trayMenuTemplate } from './quit-guard.js';
+import { SESSION_STATE_FILENAME, SessionStateFile, restoredBounds, startHidden } from './session-state.js';
+import type { SessionState, WindowStateRecord } from './session-state.js';
+import { RestartCountdown } from './updates/restart-countdown.js';
+import { MAIN_WINDOW_MIN, WindowManager } from './windows.js';
 import { buildTrayWhenHostReady, statusNotifierHostProbe } from './tray-host.js';
-import { WindowManager } from './windows.js';
 
 const OUT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 /** apps/desktop in a dev checkout, the asar root when packaged. */
@@ -87,11 +90,27 @@ protocol.registerSchemesAsPrivileged([
   { scheme: ASSET_PROTOCOL, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: false } },
 ]);
 
-const hasLock = app.requestSingleInstanceLock();
-if (!hasLock) {
-  app.quit();
-} else {
-  void main();
+void acquireInstanceLock().then((hasLock) => {
+  if (hasLock) void main();
+  else app.quit();
+});
+
+/**
+ * One rpchat per session. The AppImage updater starts the new version (with
+ * `APPIMAGE_SILENT_INSTALL=true` in its environment) before the old one has quit — and the old one
+ * takes a moment, saving what was on screen and stopping its services — so a launch that comes
+ * from an update waits for the lock instead of giving up and leaving no rpchat at all.
+ */
+async function acquireInstanceLock(): Promise<boolean> {
+  if (app.requestSingleInstanceLock()) return true;
+  if (env.APPIMAGE_SILENT_INSTALL !== 'true') return false;
+  logger.info('[main] started by an update while the previous version is still quitting; waiting for it');
+  for (let waited = 0; waited < 30_000; waited += 250) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (app.requestSingleInstanceLock()) return true;
+  }
+  logger.warn('[main] the previous version did not quit within 30 s; giving up');
+  return false;
 }
 
 // ---- lifecycle --------------------------------------------------------------
@@ -113,6 +132,27 @@ async function main(): Promise<void> {
   let services: AppServices | undefined;
   let stopping = false;
   configureEsbuildBinary();
+
+  // ---- what was on screen last time (session-state.ts) -----------------------------------
+  const sessionFile = new SessionStateFile(path.join(app.getPath('userData'), 'data', SESSION_STATE_FILENAME));
+  const saved: SessionState = await sessionFile.load();
+  /** Where the main window's UI is; the renderer keeps it current through `app.saveUiState`. */
+  let uiSnapshot: UiSnapshot | null = saved.ui ?? null;
+  /** The main window as it last was, kept when it closes so a quit without one still remembers it. */
+  let lastWindow: WindowStateRecord | undefined = saved.window;
+  /** Set once an update restart is under way: every later save says so, and the window's visibility carries over. */
+  let updateRestart = false;
+  const windowStateOf = (win: BrowserWindow): WindowStateRecord => ({ bounds: win.getNormalBounds(), maximized: win.isMaximized(), fullScreen: win.isFullScreen(), visible: win.isVisible() });
+  /** Write what is on screen now. Only once the services exist: before that there is nothing to say, and an empty file would forget the last session. */
+  const saveSession = async (): Promise<void> => {
+    if (!services) return;
+    const win = windows.getMainWindow();
+    if (win) lastWindow = windowStateOf(win);
+    const state: SessionState = { version: 1, savedAt: new Date().toISOString(), reason: updateRestart ? 'update' : 'quit', ...services.desktopSnapshot() };
+    if (lastWindow) state.window = lastWindow;
+    if (uiSnapshot) state.ui = uiSnapshot;
+    await sessionFile.save(state).catch((err: unknown) => logger.warn('[main] could not save the session state', err));
+  };
 
   /**
    * `chat-shown` / `chat-hidden` for the characters: one tracker for the app, so a window that is
@@ -142,6 +182,15 @@ async function main(): Promise<void> {
     onMainCreated: (win) => {
       if (services) installCloseToTray(win, services);
       chatVisibility.watch(win);
+      win.on('close', () => {
+        if (!win.isDestroyed()) lastWindow = windowStateOf(win);
+      });
+    },
+    // A main window opens where the last one was: at startup, and when one is recreated later.
+    mainWindowPlacement: () => {
+      if (!lastWindow) return undefined;
+      const workAreas = screen.getAllDisplays().map((d) => d.workArea);
+      return { bounds: restoredBounds(lastWindow.bounds, workAreas, MAIN_WINDOW_MIN), maximized: lastWindow.maximized, fullScreen: lastWindow.fullScreen };
     },
     onMainClosed: () => {
       // Questions asked in windows of their own outlive the chat window; only those that fell
@@ -160,6 +209,8 @@ async function main(): Promise<void> {
 
   // Running `rpchat` while it is already up (e.g. after an autostart with --hidden) shows it.
   app.on('second-instance', () => {
+    // An update's new version asking for the lock while this one quits is not a request for a window.
+    if (quitting || stopping) return;
     const win = windows.getMainWindow() ?? windows.createMainWindow();
     if (win.isMinimized()) win.restore();
     if (!win.isVisible()) win.show();
@@ -176,10 +227,14 @@ async function main(): Promise<void> {
     if (BrowserWindow.getAllWindows().length === 0 && services) windows.createMainWindow();
   });
 
+  let countdown: RestartCountdown | undefined;
   const shutdown = async (): Promise<void> => {
     if (stopping) return;
     stopping = true;
+    countdown?.stop();
     services?.updates.stop();
+    // Before the services stop: stopping them closes the media and widgets being remembered.
+    await saveSession();
     await services?.stop();
   };
   app.on('before-quit', (event) => {
@@ -204,7 +259,19 @@ async function main(): Promise<void> {
 
   const version = resolveAppVersion();
   try {
-    services = await createApp({ userData: app.getPath('userData'), appRoot: APP_ROOT, appVersion: version, windows, logger, env, dev: devGuard.rules });
+    services = await createApp({
+      userData: app.getPath('userData'),
+      appRoot: APP_ROOT,
+      appVersion: version,
+      windows,
+      logger,
+      env,
+      dev: devGuard.rules,
+      beforeUpdateRestart: async () => {
+        updateRestart = true;
+        await saveSession();
+      },
+    });
   } catch (err) {
     logger.error('[main] engine failed to start', err);
     app.exit(1);
@@ -215,10 +282,18 @@ async function main(): Promise<void> {
   const active = services;
   protocol.handle(ASSET_PROTOCOL, (request) => handleAssetRequest(request, { packRootFor: (packId) => active.packRootFor(packId), logger }));
 
-  // An avatar the user left on screen goes back up, now that `rp-asset://` can serve its image.
-  // Not awaited: an overlay that is slow to open must not hold up the window, and a failed one is
-  // logged and forgotten rather than fatal.
-  void active.restoreAvatars();
+  // The avatars, media and widgets the user left on screen go back up, now that `rp-asset://` can
+  // serve their files. Not awaited: an overlay that is slow to open must not hold up the window, and
+  // a failed one is logged and forgotten rather than fatal. The media and widgets are put back once:
+  // the file forgets them as soon as they are up, so a crash later on does not bring back what was
+  // long gone by then (the next quit writes whatever is on screen at that point).
+  void active
+    .restoreDesktop({ media: saved.media, widgets: saved.widgets })
+    .catch((err: unknown) => logger.warn('[main] restoring the last session failed', err))
+    .then(() => (saved.media.length + saved.widgets.length > 0 && !stopping ? sessionFile.save({ ...saved, media: [], widgets: [] }) : undefined))
+    .catch((err: unknown) => logger.warn('[main] could not update the session state', err));
+  // Logging out or shutting down can end the app without a quit: remember the session first.
+  powerMonitor.on('shutdown', () => void saveSession());
 
   // `app.allowQuit` from the policy: applied now (before the tray exists so its menu is right from
   // the start), on every window show/close, and whenever the watcher sees the policy change — an
@@ -239,7 +314,19 @@ async function main(): Promise<void> {
   // Which conversation the user is actually looking at: the UI reports it, and an unprompted
   // message is announced unless it lands in that one.
   let visibleSession: string | null = null;
-  registerIpc({ services, windows, logger, version, setVisibleSession: (id) => (visibleSession = id) });
+  registerIpc({
+    services,
+    windows,
+    logger,
+    version,
+    setVisibleSession: (id) => (visibleSession = id),
+    uiState: {
+      get: () => uiSnapshot,
+      set: (snapshot) => {
+        uiSnapshot = snapshot;
+      },
+    },
+  });
   if (isSmokeRun(env)) await smokeEnableModelTraffic(engine);
   // The tray is always there (not only for --hidden): it is how the app stays alive for timers,
   // self-wakes and the browser bridge while the window is closed, and how you quit.
@@ -266,12 +353,14 @@ async function main(): Promise<void> {
     // already been and gone, so honour it now rather than leave the app running invisibly.
     if (!tray && BrowserWindow.getAllWindows().length === 0 && process.platform !== 'darwin' && active.quitGuard.allowQuit) app.quit();
   });
-  const win = windows.createMainWindow({ hidden: START_HIDDEN });
+  // After an update restart the window comes back the way it was, which may be hidden in the tray.
+  const hidden = startHidden(saved, START_HIDDEN);
+  const win = windows.createMainWindow({ hidden });
   win.once('ready-to-show', () => {
-    logger.info(`[main] window ${START_HIDDEN ? 'ready (hidden, tray)' : 'opened'} (userData: ${app.getPath('userData')})`);
+    logger.info(`[main] window ${hidden ? 'ready (hidden, tray)' : 'opened'} (userData: ${app.getPath('userData')})`);
     active.updates.start();
   });
-  watchUpdateReady(active, windows);
+  countdown = watchUpdateReady(active, windows);
   watchUnpromptedMessages(active, windows, () => visibleSession);
   logger.info(`[main] rpchat ${version} ready; ${engine.packs.characters().length} character(s) available`);
   if (isBrowserSmokeRun(env)) {
@@ -292,46 +381,54 @@ async function main(): Promise<void> {
 }
 
 /**
- * Announce a downloaded update once: a native dialog when the window is visible (Restart now /
- * Later), otherwise a notification whose click brings the window back (tray mode).
+ * Announce a downloaded update once. With `settings.updates.forceRestart` a countdown window
+ * announces the restart and the app restarts when it runs out (updates/restart-countdown.ts);
+ * otherwise the user is asked: a native dialog when the window is visible (Restart now / Later),
+ * a notification whose click brings the window back in tray mode.
  */
-function watchUpdateReady(services: AppServices, windows: WindowManager): void {
-  let announced: string | undefined;
-  services.updates.subscribe((status: UpdateStatus) => {
-    if (status.state !== 'ready' || !status.latestVersion || announced === status.latestVersion) return;
-    announced = status.latestVersion;
-    const version = status.latestVersion;
-    const win = windows.getMainWindow();
-    if (win && win.isVisible()) {
-      void dialog
-        .showMessageBox(win, {
-          type: 'info',
-          title: 'Update ready',
-          message: `Update to ${version} is ready`,
-          detail:
-            status.packaging === 'system'
-              ? `rpchat ${version} has been downloaded. Restart now to have the system service install it (the previous version is kept), or later from Settings → Updates.`
-              : `rpchat ${version} has been downloaded. Restart now to apply it, or later from Settings → Updates (it is also applied when you quit).`,
-          buttons: ['Restart now', 'Later'],
-          defaultId: 0,
-          cancelId: 1,
-        })
-        .then((r) => {
-          if (r.response === 0) return services.updates.install();
-          return undefined;
-        })
-        .catch((err: unknown) => logger.warn('[updates] restart failed', err));
-      return;
-    }
-    if (!Notification.isSupported()) return;
-    const note = new Notification({ title: 'rpchat', body: `rpchat ${version} is ready to install` });
-    note.on('click', () => {
-      const w = windows.getMainWindow() ?? windows.createMainWindow();
-      w.show();
-      w.focus();
-    });
-    note.show();
+function watchUpdateReady(services: AppServices, windows: WindowManager): RestartCountdown {
+  return new RestartCountdown({
+    updates: services.updates,
+    settings: () => services.engine.settings.get(),
+    ask: (status) => askToRestart(services, windows, status),
+    openWindow: (payload) => windows.openPromptWindow(payload),
+    closeWindow: (promptId) => windows.closePromptWindow(promptId),
+    logger,
   });
+}
+
+function askToRestart(services: AppServices, windows: WindowManager, status: UpdateStatus): void {
+  const version = status.latestVersion ?? '';
+  const win = windows.getMainWindow();
+  if (win && win.isVisible()) {
+    void dialog
+      .showMessageBox(win, {
+        type: 'info',
+        title: 'Update ready',
+        message: `Update to ${version} is ready`,
+        detail:
+          status.packaging === 'system'
+            ? `rpchat ${version} has been downloaded. Restart now to have the system service install it (the previous version is kept), or later from Settings → Updates.`
+            : `rpchat ${version} has been downloaded. Restart now to apply it, or later from Settings → Updates (it is also applied when you quit).`,
+        buttons: ['Restart now', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      .then((r) => {
+        if (r.response === 0) return services.updates.install();
+        return undefined;
+      })
+      .catch((err: unknown) => logger.warn('[updates] restart failed', err));
+    return;
+  }
+  if (!Notification.isSupported()) return;
+  const note = new Notification({ title: 'rpchat', body: `rpchat ${version} is ready to install` });
+  note.on('click', () => {
+    const w = windows.getMainWindow() ?? windows.createMainWindow();
+    w.show();
+    w.focus();
+  });
+  note.show();
 }
 
 /**

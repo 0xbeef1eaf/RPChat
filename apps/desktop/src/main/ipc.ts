@@ -23,6 +23,7 @@ import type {
   ProviderConfig,
   Session,
   UiPromptAnswer,
+  UiSnapshot,
 } from '@rp/shared';
 import { IPC_EVENT_CHANNELS, RpError } from '@rp/shared';
 import type { Engine, Logger } from '@rp/core';
@@ -31,6 +32,7 @@ import { LAUNCHING_TEMPLATES, notConfigured } from './commands.js';
 import { fetchTelegramChats } from './capabilities/messaging.js';
 import type { AppServices } from './engine.js';
 import { phase2, unavailable } from './phase2.js';
+import { UI_SNAPSHOT_MAX_BYTES, parseUiSnapshot } from './session-state.js';
 import type { ChainAuthor } from './system/chain-author.js';
 import { isRestrictable, refusalFor, refusalForStoppingTurn, stopsRunningTurn } from './system/restrictions.js';
 import type { WindowManager } from './windows.js';
@@ -80,6 +82,8 @@ export interface RegisterIpcOptions {
   version: string;
   /** The UI reports which session's chat is on screen (null on any other view). */
   setVisibleSession?: (sessionId: string | null) => void;
+  /** Where the main window's UI is, kept by index.ts for session-state.ts. */
+  uiState?: { get(): UiSnapshot | null; set(snapshot: UiSnapshot): void };
 }
 
 const COMMAND_NAMES: ReadonlySet<string> = new Set<keyof CommandTemplates>([
@@ -111,6 +115,15 @@ export function registerIpc(opts: RegisterIpcOptions): () => void {
       // anything looks idle to the compositor, and typing in another app does not look idle at all.
       activity: async (_e, kind) => {
         services.senses.activity.mark(kind === 'focus' ? 'window focused' : 'input in the app');
+      },
+      uiState: async () => opts.uiState?.get() ?? null,
+      saveUiState: async (event, snapshot) => {
+        // Only the main window's UI has a place to remember; a prompt or media page has none.
+        if (windows.kindOf(event.sender) !== 'main') return;
+        const parsed = parseUiSnapshot(snapshot);
+        if (!parsed) throw new RpError('INVALID_ARGUMENT', 'Not a UI snapshot');
+        if (JSON.stringify(parsed).length > UI_SNAPSHOT_MAX_BYTES) throw new RpError('INVALID_ARGUMENT', `The UI snapshot is larger than ${UI_SNAPSHOT_MAX_BYTES} bytes`);
+        opts.uiState?.set(parsed);
       },
       restrictions: async () => (await services.policy.current()).restrictions,
       readAsset: async (_e, url) => {

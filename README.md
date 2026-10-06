@@ -352,6 +352,21 @@ announces new releases and links to the release page, where you install the
 package as usual. Development runs never check. Administrators can pin the
 "check automatically" toggle or switch update checks off entirely with the
 `settings.updates` key of the root-owned policy file (`native/rpchatd/dist/POLICY.md`).
+
+**Restart into updates automatically** (Settings → Updates, or the policy's
+`settings.updates.forceRestart`) replaces *Restart now / Later* with a countdown
+window: once the update is downloaded, rpchat restarts into it when the countdown
+runs out (`restartCountdownSeconds`, 1 minute by default), or straight away with
+*Restart now*. Closing the window does not stop it.
+
+Whenever rpchat quits or restarts — by hand, for an update, or with the session
+ending — it remembers what was on screen in `<userData>/data/session-state.json`
+and puts it back on the next launch: the main window's size and place, the open
+view, conversation, Settings tab, pack-editor location and memories panel, unsent
+text in each chat, and the images, videos, full-screen overlays, looping sounds and
+widgets characters had up (a timed image keeps only the time it had left; a video
+starts again from the beginning). Avatars come back as they always have. After an
+update restart a window that was hidden in the tray stays there.
 Each release carries `latest-linux.yml`, the manifest `electron-updater` reads;
 keep it attached.
 

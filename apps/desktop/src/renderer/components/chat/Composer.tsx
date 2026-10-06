@@ -13,14 +13,26 @@ interface ComposerProps {
   /** Messages already sent that the next turn will deliver, oldest first. */
   queued: QueuedMessage[];
   onUnqueue: (messageId: string) => void;
+  /** Unsent text this session had, put back when it is opened (or the app restarted). */
+  draft?: string;
+  /** The unsent text changed (sending clears it). */
+  onDraftChange?: (text: string) => void;
 }
 
-export function Composer({ disabled, running, onSend, onAbort, canAbort, sessionKey, queued, onUnqueue }: ComposerProps) {
-  const [text, setText] = useState('');
+export function Composer({ disabled, running, onSend, onAbort, canAbort, sessionKey, queued, onUnqueue, draft, onDraftChange }: ComposerProps) {
+  const [text, setTextState] = useState(draft ?? '');
   const ref = useRef<HTMLTextAreaElement>(null);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const onDraftRef = useRef(onDraftChange);
+  onDraftRef.current = onDraftChange;
+  const setText = (value: string): void => {
+    setTextState(value);
+    onDraftRef.current?.(value);
+  };
 
   useEffect(() => {
-    setText('');
+    setTextState(draftRef.current ?? '');
     ref.current?.focus();
   }, [sessionKey]);
 

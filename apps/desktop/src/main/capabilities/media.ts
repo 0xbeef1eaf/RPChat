@@ -25,6 +25,7 @@ import * as fs from 'node:fs';
 import type { CharacterRef, LoadedPack } from '@rp/shared';
 import type {
   ActionContext,
+  ActionTrigger,
   AppSettings,
   CapabilityHandler,
   FullscreenOverlayOptions,
@@ -102,6 +103,8 @@ interface Managed {
   offs: Array<() => void>;
   /** Full-screen overlay: it is pinned to its screens, so `update` only fades it. */
   fullscreen?: boolean;
+  /** The call that opened it, with later `update`s folded into its options: what a restart needs to open it again. */
+  request: Pending;
 }
 
 /**
@@ -109,7 +112,7 @@ interface Managed {
  * that created it has already returned, so nothing here may fail in a way the character could
  * still catch — the asset is resolved before an item is ever queued.
  */
-interface Pending {
+export interface Pending {
   id: string;
   kind: MediaKind;
   /** Which entry point queued it: `show` is `showImage`/`playVideo`, `overlay` the whole-screen wash. */
@@ -261,7 +264,7 @@ export class MediaManager {
         monitorId: resolved.monitor.id,
       },
     };
-    const managed: Managed = { item, owner: pending.owner, sessionId: context.sessionId, handles: [], offs: [] };
+    const managed: Managed = { item, owner: pending.owner, sessionId: context.sessionId, handles: [], offs: [], request: pending };
     this.items.set(id, managed);
     let handle: OverlayHandle;
     try {
@@ -345,6 +348,7 @@ export class MediaManager {
       handles: [],
       offs: [],
       fullscreen: true,
+      request: pending,
     };
     this.items.set(id, managed);
     const opened: OverlayHandle[] = [];
@@ -414,7 +418,7 @@ export class MediaManager {
     this.listenAudio(win);
     await win.whenReady();
     const item: MediaItem = { id, kind: 'audio', asset, packId: context.packId, startedAt: new Date().toISOString(), state: 'open' };
-    this.items.set(id, { item, owner: pending.owner, sessionId: context.sessionId, handles: [], offs: [] });
+    this.items.set(id, { item, owner: pending.owner, sessionId: context.sessionId, handles: [], offs: [], request: pending });
     const page: PlayAudioOptions = {};
     if (typeof options.volume === 'number') page.volume = options.volume;
     if (options.loop !== undefined) page.loop = Boolean(options.loop);
@@ -596,6 +600,7 @@ export class MediaManager {
     const raw = asObject<OverlayUpdate>(patch);
     const changes = managed.fullscreen ? fullscreenUpdate(raw) : raw;
     for (const handle of managed.handles) await handle.update(changes);
+    Object.assign(managed.request.options, changes);
     if (managed.item.overlay) {
       if (changes.layer !== undefined) managed.item.overlay.layer = nearestLayer(changes.layer, this.deps.backend().info().supports.layers);
       if (typeof changes.opacity === 'number') managed.item.overlay.opacity = Math.min(1, Math.max(0, changes.opacity));
@@ -634,6 +639,54 @@ export class MediaManager {
     return [...[...this.items.values()].filter(mine).map((m) => toHandle(m.item)), ...this.queue.filter(mine).map(pendingHandle)];
   }
 
+  /**
+   * What is on screen or waiting, as records a later launch can open again (`restore`): see
+   * `mediaRecord` for what is left out and how a timed item's remaining time is kept.
+   */
+  snapshot(now = Date.now()): MediaRecord[] {
+    const out: MediaRecord[] = [];
+    for (const m of this.items.values()) {
+      const record = mediaRecord(m.request, Date.parse(m.item.startedAt), now);
+      if (record) out.push(record);
+    }
+    for (const p of this.queue) {
+      const record = mediaRecord(p, undefined, now);
+      if (record) out.push(record);
+    }
+    return out;
+  }
+
+  /**
+   * Open the items a previous launch had on screen, under their old ids, through the same
+   * admission as a character's own call (so the media caps still hold). `contextFor` rebuilds the
+   * call's context, or returns undefined when its pack or session is gone; an item whose asset no
+   * longer resolves is skipped too. Returns how many were put back.
+   */
+  async restore(records: MediaRecord[], contextFor: (record: MediaRecord) => Promise<ActionContext | undefined>): Promise<number> {
+    let restored = 0;
+    for (const record of records) {
+      if (this.items.has(record.id) || this.queue.some((q) => q.id === record.id)) continue;
+      try {
+        const context = await contextFor(record);
+        if (!context) {
+          this.deps.logger.info(`[media] not restoring ${record.kind} ${record.asset}: its character or session is gone`);
+          continue;
+        }
+        // `locate` checks a home file; a pack asset is otherwise only checked by the dispatcher, and a
+        // pack updated since may no longer ship it.
+        if (!isFile((await this.locate(context, record.asset)).file)) {
+          this.deps.logger.info(`[media] not restoring ${record.kind} ${record.asset}: the file is gone`);
+          continue;
+        }
+        await this.admit({ id: record.id, kind: record.kind, mode: record.mode, asset: record.asset, context, owner: characterRef(context.packId, context.characterId), options: { ...record.options }, queuedAt: new Date().toISOString() });
+        restored++;
+      } catch (err) {
+        this.deps.logger.warn(`[media] could not restore ${record.kind} ${record.asset}: ${String(err)}`);
+      }
+    }
+    return restored;
+  }
+
   items_(): MediaItem[] {
     return [...[...this.items.values()].map((m) => m.item), ...this.queue.map(pendingItem)];
   }
@@ -663,6 +716,70 @@ export class MediaManager {
   async dispose(): Promise<void> {
     await this.closeAll();
   }
+}
+
+/** An `sdk.media` item as session-state.ts keeps it across a restart: the call that opened it, minus the pack root. */
+export interface MediaRecord {
+  id: string;
+  mode: 'show' | 'overlay' | 'audio';
+  kind: MediaKind;
+  asset: string;
+  packId: string;
+  characterId: string;
+  sessionId: string;
+  trigger: ActionTrigger;
+  options: Record<string, unknown>;
+}
+
+/** A timed item with less than this left is not worth bringing back. */
+export const MIN_RESTORED_DURATION_MS = 1000;
+
+/**
+ * Pure: the record for one item, or null when it should not come back. A sound that does not loop
+ * is a moment, not something on screen, so only looping audio is kept. A timed item (`durationMs`)
+ * keeps only the time it had left — `startedAtMs` is when it opened, undefined while queued — and
+ * is dropped when that is under a second.
+ */
+export function mediaRecord(request: Pending, startedAtMs: number | undefined, now: number): MediaRecord | null {
+  if (request.mode === 'audio' && request.options.loop !== true) return null;
+  const options: Record<string, unknown> = { ...request.options };
+  const duration = durationOf(options);
+  if (duration !== undefined && startedAtMs !== undefined && Number.isFinite(startedAtMs)) {
+    const left = duration - (now - startedAtMs);
+    if (left < MIN_RESTORED_DURATION_MS) return null;
+    options.durationMs = Math.round(left);
+  }
+  const { packId, characterId, sessionId, trigger } = request.context;
+  return { id: request.id, mode: request.mode, kind: request.kind, asset: request.asset, packId, characterId, sessionId, trigger, options };
+}
+
+const RECORD_MODES: ReadonlySet<string> = new Set(['show', 'overlay', 'audio']);
+
+/** Pure: the media records in a stored file, skipping any entry missing what reopening it needs. */
+export function parseMediaRecords(raw: unknown): MediaRecord[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MediaRecord[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    const strings = [e.id, e.asset, e.packId, e.characterId, e.sessionId];
+    if (!strings.every((v) => typeof v === 'string' && v.length > 0)) continue;
+    if (typeof e.mode !== 'string' || !RECORD_MODES.has(e.mode)) continue;
+    if (typeof e.kind !== 'string' || !(MEDIA_KINDS as readonly string[]).includes(e.kind)) continue;
+    if (!e.trigger || typeof e.trigger !== 'object' || typeof (e.trigger as { kind?: unknown }).kind !== 'string') continue;
+    out.push({
+      id: e.id as string,
+      mode: e.mode as MediaRecord['mode'],
+      kind: e.kind as MediaKind,
+      asset: e.asset as string,
+      packId: e.packId as string,
+      characterId: e.characterId as string,
+      sessionId: e.sessionId as string,
+      trigger: e.trigger as ActionTrigger,
+      options: e.options && typeof e.options === 'object' && !Array.isArray(e.options) ? { ...(e.options as Record<string, unknown>) } : {},
+    });
+  }
+  return out;
 }
 
 function isFile(absolute: string): boolean {

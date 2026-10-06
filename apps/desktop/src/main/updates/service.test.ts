@@ -192,6 +192,9 @@ describe('UpdateService', () => {
     expect(h.updater.downloads).toBe(1);
     await h.service.install();
     expect(h.updater.installs).toEqual([[false, true]]);
+    // The forced-restart countdown and a "Restart now" click racing must not install twice.
+    await h.service.install();
+    expect(h.updater.installs).toEqual([[false, true]]);
     await settle();
     const seen = h.statuses.map((s) => `${s.state}${s.progressPercent !== undefined ? `:${s.progressPercent}` : ''}`);
     expect(seen).toEqual(['checking', 'available', 'downloading:0', 'downloading:40', 'ready:100']);
@@ -283,8 +286,8 @@ describe('UpdateService', () => {
     expect(plainReleaseNotes(null)).toBeUndefined();
     expect(plainReleaseNotes('')).toBeUndefined();
     expect(plainReleaseNotes([{ version: '1.2.0', note: 'a<br>b' }, { version: '1.1.0', note: null }])).toBe('1.2.0: a\nb\n1.1.0:');
-    expect(mergeSettings({ providers: [] }).updates).toEqual({ automatic: true, checkIntervalHours: 6 });
-    expect(mergeSettings({ updates: { automatic: false } } as Partial<AppSettings>).updates).toEqual({ automatic: false, checkIntervalHours: 6 });
+    expect(mergeSettings({ providers: [] }).updates).toEqual({ automatic: true, checkIntervalHours: 6, forceRestart: false, restartCountdownSeconds: 60 });
+    expect(mergeSettings({ updates: { automatic: false } } as Partial<AppSettings>).updates).toEqual({ automatic: false, checkIntervalHours: 6, forceRestart: false, restartCountdownSeconds: 60 });
   });
 });
 

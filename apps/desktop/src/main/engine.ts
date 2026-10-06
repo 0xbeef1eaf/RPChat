@@ -37,6 +37,7 @@ import { EmbedModelInstaller } from './memory/embed-model.js';
 import { LocalEmbedder } from './memory/local-embedder.js';
 import { WebHandler } from './capabilities/web.js';
 import { WidgetsHandler } from './capabilities/widgets.js';
+import type { WidgetRecord } from './capabilities/widgets.js';
 import { electronCapturer } from './capture.js';
 import { ProjectRegistry, keyFromAssetHost } from './editor/registry.js';
 import { EditorService } from './editor/service.js';
@@ -67,6 +68,7 @@ import { CommandRunner } from './capabilities/commands-runner.js';
 import { DisplayHandler } from './capabilities/display.js';
 import { InputHandler } from './capabilities/input.js';
 import { MediaHandler, MediaManager } from './capabilities/media.js';
+import type { MediaRecord } from './capabilities/media.js';
 import { SystemHandler } from './capabilities/system.js';
 import { UiHandler } from './capabilities/ui.js';
 import { VIDEO_CACHE_DIRNAME, VIDEO_CACHE_PACK_ID, VideoCompat } from './capabilities/video-compat.js';
@@ -123,13 +125,22 @@ export interface AppServices {
   /** Absolute path of the bundled sample image (copied out of the asar when needed). */
   sampleImage(): Promise<string>;
   /**
-   * Put back the avatars that were on screen when the app last closed (capabilities/avatar.ts).
-   * Called by index.ts once `rp-asset://` can serve their images, and never fatal.
+   * Put back what was on screen when the app last closed: the avatars (capabilities/avatar.ts
+   * keeps those itself) and the media items and widgets in `saved` (session-state.ts). Called by
+   * index.ts once `rp-asset://` can serve their files, and never fatal.
    */
-  restoreAvatars(): Promise<void>;
+  restoreDesktop(saved: DesktopSnapshot): Promise<void>;
+  /** The media items and widgets on screen now, for session-state.ts to keep across a restart. */
+  desktopSnapshot(): DesktopSnapshot;
   /** Root directory served for a pack id by rp-asset:// (installed packs + app-generated roots). */
   packRootFor(packId: string): string | undefined;
   stop(): Promise<void>;
+}
+
+/** The character-owned things on screen that session-state.ts carries across a restart (avatars keep their own file). */
+export interface DesktopSnapshot {
+  media: MediaRecord[];
+  widgets: WidgetRecord[];
 }
 
 export interface CreateAppOptions {
@@ -145,6 +156,12 @@ export interface CreateAppOptions {
    * lock is in force the switches are already gone from `env`, so nothing else here consults it.
    */
   dev?: DevRules;
+  /**
+   * Runs right before an update restart hands over to the new version (the AppImage updater
+   * starts it straight away): index.ts saves the session state here, so the new process reads
+   * this one's and not the previous launch's. A failure is logged, not fatal.
+   */
+  beforeUpdateRestart?: () => Promise<void>;
 }
 
 export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
@@ -350,7 +367,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
     emit({ name: 'browser-navigated', data: { tabId: ev.data.tabId, url: ev.data.url, title: ev.data.title ?? '' }, at: new Date().toISOString() });
   });
   const avatar = new AvatarHandler({ backend: () => backend, packs, emit, logger, store: new AvatarFileStore(path.join(dataDir, AVATAR_STATE_FILENAME)) });
-  const widgets = new WidgetsHandler({ backend: () => backend, emit, packs, defaultLayer: async () => ((await settingsOf()).mediaAlwaysOnTop ? 'top' : 'bottom') });
+  const widgets = new WidgetsHandler({ backend: () => backend, emit, packs, logger, defaultLayer: async () => ((await settingsOf()).mediaAlwaysOnTop ? 'top' : 'bottom') });
   const screenHandler = new ScreenHandler({
     backend: () => backend,
     commands,
@@ -649,6 +666,7 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   policy.start();
   /** An update restart is an authorised quit: let it through and make sure the daemon does not race the updater's relaunch. */
   const beforeRestart = async (): Promise<void> => {
+    await opts.beforeUpdateRestart?.().catch((err: unknown) => logger.warn('[updates] saving the session before the restart failed', err));
     quitGuard.allowQuitOnce();
     await keepalive.unregister();
   };
@@ -782,11 +800,23 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
       await previous.dispose().catch((err: unknown) => logger.warn('[display] dispose of previous backend failed', err));
     },
     sampleImage,
-    async restoreAvatars() {
-      // Safe to call from the moment `createApp` resolves: the expressions come from the packs, and
-      // `engine.start()` has loaded them by then.
+    async restoreDesktop(saved) {
+      // Safe to call from the moment `createApp` resolves: the expressions and assets come from the
+      // packs, and `engine.start()` has loaded them by then.
       await avatar.restore();
+      const owns = (packId: string, characterId: string): LoadedPack | undefined => {
+        const pack = engine.packs.tryGetLoaded(packId);
+        return pack?.characters.some((c) => c.definition.id === characterId) ? pack : undefined;
+      };
+      const media_ = await media.restore(saved.media, async (record) => {
+        const pack = owns(record.packId, record.characterId);
+        if (!pack || !(await engine.sessions.get(record.sessionId).catch(() => undefined))) return undefined;
+        return { packId: record.packId, characterId: record.characterId, sessionId: record.sessionId, packRoot: pack.root, trigger: record.trigger };
+      });
+      const widgets_ = await widgets.restore(saved.widgets, (packId, characterId) => owns(packId, characterId) !== undefined);
+      if (saved.media.length + saved.widgets.length > 0) logger.info(`[main] restored ${media_}/${saved.media.length} media item(s) and ${widgets_}/${saved.widgets.length} widget(s) from the last session`);
     },
+    desktopSnapshot: () => ({ media: media.snapshot(), widgets: widgets.snapshot() }),
     packRootFor,
     async stop() {
       if (stopped) return;
