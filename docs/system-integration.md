@@ -628,7 +628,8 @@ reported to the character); `enforce` is a policy switch.
 | `protectAppData` | `true` | rpchat's data directory, `~/.config/@rp`: the session may read it, only rpchat may write it, so characters, packs, settings and the conversation store cannot be edited behind the app's back. Also takes away renaming `~/.config` itself, which would otherwise walk around the rule. A checkout of the app (`pnpm dev`) is not rpchat and cannot write there either, and `rpchat-decrypt-all` cannot update the crypto log. |
 | `wallpaper` | `true` | The shell's IPC socket and config/state files; the shell runs in `rpchat-shell`. Also denies the row's client-only binaries (`swww`, `awww`) to every profile but rpchat's, which is what stops `awww img <path>` from a terminal on a kernel that cannot mediate `connect()`. A shell shipping one binary for both jobs (`noctalia`, `qs`) cannot be denied that way — it would stop the shell starting — so `noctalia msg` survives there and the residual list says so. |
 | `compositorIpc` | `shell-only` | `allow` (nothing), `shell-only` (only the shell and rpchat may talk to the compositor), `deny` (only rpchat). |
-| `ipcAllowCompositor` | `false` | Let what the compositor launches reach the shell's sockets, so keybinds that drive the shell (launchers, session menus) keep working. A door — see [IPC guard](#ipc-guard-bpf-lsm). |
+| `ipcAllowSockets` | `[]` | Sockets the IPC guard must leave alone, so a shell that multiplexes its launcher with its wallpaper keeps its keybinds. See [IPC guard](#ipc-guard-bpf-lsm). |
+| `ipcAllowCompositor` | `false` | Let what the compositor launches reach the shell's sockets. **Does nothing on Hyprland** (it scopes everything it spawns) — see [IPC guard](#ipc-guard-bpf-lsm). |
 | `ipcGuard` | `off` | Mediate `connect()` to the shell's sockets with a BPF LSM program where the kernel allows it — the check AppArmor cannot make. **Off by default because it is unproven: the first machine to enforce it could not reach a login.** See [IPC guard](#ipc-guard-bpf-lsm). |
 | `shell` | `auto` | One row or a list. `auto` takes every row whose binary exists. With several (`["noctalia","hyprpaper"]`) each may serve its own socket but none may connect to another's, so a bar cannot set the wallpaper through a wallpaper daemon. |
 | `loginHelpers` | auto-detect | The PAM login helpers whose profile carries the per-user hats (see below). |
@@ -816,22 +817,39 @@ understand before turning it on:
   fails the window never closes. Granting first means the worst case is a socket briefly reachable
   by something it will shortly be denied to. Any failure empties the target map outright.
 
-- **The compositor's keybinds are refused unless you say otherwise.** This is the one that bites
-  first. A launcher bound to `SUPER+Space` runs something like
-  `qs -c noctalia-shell ipc call launcher toggle`, and a compositor keybind is a *plain child of
-  the compositor* — so it sits in the compositor's cgroup, not the shell's and not the app's, and
-  is refused exactly like a terminal's. `guard.ipcAllowCompositor: true` puts the compositor's
-  cgroup in the allow-list and the shortcuts work again.
+- **The shell's own keybinds are refused, and `ipcAllowSockets` is the answer.** This is the one
+  that bites first. A launcher bound to `SUPER+Space` runs something like
+  `qs -c noctalia-shell ipc call launcher toggle`, which connects to the same socket as
+  `… ipc call wallpaper set` — so mediating that socket refuses the launcher too, and
+  `SUPER+Space` stops working.
 
-  Say what that costs, because it is a door: the same allowance fits a keybind that runs
-  `… ipc call wallpaper set`, and the compositor's config is a file the session can write. It is
-  not free — the new binding needs the compositor to re-read its config, and `hyprctl reload` goes
-  through the compositor's own IPC, which `compositorIpc: shell-only` already guards, so in
-  practice it costs a re-login. But it is a door, and `residual` says so when it is open.
+  **No allow-list identity fixes it.** The obvious move is "allow what the compositor launches",
+  and it does not work on Hyprland: Hyprland puts every process it spawns in its own systemd
+  scope, measured as
 
-  There is no finer cut available: noctalia multiplexes the launcher *and* `wallpaper set` over one
-  socket, so mediation at the socket cannot allow one and deny the other. That would need
-  protocol-aware filtering, which an LSM hook on `connect()` cannot do.
+  ```
+  Hyprland  → user@<uid>.service/session.slice/wayland-wm@hyprland.desktop.service
+  noctalia  → user@<uid>.service/app.slice/app-graphical.slice/app-Hyprland-noctalia-<hash>.scope
+  kitty     → user@<uid>.service/app.slice/app-graphical.slice/app-Hyprland-kitty-<hash>.scope
+  ```
+
+  so the launcher is a *sibling* of the shell and of every terminal, not a child of the
+  compositor. There is no cgroup containing the launcher and not the terminal, and a terminal that
+  can reach the socket is the thing the guard exists to stop. (`guard.ipcAllowCompositor` adds the
+  compositor's own cgroup, which helps on a compositor that forks without a scope — sway, niri —
+  and does nothing here.) Protocol-aware filtering would separate them, and an LSM hook on
+  `connect()` cannot do that.
+
+  So the split is made at the **socket**, by naming it:
+
+  ```json
+  { "guard": { "ipcGuard": "auto", "ipcAllowSockets": ["@{run}/user/[0-9]*/noctalia-*.sock"] } }
+  ```
+
+  The keybinds work; the row's **files** stay denied, so a wallpaper set that way still does not
+  persist; and a separate wallpaper daemon's socket (`swww`, `awww`) stays mediated, where nothing
+  is multiplexed and `awww img` from a terminal is still refused. `residual` reports how many
+  sockets were spared.
 
 Four more things are worth knowing:
 

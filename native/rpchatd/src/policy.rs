@@ -313,6 +313,8 @@ pub struct GuardPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_deny_sockets: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipc_allow_sockets: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_binaries: Option<Vec<String>>,
 }
 
@@ -352,6 +354,20 @@ pub struct GuardRules {
     pub login_helpers: Option<Vec<String>>,
     pub extra_deny_paths: Vec<String>,
     pub extra_deny_sockets: Vec<String>,
+    /// Sockets the **IPC guard** must leave alone, even though the table lists them
+    /// (`guard.ipcAllowSockets`). The inverse of `extra_deny_sockets`, and the only knob that
+    /// can separate the two halves of a shell's guarding.
+    ///
+    /// It exists because a shell multiplexes. noctalia carries its launcher *and*
+    /// `wallpaper set` over one socket, so mediating `connect()` to it either breaks
+    /// `SUPER+Space` or leaves the wallpaper reachable — the socket layer cannot tell the two
+    /// apart, and no choice of allow-list identity fixes that (Hyprland gives every process it
+    /// spawns its own sibling scope, so the launcher and a terminal are indistinguishable by
+    /// cgroup). Naming the socket here keeps the keybinds working while the row's **files** stay
+    /// denied, which is the half that makes a wallpaper not persist — and leaves a separate
+    /// wallpaper daemon's socket (`swww`, `awww`) mediated, where there is nothing multiplexed
+    /// and nothing to lose.
+    pub ipc_allow_sockets: Vec<String>,
     pub allow_binaries: Vec<String>,
     /// The policy is locked (`lock` block, `seal.rs`): the guarded sessions lose every path the
     /// seal lives in, so a terminal inside one — including one under `sudo`, which stays in the
@@ -378,6 +394,7 @@ impl Default for GuardRules {
             login_helpers: None,
             extra_deny_paths: Vec::new(),
             extra_deny_sockets: Vec::new(),
+            ipc_allow_sockets: Vec::new(),
             allow_binaries: Vec::new(),
             protect_policy: false,
             deny_escapes: false,
@@ -406,6 +423,7 @@ impl GuardRules {
             login_helpers: g.login_helpers.clone(),
             extra_deny_paths: g.extra_deny_paths.clone().unwrap_or_default(),
             extra_deny_sockets: g.extra_deny_sockets.clone().unwrap_or_default(),
+            ipc_allow_sockets: g.ipc_allow_sockets.clone().unwrap_or_default(),
             allow_binaries: g.allow_binaries.clone().unwrap_or_default(),
             // Set by `PolicyFile::guard_rules`, which is the only place that can see the `lock`
             // block these two come from.
@@ -711,6 +729,7 @@ fn validate_guard(guard: &GuardPolicy) -> Result<(), String> {
     check(guard.login_helpers.as_ref(), "loginHelpers", false)?;
     check(guard.extra_deny_paths.as_ref(), "extraDenyPaths", true)?;
     check(guard.extra_deny_sockets.as_ref(), "extraDenySockets", true)?;
+    check(guard.ipc_allow_sockets.as_ref(), "ipcAllowSockets", true)?;
     check(guard.allow_binaries.as_ref(), "allowBinaries", false)?;
     if let Some(list) = &guard.login_helpers {
         if list.is_empty() {

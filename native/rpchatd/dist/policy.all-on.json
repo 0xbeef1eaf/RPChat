@@ -41,6 +41,7 @@
     "wallpaper": true,
     "compositorIpc": "shell-only",
     "ipcAllowCompositor": false,
+    "ipcAllowSockets": [],
     "ipcGuard": "off",
     "shell": "auto",
     "extraDenyPaths": [],

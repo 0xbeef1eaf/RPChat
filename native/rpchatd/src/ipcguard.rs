@@ -231,10 +231,11 @@ pub fn resolve_targets(
         paths.extend(expand_glob(&normalise_glob(extra), list_dir));
     }
 
+    let spared = spared_sockets(rules, list_dir);
     let uids: BTreeSet<u32> = ctx.user_uids.iter().map(|(_, uid)| *uid).collect();
     let mut by_inode: BTreeMap<TargetKey, String> = BTreeMap::new();
     for path in paths {
-        if never_mediate(&path) {
+        if never_mediate(&path) || spared.contains(&canonical_run(&path)) {
             continue;
         }
         let Some(st) = stat(Path::new(&path)) else {
@@ -257,6 +258,22 @@ pub fn resolve_targets(
     out.sort();
     out.truncate(MAX_TARGETS);
     out
+}
+
+/// The sockets `guard.ipcAllowSockets` names, as concrete canonical paths.
+///
+/// Expanded exactly like the table's globs, so the two are written in one language, and folded
+/// through [`canonical_run`] so a `@{run}` entry spares both spellings of one inode.
+pub fn spared_sockets(
+    rules: &GuardRules,
+    list_dir: &dyn Fn(&Path) -> Vec<String>,
+) -> BTreeSet<String> {
+    rules
+        .ipc_allow_sockets
+        .iter()
+        .flat_map(|g| expand_glob(&normalise_glob(g), list_dir))
+        .map(|p| canonical_run(&p))
+        .collect()
 }
 
 /// `/var/run/…` → `/run/…`.
@@ -556,11 +573,25 @@ pub fn attempt(event: &Event, paths: &BTreeMap<TargetKey, String>) -> GuardAttem
 // What `guard::apply` asks for, and what it gets back
 // ---------------------------------------------------------------------------
 
+/// What the OS layer worked out for one pass: what to mediate, who may reach it, and what the
+/// policy deliberately left alone.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IpcPlan {
+    pub targets: Vec<Target>,
+    /// Cgroups allowed besides the app's: the socket servers', and the compositor's when
+    /// `guard.ipcAllowCompositor` is set.
+    pub server_cgroups: Vec<PathBuf>,
+    /// How many sockets `guard.ipcAllowSockets` spared.
+    pub spared: usize,
+}
+
 /// What the guard wants mediated on this pass.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IpcRequest {
     /// `Off` unloads and unpins.
     pub mode: GuardMode,
+    /// How many sockets `guard.ipcAllowSockets` spared, so [`residual`] can disclose it.
+    pub spared: usize,
     /// `guard.ipcAllowCompositor`: the compositor's cgroup is in `server_cgroups`, so its
     /// keybinds reach the shell. Carried here only so [`residual`] can disclose the door.
     pub allow_compositor: bool,
@@ -577,6 +608,8 @@ pub struct IpcRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IpcOutcome {
     pub mediation: IpcMediation,
+    /// Mirrors [`IpcRequest::spared`].
+    pub spared: usize,
     /// Mirrors [`IpcRequest::allow_compositor`], so the residual list can say so.
     pub allow_compositor: bool,
     /// Why it is not `bpf`, when it is not. Reported in the guard's residual list, never as
@@ -623,6 +656,7 @@ impl IpcOutcome {
         IpcOutcome {
             mediation: IpcMediation::None,
             allow_compositor: false,
+            spared: 0,
             reason: Some(reason.into()),
             targets: 0,
         }
@@ -669,8 +703,14 @@ pub fn residual(outcome: &IpcOutcome, unix_class: bool, shell_guarded: bool) -> 
             lines.push("the BPF layer mediates every process on the machine, not only the confined users' sessions, so root and system services are denied the guarded sockets too. Only the guarded users' own sockets go into the map, so another user's shell is untouched".to_string());
             lines.push("the allow-list is a cgroup, so anything sharing the app's cgroup is allowed: an app started from a terminal shares that terminal's scope, and the wallpaper lock is then open to everything in it. A packaged install started from autostart or the desktop entry gets its own scope and does not have that gap".to_string());
             lines.push("the processes serving the guarded sockets may reach each other, so a bar can still drive a wallpaper daemon (which is how noctalia sets a wallpaper through swww). A session that moves itself into the shell's cgroup — cgroup delegation makes that the user's own tree — reaches them the same way".to_string());
+            if outcome.spared > 0 {
+                lines.push(format!(
+                    "guard.ipcAllowSockets leaves {} socket(s) unmediated on purpose: connect() to them is not guarded at all, which is how a shell that multiplexes its launcher and its wallpaper over one socket keeps its keybinds working. What still holds for those is the row's files — a wallpaper set that way does not persist",
+                    outcome.spared
+                ));
+            }
             if outcome.allow_compositor {
-                lines.push("guard.ipcAllowCompositor is on, so anything the compositor launches directly reaches the shell's sockets: that is what keeps keybinds like the launcher working, and it is also a door — a keybind that drives the wallpaper would be allowed, and the compositor's config is a file the session can write. Re-reading that config needs the compositor's own IPC, which is guarded, so in practice the door costs a re-login".to_string());
+                lines.push("guard.ipcAllowCompositor is on, so anything the compositor launches *directly* reaches the shell's sockets. Note that this does nothing on a compositor that puts each process it spawns in its own systemd scope — Hyprland does, as `app-Hyprland-<cmd>-<hash>.scope`, so its keybinds are siblings of the shell rather than children of the compositor and guard.ipcAllowSockets is what helps there. Where it does apply it is a door — a keybind that drives the wallpaper would be allowed, and the compositor's config is a file the session can write. Re-reading that config needs the compositor's own IPC, which is guarded, so in practice the door costs a re-login".to_string());
             }
             lines.push("a socket bound since the last refresh is unmediated until the next one: the runtime directories are watched with inotify and rescanned, but there is a window between bind() and the refresh".to_string());
             lines
@@ -881,6 +921,7 @@ pub fn engage(req: &IpcRequest) -> (IpcOutcome, Option<Engaged>) {
             IpcOutcome {
                 mediation: IpcMediation::Bpf,
                 allow_compositor: req.allow_compositor,
+                spared: req.spared,
                 reason: req.withheld(),
                 targets: engaged.targets(),
             },
@@ -1500,6 +1541,77 @@ mod tests {
         assert_eq!(targets[0].path, "/run/user/1000/noctalia-wayland-1.sock");
     }
 
+    /// `guard.ipcAllowSockets` is the only knob that can split a shell's two halves, and the
+    /// reason it had to exist: noctalia carries its launcher *and* `wallpaper set` over one
+    /// socket, so mediating it breaks `SUPER+Space`, and no allow-list identity helps —
+    /// Hyprland gives each process it spawns its own sibling scope, so the launcher and a
+    /// terminal are indistinguishable by cgroup.
+    #[test]
+    fn a_named_socket_is_left_alone_and_the_rest_still_guarded() {
+        let mut ctx = noctalia_hyprland_ctx(&["work"]);
+        ctx.shells = vec![&NOCTALIA, &SWWW];
+        ctx.served = [
+            "/run/user/1000/noctalia-wayland-1.sock",
+            "/run/user/1000/noctalia-dmenu-wayland-1.sock",
+            "/run/user/1000/wayland-1-awww-daemon.sock",
+        ]
+        .iter()
+        .map(|p| ServedSocket {
+            path: (*p).to_string(),
+            owner: Owner::Shell,
+            entry: if p.contains("awww") {
+                "swww"
+            } else {
+                "noctalia"
+            }
+            .into(),
+            pid: 7,
+        })
+        .collect();
+        let stat = |p: &Path| {
+            Some(SocketStat {
+                uid: 1000,
+                key: TargetKey {
+                    dev_major: 0,
+                    dev_minor: 76,
+                    ino: p.to_string_lossy().len() as u64,
+                },
+                is_socket: true,
+            })
+        };
+        let ls = lister(&[
+            ("/run/user", &["1000"]),
+            (
+                "/run/user/1000",
+                &[
+                    "noctalia-wayland-1.sock",
+                    "noctalia-dmenu-wayland-1.sock",
+                    "wayland-1-awww-daemon.sock",
+                ],
+            ),
+            ("/home", &[]),
+        ]);
+
+        // Guarded as usual: all three.
+        let all = rules(
+            serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{"mode":"enforce"}}),
+        );
+        assert_eq!(resolve_targets(&all, &ctx, &ls, &stat).len(), 3);
+
+        // Spare the shell's own sockets and the wallpaper daemon's stays mediated — which is the
+        // whole point: `awww img` has nothing multiplexed with it and nothing to lose.
+        let spared = rules(
+            serde_json::json!({"version":1,"app":{"users":["work"]},"guard":{
+            "mode":"enforce","ipcAllowSockets":["/run/user/[0-9]*/noctalia-*.sock"]}}),
+        );
+        let targets = resolve_targets(&spared, &ctx, &ls, &stat);
+        assert_eq!(
+            targets.iter().map(|t| t.path.as_str()).collect::<Vec<_>>(),
+            vec!["/run/user/1000/wayland-1-awww-daemon.sock"]
+        );
+        assert_eq!(spared_sockets(&spared, &ls).len(), 2);
+    }
+
     #[test]
     fn reads_the_cgroup_v2_path_and_declines_a_v1_only_machine() {
         assert_eq!(
@@ -1568,6 +1680,7 @@ mod tests {
             mode: GuardMode::Enforce,
             setting: IpcGuardMode::Auto,
             allow_compositor: false,
+            spared: 0,
             targets: vec![target.clone()],
             app_cgroup: None,
             server_cgroups: vec![PathBuf::from("/sys/fs/cgroup/shell")],
@@ -1583,6 +1696,7 @@ mod tests {
             &IpcOutcome {
                 mediation: IpcMediation::Bpf,
                 allow_compositor: false,
+                spared: 0,
                 reason: Some(withheld),
                 targets: 0,
             },
@@ -1610,6 +1724,7 @@ mod tests {
         let shut = IpcOutcome {
             mediation: IpcMediation::Bpf,
             allow_compositor: false,
+            spared: 0,
             reason: None,
             targets: 2,
         };
@@ -1622,12 +1737,33 @@ mod tests {
         };
         let lines = residual(&open, false, true).join("\n");
         assert!(lines.contains("guard.ipcAllowCompositor is on"), "{lines}");
-        // Both halves: what it buys and what it costs.
+        assert!(lines.contains("it is a door"), "{lines}");
+        // And the caveat that cost a round trip to learn: on Hyprland it buys nothing, because
+        // every process the compositor spawns gets its own sibling scope.
+        assert!(lines.contains("app-Hyprland-<cmd>-<hash>.scope"), "{lines}");
+    }
+
+    /// A spared socket is not guarded at all, which has to be said rather than left for a reader
+    /// to infer from a target count they cannot see.
+    #[test]
+    fn a_spared_socket_is_disclosed() {
+        let base = IpcOutcome {
+            mediation: IpcMediation::Bpf,
+            allow_compositor: false,
+            spared: 0,
+            reason: None,
+            targets: 1,
+        };
+        assert!(!residual(&base, false, true)
+            .join("\n")
+            .contains("ipcAllowSockets"));
+        let lines = residual(&IpcOutcome { spared: 2, ..base }, false, true).join("\n");
         assert!(
-            lines.contains("keybinds like the launcher working"),
+            lines.contains("guard.ipcAllowSockets leaves 2 socket(s)"),
             "{lines}"
         );
-        assert!(lines.contains("it is also a door"), "{lines}");
+        // The half that still holds, so this does not read as "the lock is off".
+        assert!(lines.contains("does not persist"), "{lines}");
     }
 
     #[test]
@@ -1642,6 +1778,7 @@ mod tests {
         let bpf = IpcOutcome {
             mediation: IpcMediation::Bpf,
             allow_compositor: false,
+            spared: 0,
             reason: None,
             targets: 2,
         };
@@ -1777,6 +1914,7 @@ mod tests {
             mode: GuardMode::Enforce,
             setting: IpcGuardMode::Auto,
             allow_compositor: false,
+            spared: 0,
             targets: vec![target.clone()],
             app_cgroup: None,
             server_cgroups: Vec::new(),
