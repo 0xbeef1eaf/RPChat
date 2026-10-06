@@ -34,7 +34,11 @@ export function validatePluginManifestFallback(json: unknown): PluginManifest {
   if (typeof m.name !== 'string' || m.name.trim().length === 0) problems.push('name is required');
   if (typeof m.version !== 'string' || m.version.trim().length === 0) problems.push('version is required');
   if (m.main !== undefined && (typeof m.main !== 'string' || !normalizeRelativePath(m.main).ok)) problems.push('main must be a relative path');
-  if (!Array.isArray(m.modules) || m.modules.length === 0) problems.push('modules must be a non-empty array');
+  if (m.modules === undefined) m.modules = [];
+  const sources = Array.isArray(m.mediaSources) ? m.mediaSources : [];
+  if (m.mediaSources !== undefined && !Array.isArray(m.mediaSources)) problems.push('mediaSources must be an array');
+  if (!Array.isArray(m.modules)) problems.push('modules must be an array');
+  else if (m.modules.length === 0 && sources.length === 0) problems.push('a plugin must declare at least one module or media source');
   const ids = new Set<string>();
   for (const [i, raw] of (Array.isArray(m.modules) ? m.modules : []).entries()) {
     const mod = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};

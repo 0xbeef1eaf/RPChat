@@ -13,23 +13,25 @@ type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 /**
  * A file the character can name: a pack asset from sdk.pack.asset() / sdk.pack.listAssets()
  * (source 'pack'), or a file in the character's own home folder, e.g. an sdk.webcam capture
- * (source 'home'). sdk.media.* takes either (a home file also as the string "home:<path>");
- * sdk.wallpaper.set takes pack assets only, and sdk.files.* reads and opens home files.
+ * (source 'home'), or an item of a remote media source from sdk.mediaSources.search() (source
+ * 'remote'). sdk.media.* takes any of them (a home file also as the string "home:<path>", a remote
+ * item as "remote:<path>"); sdk.wallpaper.set takes pack assets only, and sdk.files.* reads and
+ * opens home files.
  */
 interface AssetRef {
   /** Where the path below is relative to. Absent means 'pack'. */
-  readonly source?: 'pack' | 'home';
-  /** Path relative to the pack root (or to the character home for source 'home'), forward slashes. */
+  readonly source?: 'pack' | 'home' | 'remote';
+  /** Path relative to the pack root (or to the character home for source 'home'), forward slashes; "<source id>/<item id>" for source 'remote'. */
   readonly path: string;
-  /** Detected from the file extension. */
+  /** Detected from the file extension (reported by the source for 'remote'). */
   readonly kind: 'image' | 'video' | 'audio' | 'text' | 'other';
   /** MIME type, e.g. "image/png". */
   readonly mime: string;
-  /** File size in bytes. */
+  /** File size in bytes (0 when a remote source does not say). */
   readonly bytes: number;
   /** Lower-case tags describing the asset: its folder names plus the pack author's tags from media.json. */
   readonly tags: readonly string[];
-  /** The pack author's one-line description of this asset, if any. */
+  /** The pack author's (or the remote source's) one-line description of this asset, if any. */
   readonly description?: string;
 }
 

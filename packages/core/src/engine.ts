@@ -1,5 +1,5 @@
 import type { CapabilityRegistry } from '@rp/sdk';
-import { generateSdkTypings } from '@rp/sdk';
+import { MEDIA_SOURCES_MODULE_ID, generateSdkTypings, mediaSourcesModule } from '@rp/sdk';
 import { createProvider } from '@rp/llm';
 import type {
   CapabilityHandler,
@@ -27,6 +27,7 @@ import { LlmHandler } from './handlers/llm.js';
 import { EventsHandler, MoodHandler, RoutineHandler } from './handlers/living.js';
 import { HelpHandler } from './handlers/help.js';
 import { LibHandler } from './handlers/lib.js';
+import { MediaSourcesHandler } from './handlers/media-sources.js';
 import { MemoryHandler } from './handlers/memory.js';
 import { PackHandler } from './handlers/pack.js';
 import { StateHandler } from './handlers/state.js';
@@ -39,6 +40,7 @@ import { RoutineService } from './services/routine.js';
 import { SandboxService } from './services/sandbox.js';
 import { HistoryService } from './services/history.js';
 import { LibraryService } from './services/library.js';
+import { MediaSourceService } from './services/media-sources.js';
 import { EmbeddingService } from './services/embeddings.js';
 import type { Embedder } from './services/embeddings.js';
 import { MemoryService } from './services/memory.js';
@@ -102,6 +104,11 @@ export class Engine {
   readonly history: HistoryService;
   /** Per-character function libraries: the `lib` prelude of every run (and, through it, `sdk.lib`). */
   readonly library: LibraryService;
+  /**
+   * Remote media sources plugins provide (`sdk.mediaSources`). The module is in the registry only
+   * while at least one source is, with docs naming them; the host asks `locate` for the bytes.
+   */
+  readonly mediaSources: MediaSourceService;
   /** Event subscriptions + host-event routing (`hostEvents`/`subscriptions` are the host-facing views). */
   readonly eventService: EventService;
   readonly mood: MoodService;
@@ -185,6 +192,7 @@ export class Engine {
       await this.memories.consolidate(session.id, { auto: true });
     });
     this.library = new LibraryService(this.packs);
+    this.mediaSources = new MediaSourceService({ logger });
 
     this.routine = new RoutineService({
       storage: opts.storage,
@@ -206,6 +214,7 @@ export class Engine {
       new LibHandler(this.library),
       new StateHandler(opts.storage.state),
       new PackHandler(this.packs),
+      new MediaSourcesHandler(this.mediaSources),
       new TimersHandler(this.timers),
       new MemoryHandler(this.memories),
       new LlmHandler({
@@ -224,9 +233,11 @@ export class Engine {
       permissions: this.permissions,
       audit: this.audit,
       packs: this.packs,
+      remote: this.mediaSources,
       now,
       logger,
     });
+    this.mediaSources.onChange(() => this.syncMediaSourcesModule());
 
     // Event service + its handler need the behaviour runner and the chat queue; both exist before start().
     let eventService: EventService | undefined;
@@ -348,6 +359,9 @@ export class Engine {
       typings: () => generateSdkTypings(opts.registry),
       register: (spec, handler) => {
         if (!spec || typeof spec.id !== 'string') throw new RpError('INVALID_ARGUMENT', 'A capability module spec with an id is required');
+        if (spec.id === MEDIA_SOURCES_MODULE_ID) {
+          throw new RpError('INVALID_ARGUMENT', `Capability module "${spec.id}" is reserved for the app's remote media sources; provide a media source instead`, { module: spec.id });
+        }
         if (opts.registry.has(spec.id)) {
           throw new RpError('INVALID_ARGUMENT', `Capability module "${spec.id}" is already registered`, { module: spec.id });
         }
@@ -365,6 +379,16 @@ export class Engine {
         return hadSpec || hadHandler;
       },
     };
+  }
+
+  /**
+   * Put `sdk.mediaSources` in the registry while there are sources, and out of it when the last one
+   * goes. Re-registered on every change, since its docs name the sources of the moment.
+   */
+  private syncMediaSourcesModule(): void {
+    const sources = this.mediaSources.list();
+    this.registry.unregister(MEDIA_SOURCES_MODULE_ID);
+    if (sources.length > 0) this.registry.register(mediaSourcesModule(sources));
   }
 
   /** Load installed packs and arm persisted timers. */

@@ -109,8 +109,9 @@ export function PluginsSection() {
     <div className="stack" style={{ gap: 14 }}>
       <div className="row wrap">
         <p className="muted small grow" style={{ minWidth: 240 }}>
-          Plugins add SDK modules (typings, docs and a host implementation). They run as <strong>trusted code inside the app</strong>; the
-          modules they add still go through the normal permission policy for packs.
+          Plugins add SDK modules (typings, docs and a host implementation) and remote media sources characters can search and show
+          from. They run as <strong>trusted code inside the app</strong>; the modules they add still go through the normal permission
+          policy for packs.
         </p>
         <button type="button" className="btn btn-sm" onClick={openFolder}>
           Open plugins folder
@@ -173,7 +174,7 @@ export function PluginsSection() {
                 </div>
               ) : null}
               <div className="cap-list" style={{ marginTop: 8 }}>
-                {p.modules.length === 0 ? <span className="muted small">Declares no modules.</span> : null}
+                {p.modules.length === 0 && (p.mediaSources ?? []).length === 0 ? <span className="muted small">Declares no modules.</span> : null}
                 {p.modules.map((m) => (
                   <div key={m.id} className="cap-row">
                     <div className="item-text">
@@ -186,6 +187,17 @@ export function PluginsSection() {
                       </span>
                     </div>
                     <span className={PERMISSION_CLS[m.permission]}>{m.permission}</span>
+                  </div>
+                ))}
+                {(p.mediaSources ?? []).map((m) => (
+                  <div key={m.id} className="cap-row">
+                    <div className="item-text">
+                      <span className="item-title">
+                        {m.title} <span className="muted mono small">{m.id}</span>
+                      </span>
+                      <span className="item-sub">Media source: {m.kinds.join(', ')}, through sdk.mediaSources</span>
+                    </div>
+                    <span className="badge">media</span>
                   </div>
                 ))}
               </div>

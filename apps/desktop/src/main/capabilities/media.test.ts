@@ -6,6 +6,8 @@ import type { ActionContext, AppSettings, HostEvent, LoadedPack, MediaCommand, M
 import type { DisplayBackend, OverlayEvent, OverlayHandle, OverlaySpec, OverlayWindowLike } from '../display/backend.js';
 import { MediaManager, mediaLimits } from './media.js';
 import { HomeAssetRoots, characterHomeDir } from './files.js';
+import { RemoteMediaCache } from './remote-media.js';
+import type { RemoteMediaFiles } from './remote-media.js';
 
 /** Minimal listener registry (importing the Electron backend's one here would enter its import cycle first). */
 class OverlayEvents {
@@ -87,6 +89,7 @@ function make(
   monitors: MonitorInfo[] = [MONITOR],
   media?: Partial<MediaConcurrencySettings>,
   video?: { playable(file: string): Promise<{ file: string; url: string } | undefined> },
+  remote?: RemoteMediaFiles,
 ) {
   const specs: OverlaySpec[] = [];
   const handles: FakeHandle[] = [];
@@ -116,6 +119,7 @@ function make(
     logger: { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined },
     emit: (e) => events.push(e),
     ...(video ? { video } : {}),
+    ...(remote ? { remote } : {}),
   });
   return { media: manager, specs, handles, events, audio, homes };
 }
@@ -360,6 +364,56 @@ describe('MediaManager media limits', () => {
       ['media-closed', song.id, 'ended'],
       ['media-started', next.id, undefined],
     ]);
+  });
+});
+
+describe('MediaManager remote assets', () => {
+  const REMOTE_URL = /^rp-asset:\/\/app\.rpchat\.remote\/[a-f0-9]{32}\./;
+
+  /** A remote media cache over a fake source whose items are tiny files served by a fake fetch. */
+  function remoteCache() {
+    const fetched: string[] = [];
+    const cache = new RemoteMediaCache({
+      dir: path.join(userData, 'remote-media'),
+      locate: async (assetPath) => ({ location: { url: `https://photos.example/${assetPath.split('/').pop()}` } }),
+      logger: { debug: () => undefined, info: () => undefined, warn: () => undefined },
+      fetch: (async (url: string) => {
+        fetched.push(url);
+        const type = url.endsWith('clip') ? 'video/webm' : url.endsWith('song') ? 'audio/mpeg' : 'image/png';
+        return new Response('bytes', { headers: { 'content-type': type } });
+      }) as typeof fetch,
+    });
+    return { cache, fetched };
+  }
+
+  it('downloads a remote item on the first show and serves it from the cache after that', async () => {
+    const { cache, fetched } = remoteCache();
+    const { media, specs } = make([MONITOR], undefined, undefined, cache);
+    const shown = await media.show('image', ctx, 'remote:com.test.photos/albums/pic', {});
+    expect(shown.asset).toBe('remote:com.test.photos/albums/pic');
+    expect(specs[0]!.assetUrl).toMatch(REMOTE_URL);
+    expect(specs[0]!.file.endsWith('.png')).toBe(true);
+    expect(fs.readFileSync(specs[0]!.file, 'utf8')).toBe('bytes');
+    await media.show('image', ctx, 'remote:com.test.photos/albums/pic', {});
+    expect(specs[1]!.file).toBe(specs[0]!.file);
+    expect(fetched).toEqual(['https://photos.example/pic']);
+  });
+
+  it('tells an overlay\'s kind from the download, and plays remote audio', async () => {
+    const { cache } = remoteCache();
+    const { media, specs, audio } = make([MONITOR], undefined, undefined, cache);
+    await media.overlay(ctx, 'remote:com.test.photos/albums/clip', {});
+    expect(specs[0]).toMatchObject({ kind: 'fullscreen' });
+    expect(specs[0]!.assetUrl).toMatch(/\.webm$/);
+    await expect(media.overlay(ctx, 'remote:com.test.photos/albums/song', {})).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await media.playAudio(ctx, 'remote:com.test.photos/albums/song', {});
+    expect((audio.sent.at(-1) as { url: string }).url).toMatch(/\.mp3$/);
+  });
+
+  it('refuses remote items when the app has no cache for them', async () => {
+    const { media, specs } = make();
+    await expect(media.show('image', ctx, 'remote:com.test.photos/albums/pic', {})).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect(specs).toEqual([]);
   });
 });
 

@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CapabilityHandler, CapabilityModuleSpec } from '@rp/shared';
+import { MediaSourceService } from '@rp/core';
 import { JsonFileStorage, createPluginHost } from './host.js';
 import { PluginRegistry } from './registry.js';
 import { loadPluginModuleSpecsFallback, validatePluginManifestFallback } from './sdk-adapter.js';
@@ -69,7 +70,8 @@ describe('plugin manifest + specs (fallback loaders)', () => {
     expect(validatePluginManifestFallback(MANIFEST).id).toBe('com.test.clock');
     expect(() => validatePluginManifestFallback({ ...MANIFEST, id: 'Nope' })).toThrow(/reverse-DNS/);
     expect(() => validatePluginManifestFallback({ ...MANIFEST, modules: [{ ...MANIFEST.modules[0], id: 'Clock!' }] })).toThrow(/modules\[0\]\.id/);
-    expect(() => validatePluginManifestFallback({ ...MANIFEST, modules: [] })).toThrow(/non-empty/);
+    expect(() => validatePluginManifestFallback({ ...MANIFEST, modules: [] })).toThrow(/at least one module or media source/);
+    expect(validatePluginManifestFallback({ ...MANIFEST, modules: [], mediaSources: [{ id: 'photos', title: 'Photos', description: 'Photos.', kinds: ['image'] }] }).id).toBe('com.test.clock');
     const dir = path.join(tmp, 'clock');
     writePlugin(dir, MANIFEST, '');
     const specs = await loadPluginModuleSpecsFallback(dir, validatePluginManifestFallback(MANIFEST));
@@ -169,5 +171,48 @@ describe('PluginService', () => {
     await expect(service.install(path.join(pluginsDir, 'com.test.shadow'))).rejects.toThrow(/built into the app/);
     await service.dispose();
     expect(engine.registered.size).toBe(0);
+  });
+
+  it('registers the media sources a plugin declares, and takes them away with it', async () => {
+    const pluginsDir = path.join(tmp, 'sources');
+    const PHOTOS = {
+      id: 'com.test.photos',
+      name: 'Photos',
+      version: '1.0.0',
+      mediaSources: [{ id: 'albums', title: 'Albums', description: 'Holiday photos.', kinds: ['image'] }],
+    };
+    const main = (marker: string) => `export function activate() {
+  return { mediaSources: { albums: {
+    search(query) { return [{ id: '${marker}/' + (query.text ?? 'all'), kind: 'image', mime: 'image/jpeg', tags: ['Beach'] }, { id: '', kind: 'image' }]; },
+    fetch(itemId) { return { url: 'https://photos.example/' + itemId }; },
+  } } };
+}`;
+    writePlugin(path.join(pluginsDir, 'com.test.photos'), PHOTOS, main('v1'));
+    writePlugin(path.join(pluginsDir, 'com.test.nosource'), { ...PHOTOS, id: 'com.test.nosource' }, 'export function activate() { return {}; }');
+    const engine = { ...fakeEngine(), mediaSources: new MediaSourceService({ logger }) };
+    const service = new PluginService({ pluginsDir, dataDir: path.join(tmp, 'sources-data'), registry: new PluginRegistry(path.join(tmp, 'sources-data', 'plugins.json')), engine, builtinIds: new Set(['media']), appVersion: '0.1.0', logger });
+    const list = await service.loadAll();
+    expect(list.map((p) => [p.id, p.state])).toEqual([
+      ['com.test.nosource', 'error'],
+      ['com.test.photos', 'active'],
+    ]);
+    expect(list.find((p) => p.id === 'com.test.nosource')?.error).toMatch(/no media source "albums"/);
+    expect(list.find((p) => p.id === 'com.test.photos')?.mediaSources).toEqual([{ id: 'com.test.photos/albums', title: 'Albums', kinds: ['image'] }]);
+    expect(engine.mediaSources.list().map((s) => s.id)).toEqual(['com.test.photos/albums']);
+
+    const ctx = { packId: 'p', characterId: 'c', sessionId: 's', packRoot: '/', trigger: { kind: 'llm', actionId: 'a', messageId: 'm' } as const };
+    // The malformed second result is dropped; the good one comes back as a remote AssetRef.
+    expect(await engine.mediaSources.search('com.test.photos/albums', { text: 'beach' }, ctx)).toEqual([
+      { source: 'remote', path: 'com.test.photos/albums/v1/beach', kind: 'image', mime: 'image/jpeg', bytes: 0, tags: ['beach'] },
+    ]);
+    expect(await engine.mediaSources.locate('com.test.photos/albums/v1/beach', ctx)).toMatchObject({ location: { url: 'https://photos.example/v1/beach' } });
+
+    writePlugin(path.join(pluginsDir, 'com.test.photos'), PHOTOS, main('v2'));
+    await service.reload('com.test.photos');
+    expect((await engine.mediaSources.search('com.test.photos/albums', {}, ctx))[0]?.path).toBe('com.test.photos/albums/v2/all');
+    await service.setEnabled('com.test.photos', false);
+    expect(engine.mediaSources.list()).toEqual([]);
+    await expect(engine.mediaSources.search('com.test.photos/albums', {}, ctx)).rejects.toThrow(/no media source/);
+    await service.dispose();
   });
 });

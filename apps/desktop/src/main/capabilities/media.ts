@@ -5,9 +5,11 @@
  * fails on a `closed` report for an item it already removed. A full-screen
  * overlay (`overlay()`) is one item with one backend overlay per screen.
  *
- * An asset is either a pack-relative path or `home:<path>`, a file in the character's own home
- * directory (an `sdk.webcam` capture, anything `sdk.files` wrote). The home is served to the media
- * pages over `rp-asset://` like a pack root, under the host `HomeAssetRoots` registers for it.
+ * An asset is either a pack-relative path, `home:<path>`, a file in the character's own home
+ * directory (an `sdk.webcam` capture, anything `sdk.files` wrote), or `remote:<path>`, an item of a
+ * plugin's remote media source. The home is served to the media pages over `rp-asset://` like a
+ * pack root, under the host `HomeAssetRoots` registers for it; a remote item is downloaded into the
+ * cache `RemoteMediaCache` keeps and served from there.
  *
  * How much may be on screen at once is `settings.media` (`AppSettings.media`, pinnable by the
  * policy's `settings.media` block), counted per `MediaKind`: images, video and audio each have
@@ -50,6 +52,7 @@ import type { Logger } from '@rp/core';
 import type { DisplayBackend, OverlayClosedDetail, OverlayHandle, OverlaySpec, OverlayWindowLike } from '../display/backend.js';
 import { clampOpacity, nearestLayer, resolveOverlayOptions } from '../display/backend.js';
 import { selectMonitor } from '../display/placement.js';
+import type { RemoteMediaFiles } from './remote-media.js';
 
 export interface MediaHandle {
   id: string;
@@ -75,6 +78,8 @@ export interface MediaManagerDeps {
   packs: { getLoaded(packId: string): LoadedPack };
   /** Character home directories and the asset-protocol hosts they are served under. */
   homes: CharacterHomeAssets;
+  /** Items of remote media sources, downloaded on first show. Absent: `remote:` assets are refused. */
+  remote?: RemoteMediaFiles;
   settings(): Promise<AppSettings>;
   logger: Logger;
   /** Host events for `sdk.events`: `media-clicked` and `media-closed` (see `docs/spec/living.md`). */
@@ -204,8 +209,8 @@ export class MediaManager {
   async show(kind: 'image' | 'video', context: ActionContext, asset: string, rawOptions: unknown): Promise<MediaHandle> {
     if (typeof asset !== 'string' || asset.length === 0) throw new RpError('INVALID_ARGUMENT', 'Asset path must be a string');
     // Resolved here rather than in `start`: a bad asset must fail the character's call, not a
-    // queued start it can no longer catch.
-    this.locate(context, asset);
+    // queued start it can no longer catch. For a remote item this is the download.
+    await this.locate(context, asset);
     return this.admit({ id: randomUUID(), kind, mode: 'show', asset, context, owner: characterRef(context.packId, context.characterId), options: asObject(rawOptions), queuedAt: new Date().toISOString() });
   }
 
@@ -213,7 +218,7 @@ export class MediaManager {
     const { id, context, asset } = pending;
     const kind = pending.kind as 'image' | 'video';
     const options = pending.options as ShowImageOptions & PlayVideoOptions;
-    const { file, url } = await this.playable(kind, this.locate(context, asset));
+    const { file, url } = await this.playable(kind, await this.locate(context, asset));
     const backend = this.deps.backend();
     const settings = await this.deps.settings();
     const monitors = await backend.monitors();
@@ -298,11 +303,11 @@ export class MediaManager {
    */
   async overlay(context: ActionContext, asset: string, rawOptions: unknown): Promise<MediaHandle> {
     if (typeof asset !== 'string' || asset.length === 0) throw new RpError('INVALID_ARGUMENT', 'Asset path must be a string');
-    const kind = assetKindFor(parseAssetSource(asset).path);
+    // The located file's own extension says what it is: a remote item's id need not have one.
+    const kind = assetKindFor((await this.locate(context, asset)).file);
     if (kind !== 'image' && kind !== 'video') {
       throw new RpError('INVALID_ARGUMENT', `sdk.media.overlay needs an image or video asset; "${asset}" is ${kind}`, { path: asset, kind });
     }
-    this.locate(context, asset);
     return this.admit({ id: randomUUID(), kind, mode: 'overlay', asset, context, owner: characterRef(context.packId, context.characterId), options: asObject(rawOptions), queuedAt: new Date().toISOString() });
   }
 
@@ -310,7 +315,7 @@ export class MediaManager {
     const { id, context, asset } = pending;
     const kind = pending.kind as 'image' | 'video';
     const options = pending.options as MediaOverlayOptions;
-    const { file, url } = await this.playable(kind, this.locate(context, asset));
+    const { file, url } = await this.playable(kind, await this.locate(context, asset));
     const backend = this.deps.backend();
     const screens = overlayScreens(options.monitor, await backend.monitors());
     const opacity = clampOpacity(options.opacity, FULLSCREEN_DEFAULT_OPACITY);
@@ -398,7 +403,7 @@ export class MediaManager {
 
   async playAudio(context: ActionContext, asset: string, rawOptions: unknown): Promise<MediaHandle> {
     if (typeof asset !== 'string' || asset.length === 0) throw new RpError('INVALID_ARGUMENT', 'Asset path must be a string');
-    this.locate(context, asset);
+    await this.locate(context, asset);
     return this.admit({ id: randomUUID(), kind: 'audio', mode: 'audio', asset, context, owner: characterRef(context.packId, context.characterId), options: asObject(rawOptions), queuedAt: new Date().toISOString() });
   }
 
@@ -413,7 +418,8 @@ export class MediaManager {
     const page: PlayAudioOptions = {};
     if (typeof options.volume === 'number') page.volume = options.volume;
     if (options.loop !== undefined) page.loop = Boolean(options.loop);
-    win.send({ type: 'play-audio', id, url: this.locate(context, asset).url, options: page });
+    const { url } = await this.locate(context, asset);
+    win.send({ type: 'play-audio', id, url, options: page });
     return toHandle(item);
   }
 
@@ -440,11 +446,16 @@ export class MediaManager {
    * the pack root under the pack's own id, a `home:<path>` one from the character's home directory
    * under the host `HomeAssetRoots` hands out for it. Both are resolved through the same path guard.
    * A home file's existence is checked here, since the dispatcher resolves pack paths against the
-   * pack but cannot see into the home.
+   * pack but cannot see into the home. A `remote:<path>` item is downloaded (once; later calls hit
+   * the cache) and served from the remote media cache.
    */
-  private locate(context: ActionContext, asset: string): { file: string; url: string } {
+  private async locate(context: ActionContext, asset: string): Promise<{ file: string; url: string }> {
     const parsed = parseAssetSource(asset);
-    if (parsed.source !== 'home') {
+    if (parsed.source === 'remote') {
+      if (!this.deps.remote) throw new RpError('INVALID_ARGUMENT', `"${asset}" is an item of a remote media source, which this app cannot show`, { path: parsed.path, source: 'remote' });
+      return this.deps.remote.file(parsed.path, context);
+    }
+    if (parsed.source === 'pack') {
       const pack = this.deps.packs.getLoaded(context.packId);
       return { file: resolveAssetPath(pack.root, asset), url: assetUrl(context.packId, asset) };
     }

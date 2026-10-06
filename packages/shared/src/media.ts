@@ -279,7 +279,55 @@ export function homeAsset(relativePath: string): string {
   return `${HOME_ASSET_PREFIX}${relativePath}`;
 }
 
+/**
+ * Marker on a media asset argument for an item of a plugin's remote media source rather than a
+ * file on disk: `remote:<pluginId>/<sourceId>/<itemId>`, e.g. `remote:com.me.photos/albums/8f3a…`.
+ * The part after the prefix is the `path` of the `AssetRef` that `sdk.mediaSources.search` returned.
+ */
+export const REMOTE_ASSET_PREFIX = 'remote:';
+
+/** Where an asset argument points: the pack, the character home, or a plugin's remote media source. */
+export type AssetSource = 'pack' | 'home' | 'remote';
+
+/** A media source's local id inside its plugin (`plugin.json` `mediaSources[].id`). */
+export const MEDIA_SOURCE_ID_PATTERN = /^[a-z][a-z0-9-]{0,39}$/;
+/** Longest item id a media source may hand out. */
+export const REMOTE_ITEM_ID_MAX_LENGTH = 512;
+
+/** `remote:<sourceId>/<itemId>` for an item of a remote media source (`sourceId` is `<pluginId>/<id>`). */
+export function remoteAsset(sourceId: string, itemId: string): string {
+  return `${REMOTE_ASSET_PREFIX}${sourceId}/${itemId}`;
+}
+
+/** Why `itemId` cannot name an item of a remote media source, or undefined when it can. */
+export function remoteItemIdProblem(itemId: unknown): string | undefined {
+  if (typeof itemId !== 'string' || itemId.length === 0) return 'an item id must be a non-empty string';
+  if (itemId.length > REMOTE_ITEM_ID_MAX_LENGTH) return `an item id must be at most ${REMOTE_ITEM_ID_MAX_LENGTH} characters`;
+  if (/[\u0000-\u001f\u007f]/.test(itemId)) return 'an item id must not contain control characters';
+  return undefined;
+}
+
+/**
+ * Split the path of a remote asset (`<pluginId>/<sourceId>/<itemId>`, without the `remote:` prefix)
+ * into the source it belongs to and the item's id there. The item id is everything after the second
+ * slash, so it may hold slashes of its own. Undefined when the path is not shaped like one.
+ */
+export function parseRemoteAssetPath(path: string): { sourceId: string; itemId: string } | undefined {
+  const first = path.indexOf('/');
+  if (first <= 0) return undefined;
+  const second = path.indexOf('/', first + 1);
+  if (second < 0) return undefined;
+  const pluginId = path.slice(0, first);
+  const local = path.slice(first + 1, second);
+  const itemId = path.slice(second + 1);
+  if (!/^[a-z0-9]+(\.[a-z0-9-]+)+$/.test(pluginId) || !MEDIA_SOURCE_ID_PATTERN.test(local)) return undefined;
+  if (remoteItemIdProblem(itemId) !== undefined) return undefined;
+  return { sourceId: `${pluginId}/${local}`, itemId };
+}
+
 /** Split a media asset argument into the root it belongs to and its path relative to that root. */
-export function parseAssetSource(asset: string): { source: 'pack' | 'home'; path: string } {
-  return asset.startsWith(HOME_ASSET_PREFIX) ? { source: 'home', path: asset.slice(HOME_ASSET_PREFIX.length) } : { source: 'pack', path: asset };
+export function parseAssetSource(asset: string): { source: AssetSource; path: string } {
+  if (asset.startsWith(HOME_ASSET_PREFIX)) return { source: 'home', path: asset.slice(HOME_ASSET_PREFIX.length) };
+  if (asset.startsWith(REMOTE_ASSET_PREFIX)) return { source: 'remote', path: asset.slice(REMOTE_ASSET_PREFIX.length) };
+  return { source: 'pack', path: asset };
 }

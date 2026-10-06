@@ -26,6 +26,7 @@ export {
   pluginManifestSchema,
   pluginModuleSchema,
   pluginMethodSchema,
+  pluginMediaSourceSchema,
   validatePluginManifest,
   loadPluginModuleSpecs,
   isEscapingPath,
@@ -33,6 +34,7 @@ export {
 } from './plugin.js';
 export type { PluginManifestIssue } from './plugin.js';
 export * as modules from './modules/index.js';
+export { mediaSourcesModule, MEDIA_SOURCES_MODULE_ID } from './modules/media-sources.js';
 
 /** A registry with all v1 standard modules registered (chat, log, state, pack, timers, media, ui, system). */
 export function createStandardRegistry(): CapabilityRegistry {

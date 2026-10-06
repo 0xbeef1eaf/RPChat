@@ -1,0 +1,17 @@
+{
+  "id": "dev.rpchat.wikimedia",
+  "name": "Wikimedia Commons",
+  "version": "1.0.0",
+  "description": "Lets characters search the freely licensed photos on Wikimedia Commons and show them. No account or API key needed.",
+  "author": { "name": "rpchat examples", "url": "https://github.com/rpchat" },
+  "main": "main.js",
+  "minAppVersion": "0.1.0",
+  "mediaSources": [
+    {
+      "id": "commons",
+      "title": "Wikimedia Commons",
+      "description": "Millions of freely licensed photos of places, animals, objects, art and events; search in plain English.",
+      "kinds": ["image"]
+    }
+  ]
+}

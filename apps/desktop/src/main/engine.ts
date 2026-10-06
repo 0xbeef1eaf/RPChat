@@ -6,7 +6,7 @@ import { Notification, app, dialog, safeStorage, screen, shell } from 'electron'
 import { autoUpdater } from 'electron-updater';
 import { CryptoLog, CryptoManager, DaemonKeyStore, Engine, FileStorage, LocalKeyStore } from '@rp/core';
 import type { Logger, ProviderFactory } from '@rp/core';
-import { createStandardRegistry } from '@rp/sdk';
+import { MEDIA_SOURCES_MODULE_ID, createStandardRegistry } from '@rp/sdk';
 import { QuickJsRunner } from '@rp/sandbox';
 import { createProvider } from '@rp/llm';
 import type { AppSettings, DevRules, LoadedPack, PermissionDecision, PermissionRequest, Storage, UiPromptAnswer, UiPromptRequest } from '@rp/shared';
@@ -70,6 +70,7 @@ import { MediaHandler, MediaManager } from './capabilities/media.js';
 import { SystemHandler } from './capabilities/system.js';
 import { UiHandler } from './capabilities/ui.js';
 import { VIDEO_CACHE_DIRNAME, VIDEO_CACHE_PACK_ID, VideoCompat } from './capabilities/video-compat.js';
+import { REMOTE_MEDIA_DIRNAME, REMOTE_MEDIA_PACK_ID, RemoteMediaCache } from './capabilities/remote-media.js';
 import { WallpaperHandler } from './capabilities/wallpaper.js';
 import type { DisplayBackend } from './display/backend.js';
 import { selectBackend } from './display/backend.js';
@@ -169,10 +170,13 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const voicePreviewDir = path.join(opts.userData, VOICE_PREVIEW_DIRNAME);
   /** Playable copies of videos Chromium cannot decode (video-compat.ts). */
   const videoCacheDir = path.join(opts.userData, VIDEO_CACHE_DIRNAME);
+  /** Items of plugins' remote media sources, downloaded when shown (remote-media.ts). */
+  const remoteMediaDir = path.join(opts.userData, REMOTE_MEDIA_DIRNAME);
   const extraRoots: Record<string, string> = {
     [TTS_PACK_ID]: ttsDir,
     [VOICE_PREVIEW_PACK_ID]: voicePreviewDir,
     [VIDEO_CACHE_PACK_ID]: videoCacheDir,
+    [REMOTE_MEDIA_PACK_ID]: remoteMediaDir,
   };
   const registry = new ProjectRegistry(path.join(dataDir, 'editor-projects.json'));
   /** Character home directories, served like pack roots once `sdk.media` shows a file from one. */
@@ -251,7 +255,8 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   const senses = createSenses({ settings: settingsOf, commands, env, ...(hypr ? { hypr } : {}), logger });
   const emit = (event: Parameters<typeof senses.provider.push>[0]): void => senses.provider.push(event);
   const video = new VideoCompat({ cacheDir: videoCacheDir, logger });
-  const media = new MediaManager({ backend: () => backend, audioWindow: () => windows.audioWindow(), packs, homes, settings: settingsOf, logger, emit, video });
+  const remote = new RemoteMediaCache({ dir: remoteMediaDir, locate: (assetPath, context) => engine.mediaSources.locate(assetPath, context), logger });
+  const media = new MediaManager({ backend: () => backend, audioWindow: () => windows.audioWindow(), packs, homes, remote, settings: settingsOf, logger, emit, video });
   const ui = new UiHandler({
     prompts: uiPrompts,
     deliver: (request: UiPromptRequest) => windows.openPromptWindow({ kind: 'ui', prompt: request }) || windows.sendToMain(IPC_EVENT_CHANNELS.uiPrompt, request),
@@ -695,7 +700,8 @@ export async function createApp(opts: CreateAppOptions): Promise<AppServices> {
   });
 
   await engine.start();
-  const builtinIds = new Set(createStandardRegistry().list().map((m) => m.id));
+  // `mediaSources` is the app's own module even while no source registers it (see @rp/core's Engine).
+  const builtinIds = new Set([...createStandardRegistry().list().map((m) => m.id), MEDIA_SOURCES_MODULE_ID]);
   const plugins = new PluginService({
     pluginsDir: path.join(opts.userData, 'plugins'),
     dataDir: path.join(opts.userData, 'plugin-data'),
