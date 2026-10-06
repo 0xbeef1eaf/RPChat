@@ -10,9 +10,9 @@ import { ModelTrafficDrawer } from '../components/chat/ModelTrafficDrawer';
 import { SessionPanel } from '../components/chat/SessionPanel';
 import { Avatar } from '../components/common/Avatar';
 import { ZoomControl } from '../components/chat/ZoomControl';
-import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, resetSessionState, retryTurn, saveSession, sendMessage, setChatZoom, unqueueMessage } from '../store/actions';
+import { abortTurn, clearHistory, closeAllMedia, deleteMessage, deleteSession, navigate, openMemories, resetSessionState, retryTurn, saveSession, sendMessage, setChatZoom, setDraft, unqueueMessage } from '../store/actions';
 import { runtimeFor } from '../store/state';
-import { useAppState } from '../store/store';
+import { appStore, useAppState } from '../store/store';
 
 export function ChatView() {
   const activeSessionId = useAppState((s) => s.activeSessionId);
@@ -45,6 +45,8 @@ export function ChatView() {
 
   const restrictions = useAppState((s) => s.restrictions);
   const session = useMemo(() => sessions.find((s) => s.id === activeSessionId), [sessions, activeSessionId]);
+  // Read once per session rather than subscribed: the composer owns the text while it is typed.
+  const initialDraft = useMemo(() => (activeSessionId ? (appStore.getState().drafts[activeSessionId] ?? '') : ''), [activeSessionId]);
   // `requireCharacterSession` keeps a conversation open, so the last one may not be deleted either.
   const canDeleteSession = restrictions.allowDeleteSession && !(restrictions.requireCharacterSession && sessions.length <= 1);
   const character = useMemo(() => (session ? characters.find((c) => c.ref === session.characterRef) : undefined), [characters, session]);
@@ -201,6 +203,8 @@ export function ChatView() {
         canAbort={restrictions.allowStopGeneration}
         queued={runtime.queued}
         onUnqueue={onUnqueue}
+        draft={initialDraft}
+        onDraftChange={(text) => setDraft(session.id, text)}
       />
       {confirmReset ? (
         <ConfirmDialog

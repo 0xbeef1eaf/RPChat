@@ -8,7 +8,7 @@
  * `inputLock`, `vtLock` and `guard` blocks have meaningful defaults of their own and are always written.
  */
 import type { AppRestrictions, DevRules, GuardCompositorIpc, GuardIpcGuard, GuardMode, GuardShell, PackSource, PolicyFile } from '@rp/shared';
-import { DEFAULT_APP_RESTRICTIONS, DEFAULT_DEV_RULES, UNLIMITED } from '@rp/shared';
+import { DEFAULT_APP_RESTRICTIONS, DEFAULT_DEV_RULES, RESTART_COUNTDOWN_MAX_SECONDS, RESTART_COUNTDOWN_MIN_SECONDS, UNLIMITED } from '@rp/shared';
 
 export type PolicyValue = number | boolean | string | string[] | Record<string, boolean>;
 export type PolicyEmergencyKey = NonNullable<NonNullable<PolicyFile['inputLock']>['emergencyKey']>;
@@ -27,6 +27,8 @@ export interface PolicySettingSpec {
   fallback: PolicyValue;
   /** `number`/`duration`: the smallest value `parsePolicy` accepts. */
   min?: number;
+  /** `number`: the largest value `parsePolicy` accepts. */
+  max?: number;
   /** `number`/`duration`: `-1` (`UNLIMITED`) is accepted as well, for no cap (or no floor). */
   unlimited?: boolean;
   /** `choice`: the accepted values. */
@@ -96,6 +98,8 @@ export const POLICY_SETTINGS: readonly PolicySettingSpec[] = [
   { path: 'updates.enabled', group: 'updates', kind: 'boolean', label: 'Update checks', hint: 'Off switches updating off entirely — no check, no download, no install.', fallback: true },
   { path: 'updates.automatic', group: 'updates', kind: 'boolean', label: 'Check in the background', hint: 'Pins the background-check switch users see in Settings → Updates.', fallback: true },
   { path: 'updates.checkIntervalHours', group: 'updates', kind: 'number', label: 'Check interval (hours)', hint: 'Hours between background checks.', fallback: 6, min: 1 },
+  { path: 'updates.forceRestart', group: 'updates', kind: 'boolean', label: 'Force restart on update', hint: 'Restart into a downloaded update without asking, after a countdown window. What was on screen comes back after the restart.', fallback: false },
+  { path: 'updates.restartCountdownSeconds', group: 'updates', kind: 'number', label: 'Restart countdown (seconds)', hint: 'How long the countdown window runs before a forced restart.', fallback: 60, min: RESTART_COUNTDOWN_MIN_SECONDS, max: RESTART_COUNTDOWN_MAX_SECONDS },
   { path: 'updates.allowDowngrade', group: 'updates', kind: 'boolean', label: 'Allow downgrades', hint: 'Lets the daemon install a version older than the one on the system. Refused unless this is on.', fallback: false },
 
   { path: 'displayBackend', group: 'display', kind: 'choice', label: 'Display backend', hint: 'How character windows are drawn.', fallback: 'auto', choices: ['auto', 'electron', 'hyprland'] },
@@ -431,7 +435,7 @@ export function policyDraftProblems(draft: PolicyDraft): string[] {
       if (typeof value !== 'number' || !Number.isFinite(value)) problems.push(`${spec.label} needs a number.`);
       else if (spec.min !== undefined && value < spec.min && !(spec.unlimited && value === UNLIMITED)) {
         problems.push(`${spec.label} must be at least ${spec.kind === 'duration' ? `${spec.min / 1000} s` : spec.min}${spec.unlimited ? ', or -1 for unlimited' : ''}.`);
-      }
+      } else if (spec.max !== undefined && value > spec.max) problems.push(`${spec.label} must be at most ${spec.max}.`);
     }
     if (spec.kind === 'choice' && !(spec.choices ?? []).includes(String(value))) problems.push(`${spec.label} must be one of ${(spec.choices ?? []).join(', ')}.`);
   }

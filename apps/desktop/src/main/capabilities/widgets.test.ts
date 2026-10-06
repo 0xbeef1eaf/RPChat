@@ -119,3 +119,19 @@ describe('WidgetsHandler asset placeholders', () => {
     expect(await handler.invoke('list', [], ctx)).toEqual([{ id: 'w' }]);
   });
 });
+
+describe('WidgetsHandler across a restart', () => {
+  it('remembers the HTML as the character wrote it, with its placement, and shows it again under the same id', async () => {
+    const first = make();
+    await first.handler.invoke('show', [{ id: 'game', html: '<p>one</p>', title: 'Game', width: 200, height: 100, position: 'bottom-left' }], ctx);
+    await first.handler.invoke('update', ['game', { html: '<img src="{{asset:media/images/a.png}}">' }], ctx);
+    const records = first.handler.snapshot();
+    expect(records).toEqual([{ id: 'game', packId: 'com.x.p', characterId: 'c', html: '<img src="{{asset:media/images/a.png}}">', title: 'Game', width: 200, height: 100, overlay: { position: 'bottom-left' } }]);
+
+    const second = make();
+    const owns = (packId: string, characterId: string) => packId === 'com.x.p' && characterId === 'c';
+    expect(await second.handler.restore([...records, { ...records[0]!, id: 'other', characterId: 'gone' }], owns)).toBe(1);
+    expect(second.backend.specs[0]).toMatchObject({ id: 'widget-game', widget: { id: 'game', title: 'Game', width: 200, height: 100, html: '<img src="rp-asset://com.x.p/media/images/a.png">' } });
+    expect(await second.handler.invoke('list', [], ctx)).toEqual([{ id: 'game', title: 'Game' }]);
+  });
+});

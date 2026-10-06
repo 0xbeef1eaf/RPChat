@@ -576,7 +576,7 @@ impl PolicyFile {
             if let Some(updates) = map.get("updates").and_then(Value::as_object) {
                 for (key, value) in updates {
                     match key.as_str() {
-                        "automatic" | "enabled" | "allowDowngrade" => {
+                        "automatic" | "enabled" | "allowDowngrade" | "forceRestart" => {
                             if !value.is_boolean() {
                                 return Err(format!("settings.updates.{key} must be a boolean"));
                             }
@@ -589,6 +589,13 @@ impl PolicyFile {
                                         .into(),
                                 )
                             }
+                        },
+                        "restartCountdownSeconds" => match value.as_f64() {
+                            Some(n) if n.is_finite() && (10.0..=3600.0).contains(&n) => {}
+                            _ => return Err(
+                                "settings.updates.restartCountdownSeconds must be a number from 10 to 3600"
+                                    .into(),
+                            ),
                         },
                         _ => {
                             return Err(format!("settings.updates.{key} is not a managed setting"))
@@ -1258,7 +1265,7 @@ mod tests {
                 "memory": {},
                 "senses": {"includeInPrompt": false, "pollMs": 2000, "idleThresholdMs": 60000, "appIdleThresholdMs": 600000},
                 "displayBackend": "electron",
-                "updates": {"automatic": false, "enabled": true, "allowDowngrade": true, "checkIntervalHours": 24},
+                "updates": {"automatic": false, "enabled": true, "allowDowngrade": true, "checkIntervalHours": 24, "forceRestart": true, "restartCountdownSeconds": 120},
                 "browser": {"allowBlocking": false, "allowEval": true, "allowHistory": false, "autoLaunch": false},
                 "media": {"maxConcurrent": {"image": 3, "video": 1, "audio": 0}, "maxQueued": {"video": 4}},
                 "runLimits": {"timeoutMs": 5000, "memoryBytes": 33554432},
@@ -1310,6 +1317,9 @@ mod tests {
             json!({"version": 1, "settings": {"updates": {"enabled": "no"}}}),
             json!({"version": 1, "settings": {"updates": {"checkIntervalHours": 0}}}),
             json!({"version": 1, "settings": {"updates": {"checkIntervalHours": "6"}}}),
+            json!({"version": 1, "settings": {"updates": {"forceRestart": "yes"}}}),
+            json!({"version": 1, "settings": {"updates": {"restartCountdownSeconds": 5}}}),
+            json!({"version": 1, "settings": {"updates": {"restartCountdownSeconds": 7200}}}),
             json!({"version": 1, "settings": {"runLimits": 5}}),
             json!({"version": 1, "settings": {"runLimits": {"timeoutMs": 10}}}),
             json!({"version": 1, "settings": {"runLimits": {"timeoutMs": -1}}}),

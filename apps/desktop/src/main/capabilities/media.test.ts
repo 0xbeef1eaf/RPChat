@@ -510,3 +510,41 @@ describe('MediaManager video conversion', () => {
     expect(specs[0]!.assetUrl).toBe('rp-asset://com.x.p/media/phone.mov');
   });
 });
+
+describe('MediaManager across a restart', () => {
+  it('snapshots open and queued items with their latest options, keeps only looping sound, and the time a timed image has left', async () => {
+    const { media } = make([MONITOR], { maxConcurrent: { image: 0, video: 1, audio: 0 } });
+    const image = await media.show('image', ctx, 'media/a.png', { durationMs: 10_000, x: 5, y: 6 });
+    const video = await media.show('video', ctx, 'media/v.webm', { loop: true });
+    const waiting = await media.show('video', ctx, 'media/v.webm', { muted: true });
+    await media.playAudio(ctx, 'media/v.webm', {});
+    const music = await media.playAudio(ctx, 'media/v.webm', { loop: true });
+    await media.update(video.id, { opacity: 0.5 });
+    const startedAt = Date.parse(media.items_().find((i) => i.id === image.id)!.startedAt);
+    const records = media.snapshot(startedAt + 4_000);
+    expect(records.map((r) => [r.id, r.mode, r.kind])).toEqual([
+      [image.id, 'show', 'image'],
+      [video.id, 'show', 'video'],
+      [music.id, 'audio', 'audio'],
+      [waiting.id, 'show', 'video'],
+    ]);
+    expect(records[0]).toMatchObject({ asset: 'media/a.png', packId: 'com.x.p', characterId: 'c', sessionId: 's', trigger: ctx.trigger, options: { durationMs: 6_000, x: 5, y: 6 } });
+    expect(records[1]?.options).toEqual({ loop: true, opacity: 0.5 });
+    expect(records[3]?.options).toEqual({ muted: true });
+    // An image with under a second left is not worth bringing back.
+    expect(media.snapshot(startedAt + 9_500).map((r) => r.id)).not.toContain(image.id);
+  });
+
+  it('opens the records again under their old ids, skipping any whose character is gone or whose asset no longer resolves', async () => {
+    const before = make();
+    const shown = await before.media.show('image', ctx, 'media/a.png', { caption: 'hi' });
+    const overlay = await before.media.overlay(ctx, 'media/v.webm', { opacity: 0.4 });
+    const records = [...before.media.snapshot(), { ...before.media.snapshot()[0]!, id: 'gone', characterId: 'nobody' }, { ...before.media.snapshot()[0]!, id: 'missing', asset: 'media/nope.png' }];
+    const after = make();
+    const restored = await after.media.restore(records, async (r) => (r.characterId === 'c' ? { ...ctx, sessionId: r.sessionId, trigger: r.trigger } : undefined));
+    expect(restored).toBe(2);
+    expect(after.media.list().map((h) => h.id)).toEqual([shown.id, overlay.id]);
+    expect(after.specs[0]?.page).toEqual({ caption: 'hi' });
+    expect(after.specs[1]).toMatchObject({ kind: 'fullscreen', options: { opacity: 0.4 } });
+  });
+});

@@ -12,7 +12,7 @@ import type { PluginInfo } from './plugin.js';
 import type { AppRestrictions, ChainAuthorStatus, ChainLink, GuardAttemptRecord, ManagedSettingsPaths, PolicyChain, PolicyFile, PolicySnapshot, RemoteLink, SealMode, SystemIntegrationStatus } from './system.js';
 import type { CryptoStatus } from './crypto.js';
 import type { BrowserBlock, BrowserBridgeStatus } from './browser.js';
-import type { UpdateStatus } from './updates.js';
+import type { UpdatePackaging, UpdateStatus } from './updates.js';
 import type { SandboxRunRequest, SandboxRunResult } from './sandbox.js';
 
 export type Unsubscribe = () => void;
@@ -34,6 +34,22 @@ export interface UiPromptRequest {
 export type UiPromptAnswer = boolean | string | null;
 
 /**
+ * Where the main window's UI was: the view, the open conversation, the Settings tab, the pack
+ * editor's place, the memories panel and the unsent text of each composer. Main stores it as it
+ * is; the UI validates it against what exists when it applies it (a session since deleted, a view
+ * the policy now withholds), so the field types are deliberately loose.
+ */
+export interface UiSnapshot {
+  route: string;
+  activeSessionId: string | null;
+  settingsTab: string | null;
+  editor: { projectKey: string | null; section: string; characterDir: string | null };
+  memoriesPanel: { characterRef: string; sessionId?: string } | null;
+  /** Unsent composer text per session id. */
+  drafts: Record<string, string>;
+}
+
+/**
  * What one prompt window shows. Every pending question — a `prompt`-level capability request or
  * an `sdk.ui` question — gets a window of its own; the page asks `prompts.pending()` for the
  * question it was opened for and answers on the usual `permissions.respond` / `ui.respondPrompt`
@@ -48,7 +64,21 @@ export type PromptWindowPayload =
       /** Display name of its pack, falling back to the pack id. */
       packName: string;
     }
-  | { kind: 'ui'; prompt: UiPromptRequest };
+  | { kind: 'ui'; prompt: UiPromptRequest }
+  | RestartPromptPayload;
+
+/**
+ * The forced-restart countdown (`settings.updates.forceRestart`): not a question but an
+ * announcement — the app restarts into `version` at `deadline` (epoch ms) whatever the window
+ * does. Its "Restart now" calls `updates.install()`; closing it does not stop the countdown.
+ */
+export interface RestartPromptPayload {
+  kind: 'restart';
+  promptId: string;
+  version: string;
+  packaging: UpdatePackaging;
+  deadline: number;
+}
 
 /** Options for adding media through the editor. */
 export interface AddMediaOptions {
@@ -116,6 +146,13 @@ export interface IpcApi {
     activity(kind: 'input' | 'focus'): Promise<void>;
     /** Clicking such a notification asks the UI to open that session. */
     onShowSession(listener: (sessionId: string) => void): Unsubscribe;
+    /**
+     * Where the main window's UI was left: the snapshot it last saved, carried across a quit or an
+     * update restart (main keeps it in `<userData>/data/session-state.json`). Null on a first run.
+     */
+    uiState(): Promise<UiSnapshot | null>;
+    /** The UI saves where it is whenever that changes (debounced), so a quit at any moment finds it. */
+    saveUiState(snapshot: UiSnapshot): Promise<void>;
     /**
      * What the root-owned policy's `app` block forbids on this machine, so the UI can hide the
      * controls it would refuse anyway. Cosmetic only: main refuses the guarded channels whatever

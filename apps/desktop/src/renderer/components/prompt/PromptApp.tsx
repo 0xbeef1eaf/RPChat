@@ -3,11 +3,13 @@ import type { PermissionDecision, PromptWindowPayload, UiPromptAnswer } from '@r
 import { api, errorMessage } from '../../api';
 import { applyTheme } from '../../lib/theme';
 import { PermissionPrompt } from './PermissionPrompt';
+import { RestartPrompt } from './RestartPrompt';
 import { UiPrompt } from './UiPrompt';
 
 /** Title above the question, matching the window title main gave this window. */
 function titleOf(payload: PromptWindowPayload): string {
-  return payload.kind === 'permission' ? `${payload.characterName} needs permission` : `${payload.prompt.characterName} asks`;
+  if (payload.kind === 'permission') return `${payload.characterName} needs permission`;
+  return payload.kind === 'restart' ? 'rpchat is restarting to update' : `${payload.prompt.characterName} asks`;
 }
 
 /**
@@ -65,6 +67,7 @@ export function PromptApp() {
 
   const onPermission = useCallback((requestId: string, decision: PermissionDecision) => send(api().permissions.respond(requestId, decision)), [send]);
   const onUiAnswer = useCallback((promptId: string, answer: UiPromptAnswer) => send(api().ui.respondPrompt(promptId, answer)), [send]);
+  const onRestartNow = useCallback(() => send(api().updates.install()), [send]);
 
   return (
     <div className="prompt-page">
@@ -94,6 +97,8 @@ export function PromptApp() {
                 packName={payload.packName}
                 onRespond={(decision) => onPermission(payload.request.requestId, decision)}
               />
+            ) : payload.kind === 'restart' ? (
+              <RestartPrompt payload={payload} onRestartNow={onRestartNow} />
             ) : (
               <UiPrompt prompt={payload.prompt} onRespond={(answer) => onUiAnswer(payload.prompt.promptId, answer)} />
             )}

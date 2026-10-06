@@ -216,6 +216,8 @@ export class UpdateService {
   /** System install: what `update-downloaded` reported, for `install()`. */
   private downloaded: DownloadedUpdate | null = null;
   private feedSet = false;
+  /** `quitAndInstall` was called: a second `install()` (the countdown and a click racing) must not call it again. */
+  private restarting = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
   private started = false;
@@ -346,6 +348,8 @@ export class UpdateService {
     if (this.state === 'installing') return;
     if (this.state !== 'ready') throw new RpError('INVALID_ARGUMENT', 'No downloaded update to install.');
     if (this.packaging === 'system' && this.deps.systemInstall) return this.installThroughDaemon(this.deps.systemInstall);
+    if (this.restarting) return;
+    this.restarting = true;
     this.deps.logger.info(`[updates] installing ${this.latestVersion ?? 'update'} and restarting`);
     if (this.deps.beforeRestart) await this.deps.beforeRestart().catch((err: unknown) => this.deps.logger.warn('[updates] pre-restart hook failed', err));
     this.deps.updater.quitAndInstall(false, true);

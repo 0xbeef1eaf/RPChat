@@ -7,8 +7,9 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { ActionContext, CapabilityHandler, HostEvent, Json, LoadedPack, OverlayOptions, WidgetSpec } from '@rp/shared';
-import { RpError, assetUrl, characterRef } from '@rp/shared';
+import { RpError, assetUrl, characterRef, parseCharacterRef } from '@rp/shared';
 import { resolvePackAsset } from '@rp/core';
+import type { Logger } from '@rp/core';
 import type { DisplayBackend, OverlayHandle, OverlaySpec } from '../display/backend.js';
 import { resolveOverlayOptions } from '../display/backend.js';
 
@@ -22,6 +23,48 @@ interface Live {
   spec: WidgetSpec;
   handle: OverlayHandle;
   off: () => void;
+  /** What a restart needs to show it again: the HTML as the character wrote it (placeholders unresolved) and its placement. */
+  record: WidgetRecord;
+}
+
+/**
+ * A widget as session-state.ts keeps it across a restart. The HTML is the character's own, with
+ * its `{{asset:…}}` placeholders still in it: the URLs they resolve to depend on the display
+ * backend and the loopback port, which can both be different next time.
+ */
+export interface WidgetRecord {
+  id: string;
+  packId: string;
+  characterId: string;
+  html: string;
+  title?: string;
+  width: number;
+  height: number;
+  /** The overlay options the widget was shown with (`monitor`, `position`, `x`, `y`, `layer`…). */
+  overlay: Record<string, unknown>;
+}
+
+/** Pure: the widget records in a stored file, skipping any entry that could not be shown again. */
+export function parseWidgetRecords(raw: unknown): WidgetRecord[] {
+  if (!Array.isArray(raw)) return [];
+  const out: WidgetRecord[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    if (![e.id, e.packId, e.characterId, e.html].every((v) => typeof v === 'string' && v.length > 0)) continue;
+    if ((e.html as string).length > WIDGET_HTML_MAX) continue;
+    out.push({
+      id: e.id as string,
+      packId: e.packId as string,
+      characterId: e.characterId as string,
+      html: e.html as string,
+      ...(typeof e.title === 'string' ? { title: e.title } : {}),
+      width: clampDim(e.width, WIDGET_DEFAULT_WIDTH),
+      height: clampDim(e.height, WIDGET_DEFAULT_HEIGHT),
+      overlay: e.overlay && typeof e.overlay === 'object' && !Array.isArray(e.overlay) ? { ...(e.overlay as Record<string, unknown>) } : {},
+    });
+  }
+  return out;
 }
 
 export interface WidgetsHandlerDeps {
@@ -30,6 +73,7 @@ export interface WidgetsHandlerDeps {
   defaultLayer(): Promise<'top' | 'bottom'>;
   /** Installed packs, for `{{asset:…}}` placeholders. Without it placeholders are an error. */
   packs?: { getLoaded(packId: string): LoadedPack };
+  logger?: Pick<Logger, 'warn'>;
 }
 
 /** `{{asset:media/images/x.png}}` (whitespace around the path tolerated). */
@@ -89,7 +133,7 @@ export class WidgetsHandler implements CapabilityHandler {
     const owner = characterRef(context.packId, context.characterId);
     switch (method) {
       case 'show':
-        return (await this.show(owner, context, args[0])) as unknown as Json;
+        return (await this.show(owner, context.packId, args[0])) as unknown as Json;
       case 'update':
         await this.update(owner, context.packId, args[0], args[1]);
         return;
@@ -106,7 +150,31 @@ export class WidgetsHandler implements CapabilityHandler {
     }
   }
 
-  private async show(owner: string, context: ActionContext, specArg: unknown): Promise<{ id: string; title?: string }> {
+  /** The widgets on screen, as records a later launch can show again (`restore`). */
+  snapshot(): WidgetRecord[] {
+    return [...this.live.values()].map((w) => ({ ...w.record, overlay: { ...w.record.overlay } }));
+  }
+
+  /**
+   * Show the widgets a previous launch had up, under their old ids. `owns` says whether the
+   * character is still installed; a widget whose pack is gone, or whose HTML no longer resolves
+   * against it, is skipped. Returns how many were put back.
+   */
+  async restore(records: WidgetRecord[], owns: (packId: string, characterId: string) => boolean): Promise<number> {
+    let restored = 0;
+    for (const r of records) {
+      if (this.live.has(r.id) || !owns(r.packId, r.characterId)) continue;
+      try {
+        await this.show(characterRef(r.packId, r.characterId), r.packId, { ...r.overlay, id: r.id, html: r.html, width: r.width, height: r.height, ...(r.title !== undefined ? { title: r.title } : {}) });
+        restored++;
+      } catch (err) {
+        this.deps.logger?.warn(`[widgets] could not restore widget ${r.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return restored;
+  }
+
+  private async show(owner: string, packId: string, specArg: unknown): Promise<{ id: string; title?: string }> {
     const s = specArg && typeof specArg === 'object' ? (specArg as Record<string, unknown>) : {};
     if (typeof s.html !== 'string' || s.html.length === 0) throw new RpError('INVALID_ARGUMENT', 'html must be a non-empty string');
     if (s.html.length > WIDGET_HTML_MAX) throw new RpError('INVALID_ARGUMENT', `html exceeds ${WIDGET_HTML_MAX} characters`);
@@ -114,10 +182,10 @@ export class WidgetsHandler implements CapabilityHandler {
     const existing = this.live.get(id);
     if (existing) {
       if (existing.owner !== owner) throw new RpError('PERMISSION_DENIED', `Widget "${id}" belongs to another character`);
-      await this.update(owner, context.packId, id, { html: s.html, ...(typeof s.title === 'string' ? { title: s.title } : {}) });
+      await this.update(owner, packId, id, { html: s.html, ...(typeof s.title === 'string' ? { title: s.title } : {}) });
       return { id, ...(existing.spec.title !== undefined ? { title: existing.spec.title } : {}) };
     }
-    const html = this.renderHtml(s.html, context.packId);
+    const html = this.renderHtml(s.html, packId);
     if ([...this.live.values()].filter((w) => w.owner === owner).length >= WIDGETS_PER_CHARACTER) {
       throw new RpError('INVALID_ARGUMENT', `At most ${WIDGETS_PER_CHARACTER} widgets per character`);
     }
@@ -132,7 +200,7 @@ export class WidgetsHandler implements CapabilityHandler {
     const monitors = await backend.monitors();
     const { html: _html, id: _id, title: _title, ...overlayOpts } = s;
     const options = resolveOverlayOptions({ monitor: 'primary', position: 'top-right', ...(overlayOpts as OverlayOptions), width: widget.width, height: widget.height }, monitors, { layer: await this.deps.defaultLayer() });
-    const spec: OverlaySpec = { id: `widget-${id}`, kind: 'widget', file: '', assetUrl: '', packId: context.packId, asset: '', options, page: {}, widget };
+    const spec: OverlaySpec = { id: `widget-${id}`, kind: 'widget', file: '', assetUrl: '', packId, asset: '', options, page: {}, widget };
     const handle = await backend.createOverlay(spec);
     const offs = [
       handle.on('widget-message', (message) => this.deps.emit({ name: 'widget-message', data: { widgetId: id, message: (message ?? null) as Json, characterRef: owner }, at: new Date().toISOString() })),
@@ -140,7 +208,10 @@ export class WidgetsHandler implements CapabilityHandler {
         if (this.live.get(id)?.handle === handle) this.live.delete(id);
       }),
     ];
-    this.live.set(id, { owner, spec: widget, handle, off: () => offs.forEach((o) => o()) });
+    const { characterId } = parseCharacterRef(owner);
+    const { width: _width, height: _height, ...placement } = overlayOpts as Record<string, unknown>;
+    const record: WidgetRecord = { id, packId, characterId, html: s.html, ...(widget.title !== undefined ? { title: widget.title } : {}), width: widget.width, height: widget.height, overlay: placement };
+    this.live.set(id, { owner, spec: widget, handle, off: () => offs.forEach((o) => o()), record });
     return { id, ...(widget.title !== undefined ? { title: widget.title } : {}) };
   }
 
@@ -161,10 +232,12 @@ export class WidgetsHandler implements CapabilityHandler {
       const html = this.renderHtml(p.html, packId);
       cmd.html = html;
       live.spec.html = html;
+      live.record.html = p.html;
     }
     if (typeof p.title === 'string') {
       cmd.title = p.title.slice(0, 120);
       live.spec.title = cmd.title;
+      live.record.title = cmd.title;
     }
     if (p.postMessage !== undefined) cmd.postMessage = p.postMessage as Json;
     await live.handle.send(cmd);

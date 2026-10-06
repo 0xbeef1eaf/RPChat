@@ -588,8 +588,19 @@ describe('policy', () => {
     expect(() => parsePolicy({ version: 1, settings: { runLimits: 5 } })).toThrow(/runLimits must be an object/);
     expect(() => parsePolicy({ version: 1, settings: { senses: { pollMs: 10 } } })).toThrow(/senses\.pollMs must be a number ≥ 1000/);
     expect(() => parsePolicy({ version: 1, settings: { updates: { checkIntervalHours: 0 } } })).toThrow(/checkIntervalHours must be a number ≥ 1/);
+    expect(() => parsePolicy({ version: 1, settings: { updates: { forceRestart: 'yes' } } })).toThrow(/updates\.forceRestart must be a boolean/);
+    expect(() => parsePolicy({ version: 1, settings: { updates: { restartCountdownSeconds: 5 } } })).toThrow(/restartCountdownSeconds must be a number from 10 to 3600/);
+    expect(() => parsePolicy({ version: 1, settings: { updates: { restartCountdownSeconds: 7200 } } })).toThrow(/restartCountdownSeconds must be a number from 10 to 3600/);
     expect(() => parsePolicy({ version: 1, settings: { debug: { showModelTraffic: 'yes' } } })).toThrow(/debug\.showModelTraffic must be a boolean/);
     expect(() => parsePolicy({ version: 1, settings: { closeToTray: 'no' } })).toThrow(/closeToTray must be a boolean/);
+  });
+
+  it('pins the forced restart and its countdown', () => {
+    const policy = parsePolicy({ version: 1, settings: { updates: { forceRestart: true, restartCountdownSeconds: 120.4 } } });
+    expect(managedPaths(policy)).toEqual(['updates.forceRestart', 'updates.restartCountdownSeconds']);
+    const applied = applyPolicy({ ...base, updates: { automatic: true, checkIntervalHours: 6, forceRestart: false, restartCountdownSeconds: 30 } }, policy).settings;
+    expect(applied.updates).toEqual({ automatic: true, checkIntervalHours: 6, forceRestart: true, restartCountdownSeconds: 120 });
+    expect(stripManagedPatch({ updates: { automatic: false, checkIntervalHours: 6, forceRestart: false, restartCountdownSeconds: 10 } }, managedPaths(policy))).toEqual({ updates: { automatic: false, checkIntervalHours: 6 } });
   });
 
   it('takes -1 as unlimited on every cap, and as no floor on the autonomy floors', () => {

@@ -19,6 +19,14 @@ const INTERVALS: Array<{ hours: number; label: string }> = [
   { hours: 168, label: 'Once a week' },
 ];
 
+const COUNTDOWNS: Array<{ seconds: number; label: string }> = [
+  { seconds: 30, label: '30 seconds' },
+  { seconds: 60, label: '1 minute' },
+  { seconds: 120, label: '2 minutes' },
+  { seconds: 300, label: '5 minutes' },
+  { seconds: 900, label: '15 minutes' },
+];
+
 function stateLabel(s: UpdateStatus): { text: string; badge: string } {
   switch (s.state) {
     case 'unsupported':
@@ -52,6 +60,8 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
   const [busy, setBusy] = useState(false);
   const automaticManaged = useManaged('updates.automatic');
   const intervalManaged = useManaged('updates.checkIntervalHours');
+  const forceRestartManaged = useManaged('updates.forceRestart');
+  const countdownManaged = useManaged('updates.restartCountdownSeconds');
 
   const load = useCallback(async () => {
     try {
@@ -251,6 +261,44 @@ export function UpdatesSection({ settings, onPatch }: UpdatesSectionProps) {
               {INTERVALS.map((i) => (
                 <option key={i.hours} value={String(i.hours)}>
                   {i.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="row" style={{ marginTop: 12, marginBottom: 6 }}>
+            <div className="item-text grow">
+              <span className="item-title">
+                Restart into updates automatically
+                <ManagedBadge show={forceRestartManaged || disabledByPolicy} />
+              </span>
+              <span className="item-sub">
+                Once an update is downloaded, a countdown window announces the restart and rpchat restarts when it runs out instead of asking. The chats, media on screen, avatar and open views come back after the restart.
+              </span>
+            </div>
+            <Toggle
+              checked={settings.updates.forceRestart}
+              disabled={forceRestartManaged || disabledByPolicy}
+              aria-label="Restart into updates automatically"
+              onChange={(v) => void onPatch({ updates: { ...settings.updates, forceRestart: v } })}
+            />
+          </div>
+          <div className="field" style={{ maxWidth: 260 }}>
+            <label htmlFor="update-restart-countdown">
+              Countdown before restarting
+              <ManagedBadge show={countdownManaged} />
+            </label>
+            <select
+              id="update-restart-countdown"
+              value={String(settings.updates.restartCountdownSeconds)}
+              disabled={countdownManaged || disabledByPolicy || !settings.updates.forceRestart}
+              onChange={(e) => void onPatch({ updates: { ...settings.updates, restartCountdownSeconds: Number(e.target.value) } })}
+            >
+              {COUNTDOWNS.some((c) => c.seconds === settings.updates.restartCountdownSeconds) ? null : (
+                <option value={String(settings.updates.restartCountdownSeconds)}>{settings.updates.restartCountdownSeconds} seconds</option>
+              )}
+              {COUNTDOWNS.map((c) => (
+                <option key={c.seconds} value={String(c.seconds)}>
+                  {c.label}
                 </option>
               ))}
             </select>

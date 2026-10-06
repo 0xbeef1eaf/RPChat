@@ -62,6 +62,7 @@ describe('promptIdOf', () => {
   it('is the id the answer comes back with', () => {
     expect(promptIdOf({ kind: 'permission', request, characterName: 'Luna', packName: 'Luna pack' })).toBe('req-1');
     expect(promptIdOf({ kind: 'ui', prompt })).toBe('prompt-1');
+    expect(promptIdOf({ kind: 'restart', promptId: 'update-restart-1.2.0', version: '1.2.0', packaging: 'appimage', deadline: 0 })).toBe('update-restart-1.2.0');
   });
 });
 

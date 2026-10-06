@@ -27,8 +27,8 @@ import { ConfirmDialog } from '../components/common/Modal';
 import { newId } from '../lib/ids';
 import { maskSecret } from '../lib/format';
 import { applyTheme } from '../lib/theme';
-import { reportError, setChatZoom, toast } from '../store/actions';
-import { useAppState, update } from '../store/store';
+import { reportError, setChatZoom, setSettingsTabShown, toast } from '../store/actions';
+import { appStore, useAppState, update } from '../store/store';
 import type { SettingsTab } from '../store/state';
 
 async function patchSettings(patch: Partial<AppSettings>): Promise<boolean> {
@@ -305,7 +305,11 @@ const TABS: Array<{ id: SettingsTab; label: string }> = [
 export function SettingsView() {
   const settings = useAppState((s) => s.settings);
   const requestedTab = useAppState((s) => s.settingsTab);
-  const [tab, setTab] = useState<SettingsTab>('providers');
+  const [tab, setTabState] = useState<SettingsTab>(() => appStore.getState().settingsTabShown ?? 'providers');
+  const setTab = (next: SettingsTab): void => {
+    setTabState(next);
+    setSettingsTabShown(next);
+  };
   // `openSettings(tab)` (e.g. a pack card's link to Permissions) asks for a tab; adopt it once and clear the request.
   useEffect(() => {
     if (!requestedTab) return;

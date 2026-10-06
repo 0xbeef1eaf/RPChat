@@ -186,7 +186,7 @@ describe('the policy form', () => {
       draft.values[spec.path] = UNLIMITED;
     }
     // `consolidateEveryTurns` is a cadence, not a cap, and the sandbox limits, senses timings and
-    // update interval are floors with no "unlimited": -1 there is refused on both sides.
+    // update interval (and restart countdown) are floors with no "unlimited": -1 there is refused on both sides.
     const floors = POLICY_SETTINGS.filter((s) => (s.kind === 'number' || s.kind === 'duration') && !s.unlimited);
     expect(floors.map((s) => s.path)).toEqual([
       'runLimits.timeoutMs',
@@ -200,6 +200,7 @@ describe('the policy form', () => {
       'senses.idleThresholdMs',
       'senses.appIdleThresholdMs',
       'updates.checkIntervalHours',
+      'updates.restartCountdownSeconds',
     ]);
     expect(policyDraftProblems(draft)).toEqual(floors.map((s) => expect.stringContaining(s.label)));
     expect(() => parsePolicy(policyDraftToFile(draft))).toThrow(/memory\.consolidateEveryTurns must be a non-negative number$/m);
