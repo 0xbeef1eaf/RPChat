@@ -1,12 +1,16 @@
 import * as fs from 'node:fs';
 import type { AssetEntry, AssetKind, LoadedPack, TagSummary } from '@rp/shared';
-import { RpError, parseAssetSource } from '@rp/shared';
+import { RpError, parseAssetSource, parseRemoteAssetPath } from '@rp/shared';
+import type { AssetSource } from '@rp/shared';
 import { DEFAULT_MEDIA_ROOT, assetKindFor, mimeFor, normalizeRelativePath, resolveAssetPath, summariseTags as packSummariseTags } from '@rp/pack';
 
 /** The shape of `AssetRef` in the SDK preamble (mirrors `AssetEntry`). */
 export interface AssetRef {
-  /** Where `path` is relative to; omitted (i.e. 'pack') for everything the pack itself indexes. */
-  source?: 'pack' | 'home';
+  /**
+   * Where `path` is relative to; omitted (i.e. 'pack') for everything the pack itself indexes.
+   * `remote` is an item of a plugin's media source, its path `<sourceId>/<itemId>`.
+   */
+  source?: AssetSource;
   path: string;
   kind: AssetEntry['kind'];
   mime: string;
@@ -169,6 +173,12 @@ export function homeAssetRef(input: string): AssetRef {
 export interface CoerceAssetOptions {
   /** Whether the call takes a file from the character home as well as a pack asset. Default false. */
   home?: boolean;
+  /**
+   * The remote media sources, when the call takes their items as well (`MediaSourceService`). The
+   * kind of a `remote:<path>` string comes from the search that returned it; a ref object that has
+   * outlived that memory is taken at its word.
+   */
+  remote?: { hasSource(sourceId: string): boolean; describe(assetPath: string): AssetRef | undefined };
   /** The call being made (`sdk.wallpaper.set`), to name it in the message when it takes pack assets only. */
   call?: string;
 }
@@ -178,7 +188,8 @@ export interface CoerceAssetOptions {
  * A file in the character's home directory — an `sdk.webcam` capture, anything `sdk.files` wrote —
  * comes in either as a `source: 'home'` ref or as a `home:<path>` string, and is taken only by the
  * calls that can serve one (`options.home`); the rest name it for what it is rather than report it
- * as a pack file that does not exist.
+ * as a pack file that does not exist. An item of a remote media source (`source: 'remote'` or
+ * `remote:<path>`) is taken the same way, by the calls given `options.remote`.
  */
 export function coerceAssetArg(pack: LoadedPack, arg: unknown, options: CoerceAssetOptions = {}): AssetRef {
   const home = (relative: string): AssetRef => {
@@ -191,12 +202,40 @@ export function coerceAssetArg(pack: LoadedPack, arg: unknown, options: CoerceAs
   };
   if (typeof arg === 'string') {
     const parsed = parseAssetSource(arg);
+    if (parsed.source === 'remote') return remoteAssetRef(parsed.path, undefined, options);
     return parsed.source === 'home' ? home(parsed.path) : resolvePackAsset(pack, arg);
   }
   if (arg && typeof arg === 'object' && typeof (arg as { path?: unknown }).path === 'string') {
-    const ref = arg as { path: string; source?: unknown };
+    const ref = arg as { path: string; source?: unknown; kind?: unknown };
     if (ref.source === 'home') return home(ref.path);
+    if (ref.source === 'remote') return remoteAssetRef(ref.path, ref, options);
     return resolvePackAsset(pack, ref.path);
   }
   throw new RpError('INVALID_ARGUMENT', 'Expected an asset path string or an AssetRef object');
+}
+
+const REMOTE_KINDS: ReadonlySet<string> = new Set(['image', 'video', 'audio']);
+
+/**
+ * A remote asset argument: its path must name an item of a source that is registered now. The ref
+ * a search returned is what describes it; failing that (the search was long ago, or in an earlier
+ * run), a ref object passed back whole still says its kind, while a bare string no longer can.
+ */
+function remoteAssetRef(assetPath: string, given: { kind?: unknown } | undefined, options: CoerceAssetOptions): AssetRef {
+  const remote = options.remote;
+  if (!remote) {
+    throw new RpError('INVALID_ARGUMENT', `${options.call ?? 'This call'} needs a pack asset; "${assetPath}" is an item of a remote media source. sdk.media can show one of those.`, { path: assetPath, source: 'remote' });
+  }
+  const parsed = parseRemoteAssetPath(assetPath);
+  if (!parsed) throw new RpError('INVALID_ARGUMENT', `"${assetPath}" is not a remote asset path ("<plugin id>/<source>/<item id>", as sdk.mediaSources.search returns it)`, { path: assetPath, source: 'remote' });
+  if (!remote.hasSource(parsed.sourceId)) {
+    throw new RpError('NOT_FOUND', `The media source "${parsed.sourceId}" is not available any more (sdk.mediaSources.list() shows what is)`, { path: assetPath, source: 'remote' });
+  }
+  const known = remote.describe(assetPath);
+  if (known) return known;
+  if (given && typeof given.kind === 'string' && REMOTE_KINDS.has(given.kind)) {
+    const kind = given.kind as AssetKind;
+    return { source: 'remote', path: assetPath, kind, mime: `${kind}/*`, bytes: 0, tags: [] };
+  }
+  throw new RpError('NOT_FOUND', `"${assetPath}" is not a result of a recent sdk.mediaSources.search; search the source again and pass the AssetRef it returns`, { path: assetPath, source: 'remote' });
 }

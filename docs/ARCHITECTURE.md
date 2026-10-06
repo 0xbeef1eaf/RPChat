@@ -188,11 +188,12 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `llm`    | trusted    | `ask(prompt, opts?)` (private side completion), `wake(prompt, { delayMs? })` (self-triggered turn now or later; rate-limited by autonomy settings) |
 | `memory` | trusted    | `remember(text, opts?)`, `recall(query, limit?)`, `recent(limit?)`, `update(id, patch)`, `forget(id)` — long-term memory, also consolidated automatically (see `docs/spec/memory.md`) |
 | `display`| trusted    | `monitors()`, `backend()` — read-only screen/backend info for placement decisions   |
-| `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `overlay(asset, opts?)` (image/video washed over whole screens, always click-through), `update(id, changes)`, `close(id)`, `closeAll()`, `list()`; overlay options: monitor, position or x/y, layer (background/bottom/top/overlay), opacity, clickThrough, width/height. `asset` is a pack asset or a file in the character's own home directory (`home:<path>`, or a `source: 'home'` AssetRef such as an `sdk.webcam` capture) |
+| `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `overlay(asset, opts?)` (image/video washed over whole screens, always click-through), `update(id, changes)`, `close(id)`, `closeAll()`, `list()`; overlay options: monitor, position or x/y, layer (background/bottom/top/overlay), opacity, clickThrough, width/height. `asset` is a pack asset, a file in the character's own home directory (`home:<path>`, or a `source: 'home'` AssetRef such as an `sdk.webcam` capture), or an item of a plugin's remote media source (`remote:<path>`, or a `source: 'remote'` AssetRef from `sdk.mediaSources.search`) |
 | `ui`     | pack       | `notify(title, body?, opts?)` (urgency low/normal/critical), `confirm(question)`, `choose(question, options[])`, `ask(question, opts?)` (free text), `pickFile(opts?)`, `pickFolder(opts?)` (native pickers) |
 | `wallpaper` | pack    | `set(asset, { monitor? })`, `restore()`, `current()` — via the user's wallpaper command template |
 | `browser`| pack       | `open(url, { newWindow? })` via the user's browser command; with the browser extension connected also `status`, `tabs`, `openTab`, `activate`, `close`, `navigate`, `back/forward/reload`, `read`, `query`, `click`, `type`, `scroll`, `screenshot`, `find` (docs/browser-extension.md) |
 | `input`  | pack       | `lock(durationMs, { reason?, devices? })`, `unlock()`, `status()`, `type`, `key`, `click`, `moveMouse` — daemon-only (`rpchatd`, Linux), duration capped; `CAPABILITY_FAILED` without the daemon |
+| `mediaSources` | pack | `list()`, `search(source, { text?, tags?, kind?, limit?, page? })` — the remote media sources plugins provide (docs/spec/plugins.md); registered only while at least one source is, and its typings name them. Results are `source: 'remote'` AssetRefs for `sdk.media` |
 | `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — via the user's camera command templates; the capture is saved under `webcam/` in the character home and returned as a `source: 'home'` AssetRef, which `sdk.media` can show |
 | `crypto` | pack       | `encrypt(path)`, `decrypt(path)` — one of the user's own files, in place, under an app-managed AES-256-GCM key; refuses anything outside the home directory or that looks like a system/session file, and logs every encryption so it stays recoverable (docs/spec/system.md) |
 | `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)`, `clipboardRead()` |
@@ -346,7 +347,10 @@ Threat model: pack authors and the LLM are **untrusted**. The user is trusted.
   file from the character's own home directory (`home:<relative>`), validated
   against that home with the same guard and served under a host of its own,
   `rp-asset://home-<12 hex>/<relative>`, which the dispatcher registers when a
-  call names it (`HomeAssetRoots`). No other path reaches a media window.
+  call names it (`HomeAssetRoots`). An item of a plugin's remote media source
+  (`remote:<plugin>/<source>/<item>`) is downloaded by the host into
+  `<userData>/remote-media` and served from `rp-asset://app.rpchat.remote/`, so
+  the page never loads a remote URL itself. No other path reaches a media window.
 - **Audit**: every capability call (allowed or denied) is an `AuditEntry` in
   storage, visible in the UI's action log, and so is every `lib.<name>(...)` the
   sandbox reports — a library call runs inside the isolate, so it is logged after

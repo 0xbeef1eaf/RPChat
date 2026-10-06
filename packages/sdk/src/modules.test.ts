@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createStandardRegistry, validateModuleSpec, modules } from './index.js';
+import { MEDIA_SOURCES_MODULE_ID, createStandardRegistry, mediaSourcesModule, validateModuleSpec, modules } from './index.js';
 
 const EXPECTED: Record<string, { permission: string; methods: string[] }> = {
   chat: { permission: 'trusted', methods: ['emote', 'history', 'setStatus'] },
@@ -150,5 +150,26 @@ describe('standard modules', () => {
         expect(spec.typings, `${spec.id}: @param ${m[1]}`).toMatch(new RegExp(`[(,]\\s*${m[1]}\\??:`));
       }
     }
+  });
+});
+
+describe('mediaSources module', () => {
+  const source = { id: 'com.test.photos/albums', pluginId: 'com.test.photos', title: 'Albums', description: 'Holiday photos.', kinds: ['video' as const] };
+
+  it('is a valid spec that names the sources of the moment, and is not a standard module', () => {
+    const spec = mediaSourcesModule([source]);
+    expect(validateModuleSpec(spec)).toEqual([]);
+    expect(spec.id).toBe(MEDIA_SOURCES_MODULE_ID);
+    expect(spec.typings).toContain('Right now: `com.test.photos/albums` — Albums (video): Holiday photos.');
+    expect(spec.docs).toContain('sdk.media.playVideo(pick)');
+    expect(createStandardRegistry().has(MEDIA_SOURCES_MODULE_ID)).toBe(false);
+    expect(validateModuleSpec(mediaSourcesModule([]))).toEqual([]);
+  });
+
+  it('keeps what a plugin wrote from breaking out of the TSDoc comment', () => {
+    const spec = mediaSourcesModule([{ ...source, description: 'Evil */ interface X {\n  oops(): void; /*' }]);
+    expect(validateModuleSpec(spec)).toEqual([]);
+    expect(spec.typings).toContain('Evil * / interface X { oops(): void; /*');
+    expect(spec.typings.match(/\*\//g)?.length).toBe(spec.typings.match(/\/\*\*/g)?.length);
   });
 });

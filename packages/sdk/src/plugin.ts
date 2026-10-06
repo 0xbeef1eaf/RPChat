@@ -6,7 +6,7 @@
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { RpError } from '@rp/shared';
+import { MEDIA_SOURCE_ID_PATTERN, RpError } from '@rp/shared';
 import type { CapabilityModuleSpec, PluginManifest, PluginModuleManifest } from '@rp/shared';
 import { API_TYPE_NAME_PATTERN, METHOD_KEY_PATTERN, MODULE_ID_PATTERN, SEMVER_PATTERN, validateModuleSpec } from './validate.js';
 
@@ -61,6 +61,13 @@ export const pluginModuleSchema = z
     }
   });
 
+export const pluginMediaSourceSchema = z.object({
+  id: z.string().regex(MEDIA_SOURCE_ID_PATTERN, `media source id must match ${MEDIA_SOURCE_ID_PATTERN}`),
+  title: nonEmpty('title'),
+  description: nonEmpty('description'),
+  kinds: z.array(z.enum(['image', 'video', 'audio'])).min(1, 'kinds must name at least one of image, video, audio'),
+});
+
 /** Schema of `plugin.json`. Built-in id collisions are checked by core at registration time, not here. */
 export const pluginManifestSchema = z
   .object({
@@ -72,9 +79,18 @@ export const pluginManifestSchema = z
     homepage: z.string().optional(),
     main: relativePath('main').optional(),
     minAppVersion: semver('minAppVersion').optional(),
-    modules: z.array(pluginModuleSchema).min(1, 'modules must declare at least one module'),
+    modules: z.array(pluginModuleSchema).default([]),
+    mediaSources: z.array(pluginMediaSourceSchema).optional(),
   })
   .superRefine((m, ctx) => {
+    if (m.modules.length === 0 && (m.mediaSources ?? []).length === 0) {
+      ctx.addIssue({ code: 'custom', message: 'a plugin must declare at least one module or media source', path: ['modules'] });
+    }
+    const sources = new Set<string>();
+    (m.mediaSources ?? []).forEach((source, i) => {
+      if (sources.has(source.id)) ctx.addIssue({ code: 'custom', message: `duplicate media source id "${source.id}"`, path: ['mediaSources', i, 'id'] });
+      sources.add(source.id);
+    });
     const seen = new Set<string>();
     m.modules.forEach((mod, i) => {
       if (seen.has(mod.id)) {

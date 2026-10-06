@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { ActionContext, CapabilityHandler, CapabilityModuleSpec, HostEvent, Json, PluginActivation, PluginEntryModule, PluginHost, PluginInfo, PluginManifest } from '@rp/shared';
+import type { ActionContext, CapabilityHandler, CapabilityModuleSpec, HostEvent, Json, MediaSourceInfo, MediaSourceProvider, PluginActivation, PluginEntryModule, PluginHost, PluginInfo, PluginManifest } from '@rp/shared';
 import { RpError } from '@rp/shared';
 import { normalizeRelativePath, resolveAssetPath } from '@rp/pack';
 import { createPluginHost } from './host.js';
@@ -23,6 +23,11 @@ export interface PluginEngineLike {
     list(): Array<{ id: string }>;
   };
   hostEvents?: { emit(event: HostEvent): void };
+  /** Remote media sources (`engine.mediaSources`); absent in a core that predates them. */
+  mediaSources?: {
+    register(info: MediaSourceInfo, provider: MediaSourceProvider): void;
+    unregister(id: string): boolean;
+  };
 }
 
 export type ModuleImporter = (file: string) => Promise<unknown>;
@@ -48,6 +53,8 @@ interface Loaded {
   specs: CapabilityModuleSpec[];
   activation?: PluginActivation;
   registered: string[];
+  /** Media sources registered with the engine, by full `<pluginId>/<id>`. */
+  sources: string[];
   state: PluginInfo['state'];
   error?: string;
 }
@@ -147,17 +154,17 @@ export class PluginService {
     } catch (err) {
       // No usable manifest: remember the folder under its name so the UI can show the problem.
       const id = path.basename(dir);
-      const loaded: Loaded = { manifest: { id, name: id, version: '0.0.0', modules: [] }, dir, specs: [], registered: [], state: 'error', error: (err as Error).message };
+      const loaded: Loaded = { manifest: { id, name: id, version: '0.0.0', modules: [] }, dir, specs: [], registered: [], sources: [], state: 'error', error: (err as Error).message };
       this.plugins.set(id, loaded);
       return this.info(loaded);
     }
     const existing = this.plugins.get(manifest.id);
     if (existing && existing.dir !== dir && existing.state !== 'error') {
-      const loaded: Loaded = { manifest, dir, specs: [], registered: [], state: 'error', error: `Another plugin with id ${manifest.id} is already loaded from ${existing.dir}` };
+      const loaded: Loaded = { manifest, dir, specs: [], registered: [], sources: [], state: 'error', error: `Another plugin with id ${manifest.id} is already loaded from ${existing.dir}` };
       return this.info(loaded);
     }
     if (existing) await this.deactivate(existing);
-    const loaded: Loaded = { manifest, dir, specs: [], registered: [], state: 'disabled' };
+    const loaded: Loaded = { manifest, dir, specs: [], registered: [], sources: [], state: 'disabled' };
     this.plugins.set(manifest.id, loaded);
     if (!this.deps.registry.isEnabled(manifest.id)) return this.info(loaded);
     await this.activate(loaded);
@@ -179,21 +186,22 @@ export class PluginService {
       const activate = activateFrom(await this.importModule(mainFile));
       const host = this.hostFor(manifest.id, dir);
       const activation = await activate(host);
-      if (!activation || typeof activation !== 'object' || !activation.handlers || typeof activation.handlers !== 'object') {
+      if (!activation || typeof activation !== 'object' || (specs.length > 0 && (!activation.handlers || typeof activation.handlers !== 'object'))) {
         throw new RpError('INVALID_ARGUMENT', 'activate(host) must return { handlers: { <moduleId>: handler } }');
       }
       loaded.activation = activation;
       const register = this.deps.engine.capabilities.register;
-      if (typeof register !== 'function') throw new RpError('INTERNAL', 'This build of @rp/core cannot register plugin modules (engine.capabilities.register missing)');
+      if (specs.length > 0 && typeof register !== 'function') throw new RpError('INTERNAL', 'This build of @rp/core cannot register plugin modules (engine.capabilities.register missing)');
       for (const spec of specs) {
         const handler = activation.handlers[spec.id];
         if (!handler || typeof handler.invoke !== 'function') throw new RpError('INVALID_ARGUMENT', `activate(host) returned no handler for module "${spec.id}"`);
-        await register.call(this.deps.engine.capabilities, spec, new PluginModuleHandler(spec.id, manifest.id, handler));
+        await register!.call(this.deps.engine.capabilities, spec, new PluginModuleHandler(spec.id, manifest.id, handler));
         loaded.registered.push(spec.id);
       }
+      this.registerSources(loaded, activation);
       loaded.state = 'active';
       delete loaded.error;
-      this.deps.logger.info(`[plugins] ${manifest.id}@${manifest.version} active (${specs.map((s) => s.id).join(', ')})`);
+      this.deps.logger.info(`[plugins] ${manifest.id}@${manifest.version} active (${[...specs.map((s) => s.id), ...loaded.sources].join(', ')})`);
     } catch (err) {
       loaded.state = 'error';
       loaded.error = (err as Error).message;
@@ -202,7 +210,31 @@ export class PluginService {
     }
   }
 
+  /** Hand each media source the manifest declares to the engine, with the provider `activate` returned for it. */
+  private registerSources(loaded: Loaded, activation: PluginActivation): void {
+    const declared = loaded.manifest.mediaSources ?? [];
+    if (declared.length === 0) return;
+    const engine = this.deps.engine.mediaSources;
+    if (!engine) throw new RpError('INTERNAL', 'This build of @rp/core cannot register media sources (engine.mediaSources missing)');
+    for (const source of declared) {
+      const provider = activation.mediaSources?.[source.id];
+      if (!provider || typeof provider.search !== 'function' || typeof provider.fetch !== 'function') {
+        throw new RpError('INVALID_ARGUMENT', `activate(host) returned no media source "${source.id}" with search(query, context) and fetch(itemId, context)`);
+      }
+      const id = `${loaded.manifest.id}/${source.id}`;
+      engine.register({ id, pluginId: loaded.manifest.id, title: source.title, description: source.description, kinds: source.kinds }, provider);
+      loaded.sources.push(id);
+    }
+  }
+
   private async deactivate(loaded: Loaded, keepError = false): Promise<void> {
+    for (const id of loaded.sources.splice(0)) {
+      try {
+        this.deps.engine.mediaSources?.unregister(id);
+      } catch (err) {
+        this.deps.logger.warn(`[plugins] unregister media source ${id} failed`, err);
+      }
+    }
     const unregister = this.deps.engine.capabilities.unregister;
     for (const id of loaded.registered.splice(0)) {
       try {
@@ -248,6 +280,7 @@ export class PluginService {
       enabled: this.deps.registry.isEnabled(manifest.id),
       state: loaded.state,
       modules: manifest.modules.map((m) => ({ id: m.id, title: m.title, permission: m.permission, methods: Object.keys(m.methods ?? {}) })),
+      mediaSources: (manifest.mediaSources ?? []).map((m) => ({ id: `${manifest.id}/${m.id}`, title: m.title, kinds: [...m.kinds] })),
     };
     if (manifest.description !== undefined) info.description = manifest.description;
     if (manifest.author !== undefined) info.author = manifest.author;

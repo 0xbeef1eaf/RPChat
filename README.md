@@ -135,8 +135,11 @@ Characters, their behaviours and their media are distributed as shareable
 - **SDK plugins**: drop a folder with `plugin.json`, a `.d.ts` with TSDoc, a
   markdown guide and a `main.js` into the plugins directory and the app adds
   the module to the SDK: it shows up in the reference, the prompt and the
-  permission policy like any built-in, function by function. See
-  [docs/plugins.md](docs/plugins.md) and `examples/plugins/clock`.
+  permission policy like any built-in, function by function. A plugin can also
+  provide remote media sources (a photo library, an image site) that characters
+  search with `sdk.mediaSources` and show with `sdk.media`. See
+  [docs/plugins.md](docs/plugins.md), `examples/plugins/clock` and
+  `examples/plugins/wikimedia`.
 - **Built-in pack editor**: create or import a pack, edit the manifest, the
   character (persona, greeting, behaviours, avatar and expressions), its function
   library (Scripts), media with tags and descriptions, and the README, with live

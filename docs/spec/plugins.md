@@ -71,6 +71,47 @@ my-plugin/
 - Tests: manifest → specs → registration with a fake engine, host `storage` round trip,
   error isolation (a throwing plugin does not block others), reload replaces handlers.
 
+## Remote media sources
+
+A plugin may also (or only) provide **media sources**: places outside the pack where characters find
+pictures, video and sound. Contracts: `PluginMediaSourceManifest`, `MediaSourceProvider`,
+`MediaSourceQuery`, `RemoteMediaItem`, `RemoteMediaLocation`, `MediaSourceInfo` in
+`@rp/shared/plugin.ts`; `REMOTE_ASSET_PREFIX`, `parseRemoteAssetPath` in `@rp/shared/media.ts`.
+
+- Manifest: `mediaSources: [{ id, title, description, kinds }]` (`id` matches
+  `MEDIA_SOURCE_ID_PATTERN`, unique per plugin; `kinds` ⊆ image/video/audio, non-empty).
+  `modules` defaults to `[]`; a plugin must declare at least one module or source.
+- `activate(host)` returns `mediaSources: { [id]: { search(query, ctx), fetch(itemId, ctx) } }`;
+  `handlers` is required only when the plugin declares modules. A declared source without a
+  provider puts the plugin in `error`.
+- Core `MediaSourceService` (`engine.mediaSources`): `register(info, provider)` with
+  `info.id = <pluginId>/<id>`, `unregister(id)`, `list()`, `search(source, query, ctx)`,
+  `locate(path, ctx)`. It normalises the query (text ≤ 500 chars, ≤ 20 lower-cased tags, `kind`
+  among the source's kinds, `limit` 1..50 default 20, `page` ≥ 1), bounds both provider calls to
+  30 s (`CAPABILITY_FAILED`), drops malformed items, and turns the rest into `AssetRef`s
+  `{ source: 'remote', path: '<sourceId>/<itemId>', kind, mime (or '<kind>/*'), bytes (or 0), tags,
+  description? }`. The last 2000 results are remembered so the dispatcher can type a
+  `remote:<path>` string; a whole `source: 'remote'` ref is taken at its own `kind` after that.
+  `locate` accepts only `{ url: http(s), headers?: Record<string, string> }` or
+  `{ file: <absolute path> }`.
+- `sdk.mediaSources` (`list()`, `search(source, query?)`, permission `pack`) is not a standard
+  module: core puts `mediaSourcesModule(sources)` in the registry while at least one source is
+  registered and re-registers it on every change, since its typings name the sources. The handler
+  is always attached; the registry is what gates calls. `mediaSources` is reserved — a plugin
+  module may not use the id.
+- Dispatcher: `media.showImage/playVideo/playAudio/overlay` take remote refs (or `remote:<path>`)
+  and hand them to the host as `remote:<path>`; the kind check uses the kind the search reported.
+  `wallpaper.set` refuses them. A ref of a source that is gone is `NOT_FOUND`.
+- Desktop `RemoteMediaCache` (`capabilities/remote-media.ts`): `MediaManager.locate` asks it for
+  `remote:` assets. It calls `engine.mediaSources.locate`, downloads (≤ 1 GB, 5 min, one download
+  per item at a time) or copies the file into `<userData>/remote-media/<sha256(path)[:32]>.<ext>`,
+  served as the root of `REMOTE_MEDIA_PACK_ID` (`app.rpchat.remote`). The extension comes from the
+  item's MIME, the response's `Content-Type` or the URL, and must be a known image/video/audio
+  type; a download of another kind than the search reported is refused. The cache keeps 2 GB,
+  least recently shown first out. `overlay()` reads its kind off the located file.
+- `PluginInfo.mediaSources` lists them; Settings → Plugins shows them under the plugin.
+- Example: `examples/plugins/wikimedia` (Wikimedia Commons, images, no key).
+
 ## Renderer
 
 Settings → **Plugins** tab: list (name, version, author, modules with permission badges,

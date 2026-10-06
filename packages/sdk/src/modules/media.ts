@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const mediaModule: CapabilityModuleSpec = {
   id: 'media',
-  version: '1.5.0',
+  version: '1.6.0',
   title: 'Media playback',
   summary: 'Show images and play video/audio from the pack or your own home folder in an overlay window on the user\'s screen, or wash one over whole screens.',
   permission: 'pack',
@@ -12,7 +12,8 @@ export const mediaModule: CapabilityModuleSpec = {
  * window whose monitor, placement, stacking layer, opacity and click-through you control
  * through OverlayOptions; audio plays without a window. What you may show is a pack asset or a
  * file in your own home folder ("home:<path>", or an AssetRef with source: 'home' such as an
- * sdk.webcam capture) — no URLs, nothing else on the disk. Every call returns a MediaHandle you can
+ * sdk.webcam capture), or an item sdk.mediaSources.search found (an AssetRef with source: 'remote',
+ * when the user has a plugin providing one) — no URLs, nothing else on the disk. Every call returns a MediaHandle you can
  * pass to update() or close(). Use sdk.display to discover monitors and backend abilities.
  *
  * The user can cap how many images, videos and sounds run at once. Over that cap a call still
@@ -92,7 +93,7 @@ interface MediaApi {
   docs: `Show pictures, play video or audio from the pack (or your home folder) in a small overlay on the user's screen. Available unless the user switched \`media\` off under Settings → Permissions.
 
 - Pass a pack-relative path (or an \`AssetRef\`); files must exist in the pack — check the asset list in your prompt or use \`sdk.pack.listAssets\`.
-- Your own home folder works the same way: \`"home:<path>"\` (\`sdk.files.list\` names what is in there) or an \`AssetRef\` with \`source: 'home'\`, so an \`sdk.webcam\` capture goes on screen without a detour through the pack. A home file that is not there throws NOT_FOUND. Nothing else on the disk can be shown, and \`sdk.wallpaper.set\` still takes pack assets only.
+- Your own home folder works the same way: \`"home:<path>"\` (\`sdk.files.list\` names what is in there) or an \`AssetRef\` with \`source: 'home'\`, so an \`sdk.webcam\` capture goes on screen without a detour through the pack. A home file that is not there throws NOT_FOUND. Nothing else on the disk can be shown, and \`sdk.wallpaper.set\` still takes pack assets only. The \`source: 'remote'\` refs \`sdk.mediaSources.search\` returns (where that module exists) work too; the first show of one waits for its download.
 - Images stay open until \`durationMs\` elapses or you \`close()\` them; videos close on end by default. Without \`durationMs\` the user can click an overlay away; with one it is theirs for that long, so keep timed overlays short and out of the way. Do not open many overlays at once — \`closeAll()\` before showing something new if the screen is getting busy.
 - Playback calls resolve when playback starts, not when it finishes; do not wait for the end inside an action (schedule a timer instead if you need to react later).
 - The user can limit how many images, videos and sounds may run at once, each kind separately. Asking for more does not fail and does not block: the call returns a handle with \`state: 'queued'\` and that item opens by itself the moment one of its kind goes away, raising \`media-started\` \`{ mediaId, asset, packId, kind }\`. So three videos with a limit of one play one after another, in the order you asked for them. \`close()\` on a queued handle takes it out of the queue (reported as \`media-closed\`), and \`update()\` on one changes how it will open. Only when the queue is full as well is the call refused, with CAPABILITY_FAILED.

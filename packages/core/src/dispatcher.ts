@@ -12,8 +12,9 @@ import type {
   LoadedPack,
   SerializedError,
 } from '@rp/shared';
-import { HOME_ASSET_PREFIX, RpError, characterRef, homeAsset, serializeError } from '@rp/shared';
+import { HOME_ASSET_PREFIX, REMOTE_ASSET_PREFIX, RpError, characterRef, homeAsset, serializeError } from '@rp/shared';
 import { coerceAssetArg } from './assets.js';
+import type { RemoteAssetLookup } from './services/media-sources.js';
 import type { AuditService } from './services/audit.js';
 import type { PermissionService } from './services/permissions.js';
 import type { Clock, Logger } from './types.js';
@@ -27,22 +28,25 @@ export interface DispatcherOptions {
   audit: Pick<AuditService, 'record'>;
   /** Used to normalise `media.*` asset arguments to pack-root-relative paths. */
   packs?: { tryGetLoaded(packId: string): LoadedPack | undefined };
+  /** Remote media sources, so `media.*` can take the items `sdk.mediaSources.search` returned. */
+  remote?: RemoteAssetLookup;
   now?: Clock;
   logger?: Logger;
 }
 
 /**
  * `module.method` calls whose first argument is an asset (string or AssetRef): the kinds it may
- * have, and whether it also takes a file from the character's home directory. `sdk.media` serves
- * the home over the asset protocol like a pack root; `sdk.wallpaper` hands a path to the user's
- * wallpaper command and takes pack assets only.
+ * have, and whether it also takes a file from the character's home directory or an item of a remote
+ * media source. `sdk.media` serves the home over the asset protocol like a pack root, and remote
+ * items from the download cache the same way; `sdk.wallpaper` hands a path to the user's wallpaper
+ * command and takes pack assets only.
  */
-const ASSET_ARG_METHODS: Record<string, { kinds: readonly AssetKind[]; home: boolean }> = {
-  'media.showImage': { kinds: ['image'], home: true },
-  'media.playVideo': { kinds: ['video'], home: true },
-  'media.playAudio': { kinds: ['audio'], home: true },
-  'media.overlay': { kinds: ['image', 'video'], home: true },
-  'wallpaper.set': { kinds: ['image'], home: false },
+const ASSET_ARG_METHODS: Record<string, { kinds: readonly AssetKind[]; home: boolean; remote: boolean }> = {
+  'media.showImage': { kinds: ['image'], home: true, remote: true },
+  'media.playVideo': { kinds: ['video'], home: true, remote: true },
+  'media.playAudio': { kinds: ['audio'], home: true, remote: true },
+  'media.overlay': { kinds: ['image', 'video'], home: true, remote: true },
+  'wallpaper.set': { kinds: ['image'], home: false, remote: false },
 };
 
 /** "an image", "an image or video" — for the message naming what a method accepts. */
@@ -81,6 +85,7 @@ export class CapabilityDispatcher implements CapabilityInvoker {
   private readonly permissions: DispatcherOptions['permissions'];
   private readonly audit: DispatcherOptions['audit'];
   private readonly packs: DispatcherOptions['packs'];
+  private readonly remote: DispatcherOptions['remote'];
   private readonly now: Clock;
   private readonly logger: Logger;
 
@@ -89,6 +94,7 @@ export class CapabilityDispatcher implements CapabilityInvoker {
     this.permissions = options.permissions;
     this.audit = options.audit;
     this.packs = options.packs;
+    this.remote = options.remote;
     this.now = options.now ?? (() => new Date());
     this.logger = options.logger ?? NOOP_LOGGER;
     for (const handler of options.handlers) this.registerHandler(handler);
@@ -268,19 +274,19 @@ export class CapabilityDispatcher implements CapabilityInvoker {
     if (wanted) {
       const pack = this.packs?.tryGetLoaded(context.packId);
       if (!pack) throw new RpError('NOT_FOUND', `Pack "${context.packId}" is not installed`, { packId: context.packId });
-      const ref = coerceAssetArg(pack, args[0], { home: wanted.home, call: `sdk.${key}` });
+      const ref = coerceAssetArg(pack, args[0], { home: wanted.home, ...(wanted.remote && this.remote ? { remote: this.remote } : {}), call: `sdk.${key}` });
       if (!wanted.kinds.includes(ref.kind)) {
         throw new RpError('INVALID_ARGUMENT', `sdk.${key} needs ${kindPhrase(wanted.kinds)} asset; "${ref.path}" is ${ref.kind}`, {
           path: ref.path,
           kind: ref.kind,
         });
       }
-      // The handler tells the two roots apart by the `home:` prefix, so a pack path may not wear it.
-      if (ref.source !== 'home' && ref.path.startsWith(HOME_ASSET_PREFIX)) {
-        throw new RpError('INVALID_ARGUMENT', `sdk.${key} cannot take "${ref.path}": a pack path may not start with "${HOME_ASSET_PREFIX}", which names a file in the character home`, { path: ref.path });
+      // The handler tells the roots apart by the `home:`/`remote:` prefix, so a pack path may not wear one.
+      if (ref.source !== 'home' && ref.source !== 'remote' && (ref.path.startsWith(HOME_ASSET_PREFIX) || ref.path.startsWith(REMOTE_ASSET_PREFIX))) {
+        throw new RpError('INVALID_ARGUMENT', `sdk.${key} cannot take "${ref.path}": a pack path may not start with "${HOME_ASSET_PREFIX}" or "${REMOTE_ASSET_PREFIX}", which name a file in the character home and a remote media item`, { path: ref.path });
       }
       const out = [...args];
-      out[0] = ref.source === 'home' ? homeAsset(ref.path) : ref.path;
+      out[0] = ref.source === 'home' ? homeAsset(ref.path) : ref.source === 'remote' ? `${REMOTE_ASSET_PREFIX}${ref.path}` : ref.path;
       return out;
     }
     if (HANDLE_ARG_METHODS.has(key)) {

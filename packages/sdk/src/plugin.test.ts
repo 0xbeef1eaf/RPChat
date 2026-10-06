@@ -89,6 +89,17 @@ describe('validatePluginManifest', () => {
     expect(issuePaths(rpError(() => validatePluginManifest(manifest({ modules: [] }))))).toContain('modules');
   });
 
+  it('takes media sources, alone or beside modules, and checks them', () => {
+    const photos = { id: 'albums', title: 'Albums', description: 'Holiday photos.', kinds: ['image', 'video'] as Array<'image' | 'video'> };
+    const onlySources = validatePluginManifest({ ...manifest(), modules: undefined, mediaSources: [photos] });
+    expect(onlySources.modules).toEqual([]);
+    expect(onlySources.mediaSources).toEqual([photos]);
+    expect(validatePluginManifest(manifest({ mediaSources: [photos] })).modules).toHaveLength(1);
+    const bad = manifest({ modules: [], mediaSources: [photos, { ...photos, id: 'Bad_Id' }, { ...photos, id: 'other', kinds: [] }, { ...photos, id: 'third', kinds: ['text' as never] }] });
+    expect(issuePaths(rpError(() => validatePluginManifest(bad)))).toEqual(['mediaSources.1.id', 'mediaSources.2.kinds', 'mediaSources.3.kinds.0']);
+    expect(issuePaths(rpError(() => validatePluginManifest(manifest({ mediaSources: [photos, { ...photos }] }))))).toEqual(['mediaSources.1.id']);
+  });
+
   it('rejects modules with neither typings nor typingsText (and docs likewise)', () => {
     const err = rpError(() => validatePluginManifest(manifest({}, { typingsText: undefined, docsText: undefined })));
     expect(issuePaths(err)).toEqual(['modules.0.typings', 'modules.0.docs']);
