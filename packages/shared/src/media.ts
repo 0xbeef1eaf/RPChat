@@ -99,6 +99,11 @@ export interface PlayVideoOptions extends OverlayOptions {
   /** Close the window automatically when playback ends. Default true. */
   closeOnEnd?: boolean;
   muted?: boolean;
+  /**
+   * Stop the video and close its window after this many ms, even if it is still playing. Omit to
+   * let it run to its end (or forever with `loop`). Combine with `loop` to fill the whole time.
+   */
+  durationMs?: number;
 }
 
 /** Live changes to an open overlay via `sdk.media.update`. */
@@ -147,6 +152,11 @@ export interface DisplayBackendInfo {
 export interface PlayAudioOptions {
   volume?: number;
   loop?: boolean;
+  /**
+   * Stop the sound after this many ms, even if it is still playing. Omit to let it run to its end
+   * (or forever with `loop`). Combine with `loop` to fill the whole time.
+   */
+  durationMs?: number;
 }
 
 export type MediaKind = 'image' | 'video' | 'audio';

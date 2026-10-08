@@ -175,6 +175,23 @@ describe('MediaManager host events', () => {
     expect(media.list()).toEqual([]);
   });
 
+  it('stops a timed video or sound when its durationMs runs out, mid-playback', async () => {
+    const { media, handles, audio, events } = make();
+    const video = await media.show('video', ctx, 'media/v.webm', { durationMs: 20, loop: true });
+    const song = await media.playAudio(ctx, 'media/song.mp3', { durationMs: 20, loop: true });
+    const untimed = await media.playAudio(ctx, 'media/song.mp3', { durationMs: -5 });
+    // The pages are not told: the manager's own timer is the one that stops them.
+    expect(audio.sent.map((c) => (c.type === 'play-audio' ? c.options : undefined))).toEqual([{ loop: true }, {}]);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(handles[0]!.closed).toBe(true);
+    expect(audio.sent.filter((c) => c.type === 'close').map((c) => (c as { id: string }).id)).toEqual([song.id]);
+    expect(events.map(summary)).toEqual([
+      ['media-closed', video.id, 'timeout'],
+      ['media-closed', song.id, 'timeout'],
+    ]);
+    expect(media.list().map((h) => h.id)).toEqual([untimed.id]);
+  });
+
   it('closeAll reports api for every item of the character', async () => {
     const { media, events } = make();
     const a = await media.show('image', ctx, 'media/a.png', {});
