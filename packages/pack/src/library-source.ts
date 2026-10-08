@@ -1,292 +1,260 @@
 /**
- * What a library function's source may look like (`characters/<id>/lib/<name>.ts`,
- * and the `fn` of `lib.register`), and how it becomes the value the prelude puts
- * on the `lib` object.
+ * What the files of a character's function library declare, read from their text:
+ * for every export, whether it is a function, its parameter list and the summary of
+ * its JSDoc. The pack loader asks esbuild which names a file exports (that is the
+ * truth, re-exports included) and this scanner what each of them looks like, for
+ * the prompt's `<library>` lines (`- lib.<name>(<params>) — <description>`).
  *
- * Two shapes, both holding exactly one function for the character to call:
- *
- * - **a bare function expression** — the original format, the whole file is the
- *   function (`async (mood: string) => { … }`);
- * - **a module** — helpers, constants and types of the file's own, with exactly
- *   one `export`: the function the character calls. Everything else in the file
- *   is private to it, so a long function can be broken up without spending a
- *   library name (and a `<library>` line) on each piece.
- *
- * The file is kept verbatim: the module's statements reach the prelude as the
- * author wrote them, with its `export` marker rewritten away and a `return` added
- * (`libraryValueExpression`).
+ * Textual only: nothing here parses TypeScript properly. What it cannot read is
+ * reported as `unknown`, which still lands on `lib` — the scanner only decides how
+ * a function is described, never whether the library builds.
  */
-import { transformSync } from 'esbuild';
-import type { Message } from 'esbuild';
 
-/** `return await (<fn>)(input);` — how the sandbox serialises a function argument (docs/spec/sandbox.md §4). */
-const HANDLER_WRAPPER_RE = /^return await \(([\s\S]*)\)\(input\);$/;
-/** What a function expression looks like: `function …`, `(a, b) => …` or `x => …`, optionally `async` and parenthesised. */
-const FUNCTION_EXPRESSION_RE = /^\(?\s*(async\s+)?(function\b|\([\s\S]*?\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/;
-/** Local name a `export default <expression>` is given in the prelude (a declaration keeps its own name). */
-const DEFAULT_LOCAL = '__rp_default';
-/** The forms a library module may export, for the messages that list them. */
-const EXPORT_FORMS = '`export default <function>`, `export const <name> = <function>` or `export function <name>() {…}`';
-/** What to do with a source that is good code but more than one function. */
-const MORE_THAN_ONE = `the source is more than one statement: export the function to call (${EXPORT_FORMS}) and leave the rest of the file as its helpers`;
+/** What a function expression looks like: `function …`, `(a, b) => …`, `<T>(a: T) => …` or `x => …`, optionally `async` and parenthesised. */
+const FUNCTION_EXPRESSION_RE = /^\(?\s*(async\s+)?(function\b|<[^>]*>\s*\(|\([\s\S]*?\)\s*(:[^=]*)?=>|[A-Za-z_$][\w$]*\s*=>)/;
+/** Words that may stand in front of a declaration keyword in the same statement. */
+const DECLARATION_MODIFIERS = new Set(['export', 'async', 'declare', 'abstract']);
 
-/**
- * The function expression behind what `lib.register` received: a function
- * argument arrives as the action body that calls it (see the sandbox
- * bootstrap); a string is taken as the source itself.
- */
-export function unwrapFunctionSource(raw: string): string {
-  const text = raw.trim();
-  const wrapped = HANDLER_WRAPPER_RE.exec(text);
-  return (wrapped ? wrapped[1]! : text).trim();
+/** How an export of a library file looks. */
+export interface ExportShape {
+  /**
+   * `function`: a function declaration, or a `const` holding an arrow or function
+   * expression. `value`: anything else declared in the file (a constant, a class,
+   * an enum) — importable by the other files, not a `lib` function. `unknown`: the
+   * scanner could not see the declaration (a re-export, say).
+   */
+  kind: 'function' | 'value' | 'unknown';
+  /** The parameter list as written; '' when not a function or not readable. */
+  params: string;
+  /** The summary of the JSDoc in front of the declaration. */
+  description?: string;
+  /** The JSDoc carries `@internal`. */
+  internal?: boolean;
 }
 
-/**
- * `source` with the comments in front of the function removed, so a `// note`
- * line above it does not stand in for the `async` behind it. Only the head is
- * scanned, where `//` and `/*` can only open a comment; comments further in
- * (inside the parameter list, in the body) are left alone. A source that is
- * nothing but comments gives an empty string.
- */
-export function stripLeadingComments(source: string): string {
-  let i = 0;
-  for (;;) {
-    while (i < source.length && /\s/.test(source[i]!)) i += 1;
-    if (source.startsWith('//', i)) {
-      const end = source.indexOf('\n', i + 2);
-      if (end < 0) return '';
-      i = end + 1;
-    } else if (source.startsWith('/*', i)) {
-      const end = source.indexOf('*/', i + 2);
-      if (end < 0) return '';
-      i = end + 2;
-    } else {
-      return source.slice(i);
-    }
-  }
-}
-
-/* ------------------------------------------------------------- the shapes */
-
-/** A library file that is a module: its statements, and the name its one export ends up under. */
-export interface LibraryModule {
-  /** The file with its `export` keywords rewritten away — statements to run before the function is handed over. */
-  body: string;
-  /** The name the exported function has in `body` once that rewrite is done. */
-  returns: string;
-}
-
-/** A library source that holds one function, and how it is written. */
-export interface LibraryFunctionShape {
-  /** The exported function itself: the whole source when it is a bare expression. */
+/** A declaration at the top level of a file: where its statement starts and what it declares. */
+interface Declaration {
+  /** Start of the statement, before any `export` / `async` in front of the keyword. */
+  start: number;
+  kind: 'function' | 'value';
+  /** The function's own text from its parameter list on (or its initialiser); '' for a value. */
   fn: string;
-  /** Set when the source is a module (helpers plus one export); absent for a bare function expression. */
-  module?: LibraryModule;
-}
-
-/** Why a source cannot be a library function, and whether it was read as a module. */
-interface ShapeProblem {
-  problem: string;
-  module: boolean;
 }
 
 /**
- * The shape of `source`, or the reason it has none. Textual only — no parser
- * runs here, so the prelude can be rebuilt cheaply; {@link functionSourceProblem}
- * is what puts the source through esbuild.
+ * Exported name → shape, for every export the scanner can read in `source`. A name
+ * esbuild reports and this map lacks is `unknown`.
  */
-export function libraryFunctionShape(source: string): LibraryFunctionShape | ShapeProblem {
-  const text = source.trim();
-  const keywords = moduleKeywords(text);
-  if (keywords.imports.length > 0) {
-    return { module: true, problem: 'a library function cannot `import` anything: keep what it needs in the same file, or reach for it through `sdk` and `lib`' };
-  }
-  if (keywords.exports.length === 0) return { fn: text };
+export function scanExports(source: string): Map<string, ExportShape> {
+  const declarations = topLevelDeclarations(source);
+  const out = new Map<string, ExportShape>();
+  const describe = (local: string): ExportShape => {
+    const d = declarations.get(local);
+    if (!d) return { kind: 'unknown', params: '' };
+    const shape: ExportShape = { kind: d.kind, params: d.kind === 'function' ? functionParams(d.fn) : '' };
+    const doc = jsDocBefore(source, d.start);
+    if (doc !== undefined) {
+      const summary = jsDocSummary(doc);
+      if (summary.description !== undefined) shape.description = summary.description;
+      if (summary.internal) shape.internal = true;
+    }
+    return shape;
+  };
 
-  const drop: Array<{ start: number; end: number; text: string }> = [];
-  let exported: { returns: string; fn: string } | undefined;
-  for (const start of keywords.exports) {
-    const after = skipSpace(text, start + 'export'.length);
-    const word = identifierAt(text, after);
-    // `export type X = …` / `export interface X {}` are erased with the types; they are not the function.
-    if (word === 'type' || word === 'interface') {
-      drop.push({ start, end: after, text: '' });
+  walkCode(source, 0, ({ text, start, prevChar, depth }) => {
+    if (text !== 'export' || depth !== 0 || prevChar === '.') return;
+    const after = skipSpace(source, start + text.length);
+    const word = identifierAt(source, after);
+    if (source[after] === '{') {
+      const close = source.indexOf('}', after);
+      if (close < 0) return;
+      const from = identifierAt(source, skipSpace(source, close + 1)) === 'from';
+      for (const item of source.slice(after + 1, close).split(',')) {
+        const m = /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/.exec(stripComments(item));
+        if (!m || /^\s*type\s/.test(item)) continue;
+        const exported = m[2] ?? m[1]!;
+        out.set(exported, from ? { kind: 'unknown', params: '' } : describe(m[1]!));
+      }
+      return;
+    }
+    if (word === 'default' || word === 'type' || word === 'interface' || word === '') return;
+    // `export function f`, `export const f = …`, `export class C`: the declaration is the file's own.
+    const declared = declarationAt(source, after);
+    if (declared !== undefined) out.set(declared, describe(declared));
+  });
+  return out;
+}
+
+/** Whether `source` has an `export` statement at its top level (type-only ones included). */
+export function hasExports(source: string): boolean {
+  let found = false;
+  walkCode(source, 0, ({ text, prevChar, depth }) => {
+    if (text !== 'export' || depth !== 0 || prevChar === '.') return;
+    found = true;
+    return true;
+  });
+  return found;
+}
+
+/**
+ * The name declared by the statement whose keyword sequence starts at `i`
+ * (`async function f`, `const f`, `class C`, …), or undefined.
+ */
+function declarationAt(source: string, i: number): string | undefined {
+  let at = i;
+  for (;;) {
+    const word = identifierAt(source, at);
+    if (!DECLARATION_MODIFIERS.has(word)) break;
+    at = skipSpace(source, at + word.length);
+  }
+  const keyword = identifierAt(source, at);
+  if (!['function', 'const', 'let', 'var', 'class', 'enum'].includes(keyword)) return undefined;
+  let nameAt = skipSpace(source, at + keyword.length);
+  if (source[nameAt] === '*') nameAt = skipSpace(source, nameAt + 1);
+  const name = identifierAt(source, nameAt);
+  return name.length > 0 ? name : undefined;
+}
+
+/** Every declaration at the top level of `source`, by name (the first one wins). */
+function topLevelDeclarations(source: string): Map<string, Declaration> {
+  const out = new Map<string, Declaration>();
+  walkCode(source, 0, ({ text, start, prevChar, depth }) => {
+    if (depth !== 0 || prevChar === '.') return;
+    if (!['function', 'const', 'let', 'var', 'class', 'enum'].includes(text)) return;
+    let nameAt = skipSpace(source, start + text.length);
+    if (source[nameAt] === '*') nameAt = skipSpace(source, nameAt + 1);
+    const name = identifierAt(source, nameAt);
+    if (name.length === 0 || out.has(name)) return;
+    const statement = statementStart(source, start);
+    const rest = nameAt + name.length;
+    if (text === 'function') {
+      out.set(name, { start: statement, kind: 'function', fn: source.slice(rest) });
+    } else if (text === 'const' || text === 'let' || text === 'var') {
+      const init = initialiserAt(source, rest);
+      // Without a readable initialiser it is left to the run to say whether it is a function.
+      if (init === undefined) return;
+      const fn = source.slice(init);
+      const isFunction = FUNCTION_EXPRESSION_RE.test(stripLeadingComments(fn));
+      out.set(name, { start: statement, kind: isFunction ? 'function' : 'value', fn: isFunction ? fn : '' });
+    } else {
+      out.set(name, { start: statement, kind: 'value', fn: '' });
+    }
+  });
+  return out;
+}
+
+/** Where the statement around the keyword at `keyword` starts: back over `export`, `async`, `declare`, … */
+function statementStart(source: string, keyword: number): number {
+  let start = keyword;
+  for (;;) {
+    let at = start;
+    while (at > 0 && /\s/.test(source[at - 1]!)) at -= 1;
+    let wordStart = at;
+    while (wordStart > 0 && IDENT_CHAR.test(source[wordStart - 1]!)) wordStart -= 1;
+    if (wordStart === at || !DECLARATION_MODIFIERS.has(source.slice(wordStart, at))) return start;
+    start = wordStart;
+  }
+}
+
+/**
+ * Index of the initialiser of the declarator whose name ends at `i`: just past its `=`,
+ * skipping a type annotation (`: Record<string, (a: string) => void>`), or undefined
+ * when the declarator ends without one.
+ */
+function initialiserAt(source: string, i: number): number | undefined {
+  let depth = 0;
+  for (let at = i; at < source.length; at++) {
+    const ch = source[at]!;
+    if (ch === '(' || ch === '[' || ch === '{' || ch === '<') depth += 1;
+    else if (ch === ')' || ch === ']' || ch === '}') depth -= 1;
+    else if (ch === '>' && source[at - 1] !== '=') depth -= 1;
+    else if (depth === 0 && (ch === ';' || ch === ',')) return undefined;
+    else if (depth === 0 && ch === '=' && source[at + 1] !== '>' && source[at + 1] !== '=') return skipSpace(source, at + 1);
+    if (depth < 0) return undefined;
+  }
+  return undefined;
+}
+
+/** The `/** … *\/` comment that ends right before `start` (only whitespace between), or undefined. */
+function jsDocBefore(source: string, start: number): string | undefined {
+  let end = start;
+  while (end > 0 && /\s/.test(source[end - 1]!)) end -= 1;
+  if (!source.slice(0, end).endsWith('*/')) return undefined;
+  const open = source.lastIndexOf('/*', end - 2);
+  if (open < 0 || source[open + 2] !== '*' || open + 3 > end - 2) return undefined;
+  return source.slice(open + 3, end - 2);
+}
+
+/**
+ * The description and `@internal` flag of a JSDoc body (what lies between `/**` and
+ * `*\/`): the description is its first paragraph — up to a blank line or the first
+ * tag other than a leading `@internal` — on one line.
+ */
+export function jsDocSummary(body: string): { description?: string; internal: boolean } {
+  const raw = body.split('\n').map((l) => l.replace(/^\s*\*?\s?/, '').trimEnd());
+  const internal = raw.some((l) => /(^|\s)@internal\b/.test(l));
+  // `@internal` is a modifier with no text of its own: `/** @internal Roll a die. */` describes the function.
+  const lines = raw.map((l) => l.replace(/^\s*@internal\b\s*/, ''));
+  const summary: string[] = [];
+  for (const line of lines) {
+    if (line.trim().startsWith('@')) break;
+    if (line.trim().length === 0) {
+      if (summary.length > 0) break;
       continue;
     }
-    if (exported !== undefined) {
-      return { module: true, problem: 'the file exports more than one thing: export only the function the character calls, and leave its helpers unexported' };
+    summary.push(line.trim());
+  }
+  const description = summary.join(' ').replace(/\s+/g, ' ').trim();
+  return description.length > 0 ? { description, internal } : { internal };
+}
+
+/**
+ * Parameters of a function as text: what lies between the first `(` and its
+ * matching `)`, whitespace collapsed (`async (mood: string) => …` gives
+ * `mood: string`); a parenthesis-free arrow (`x => …`) gives its one parameter.
+ * Comments in front of the function are skipped, so one holding a `(` or a `=>`
+ * cannot pass itself off as the parameter list.
+ */
+export function functionParams(source: string): string {
+  const text = stripLeadingComments(source).trim();
+  const open = text.indexOf('(');
+  const arrow = text.indexOf('=>');
+  if (open < 0 || (arrow >= 0 && arrow < open)) {
+    // `x => …` / `async x => …`
+    const m = /^(?:async\s+)?([A-Za-z_$][\w$]*)\s*=>/.exec(text);
+    return m ? m[1]! : '';
+  }
+  let depth = 0;
+  let quote: string | undefined;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote !== undefined) {
+      if (ch === '\\') i += 1;
+      else if (ch === quote) quote = undefined;
+      continue;
     }
-    const declared = word === 'default' ? defaultExport(text, after) : namedExport(text, after, word);
-    if ('problem' in declared) return declared;
-    drop.push({ start, end: declared.from, text: declared.replacement });
-    exported = { returns: declared.returns, fn: sliceStatement(text, declared.fnFrom) };
+    if (ch === '"' || ch === "'" || ch === '`') quote = ch;
+    else if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    else if (ch === ')' || ch === ']' || ch === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(open + 1, i).replace(/\s+/g, ' ').trim();
+    }
   }
-  if (exported === undefined) {
-    return { module: true, problem: `the file exports no function: mark the one the character calls with ${EXPORT_FORMS}` };
-  }
-  if (!FUNCTION_EXPRESSION_RE.test(stripLeadingComments(exported.fn))) {
-    return { module: true, problem: 'the export must be a function (an arrow function or `function`), not a call or a value' };
-  }
-  return { fn: exported.fn, module: { body: applyRewrites(text, drop), returns: exported.returns } };
-}
-
-/** How one `export` is rewritten: `[start, from)` becomes `replacement`, and the function itself starts at `fnFrom`. */
-interface ExportedFunction {
-  from: number;
-  fnFrom: number;
-  replacement: string;
-  returns: string;
-}
-
-/** `export default …`: a named function declaration keeps its name, anything else is bound to {@link DEFAULT_LOCAL}. */
-function defaultExport(text: string, after: number): ExportedFunction | ShapeProblem {
-  const from = skipSpace(text, after + 'default'.length);
-  const declaration = /^(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/.exec(text.slice(from));
-  // `export default function cheer() {}` binds `cheer` in the file too, so keep it a declaration.
-  if (declaration) return { from, fnFrom: from, replacement: '', returns: declaration[1]! };
-  return { from, fnFrom: from, replacement: `var ${DEFAULT_LOCAL} = `, returns: DEFAULT_LOCAL };
-}
-
-/** `export function f() {}` / `export const f = …`: the `export` keyword goes, the declaration stays. */
-function namedExport(text: string, after: number, word: string): ExportedFunction | ShapeProblem {
-  const rest = text.slice(after);
-  if (word === 'function' || word === 'async') {
-    const declaration = /^(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/.exec(rest);
-    if (declaration) return { from: after, fnFrom: after, replacement: '', returns: declaration[1]! };
-  }
-  if (word === 'const' || word === 'let' || word === 'var') {
-    // The function is what stands after the `=`; the declaration around it is the file's, not the character's.
-    const declaration = /^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(rest);
-    if (declaration) return { from: after, fnFrom: skipSpace(text, after + declaration[0]!.length), replacement: '', returns: declaration[1]! };
-  }
-  return { module: true, problem: `this export is not a function the character can call; write ${EXPORT_FORMS}` };
-}
-
-/** `text` with each rewrite applied (they are found left to right and never overlap). */
-function applyRewrites(text: string, rewrites: Array<{ start: number; end: number; text: string }>): string {
-  let out = '';
-  let at = 0;
-  for (const r of rewrites) {
-    out += text.slice(at, r.start) + r.text;
-    at = r.end;
-  }
-  return out + text.slice(at);
-}
-
-/* -------------------------------------------------------------- the checks */
-
-/**
- * Check that `source` holds exactly one function for the character to call,
- * using esbuild as the parser (character code is never evaluated on the host).
- * Returns the problem, or undefined when the source is fine.
- */
-export function functionSourceProblem(source: string): string | undefined {
-  const text = source.trim();
-  if (text.length === 0) return 'fn must be a function';
-  const shape = libraryFunctionShape(text);
-  if ('problem' in shape) return shape.problem;
-  if (shape.module !== undefined) return moduleParseProblem(text) ?? preludeProblem(shape.module);
-  return expressionProblem(text);
+  return text.slice(open + 1).replace(/\s+/g, ' ').trim();
 }
 
 /**
- * The rewritten module, compiled the way the prelude will run it: inside a
- * function, where a top-level `await` and anything else that only a module may
- * do are errors. It is also what keeps the textual rewrite honest — an `export`
- * the scanner missed, or a statement it cut through, does not parse here.
- *
- * The wrapper opens on the body's own first line, so the line numbers esbuild
- * reports are still the file's.
+ * `source` with the comments in front of it removed. Only the head is scanned,
+ * where `//` and `/*` can only open a comment; comments further in are left
+ * alone. A source that is nothing but comments gives an empty string.
  */
-function preludeProblem(module: LibraryModule): string | undefined {
-  try {
-    transformSync(`(() => {${module.body}\n;return ${module.returns};\n})`, { loader: 'ts', target: 'es2020', logLevel: 'silent', legalComments: 'none' });
-  } catch (err) {
-    return `the file cannot run as a library function: ${esbuildMessage(err)}`;
-  }
-  return undefined;
+export function stripLeadingComments(source: string): string {
+  return source.slice(skipSpace(source, 0));
 }
 
-/** A module file: esbuild parses it as one, so its own line numbers are what a syntax error names. */
-function moduleParseProblem(source: string): string | undefined {
-  try {
-    transformSync(source, { loader: 'ts', target: 'es2020', logLevel: 'silent', legalComments: 'none' });
-  } catch (err) {
-    return `the file does not parse: ${esbuildMessage(err)}`;
-  }
-  return undefined;
-}
-
-/** A bare function expression: it must be one expression, and a function. */
-function expressionProblem(source: string): string | undefined {
-  let normalised: string;
-  try {
-    // `minifyWhitespace` drops every comment: esbuild otherwise hoists the ones in front of the
-    // function to the top of its output, where they would hide the function from the shape check below.
-    normalised = transformSync(`(${source})`, { loader: 'ts', target: 'es2020', logLevel: 'silent', legalComments: 'none', minifyWhitespace: true }).code.trim();
-  } catch (err) {
-    // Several statements with no export — helpers around a function, say — is the other format written
-    // without its `export`, so say that rather than pointing at the parenthesis the check put in front.
-    // A source that is nothing but comments parses as a module too, and is not that case.
-    const code = stripLeadingComments(source).trim().length > 0;
-    return code && moduleParseProblem(source) === undefined ? MORE_THAN_ONE : `fn does not parse: ${esbuildMessage(err)}`;
-  }
-  // esbuild ends every statement with `;`. One expression re-wrapped in parentheses still parses;
-  // a source that closed our parenthesis and smuggled in more statements no longer does.
-  const expression = normalised.endsWith(';') ? normalised.slice(0, -1) : normalised;
-  try {
-    transformSync(`(${expression})`, { loader: 'js', target: 'es2020', logLevel: 'silent', legalComments: 'none' });
-  } catch {
-    if (moduleParseProblem(source) === undefined) return MORE_THAN_ONE;
-    return 'fn must be a single function expression (arrow function or `async function`)';
-  }
-  if (!FUNCTION_EXPRESSION_RE.test(expression)) return 'fn must be a function expression (arrow function or `async function`), not a call or a value';
-  return undefined;
-}
-
-function esbuildMessage(err: unknown): string {
-  const errors = (err as { errors?: Message[] } | undefined)?.errors;
-  const first = errors?.[0];
-  if (first) return first.location ? `${first.text} (line ${first.location.line}, column ${first.location.column + 1})` : first.text;
-  return err instanceof Error ? err.message : String(err);
-}
-
-/* ------------------------------------------------------- what the run sees */
-
-/**
- * The value the prelude puts on the `lib` object for this source: the function
- * expression in parentheses, or — for a module — an arrow that runs the file's
- * statements once and hands back the exported function. Nothing in that arrow
- * is named `lib`, so no binding of the run is shadowed (and none is renamed by
- * the transpiler, which used to travel into stored handler sources).
- *
- * A source that has no shape at all is passed through in parentheses: the
- * loader and `lib.register` refuse those long before a prelude is built.
- */
-export function libraryValueExpression(source: string): string {
-  const shape = libraryFunctionShape(source);
-  if ('problem' in shape || shape.module === undefined) return `(${source.trim()})`;
-  return `(() => {\n${shape.module.body}\n;return ${shape.module.returns};\n})()`;
-}
-
-/**
- * Whether `source` is written as a module — helpers of its own plus one export —
- * rather than as a bare function expression. True for a module that does not hold
- * up as one, so a file can be reported against the format it was written in.
- */
-export function isLibraryModule(source: string): boolean {
-  const shape = libraryFunctionShape(source);
-  return 'problem' in shape ? shape.module : shape.module !== undefined;
-}
-
-/**
- * The exported function's own source — for a module, the file without its
- * helpers, which is the part a signature is read from (`functionParams`) and
- * the part the sandbox reports as `String(lib.<name>)`.
- */
-export function exportedFunctionSource(source: string): string {
-  const shape = libraryFunctionShape(source);
-  return 'problem' in shape ? source.trim() : shape.fn;
+/** `text` without its comments (for one short piece of an export list). */
+function stripComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
 }
 
 /* ------------------------------------------------------------- the scanner */
@@ -394,48 +362,6 @@ function walkCode(source: string, from: number, visit: (token: CodeToken) => boo
     }
     i += 1;
   }
-}
-
-/**
- * Where the `export` and `import` keywords are in `source`. Both are only valid
- * at the top level of a module, so an occurrence the scanner reports is the real
- * thing and not, say, a property name (`a.export`, `{ export: 1 }`) — while
- * comments, strings, template literals and regular expressions are skipped,
- * since the word is ordinary text in there.
- *
- * A miss is not silent: the rewritten body goes through esbuild before the
- * source is accepted (`preludeProblem`), and an `export` left in it is a syntax
- * error there.
- */
-function moduleKeywords(source: string): { exports: number[]; imports: number[] } {
-  const exports: number[] = [];
-  const imports: number[] = [];
-  walkCode(source, 0, ({ text, start, prevChar }) => {
-    if (text !== 'export' && text !== 'import') return;
-    if (prevChar === '.') return;
-    // `{ export: 1 }` is a property name; `import(…)` and `import.meta` are expressions, not the statement.
-    const next = source[skipSpace(source, start + text.length)] ?? '';
-    if (next === ':' || (text === 'import' && (next === '(' || next === '.'))) return;
-    (text === 'export' ? exports : imports).push(start);
-  });
-  return { exports, imports };
-}
-
-/**
- * The statement that starts at `from`, as text: up to the first `;` outside
- * brackets, strings and comments, or the end of the source. Only the head of
- * what this returns is ever read (is it a function, what are its parameters),
- * so a statement that ends without a `;` and is followed by another simply
- * brings it along.
- */
-function sliceStatement(source: string, from: number): string {
-  let end = source.length;
-  walkCode(source, from, ({ text, start, depth }) => {
-    if (text !== ';' || depth > 0) return;
-    end = start;
-    return true;
-  });
-  return source.slice(from, end).trim();
 }
 
 /** Whether a `/` here opens a regular expression: it does unless a value just ended. */

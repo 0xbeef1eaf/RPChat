@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ActionContext, CapabilityCall, CapabilityResult, HostEvent, Json, LoadedPack, MediaCommand, MonitorInfo, SdkSurface } from '@rp/shared';
 import { RpError } from '@rp/shared';
-import { loadPack } from '@rp/pack';
+import { buildCharacterLibrary, loadPack } from '@rp/pack';
 import { createStandardRegistry, describeSurface } from '@rp/sdk';
 import { buildPrelude, findAssets, matchesFilter, resolvePackAsset, showableAssets, toAssetRef } from '@rp/core';
 import { QuickJsRunner } from '@rp/sandbox';
@@ -187,10 +187,14 @@ let surface: SdkSurface;
 beforeAll(async () => {
   runner = new QuickJsRunner();
   pack = await loadPack(MAKIMA_DIR);
-  const library = pack.characters[0]!.library;
-  // a test-only loss/win recorder next to the shipped functions: what the hooks receive is asserted precisely
-  const recorder = { source: 'async (info) => { await sdk.state.session.set("recorded", [...(((await sdk.state.session.get("recorded")) as any[]) ?? []), info]); return "recorded"; }', bytes: 1, updatedAt: 't' };
-  prelude = buildPrelude([...Object.entries(library).map(([name, e]) => ({ name, source: e.source, bytes: e.bytes, updatedAt: e.updatedAt })), { name: 'record', ...recorder }]);
+  const character = pack.characters[0]!;
+  const libRel = `${character.dir}/lib`;
+  const sources = Object.fromEntries(Object.entries(character.library.files).map(([file, text]) => [file.slice(libRel.length + 1), text]));
+  // a test-only loss/win recorder next to the shipped files: what the hooks receive is asserted precisely
+  sources['record.ts'] = 'export async function record(info: unknown) { await sdk.state.session.set("recorded", [...(((await sdk.state.session.get("recorded")) as any[]) ?? []), info]); return "recorded"; }\n';
+  const { library } = await buildCharacterLibrary(sources, libRel);
+  expect(library.problems).toEqual([]);
+  prelude = buildPrelude(library);
   surface = describeSurface(createStandardRegistry());
 });
 afterAll(async () => {
@@ -460,7 +464,7 @@ describe('Makima mini games (real sandbox)', () => {
     expect(game(host)).toMatchObject({ game: 'reaction', attempt: 1 });
     expect(recorded(host)).toEqual([]);
     for (const name of ['memoryGame', 'simonSays', 'writeLines', 'whackAMole', 'reactionTest', 'slidingPuzzle']) {
-      expect(pack.characters[0]!.library[name]!.description, name).toMatch(/lib\[onLose\]\(\{ game: "[a-z]+", event: "[a-z]+"/);
+      expect(pack.characters[0]!.library.functions[name]!.description, name).toMatch(/lib\[onLose\]\(\{ game: "[a-z]+", event: "[a-z]+"/);
     }
   });
 });

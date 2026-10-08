@@ -22,10 +22,9 @@
  * Dotted method names (`session.get`) are exposed one level deep
  * (`sdk.state.session.get`).
  *
- * The `lib` module is not a namespace of its own: `__rp_lib(functions, internalNames)`
- * builds the character's function library — the `lib` the prelude defines — out of the
- * saved functions plus the module's `register` / `unregister`, and `sdk.lib`
- * reads back whatever it last built. `sdk.lib.cheer()` is therefore the same
+ * `lib` is not a module of the surface: `__rp_lib(functions, internalNames)` builds the
+ * character's function library — the `lib` the prelude defines — out of the exports of
+ * its pack's `lib/` folder, and `sdk.lib` reads back whatever it last built. `sdk.lib.cheer()` is therefore the same
  * call as `lib.cheer()`, which is what characters kept writing anyway.
  */
 export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log, restrictInternals, libCall) {
@@ -93,7 +92,6 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
   }
 
   var sdk = {};
-  var libStatics = null;
   for (var m = 0; m < surface.modules.length; m++) {
     var mod = surface.modules[m];
     var target = {};
@@ -114,14 +112,15 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
     for (var k = 0; k < keys.length; k++) {
       if (typeof target[keys[k]] === 'object') Object.freeze(target[keys[k]]);
     }
-    if (mod.id === 'lib') libStatics = target; // the library's own methods; sdk.lib is the lib object (below)
-    else sdk[mod.id] = Object.freeze(target);
+    // sdk.lib is the character's library (below), never a module of the surface.
+    if (mod.id !== 'lib') sdk[mod.id] = Object.freeze(target);
   }
 
   /**
    * The character's function library. The prelude the host prepends to the code calls
-   * __rp_lib once ("const lib = __rp_lib({...}, ["helper"]);"): the first argument holds
-   * every saved function, the second names the ones marked @internal in the pack.
+   * __rp_lib once ("const lib = __rp_lib(<bundle>, ["helper"]);"): the first argument is the
+   * object of every export of the pack's lib/ folder, the second names the exports tagged
+   * @internal. A library function that imports a sibling calls it directly, past this object.
    *
    * There is only ever one lib object, and every function is on it — a second, narrower
    * one in a nested scope would make the transpiler rename the inner binding (lib -> lib2),
@@ -135,7 +134,7 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
    * of the author's plumbing; it is not a security boundary, since every one of these
    * functions is the character's own code running with the same permissions.
    *
-   * Every saved function is wrapped in every run, whatever the trigger, because the wrapper
+   * Every exported function is wrapped in every run, whatever the trigger, because the wrapper
    * is also what reports the call to the host for the action log (reportLibCall).
    */
   var libValue = buildLib({});
@@ -246,11 +245,6 @@ export const BOOTSTRAP_SOURCE = String.raw`(function (surfaceJson, hostCall, log
       if (typeof fn !== 'function') lib[name] = fn;
       else if (internal[name] === true) lib[name] = guardInternal(name, fn);
       else lib[name] = trackDepth(name, fn);
-    }
-    if (libStatics !== null) {
-      // Not overridable by a saved function: register and unregister are reserved names.
-      lib.register = libStatics.register;
-      lib.unregister = libStatics.unregister;
     }
     return Object.freeze(lib);
   }

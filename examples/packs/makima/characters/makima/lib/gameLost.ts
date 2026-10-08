@@ -1,5 +1,5 @@
-// (games) the per-mistake hook: counts the mistake, calls lib[onLose]({ game, event, attempt, mistakes, ...details }) and, when details.restart is true, starts the next attempt of the same game with the same options (its media closed, its widget replaced); the game never ends here — only a win ends it
-async (details: { event?: string; restart?: boolean; [key: string]: unknown } = {}) => {
+/** (games) the per-mistake hook: counts the mistake, calls lib[onLose]({ game, event, attempt, mistakes, ...details }) and, when details.restart is true, starts the next attempt of the same game with the same options (its media closed, its widget replaced); the game never ends here — only a win ends it */
+export const gameLost = async (details: { event?: string; restart?: boolean; [key: string]: unknown } = {}) => {
   const game = (await sdk.state.session.get("game")) as { [key: string]: any } | null | undefined;
   if (!game) return null;
   const { restart, ...rest } = details;
@@ -21,4 +21,4 @@ async (details: { event?: string; restart?: boolean; [key: string]: unknown } = 
   }
   const next = await lib[String(game.starter)]({ ...(game.options ?? {}), attempt: attempt + 1, mistakes });
   return { ...report, restarted: true, next, outcome };
-}
+};

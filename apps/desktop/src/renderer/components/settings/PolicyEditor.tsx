@@ -134,7 +134,7 @@ const PIN_OPTIONS = [
  * `permissions.functionAllow`: a key named here is pinned allowed or denied for everyone, and one
  * left out stays the user's own choice — so each row is a three-way, not a checkbox. A module row
  * pins the module as a whole; expanding it pins single functions, which win over the module's own
- * pin. `sdk.lib` is the character's own library and is never pinnable.
+ * pin. `sdk.lib` is the pack's own function library, not a module, and is never pinnable.
  */
 function FunctionAllowEditor({ value, onChange, disabled }: { value: Record<string, boolean>; onChange: (v: Record<string, boolean>) => void; disabled?: boolean }) {
   const caps = useAppState((s) => s.capabilities);

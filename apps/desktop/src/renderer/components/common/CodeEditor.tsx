@@ -144,8 +144,8 @@ export function CodeEditor({ value, onChange, language, path, height = 260, read
           message: problem.message,
           severity: monaco.MarkerSeverity.Error,
           startLineNumber: line,
-          // esbuild counts columns from zero, Monaco from one.
-          startColumn: (problem.column ?? 0) + 1,
+          // Already 1-based (the host adds one to esbuild's zero-based column), like Monaco's.
+          startColumn: problem.column ?? 1,
           endLineNumber: line,
           endColumn: model.getLineMaxColumn(line),
         };

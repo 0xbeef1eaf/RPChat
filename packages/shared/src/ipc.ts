@@ -7,7 +7,7 @@ import type { VoicePreview, VoiceStudioState } from './voice.js';
 import type { AppSettings, CommandTemplate, CommandTemplates } from './settings.js';
 import type { EmbeddingStatus, MemoryEntry, MemoryImportance } from './memory.js';
 import type { EventSubscription, MoodState, PresenceSnapshot, RoutineEntry, RoutineStatus, TelegramChat } from './senses.js';
-import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, SaveScriptInput, ScriptKind, ScriptProblem, TagMediaOptions } from './editor.js';
+import type { BehaviourTemplate, CreateProjectInput, EditorProject, EditorProjectSummary, EditorValidation, MediaTagSuggestion, SaveCharacterInput, SaveLibraryFileInput, ScriptKind, ScriptProblem, TagMediaOptions } from './editor.js';
 import type { PluginInfo } from './plugin.js';
 import type { AppRestrictions, ChainAuthorStatus, ChainLink, GuardAttemptRecord, ManagedSettingsPaths, PolicyChain, PolicyFile, PolicySnapshot, RemoteLink, SealMode, SystemIntegrationStatus } from './system.js';
 import type { CryptoStatus } from './crypto.js';
@@ -460,12 +460,12 @@ export interface IpcApi {
     saveManifest(key: string, manifest: PackManifest): Promise<EditorProject>;
     /** Save the pack's one character (a pack has exactly one; there is no add or remove). */
     saveCharacter(key: string, input: SaveCharacterInput): Promise<EditorProject>;
-    /** Write (or rename) one `lib/<name>.ts` function file of the character. */
-    saveScript(key: string, input: SaveScriptInput): Promise<EditorProject>;
-    /** Delete `lib/<name>.ts`. */
-    removeScript(key: string, dir: string, name: string): Promise<EditorProject>;
-    /** Starter source for a new library function (description comment + function). */
-    scriptTemplate(): Promise<string>;
+    /** Write (or rename) one file of the character's `lib/` folder. */
+    saveLibraryFile(key: string, input: SaveLibraryFileInput): Promise<EditorProject>;
+    /** Delete `lib/<path>` (a path relative to the `lib/` folder). */
+    removeLibraryFile(key: string, dir: string, path: string): Promise<EditorProject>;
+    /** Starter source for a new library file (a documented exported function). */
+    libraryFileTemplate(): Promise<string>;
     /** Native picker → copies the image into the character dir and sets `avatar`. */
     pickAvatar(key: string, dir: string): Promise<EditorProject>;
     /** Native picker → copies the image/video into the character dir and adds an `avatarSet` expression. */
@@ -487,8 +487,8 @@ export interface IpcApi {
     /**
      * Compile a script without saving it: what the editor calls while the author types, so a
      * syntax error shows up under the box instead of at the next session start. `kind`
-     * `behaviour` (default) compiles a hook script; `function` checks a library function the way
-     * the pack loader does (one function expression, or a module exporting one function).
+     * `behaviour` (default) compiles a hook script; `module` parses a library file on its own (what
+     * its imports bring in is checked when the saved library is bundled, see `library.problems`).
      */
     checkScript(source: string, kind?: ScriptKind): Promise<ScriptProblem[]>;
     /** Save dialog → writes the .rppack; returns the file path or null when cancelled. */

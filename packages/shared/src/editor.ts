@@ -1,6 +1,7 @@
 import type { BehaviourHook } from './capability.js';
 import type { LlmReasoningEffort } from './llm.js';
 import type { AssetEntry, CharacterDefinition, MediaManifest, PackManifest, TagSummary } from './pack.js';
+import type { LibFunction, LibraryProblem } from './library.js';
 
 /** A pack folder open for editing (lives in the workspace dir or anywhere the user chose). */
 export interface EditorProjectSummary {
@@ -16,21 +17,24 @@ export interface EditorProjectSummary {
   installed: boolean;
 }
 
-/** One `lib/<name>.ts` function file of the character, as the editor shows it. */
-export interface EditorScript {
-  /** Function name = file stem (`lib.<name>(...)`). */
-  name: string;
-  /** From the file's first-line `// …` comment. */
-  description?: string;
-  /** Marked `// @internal`: the character's other functions and its behaviour hooks may call it, the character itself may not. */
-  internal?: boolean;
-  /** The file without its description comment: one function expression, or a module exporting one. */
-  source: string;
-  bytes: number;
+/** One file of the character's function library (any `.ts` file under `lib/`), as the editor shows it. */
+export interface EditorLibraryFile {
+  /** Path relative to the character's `lib/` folder, e.g. `cheer.ts` or `games/simon.ts`. */
+  path: string;
   /** Path relative to the pack root, e.g. `characters/luna/lib/cheer.ts`. */
   file: string;
-  /** Why the loader skips this file (no single function to call, bad name); absent when it loads. */
-  problem?: string;
+  source: string;
+  bytes: number;
+}
+
+/** The character's function library as the editor shows it: the files, and what they add up to. */
+export interface EditorLibrary {
+  /** Every library file, sorted by path. */
+  files: EditorLibraryFile[];
+  /** The `lib.<name>` functions the files export, sorted by name; empty while the library does not build. */
+  functions: LibFunction[];
+  /** What keeps the library from building, each against its file. */
+  problems: LibraryProblem[];
 }
 
 export interface EditorCharacter {
@@ -40,8 +44,8 @@ export interface EditorCharacter {
   personaText: string;
   /** Hook → script source. */
   behaviours: Partial<Record<BehaviourHook, string>>;
-  /** The function library (`lib/*.ts`), sorted by name; files the loader skips are included with `problem`. */
-  library: EditorScript[];
+  /** The function library (`lib/`): its files, the functions they export and what keeps it from building. */
+  library: EditorLibrary;
   /** `rp-asset://` URL of the avatar, when present. */
   avatarUrl?: string;
   /** Expression name → `rp-asset://` URL (from `avatarSet`). */
@@ -92,22 +96,20 @@ export interface SaveCharacterInput {
   behaviours: Partial<Record<BehaviourHook, string>>;
 }
 
-/** Write (or rename) one library function file: `<dir>/lib/<name>.ts`. */
-export interface SaveScriptInput {
+/** Write (or rename) one library file: `<dir>/lib/<path>`. */
+export interface SaveLibraryFileInput {
   /** Character directory relative to the pack root. */
   dir: string;
-  name: string;
-  /** The function expression (arrow or `async function`), or a module exporting one; saved as is, so a broken one is reported rather than refused. */
+  /** Path relative to `lib/`, ending in `.ts`; sub-folders are created as needed. */
+  path: string;
+  /** Saved as is, so a broken file is reported (in `library.problems`) rather than refused. */
   source: string;
-  description?: string;
-  /** Write it as an internal helper (`// @internal` first line): hidden from the character, callable from its other functions and hooks. */
-  internal?: boolean;
-  /** When renaming: the file `<previousName>.ts` is removed after the new one is written. */
-  previousName?: string;
+  /** When renaming: the file at this path is removed after the new one is written. */
+  previousPath?: string;
 }
 
-/** Which compiler check `editor.checkScript` runs: a hook script (an async function body) or a library function (one function for the character to call). */
-export type ScriptKind = 'behaviour' | 'function';
+/** Which compiler check `editor.checkScript` runs: a hook script (an async function body) or a library file (a module). */
+export type ScriptKind = 'behaviour' | 'module';
 
 /**
  * One problem in a behaviour script, from compiling it exactly as the sandbox will. `line`/`column`

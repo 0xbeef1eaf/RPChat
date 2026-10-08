@@ -22,7 +22,6 @@ import type {
 import { ACTION_FENCE_TAG, RUN_ACTION_TOOL_NAME, SELF_WAKE_PREFIX } from '@rp/shared';
 import { errorForModel, resultPayload } from './action-loop.js';
 import { tagsOf } from './assets.js';
-import { functionParams } from './services/library.js';
 import { memoryLine } from './services/memory.js';
 import { moodPromptText } from './services/mood.js';
 import { RoutineService } from './services/routine.js';
@@ -136,7 +135,7 @@ function engineRules(name: string, useTools: boolean, minDelayMs = 30_000): stri
     'A failed call is never a silent one: a call you caught with try/catch, or never awaited, comes back under `failedCalls` even when the action as a whole returned `ok: true`. Catching a failure does not make it a success — read those entries, and never tell the user something happened when the call behind it failed.',
     'Do not narrate or explain the code you run unless the user asks; the conversation is what the user sees, the code is not.',
     'You can act on your own initiative: `sdk.llm.wake` gives you a turn later (or right after this action) with a note from your past self; `sdk.timers.runLater` runs code later without a turn. Use them to follow up, continue stories, or check in. Limits apply; do not chain wakes needlessly.',
-    'You can save reusable code with lib.register and call it as lib.<name>(...) in any later action, timer or event handler; prefer that over re-writing the same steps. sdk.lib is that same lib object, so sdk.lib.<name>(...) works too — there is no sdk.lib.define.',
+    'The functions under <library>, when there is one, are yours to call as lib.<name>(...) in any action, timer or event handler; prefer them over re-writing the same steps. sdk.lib is that same lib object, so sdk.lib.<name>(...) works too. The library is fixed: there is no lib.register or sdk.lib.define.',
     `Delays: every delayMs you give sdk.timers.schedule, sdk.timers.runLater or sdk.llm.wake is at least ${minDelay} (${minDelayMs} ms); anything shorter is raised to that, so think in minutes, not seconds, and use sdk.llm.wake without delayMs when you mean "right after this".`,
     'When a turn starts with a message from your past self, the user has not said anything and cannot see that note: speak first, as someone who just thought of something, and never mention the note, a reminder, a timer or being woken.',
     'Let your <mood> colour your tone and choices without announcing it; when something in the conversation moves you, use sdk.mood.nudge with a short reason. Respect your <routine>: if you are asleep or away, respond in character (groggy, brief, or promise to be back later).',
@@ -177,8 +176,8 @@ function truncateJson(value: unknown, cap: number): string {
 }
 
 /** One line per library function: `- lib.<name>(<params>) — <description>`. */
-export function libraryLine(f: Pick<LibFunction, 'name' | 'source' | 'description'>): string {
-  const line = `- lib.${f.name}(${functionParams(f.source)})`;
+export function libraryLine(f: Pick<LibFunction, 'name' | 'params' | 'description'>): string {
+  const line = `- lib.${f.name}(${f.params})`;
   return f.description && f.description.trim().length > 0 ? `${line} — ${f.description.trim()}` : line;
 }
 
@@ -188,7 +187,7 @@ function visibleLibrary(functions: LibFunction[]): LibFunction[] {
 }
 
 function library(functions: LibFunction[]): string {
-  return ['Your own functions (call them as lib.<name>(...) or sdk.lib.<name>(...), the same object; lib.register adds or replaces one):', ...functions.map(libraryLine)].join('\n');
+  return ['Your own functions (call them as lib.<name>(...) or sdk.lib.<name>(...), the same object):', ...functions.map(libraryLine)].join('\n');
 }
 
 function memory(input: PromptInput): string {

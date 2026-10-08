@@ -1,5 +1,5 @@
-// (game) whack-a-mole: pack images pop up one at a time at random spots for showMs and must be clicked before they vanish; a click scores and pops the next one, a mole that times out calls lib[onLose]({ game: "mole", event: "miss", round, hits, misses, attempt, mistakes }) and pops the next one, more than maxMisses misses calls it with event "lost" and restarts from round one; `rounds` hits call lib[onWin]. Options { onLose, onWin?, rounds?: 10, showMs?: 1500, maxMisses?: rounds / 2, tags?: ["card"] }
-async (opts: { onLose: string; onWin?: string; rounds?: number; showMs?: number; maxMisses?: number; tags?: string[]; attempt?: number; mistakes?: number }) => {
+/** (game) whack-a-mole: pack images pop up one at a time at random spots for showMs and must be clicked before they vanish; a click scores and pops the next one, a mole that times out calls lib[onLose]({ game: "mole", event: "miss", round, hits, misses, attempt, mistakes }) and pops the next one, more than maxMisses misses calls it with event "lost" and restarts from round one; `rounds` hits call lib[onWin]. Options { onLose, onWin?, rounds?: 10, showMs?: 1500, maxMisses?: rounds / 2, tags?: ["card"] } */
+export const whackAMole = async (opts: { onLose: string; onWin?: string; rounds?: number; showMs?: number; maxMisses?: number; tags?: string[]; attempt?: number; mistakes?: number }) => {
   const rounds = Math.max(1, Math.min(50, Math.round(opts.rounds ?? 10)));
   const showMs = Math.max(400, Math.min(10000, Math.round(opts.showMs ?? 1500)));
   const maxMisses = Math.max(0, Math.round(opts.maxMisses ?? rounds / 2));
@@ -37,4 +37,4 @@ async (opts: { onLose: string; onWin?: string; rounds?: number; showMs?: number;
   });
   const first = await lib.molePop();
   return { started: "mole", attempt: Number(opts.attempt ?? 1), rounds, showMs, maxMisses, first };
-}
+};

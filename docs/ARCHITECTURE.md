@@ -26,7 +26,7 @@ Goals
   Adding a capability never touches the engine or the sandbox.
 - **Shareable packs**: a directory or `.rppack` zip with a manifest, exactly
   one character, media assets, optional pre-written behaviour scripts and the
-  character's function library (`lib/*.ts`).
+  character's function library (`lib/`, a small TypeScript project).
 - **Safety by construction**: character code runs in a WebAssembly QuickJS
   isolate with no ambient authority. It can only reach the host through
   capability calls that are permission-checked, logged and resource-limited.
@@ -184,7 +184,6 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `state`  | trusted    | `get/set/delete/keys` (character-scoped, persistent), `session.get/set/delete/keys` |
 | `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `readText(path)`, `info()`                    |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `runLater(delayMs, code, opts?)` (setTimeout-style stored code, optionally repeating), `cancel(id)`, `list()` |
-| `lib`    | trusted    | not a namespace of its own: `sdk.lib` **is** the `lib` global (the character's own function library, one file per function in the pack — `characters/<id>/lib/<name>.ts`; authors can ship them), so `sdk.lib.<name>(...)` and `lib.<name>(...)` are the same call. Only `register(name, fn, opts?)` and `unregister(name)` cross to the host; the rest is the prelude (`CodeRunRequest.prelude`) |
 | `llm`    | trusted    | `ask(prompt, opts?)` (private side completion), `wake(prompt, { delayMs? })` (self-triggered turn now or later; rate-limited by autonomy settings) |
 | `memory` | trusted    | `remember(text, opts?)`, `recall(query, limit?)`, `recent(limit?)`, `update(id, patch)`, `forget(id)` — long-term memory, also consolidated automatically (see `docs/spec/memory.md`) |
 | `display`| trusted    | `monitors()`, `backend()` — read-only screen/backend info for placement decisions   |
@@ -197,6 +196,12 @@ Standard modules (v1), all in `@rp/sdk/modules`:
 | `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — via the user's camera command templates; the capture is saved under `webcam/` in the character home and returned as a `source: 'home'` AssetRef, which `sdk.media` can show |
 | `crypto` | pack       | `encrypt(path)`, `decrypt(path)` — one of the user's own files, in place, under an app-managed AES-256-GCM key; refuses anything outside the home directory or that looks like a system/session file, and logs every encryption so it stays recoverable (docs/spec/system.md) |
 | `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)`, `clipboardRead()`, and the virtual terminals: `vtStatus()`, `vtSwitchBack()`, `vtPreventSwitching(durationMs?, { reason? })` (no duration holds the console until `vtAllowSwitching()`), `vtAllowSwitching()` — the last three daemon-only (`rpchatd`, Linux) and bounded by the policy, like `input` |
+
+`lib` is not a module: `sdk.lib` **is** the `lib` global, the character's
+function library — the exports of its pack's `characters/<id>/lib/` folder (§8),
+bundled into the prelude (`CodeRunRequest.prelude`) — so `sdk.lib.<name>(...)`
+and `lib.<name>(...)` are the same call, run inside the isolate. Nothing at run
+time changes it, and no plugin may register a module called `lib`.
 
 Adding a module = write a spec (typings+docs+methods) and a host handler,
 register both. Third-party modules can later be shipped by packs or plugins;
@@ -327,7 +332,7 @@ Threat model: pack authors and the LLM are **untrusted**. The user is trusted.
   over its module's; anything the map does not mention is allowed, so a function
   added by a later version or by a plugin arrives switched on. A switched-off
   function is not on the sandbox `sdk` at all and is not mentioned in the prompt.
-  `sdk.lib` — the character's own saved functions — is the one module outside all
+  `sdk.lib` — the character's own function library, not a module — is outside all
   of this: always available, never listed (`@rp/shared/permissions.ts`). Packs
   neither request nor are granted anything; a `capabilities` key in an old
   `pack.json` / `character.json` is accepted, ignored and reported as a loader
@@ -376,8 +381,8 @@ my-pack/
 │       ├── character.json
 │       ├── persona.md
 │       ├── avatar.png
-│       ├── lib/                  (optional) the character's `lib` functions, one per file
-│       │   └── cheer.ts          `// <description>` + one function expression (or a module exporting one)
+│       ├── lib/                  (optional) the character's `lib`: a small TypeScript project
+│       │   └── cheer.ts          ES module; each named export is `lib.<name>`, its JSDoc summary the prompt line
 │       └── scripts/
 │           ├── on-session-start.ts
 │           └── on-timer.ts
@@ -434,11 +439,9 @@ the user's permissions, and `sdk.lib` is always in it. Omit the key for
 "everything the user allows"; an empty array means "nothing but `sdk.lib`".
 
 Installed packs live in `<userData>/packs/<packId>/<version>/`. The pack store
-(`InstalledPackRecord`) keeps id, version, root path and install time. The app owns that folder: `lib.register` writes the character's own
-functions into `characters/<id>/lib/` of the installed copy (and `unregister`
-deletes them), so they persist across sessions and restarts; reinstalling or
-upgrading the pack replaces the folder and therefore those functions, unless
-the author shipped them. `@rp/pack` exposes `loadPack(dir)`, `validatePack`, `packDirectory(dir)
+(`InstalledPackRecord`) keeps id, version, root path and install time. The app owns that folder. The
+character's function library is what the author shipped in `characters/<id>/lib/` (docs/spec/pack.md "Function library"), and
+reinstalling or upgrading the pack replaces it. `@rp/pack` exposes `loadPack(dir)`, `validatePack`, `packDirectory(dir)
 → .rppack`, `extractPack(file, destDir)`, and `indexAssets(pack)` (kind by
 extension: image/video/audio/text/other).
 

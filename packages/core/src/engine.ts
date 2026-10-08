@@ -26,7 +26,6 @@ import { ChatHandler } from './handlers/chat.js';
 import { LlmHandler } from './handlers/llm.js';
 import { EventsHandler, MoodHandler, RoutineHandler } from './handlers/living.js';
 import { HelpHandler } from './handlers/help.js';
-import { LibHandler } from './handlers/lib.js';
 import { MediaSourcesHandler } from './handlers/media-sources.js';
 import { MemoryHandler } from './handlers/memory.js';
 import { PackHandler } from './handlers/pack.js';
@@ -211,7 +210,6 @@ export class Engine {
     const coreHandlers: CapabilityHandler[] = [
       new ChatHandler(this.sessions, opts.storage.messages, this.events),
       new HelpHandler(opts.registry, this.permissions, (packId, characterId) => this.packs.tryGetLoaded(packId)?.characters.find((c) => c.definition.id === characterId)?.definition.promptFunctions),
-      new LibHandler(this.library),
       new StateHandler(opts.storage.state),
       new PackHandler(this.packs),
       new MediaSourcesHandler(this.mediaSources),
@@ -361,6 +359,9 @@ export class Engine {
         if (!spec || typeof spec.id !== 'string') throw new RpError('INVALID_ARGUMENT', 'A capability module spec with an id is required');
         if (spec.id === MEDIA_SOURCES_MODULE_ID) {
           throw new RpError('INVALID_ARGUMENT', `Capability module "${spec.id}" is reserved for the app's remote media sources; provide a media source instead`, { module: spec.id });
+        }
+        if (spec.id === 'lib') {
+          throw new RpError('INVALID_ARGUMENT', 'Capability module "lib" is reserved: `sdk.lib` is the character\'s own function library', { module: spec.id });
         }
         if (opts.registry.has(spec.id)) {
           throw new RpError('INVALID_ARGUMENT', `Capability module "${spec.id}" is already registered`, { module: spec.id });

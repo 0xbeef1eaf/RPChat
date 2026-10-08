@@ -47,11 +47,11 @@ drop them into a tagged folder such as `media/images/wallpapers/`). The
   to a game).
 - **Character**: `avatarSet` with four expressions, mood baselines, model hints,
   six example exchanges and a persona with a hard boundary section.
-- **Function library**: `characters/makima/lib/glance.ts` ships one `lib`
-  function, `lib.glance()`, which shows a random `portrait`-tagged image for
-  five seconds and returns its path, plus the mini games below. They are in her
-  prompt's `<library>` from the first install; anything she saves herself
-  with `lib.register` lands in the same folder of the installed copy.
+- **Function library**: `characters/makima/lib/` exports `lib.glance()`
+  (`glance.ts`), which shows a random `portrait`-tagged image for five seconds
+  and returns its path, plus the mini games below — one file per function,
+  each an `export const` with a JSDoc summary. They are in her prompt's
+  `<library>` from the first install.
 
 ## Mini games
 

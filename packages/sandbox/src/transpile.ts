@@ -102,7 +102,7 @@ function toCompileError(err: unknown, preludeLines: number): RpError {
     // The library, not the code the model just wrote: say so instead of pointing at its lines.
     return new RpError(
       'SANDBOX_COMPILE',
-      `syntax error in your function library, not in this action: ${first.text} (library line ${inSource}, column ${column}); fix or remove the function with sdk.lib`,
+      `syntax error in your function library, not in this action: ${first.text} (library line ${inSource}, column ${column}); the library is your pack's own code, so this action cannot fix it`,
       { library: true, libraryLine: inSource, libraryColumn: column, lineText: loc.lineText },
     );
   }

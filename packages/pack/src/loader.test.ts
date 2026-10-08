@@ -17,7 +17,7 @@ describe('loadPack', () => {
     expect(pack.characters).toHaveLength(1);
     const luna = pack.characters[0]!;
     expect(pack.character).toBe(luna);
-    expect(luna.library).toEqual({});
+    expect(luna.library).toEqual({ files: {}, functions: {}, code: '', problems: [] });
     expect(luna.dir).toBe('characters/luna');
     expect(luna.definition.id).toBe('luna');
     expect(luna.definition.name).toBe('Luna');
@@ -67,26 +67,29 @@ describe('loadPack', () => {
     expect(makima.behaviourSources.onEvent).toContain("'window-changed'");
     expect(makima.personaText).toMatch(/\*\*chainsaw\*\*/);
     // the shipped function library: characters/makima/lib/glance.ts plus the mini games and their helpers
-    expect(Object.keys(makima.library)).toEqual(['endGame', 'gameLost', 'gameSetup', 'glance', 'memoryGame', 'molePop', 'punish', 'quitGame', 'reactionTest', 'reward', 'simonSays', 'slidingPuzzle', 'whackAMole', 'writeLines']);
+    const lib = makima.library;
+    expect(lib.problems).toEqual([]);
+    expect(Object.keys(lib.functions)).toEqual(['endGame', 'gameLost', 'gameSetup', 'glance', 'memoryGame', 'molePop', 'punish', 'quitGame', 'reactionTest', 'reward', 'simonSays', 'slidingPuzzle', 'whackAMole', 'writeLines']);
     for (const name of ['memoryGame', 'simonSays', 'writeLines', 'whackAMole', 'reactionTest', 'slidingPuzzle']) {
-      const fn = makima.library[name]!;
+      const fn = lib.functions[name]!;
+      const source = lib.files[fn.file]!;
       expect(fn.file, name).toBe(`characters/makima/lib/${name}.ts`);
       expect(fn.description, name).toMatch(/^\(game\) .*lib\[onLose\]/); // the loss function is named, and what it receives is documented
-      expect(fn.source, name).toMatch(/^async \(opts: \{ onLose: string; onWin\?: string;/);
-      expect(fn.source, name).toContain('lib.gameSetup(');
-      expect(fn.source, name).toContain('lib.endGame(');
+      expect(fn.params, name).toMatch(/^opts: \{ onLose: string; onWin\?: string;/);
+      expect(source, name).toContain('lib.gameSetup(');
+      expect(source, name).toContain('lib.endGame(');
     }
-    for (const name of ['memoryGame', 'simonSays', 'slidingPuzzle']) expect(makima.library[name]!.source, name).toContain('{{asset:');
-    expect(makima.library['punish']!.description).toMatch(/onLose/);
-    expect(makima.library['reward']!.description).toMatch(/onWin/);
-    expect(makima.library['glance']).toMatchObject({
+    for (const name of ['memoryGame', 'simonSays', 'slidingPuzzle']) expect(lib.files[`characters/makima/lib/${name}.ts`], name).toContain('{{asset:');
+    expect(lib.functions['punish']!.description).toMatch(/onLose/);
+    expect(lib.functions['reward']!.description).toMatch(/onWin/);
+    expect(lib.functions['glance']).toEqual({
+      name: 'glance',
       file: 'characters/makima/lib/glance.ts',
+      params: '',
       description: 'show a random portrait of Makima for five seconds and return its path',
-      source: expect.stringMatching(/^async \(\) => \{[\s\S]*sdk\.media\.showImage\(pick, \{ durationMs: 5000[\s\S]*\}$/),
     });
-    expect(makima.library['glance']!.source).not.toContain('//');
-    expect(makima.library['glance']!.bytes).toBe(Buffer.byteLength(makima.library['glance']!.source));
-    expect(makima.library['glance']!.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(lib.files['characters/makima/lib/glance.ts']).toMatch(/^\/\*\* show a random portrait[^\n]*\*\/\nexport const glance = async \(\) => \{[\s\S]*sdk\.media\.showImage\(pick, \{ durationMs: 5000/);
+    expect(lib.code).toContain('sdk.media.showImage(pick');
     expect(makima.personaText).toContain('sdk.wallpaper');
     const words = makima.personaText.split(/\s+/).filter(Boolean).length;
     expect(words).toBeGreaterThan(550);
@@ -252,142 +255,81 @@ describe('validatePack / loadPack problems', () => {
     expect((await validatePack(notes)).ok).toBe(true);
   });
 
-  it('reads lib/<name>.ts into the character library, sorted by name, with the first-line description', async () => {
+  it('reads every .ts file under lib/ as a module whose exports are the library', async () => {
     const dir = await packWith({
       ...minimalPackFiles(),
       'characters/a/lib/README.md': 'ignored',
-      'characters/a/lib/.hidden.ts': 'x => x',
+      'characters/a/lib/.hidden.ts': 'export const hidden = () => 1;',
+      'characters/a/lib/.git/x.ts': 'export const git = () => 1;',
+      'characters/a/lib/types.d.ts': 'declare const nope: number;',
       'characters/a/lib/notes.txt': 'ignored',
-      'characters/a/lib/wave.ts': '// wave hello\nasync (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}\n',
-      'characters/a/lib/double.ts': '(n: number) => n * 2',
-      'characters/a/lib/named.ts': '  // has a description with trailing space   \r\n\r\nasync function named() { return 1; }\r\n',
-      'characters/a/lib/pick.ts': '// @internal pick a picture\n(mood: string) => mood\n',
-    });
-    expect(await validatePack(dir)).toEqual({ ok: true, problems: [], warnings: [] });
-    const pack = await loadPack(dir);
-    const lib = pack.character.library;
-    expect(Object.keys(lib)).toEqual(['double', 'named', 'pick', 'wave']);
-    expect(lib['wave']).toMatchObject({
-      description: 'wave hello',
-      source: 'async (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}',
-      bytes: Buffer.byteLength('async (times: number) => {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}'),
-      file: 'characters/a/lib/wave.ts',
-    });
-    expect(lib['double']).toMatchObject({ source: '(n: number) => n * 2', file: 'characters/a/lib/double.ts' });
-    expect(lib['double']!.description).toBeUndefined();
-    expect(lib['named']).toMatchObject({ description: 'has a description with trailing space', source: 'async function named() { return 1; }' });
-    // `// @internal` marks the author's own helper: it loads like any other function, flagged
-    expect(lib['pick']).toMatchObject({ description: 'pick a picture', internal: true, source: '(mood: string) => mood' });
-    expect(lib['wave']!.internal).toBeUndefined();
-  });
-
-  it('reads a library file whose function is preceded by comment lines, keeping them in the source', async () => {
-    const commented = '// only reaches for the mood tag\n/* the pack ships the pictures */\nasync (mood: string) => (await sdk.pack.findAssets({ anyTags: [mood] }))[0]';
-    const dir = await packWith({
-      ...minimalPackFiles(),
-      'characters/a/lib/cheer.ts': `// show a picture for a mood\n${commented}\n`,
-      'characters/a/lib/tick.ts': '// counts (up) to => 1\n() => 1\n',
+      'characters/a/lib/wave.ts': '/** Wave hello. */\nexport async function wave(times: number) {\n  await sdk.chat.emote(`waves ${times}x`);\n  return times;\n}\n',
+      'characters/a/lib/math/double.ts': "import { MARK } from './marks';\nexport const double = (n: number) => n * 2;\nexport const marked = (n: number) => `${n}${MARK}`;\n",
+      'characters/a/lib/math/marks.ts': 'export const MARK = "!";\n',
+      'characters/a/lib/pick.ts': '/**\n * @internal\n * Pick a picture.\n */\nexport const pick = (mood: string) => mood;\n',
     });
     expect(await validatePack(dir)).toEqual({ ok: true, problems: [], warnings: [] });
     const lib = (await loadPack(dir)).character.library;
-    expect(Object.keys(lib)).toEqual(['cheer', 'tick']);
-    // the first line is the description; the comments below it stay part of the function, verbatim
-    expect(lib['cheer']).toMatchObject({ description: 'show a picture for a mood', source: commented });
-    expect(lib['tick']).toMatchObject({ description: 'counts (up) to => 1', source: '() => 1' });
+    expect(Object.keys(lib.files)).toEqual(['characters/a/lib/math/double.ts', 'characters/a/lib/math/marks.ts', 'characters/a/lib/pick.ts', 'characters/a/lib/wave.ts']);
+    expect(lib.functions).toEqual({
+      double: { name: 'double', file: 'characters/a/lib/math/double.ts', params: 'n: number' },
+      marked: { name: 'marked', file: 'characters/a/lib/math/double.ts', params: 'n: number' },
+      // `@internal` marks the author's own plumbing: it loads like any other function, flagged
+      pick: { name: 'pick', file: 'characters/a/lib/pick.ts', params: 'mood: string', description: 'Pick a picture.', internal: true },
+      wave: { name: 'wave', file: 'characters/a/lib/wave.ts', params: 'times: number', description: 'Wave hello.' },
+    });
+    expect(lib.code).toMatch(/^\(\(\) => \{/);
   });
 
-  it('skips a library file that is not one function expression or not a valid name, with a warning, and still loads', async () => {
+  it('loads a pack whose library does not build, with the reason as a warning', async () => {
     const dir = await packWith({
       ...minimalPackFiles(),
-      'characters/a/lib/good.ts': '() => 1',
-      'characters/a/lib/broken.ts': '// half\nasync ( => 1',
-      'characters/a/lib/call.ts': 'sdk.chat.emote("hi")',
-      'characters/a/lib/two.ts': 'x => 1); (y => 2',
-      'characters/a/lib/sneaky.ts': '// a description\n// and a comment the function hides behind\nx => 1); sdk.chat.emote("hi"); (y => 2',
-      'characters/a/lib/1bad.ts': '() => 1',
-      'characters/a/lib/class.ts': '() => 1',
+      'characters/a/lib/good.ts': 'export const good = () => 1;',
+      'characters/a/lib/broken.ts': '// half\nexport const broken = async ( => 1;',
     });
     const result = await validatePack(dir);
     expect(result.ok).toBe(true);
-    expect(result.warnings).toEqual([
-      expect.stringMatching(/^warning: characters\/a\/lib\/1bad\.ts: file name is not a valid function name: name must be a JavaScript identifier/),
-      expect.stringMatching(/^warning: characters\/a\/lib\/broken\.ts: not a single function expression: fn does not parse: /),
-      expect.stringMatching(/^warning: characters\/a\/lib\/call\.ts: not a single function expression: fn must be a function expression/),
-      'warning: characters/a/lib/class.ts: file name is not a valid function name: "class" is a reserved word and cannot be a function name',
-      // a comment above the function does not make the statements it smuggles in look like one expression
-      'warning: characters/a/lib/sneaky.ts: not a single function expression: fn must be a single function expression (arrow function or `async function`)',
-      'warning: characters/a/lib/two.ts: not a single function expression: fn must be a single function expression (arrow function or `async function`)',
-    ]);
-    const pack = await loadPack(dir);
-    expect(Object.keys(pack.character.library)).toEqual(['good']);
-  });
-
-  it('reads a library file that keeps helpers beside its one exported function', async () => {
-    const withHelpers = [
-      'const MARK = "!";',
-      '',
-      '/** not the description: that is the first line of the file */',
-      'function shout(text: string): string {',
-      '  return `${text.toUpperCase()}${MARK}`;',
-      '}',
-      '',
-      'export default async (name: string) => shout(`hi ${name}`);',
-    ].join('\n');
-    const dir = await packWith({
-      ...minimalPackFiles(),
-      'characters/a/lib/greet.ts': `// greet someone loudly\n${withHelpers}\n`,
-      'characters/a/lib/named.ts': 'const n = 1;\nexport function add(x: number) { return x + n; }\n',
-      'characters/a/lib/typed.ts': 'export type Mood = "up";\nexport const mood = (m: Mood) => m;\n',
-      // the same file without the export: which of the two the character would call is not said
-      'characters/a/lib/unmarked.ts': 'function shout(text: string) { return text; }\nasync (name: string) => shout(name)\n',
-      'characters/a/lib/twice.ts': 'export const a = () => 1;\nexport const b = () => 2;\n',
-      'characters/a/lib/value.ts': 'export default 42;\n',
-    });
-    const result = await validatePack(dir);
-    expect(result.ok).toBe(true);
-    expect(result.warnings).toEqual([
-      expect.stringMatching(/^warning: characters\/a\/lib\/twice\.ts: not one exported function: the file exports more than one thing/),
-      expect.stringMatching(/^warning: characters\/a\/lib\/unmarked\.ts: not a single function expression: the source is more than one statement: export the function to call/),
-      expect.stringMatching(/^warning: characters\/a\/lib\/value\.ts: not one exported function: the export must be a function/),
-    ]);
+    expect(result.warnings).toEqual(['warning: characters/a/lib/broken.ts:2:31: Unexpected "=>"']);
     const lib = (await loadPack(dir)).character.library;
-    expect(Object.keys(lib)).toEqual(['greet', 'named', 'typed']);
-    // the file is kept whole — helpers included — and its first line is still the description
-    expect(lib['greet']).toMatchObject({ description: 'greet someone loudly', source: withHelpers, bytes: Buffer.byteLength(withHelpers) });
-    // the file name is the name the character calls, whatever the export is called
-    expect(lib['named']!.source).toContain('export function add');
-    expect(lib['typed']!.source).toContain('export type Mood');
-    expect(lib['mood']).toBeUndefined();
+    expect(lib.functions).toEqual({});
+    expect(Object.keys(lib.files)).toEqual(['characters/a/lib/broken.ts', 'characters/a/lib/good.ts']);
   });
 
-  it('enforces the library caps as problems', async () => {
-    // One file has no size cap of its own, however large.
-    const big = `() => "${'b'.repeat(20 * 1024)}"`;
-    const oneBig = await packWith({ ...minimalPackFiles(), 'characters/a/lib/big.ts': big });
-    expect((await validatePack(oneBig)).problems).toEqual([]);
+  it('warns about a file in the old one-function format, which now adds nothing', async () => {
+    const dir = await packWith({
+      ...minimalPackFiles(),
+      'characters/a/lib/old.ts': '// show a picture\nasync (mood: string) => mood\n',
+      'characters/a/lib/new.ts': 'export const fresh = () => 1;',
+    });
+    const result = await validatePack(dir);
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([expect.stringMatching(/^warning: characters\/a\/lib\/old\.ts: this file exports nothing and no other file imports it/)]);
+    expect(Object.keys((await loadPack(dir)).character.library.functions)).toEqual(['fresh']);
+  });
 
-    // Both caps are advisory: over them the pack still validates, loads and keeps every function.
+  it('enforces the library caps as warnings', async () => {
     const many: Record<string, string> = {};
-    for (let i = 0; i <= LIB_MAX_FUNCTIONS; i++) many[`characters/a/lib/f${i}.ts`] = '() => 1';
+    for (let i = 0; i <= LIB_MAX_FUNCTIONS; i++) many[`characters/a/lib/f${i}.ts`] = `export const f${i} = () => 1;`;
+    // internal exports are not listed in the prompt, so they do not count
+    many['characters/a/lib/plumbing.ts'] = '/** @internal */\nexport const plumbing = () => 1;';
     const tooMany = await packWith({ ...minimalPackFiles(), ...many });
     const manyResult = await validatePack(tooMany);
     expect(manyResult.ok).toBe(true);
     expect(manyResult.warnings).toEqual([
-      `warning: characters/a/lib: ${LIB_MAX_FUNCTIONS + 1} functions (over the advisory ${LIB_MAX_FUNCTIONS}); each one adds a <library> line to every prompt`,
+      `warning: characters/a/lib: ${LIB_MAX_FUNCTIONS + 1} public functions (over the advisory ${LIB_MAX_FUNCTIONS}); each one adds a <library> line to every prompt`,
     ]);
-    expect(Object.keys((await loadPack(tooMany)).character.library)).toHaveLength(LIB_MAX_FUNCTIONS + 1);
+    expect(Object.keys((await loadPack(tooMany)).character.library.functions)).toHaveLength(LIB_MAX_FUNCTIONS + 2);
 
-    const chunk = `() => "${'c'.repeat(16 * 1024)}"`;
+    const chunk = `export const PAD = "${'c'.repeat(16 * 1024)}";`;
     const files: Record<string, string> = {};
     const count = Math.floor(LIB_MAX_TOTAL_BYTES / Buffer.byteLength(chunk)) + 1;
-    for (let i = 0; i < count; i++) files[`characters/a/lib/g${i}.ts`] = chunk;
+    for (let i = 0; i < count; i++) files[`characters/a/lib/g${i}.ts`] = chunk.replace('PAD', `PAD${i}`);
     const tooMuch = await packWith({ ...minimalPackFiles(), ...files });
     const muchResult = await validatePack(tooMuch);
     expect(muchResult.ok).toBe(true);
     expect(muchResult.warnings).toEqual([
-      `warning: characters/a/lib: ${count * Buffer.byteLength(chunk)} bytes in total (over the advisory ${LIB_MAX_TOTAL_BYTES} bytes); the whole library is transpiled and evaluated on every run`,
+      expect.stringMatching(/^warning: characters\/a\/lib: \d+ bytes in total \(over the advisory \d+ bytes\); the whole library is evaluated on every run$/),
     ]);
-    await expect(loadPack(tooMuch)).resolves.toBeTruthy();
   });
 
   it('reports a mediaRoot that is a file, but tolerates a missing one', async () => {

@@ -78,14 +78,14 @@ describe('generateSdkTypings', () => {
     expect(out).not.toMatch(/^\s*(import|export)\b/m);
   });
 
-  it('types the lib global as the lib module\'s api, and falls back when that module is not selected', () => {
-    // `sdk.lib` is the `lib` object itself, so both are `LibApi`; without the module there is no LibApi.
-    const withLib = generateSdkTypings(registry, { modules: ['lib'] });
-    expect(withLib).toContain('  lib: LibApi;');
-    expect(withLib).toContain('declare const lib: LibApi;');
-    const withoutLib = generateSdkTypings(registry, { modules: ['chat'] });
-    expect(withoutLib).toContain('declare const lib: { [name: string]: (...args: any[]) => any };');
-    expect(withoutLib).not.toContain('LibApi');
+  it('types the lib global and sdk.lib as one open record, whatever modules are selected', () => {
+    // `sdk.lib` is the `lib` object itself, not a module: it is there with any selection.
+    for (const out of [generateSdkTypings(registry), generateSdkTypings(registry, { modules: ['chat'] })]) {
+      expect(out).toContain('  lib: LibApi;');
+      expect(out).toContain('declare const lib: LibApi;');
+      expect(out).toContain('interface LibApi {\n  [name: string]: (...args: any[]) => any;\n}');
+      expect(out).not.toContain('// ---- module: lib ');
+    }
   });
 
   it('compiles with zero diagnostics against lib.es2022', () => {
@@ -97,7 +97,7 @@ describe('generateSdkTypings', () => {
       expect(compile({ 'sdk.d.ts': generateSdkTypings(registry, { modules: [spec.id] }) }), spec.id).toEqual([]);
     }
     const none = generateSdkTypings(registry, { modules: [] });
-    expect(none).toContain('interface Sdk {\n}');
+    expect(none).toContain('interface Sdk {\n  /** Your function library: the same object as the global `lib`. */\n  lib: LibApi;\n}');
     expect(none).not.toContain('// ---- module:');
     expect(compile({ 'sdk.d.ts': none })).toEqual([]);
   }, 60_000);
@@ -263,7 +263,7 @@ describe('describeSurface', () => {
   it('lists modules with their method names, dotted for nested members', () => {
     const surface = describeSurface(registry);
     expect(surface.modules.map((m) => m.id)).toEqual([
-      'chat', 'help', 'lib', 'state', 'pack', 'timers', 'llm', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input',
+      'chat', 'help', 'state', 'pack', 'timers', 'llm', 'memory', 'display', 'media', 'ui', 'wallpaper', 'browser', 'input',
       'presence', 'screen', 'calendar', 'web', 'events', 'avatar', 'widgets', 'voice', 'desktop', 'files', 'mood', 'routine', 'messaging', 'webcam', 'crypto',
       'system',
     ]);

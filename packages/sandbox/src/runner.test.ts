@@ -362,8 +362,6 @@ describe('QuickJsRunner', () => {
 
   describe('prelude (the character\'s function library)', () => {
     const prelude = ['const lib = __rp_lib({', '  "double": (async (n: number) => n * 2),', '});'].join('\n');
-    /** The surface with the library module on it, so `lib` carries its two methods. */
-    const libSurface: SdkSurface = { modules: [...surface.modules, { id: 'lib', methods: ['register', 'unregister'] }] };
 
     it('defines lib in front of the user code, inside the same async wrapper', async () => {
       const result = await runner.run(req('const four = await lib.double(2);\nreturn { four, keys: Object.keys(lib), source: String(lib.double) };', { prelude }));
@@ -384,15 +382,15 @@ describe('QuickJsRunner', () => {
 
     it('refuses an internal function to the action body of an LLM run, while its siblings still call it', async () => {
       const result = await runner.run(
-        req('return { six: await lib.double(2), keys: Object.keys(lib), source: String(lib.pick) };', { prelude: withInternal, surface: libSurface }),
+        req('return { six: await lib.double(2), keys: Object.keys(lib), source: String(lib.pick) };', { prelude: withInternal }),
       );
       expect(result.error).toBeUndefined();
       // it is on the object (one lib, no second scope) and its source still reads back...
-      expect(result.returnValue).toEqual({ six: 6, keys: ['pick', 'double', 'watch', 'register', 'unregister'], source: '(n) => n + 1' });
+      expect(result.returnValue).toEqual({ six: 6, keys: ['pick', 'double', 'watch'], source: '(n) => n + 1' });
 
       // ...but the action body itself cannot call it, through `lib` or through `sdk.lib`
       for (const code of ['return await lib.pick(1);', 'return await sdk.lib.pick(1);']) {
-        const denied = await runner.run(req(code, { prelude: withInternal, surface: libSurface }));
+        const denied = await runner.run(req(code, { prelude: withInternal }));
         expect(denied.error?.message).toContain('lib.pick is an internal helper');
       }
     });
@@ -405,48 +403,45 @@ describe('QuickJsRunner', () => {
         { kind: 'sandbox', runId: 'r1' },
       ] as const) {
         const result = await runner.run(
-          req('return await lib.pick(1);', { prelude: withInternal, surface: libSurface, context: { ...context, trigger } }),
+          req('return await lib.pick(1);', { prelude: withInternal, context: { ...context, trigger } }),
         );
         expect(result.error, `trigger ${trigger.kind}`).toBeUndefined();
         expect(result.returnValue).toBe(2);
       }
     });
 
-    // What buildPrelude emits for a file written as a module: its statements run inside an arrow
-    // that hands back the exported function, so the helpers belong to that one entry alone.
-    const withHelpers = [
-      'const lib = __rp_lib({',
-      '  "greet": (() => {',
-      '    const mark = "!";',
-      '    function shout(text: string) { return text.toUpperCase() + mark; }',
-      '    var __rp_default = (name: string) => shout("hi " + name);',
-      '    ;return __rp_default;',
-      '  })(),',
-      '  "farewell": (() => {',
-      '    const mark = "?";',
-      '    function shout(text: string) { return text.toLowerCase() + mark; }',
-      '    ;return (name: string) => shout("BYE " + name);',
-      '  })(),',
-      '});',
+    // The shape of what buildPrelude emits: the lib/ folder bundled by esbuild into an iife whose
+    // value is the object of its exports, with every file's private declarations inside it.
+    const bundled = [
+      'const lib = __rp_lib((() => {',
+      'var __rp_library = (() => {',
+      '  // lib/greet.ts',
+      '  const mark = "!";',
+      '  function shout(text: string) { return text.toUpperCase() + mark; }',
+      '  const greet = (name: string) => shout("hi " + name);',
+      '  // lib/farewell.ts',
+      '  const mark2 = "?";',
+      '  function shout2(text: string) { return text.toLowerCase() + mark2; }',
+      '  const farewell = (name: string) => shout2("BYE " + name);',
+      '  return { greet, farewell };',
+      '})();',
+      'return __rp_library;',
+      '})());',
     ].join('\n');
 
-    it('runs a library function that keeps helpers of its own, one file at a time', async () => {
+    it('runs a bundled library, whose private helpers stay out of the action body', async () => {
       const result = await runner.run(
-        req('return { hi: await lib.greet("ada"), bye: await lib.farewell("ada"), keys: Object.keys(lib), source: String(lib.greet), leaked: typeof shout };', {
-          prelude: withHelpers,
+        req('return { hi: await lib.greet("ada"), bye: await lib.farewell("ada"), keys: Object.keys(lib), leaked: [typeof shout, typeof __rp_library] };', {
+          prelude: bundled,
         }),
       );
       expect(result.error).toBeUndefined();
-      // each file's `shout` and `mark` are its own, and neither reaches the action body
-      expect(result.returnValue).toMatchObject({ hi: 'HI ADA!', bye: 'bye ada?', keys: ['greet', 'farewell'], leaked: 'undefined' });
-      // the transpiler numbers the two `shout` declarations apart, which is why a handler stored
-      // out of such a function must call `lib.<name>` rather than reach for a helper beside it
-      expect((result.returnValue as { source: string }).source).toMatch(/^\(name\) => shout\d*\("hi " \+ name\)$/);
+      expect(result.returnValue).toEqual({ hi: 'HI ADA!', bye: 'bye ada?', keys: ['greet', 'farewell'], leaked: ['undefined', 'undefined'] });
     });
 
     it('stores a handler a library function installs without a renamed binding', async () => {
       const invoker = makeInvoker();
-      const result = await runner.run(req('return await lib.watch();', { prelude: withInternal, surface: libSurface, invoker }));
+      const result = await runner.run(req('return await lib.watch();', { prelude: withInternal, invoker }));
       expect(result.error).toBeUndefined();
       // The prelude declares one `lib`, so nothing is renamed to `lib2` on the way into the stored code.
       const stored = String(invoker.calls.find((c) => c.module === 'events' && c.method === 'on')!.args[1]);
@@ -454,39 +449,25 @@ describe('QuickJsRunner', () => {
       expect(stored).not.toMatch(/\blib\d+\b/);
     });
 
-    it('makes sdk.lib the very lib object, with the module\'s register and unregister on it', async () => {
+    it('makes sdk.lib the very lib object, frozen, with nothing of its own on it', async () => {
       const invoker = makeInvoker();
       const result = await runner.run(
-        req(
-          `const four = await sdk.lib.double(2);
-           await sdk.lib.register("triple", (n: number) => n * 3);
-           await lib.unregister("double");
-           return { same: sdk.lib === lib, four, keys: Object.keys(lib), frozen: Object.isFrozen(lib) };`,
-          { prelude, surface: libSurface, invoker },
-        ),
+        req('return { same: sdk.lib === lib, four: await sdk.lib.double(2), keys: Object.keys(lib), frozen: Object.isFrozen(lib), register: typeof lib.register };', {
+          prelude,
+          invoker,
+        }),
       );
       expect(result.error).toBeUndefined();
-      expect(result.returnValue).toEqual({ same: true, four: 4, keys: ['double', 'register', 'unregister'], frozen: true });
-      // only the two methods cross to the host; the saved function ran inside the isolate
-      expect(invoker.calls.map((c) => `${c.module}.${c.method}`)).toEqual(['lib.register', 'lib.unregister']);
-      expect(invoker.calls[0]!.args[0]).toBe('triple');
-      expect(invoker.calls[0]!.args[1]).toMatch(/^return await \(.*n \* 3.*\)\(input\);$/);
-      expect(invoker.calls[1]!.args).toEqual(['double']);
+      expect(result.returnValue).toEqual({ same: true, four: 4, keys: ['double'], frozen: true, register: 'undefined' });
+      // the function ran inside the isolate: nothing crossed to the host
+      expect(invoker.calls).toEqual([]);
     });
 
-    it('still defines lib when the library module is not on the surface, without its methods', async () => {
-      const result = await runner.run(req('return { four: await sdk.lib.double(2), keys: Object.keys(lib), register: typeof lib.register };', { prelude }));
+    it('gives sdk.lib an empty library without a prelude, even when a surface names a lib module', async () => {
+      const stale: SdkSurface = { modules: [...surface.modules, { id: 'lib', methods: ['register'] }] };
+      const result = await runner.run(req('return { keys: Object.keys(sdk.lib), register: typeof sdk.lib.register };', { surface: stale }));
       expect(result.error).toBeUndefined();
-      expect(result.returnValue).toEqual({ four: 4, keys: ['double'], register: 'undefined' });
-    });
-
-    it('gives sdk.lib the library methods even without a prelude', async () => {
-      const invoker = makeInvoker();
-      const code = ['await sdk.lib.register("triple", "(n) => n * 3");', 'return Object.keys(sdk.lib);'].join('\n');
-      const result = await runner.run(req(code, { surface: libSurface, invoker }));
-      expect(result.error).toBeUndefined();
-      expect(result.returnValue).toEqual(['register', 'unregister']);
-      expect(invoker.calls.map((c) => `${c.module}.${c.method}`)).toEqual(['lib.register']);
+      expect(result.returnValue).toEqual({ keys: [], register: 'undefined' });
     });
 
     it('still reports the user\'s own line numbers after a three-line prelude', async () => {
@@ -550,7 +531,7 @@ describe('QuickJsRunner', () => {
 
       it('reports a call one library function makes to another', async () => {
         const invoker = makeInvoker();
-        const result = await runner.run(req('return await lib.double(2);', { prelude: withInternal, surface: libSurface, invoker }));
+        const result = await runner.run(req('return await lib.double(2);', { prelude: withInternal, invoker }));
         expect(result.error).toBeUndefined();
         expect(invoker.libCalls.map((c) => `${c.name}(${c.args.join()})`)).toEqual(['pick(2)', 'double(2)']);
       });
@@ -565,7 +546,7 @@ describe('QuickJsRunner', () => {
 
       it('reports an internal helper an action may not call as denied', async () => {
         const invoker = makeInvoker();
-        const result = await runner.run(req('return await lib.pick(1);', { prelude: withInternal, surface: libSurface, invoker }));
+        const result = await runner.run(req('return await lib.pick(1);', { prelude: withInternal, invoker }));
         expect(result.ok).toBe(false);
         expect(invoker.libCalls).toHaveLength(1);
         expect(invoker.libCalls[0]).toMatchObject({ name: 'pick', args: [1], outcome: 'denied', error: { code: 'PERMISSION_DENIED' } });
@@ -597,7 +578,6 @@ describe('QuickJsRunner', () => {
         const result = await runner.run(
           req('return await lib.pick(1);', {
             prelude: withInternal,
-            surface: libSurface,
             invoker,
             context: { ...context, trigger: { kind: 'timer', timerId: 't1' } },
           }),

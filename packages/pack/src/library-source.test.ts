@@ -1,166 +1,151 @@
 import { describe, expect, it } from 'vitest';
-import {
-  exportedFunctionSource,
-  functionSourceProblem,
-  isLibraryModule,
-  libraryFunctionShape,
-  libraryValueExpression,
-  unwrapFunctionSource,
-} from './library-source.js';
+import { functionParams, hasExports, jsDocSummary, scanExports } from './library-source.js';
+import { buildCharacterLibrary } from './library.js';
 
-/** Run a prelude value the way the sandbox does: transpiled inside a function body, with `sdk` in scope. */
-async function callValue(source: string, sdk: unknown, ...args: unknown[]): Promise<unknown> {
-  const { transformSync } = await import('esbuild');
-  const js = transformSync(`return ${libraryValueExpression(source)};`, { loader: 'ts', target: 'es2020' }).code;
-  const fn = new Function('sdk', js)(sdk) as (...a: unknown[]) => unknown;
-  return fn(...args);
+/** Evaluate a library's code the way the prelude does, with `sdk` and `lib` as globals. */
+function evaluate(code: string, globals: Record<string, unknown> = {}): Record<string, unknown> {
+  return new Function(...Object.keys(globals), `return ${code};`)(...Object.values(globals)) as Record<string, unknown>;
 }
 
-describe('a bare function expression', () => {
-  it('is the whole source, and stays exactly that in the prelude', () => {
-    const source = 'async (mood: string) => {\n  return mood;\n}';
-    expect(functionSourceProblem(source)).toBeUndefined();
-    expect(isLibraryModule(source)).toBe(false);
-    expect(exportedFunctionSource(source)).toBe(source);
-    expect(libraryValueExpression(source)).toBe(`(${source})`);
-  });
-
-  it('is refused when it is not one function, with the module format offered', () => {
-    expect(functionSourceProblem('x => 1); (y => 2')).toBe('fn must be a single function expression (arrow function or `async function`)');
-    expect(functionSourceProblem('sdk.chat.say("hi")')).toMatch(/not a call or a value/);
-    // helpers beside the function, but no export to say which one the character calls
-    expect(functionSourceProblem('function helper() { return 1; }\n() => helper()')).toMatch(/more than one statement: export the function to call/);
-    expect(functionSourceProblem('const a = 1;\nasync ( => 1')).toMatch(/^fn does not parse: /);
-    expect(functionSourceProblem('')).toBe('fn must be a function');
-  });
-});
-
-describe('a module with one export', () => {
-  const source = [
-    'const GREETING = "hi";',
-    '',
-    'function shout(text: string): string {',
-    '  return `${text.toUpperCase()}!`;',
-    '}',
-    '',
-    'export default async (name: string) => {',
-    '  return shout(`${GREETING} ${name}`);',
-    '};',
-  ].join('\n');
-
-  it('loads, and reports the exported function as the one the character calls', () => {
-    expect(functionSourceProblem(source)).toBeUndefined();
-    expect(isLibraryModule(source)).toBe(true);
-    expect(exportedFunctionSource(source)).toBe('async (name: string) => {\n  return shout(`${GREETING} ${name}`);\n}');
-  });
-
-  it('keeps the helpers in the prelude value and hands back the export', async () => {
-    const value = libraryValueExpression(source);
-    expect(value).toContain('function shout(text: string)');
-    expect(value).not.toContain('export');
-    expect(await callValue(source, {}, 'ada')).toBe('HI ADA!');
-  });
-
-  it('runs its statements once per run, not once per call', async () => {
-    const counted = 'let calls = 0;\ncalls += 1;\nexport default () => calls;';
-    expect(await callValue(counted, {})).toBe(1);
-  });
-
-  it('takes every export form, and a named default keeps its name', async () => {
-    const forms: Array<[string, unknown]> = [
-      ['export default function greet() { return "a"; }', 'a'],
-      ['export default async function () { return "b"; }', 'b'],
-      ['export function greet() { return "c"; }', 'c'],
-      ['export async function greet() { return "d"; }', 'd'],
-      ['export const greet = () => "e";', 'e'],
-      ['const inner = () => "f";\nexport const greet = () => inner();', 'f'],
-      ['export default function fact(n: number) { return n <= 1 ? 1 : n * fact(n - 1); }', undefined],
-    ];
-    for (const [form, expected] of forms) {
-      expect(functionSourceProblem(form), form).toBeUndefined();
-      if (expected !== undefined) expect(await callValue(form, {}), form).toBe(expected);
-    }
-    // the default export of a named declaration is reachable by its own name inside the file
-    expect(await callValue(forms[6]![0], {}, 4)).toBe(24);
-  });
-
-  it('lets the exported function use sdk and its file-local helpers', async () => {
-    const said: string[] = [];
-    const withSdk = [
-      '// @internal not the description, just a comment',
-      'async function say(sdkText: string) {',
-      '  await sdk.chat.say(sdkText);',
-      '}',
-      'export default async (text: string) => {',
-      '  await say(text);',
-      '  return true;',
-      '};',
+describe('scanExports', () => {
+  it('reads every declaration form, with its JSDoc summary and parameters', () => {
+    const source = [
+      'type Mood = "happy" | "sad";',
+      'const GREETING = "hi";',
+      '',
+      '/**',
+      ' * Show a picture for a mood.',
+      ' * Returns whether there was one.',
+      ' *',
+      ' * @param mood which one',
+      ' */',
+      'export async function cheer(mood: Mood, opts: { ms?: number } = {}) { return mood; }',
+      '/** Shout it. */',
+      'export const shout = (text: string): string => `${text}!`;',
+      'export const typed: (n: number) => number = (n) => n;',
+      'export const generic = <T,>(x: T) => x;',
+      'export const one = x => x;',
+      'export function* count() {}',
+      '/** @internal Not for the character. */',
+      'export let helper = function (a, b) { return a + b; };',
+      'export const LIMIT = 3;',
+      'export class Box {}',
+      'export type Exported = string;',
+      'export interface Shape {}',
+      'function local(a: number) { return a; }',
+      '/** Renamed. */',
+      'const inner = async (q: string) => q;',
+      'export { local, inner as outer, GREETING };',
+      'export { roll } from "./dice";',
     ].join('\n');
-    const sdk = { chat: { say: (t: string) => void said.push(t) } };
-    expect(await callValue(withSdk, sdk, 'hello')).toBe(true);
-    expect(said).toEqual(['hello']);
+    const shapes = Object.fromEntries(scanExports(source));
+    expect(shapes).toEqual({
+      cheer: { kind: 'function', params: 'mood: Mood, opts: { ms?: number } = {}', description: 'Show a picture for a mood. Returns whether there was one.' },
+      shout: { kind: 'function', params: 'text: string', description: 'Shout it.' },
+      typed: { kind: 'function', params: 'n' },
+      generic: { kind: 'function', params: 'x: T' },
+      one: { kind: 'function', params: 'x' },
+      count: { kind: 'function', params: '' },
+      helper: { kind: 'function', params: 'a, b', description: 'Not for the character.', internal: true },
+      LIMIT: { kind: 'value', params: '' },
+      Box: { kind: 'value', params: '' },
+      local: { kind: 'function', params: 'a: number' },
+      outer: { kind: 'function', params: 'q: string', description: 'Renamed.' },
+      GREETING: { kind: 'value', params: '' },
+      roll: { kind: 'unknown', params: '' },
+    });
   });
 
-  it('erases a type-only export without taking it for the function', () => {
-    const typed = 'export type Mood = "up" | "down";\nexport interface Opts { mood: Mood }\nexport default (o: Opts) => o.mood;';
-    expect(functionSourceProblem(typed)).toBeUndefined();
-    expect(libraryValueExpression(typed)).toContain('type Mood');
-    expect(libraryValueExpression(typed)).not.toContain('export');
-    expect(exportedFunctionSource(typed)).toBe('(o: Opts) => o.mood');
-  });
-
-  it('refuses a second export, a non-function export and an import', () => {
-    expect(functionSourceProblem('export const a = () => 1;\nexport const b = () => 2;')).toMatch(/exports more than one thing/);
-    expect(functionSourceProblem('export default 42;')).toMatch(/must be a function/);
-    expect(functionSourceProblem('export default sdk.chat.say("hi");')).toMatch(/must be a function/);
-    expect(functionSourceProblem('const a = () => 1;\nexport { a };')).toMatch(/not a function the character can call/);
-    expect(functionSourceProblem('export * from "./other";')).toMatch(/not a function the character can call/);
-    expect(functionSourceProblem('export class Greeter {}')).toMatch(/not a function the character can call/);
-    expect(functionSourceProblem('import { x } from "./x";\nexport default () => x;')).toMatch(/cannot `import` anything/);
-    expect(functionSourceProblem('export default () => {')).toMatch(/the file does not parse: /);
-    // a module may await at its top level; the prelude runs the file inside a function, which may not
-    expect(functionSourceProblem('const now = await Promise.resolve(1);\nexport default () => now;')).toMatch(/Top-level await/);
-    expect(isLibraryModule('export default 42;')).toBe(true);
-  });
-
-  it('still allows dynamic import() and a property called export', () => {
-    expect(functionSourceProblem('export default async () => (await import("./x")).y;')).toBeUndefined();
-    expect(functionSourceProblem('const o = { export: 1 };\nexport default () => o.export;')).toBeUndefined();
-  });
-
-  it('is not fooled by the word export inside a string, a comment or a regular expression', () => {
-    const inText = [
-      '// an export default in a comment',
-      'const note = "export default nothing";',
-      'const pattern = /export default/g;',
-      'const quote = `an ${note} export default`;',
-      'export default () => note.replace(pattern, quote);',
+  it('is not fooled by the word in strings, comments, properties or nested code', () => {
+    const source = [
+      '// export function no() {}',
+      'const s = "export function no2() {}";',
+      'const o = { export: 1 };',
+      'function f() { const inside = 1; return o.export; }',
+      'const t = `${"x"} export const no3 = 1`;',
+      'export function yes() { return /export const no4/.test(s); }',
     ].join('\n');
-    expect(functionSourceProblem(inText)).toBeUndefined();
-    expect(exportedFunctionSource(inText)).toBe('() => note.replace(pattern, quote)');
-    expect(libraryValueExpression(inText)).toContain('"export default nothing"');
-  });
-
-  it('is not desynchronised by a quote inside a regular expression', () => {
-    const tricky = "const strip = (s: string) => s.replace(/'/g, '');\nexport default (s: string) => strip(s);";
-    expect(functionSourceProblem(tricky)).toBeUndefined();
-    expect(exportedFunctionSource(tricky)).toBe('(s: string) => strip(s)');
+    expect([...scanExports(source).keys()]).toEqual(['yes']);
+    expect(hasExports(source)).toBe(true);
+    expect(hasExports('async (x: number) => x')).toBe(false);
   });
 });
 
-describe('what lib.register receives', () => {
-  it('unwraps a serialised function argument, and takes a module string as it stands', () => {
-    expect(unwrapFunctionSource('return await ((mood) => mood)(input);')).toBe('(mood) => mood');
-    const module = 'function helper() { return 1; }\nexport default () => helper();';
-    expect(unwrapFunctionSource(module)).toBe(module);
-    expect(functionSourceProblem(module)).toBeUndefined();
+describe('jsDocSummary and functionParams', () => {
+  it('takes the first paragraph, on one line, and flags @internal', () => {
+    expect(jsDocSummary(' Hello.\n * world\n *\n * more')).toEqual({ description: 'Hello. world', internal: false });
+    expect(jsDocSummary(' @internal')).toEqual({ internal: true });
+    expect(jsDocSummary(' Pick one. @internal')).toEqual({ description: 'Pick one. @internal', internal: true });
+    expect(jsDocSummary(' @internal Roll a die.\n * @param n sides')).toEqual({ description: 'Roll a die.', internal: true });
+  });
+
+  it('reads the parameter list of any function form', () => {
+    expect(functionParams('async (mood: string) => 1')).toBe('mood: string');
+    expect(functionParams('x => x')).toBe('x');
+    expect(functionParams('/* (a) => */ (b) => b')).toBe('b');
+    expect(functionParams('(s = ")") => s')).toBe('s = ")"');
   });
 });
 
-describe('a source with no shape', () => {
-  it('falls back to the bare expression, which the loader and register refuse first', () => {
-    expect(libraryFunctionShape('export default 42;')).toMatchObject({ problem: expect.any(String), module: true });
-    expect(libraryValueExpression('export default 42;')).toBe('(export default 42;)');
-    expect(exportedFunctionSource('export default 42;')).toBe('export default 42;');
+describe('buildCharacterLibrary', () => {
+  it('bundles the folder into one expression of its exports, private helpers included', async () => {
+    const { library } = await buildCharacterLibrary(
+      {
+        'dice.ts': '/** @internal */\nexport function roll(n: number) { return n; }\nexport const SIDES = 6;',
+        'games/play.ts': "import { roll, SIDES } from '../dice';\nconst twice = (n: number) => 2 * n;\n/** Roll. */\nexport async function play() { return twice(roll(SIDES)) + (await sdk.base()); }",
+      },
+      'characters/x/lib',
+    );
+    expect(library.problems).toEqual([]);
+    expect(Object.keys(library.functions)).toEqual(['play', 'roll']); // SIDES is on lib, but not a function
+    const exports = evaluate(library.code, { sdk: { base: async () => 1 } });
+    expect(Object.keys(exports).sort()).toEqual(['SIDES', 'play', 'roll']);
+    expect(await (exports['play'] as () => Promise<number>)()).toBe(13);
+    expect('twice' in exports).toBe(false);
+  });
+
+  it('leaves out an export it cannot name, and says why', async () => {
+    const { library } = await buildCharacterLibrary(
+      {
+        'a.ts': 'export default () => 1;\nexport const ok = () => 1;',
+        'b.ts': "export const ok = () => 2;\nexport { ok as delete };",
+        'old.ts': 'async (mood: string) => mood',
+      },
+      'lib',
+    );
+    expect(Object.keys(library.functions)).toEqual(['ok']);
+    expect(library.functions['ok']!.file).toBe('lib/a.ts');
+    expect(library.problems).toEqual([
+      { file: 'lib/a.ts', message: expect.stringContaining('`export default` has no name') },
+      { file: 'lib/b.ts', message: expect.stringContaining('lib.delete cannot be a library name') },
+      { file: 'lib/b.ts', message: 'lib.ok is already exported by lib/a.ts: a name is exported by one file only (import it from there instead of re-exporting it)' },
+      { file: 'lib/old.ts', message: expect.stringContaining('exports nothing') },
+    ]);
+    expect((evaluate(library.code)['ok'] as () => number)()).toBe(1);
+  });
+
+  it('has no code when no file exports anything', async () => {
+    const { library } = await buildCharacterLibrary({ 'types.ts': 'export type Mood = "up";\nconst unused = 1;' }, 'lib');
+    expect(library).toEqual({ files: { 'lib/types.ts': 'export type Mood = "up";\nconst unused = 1;' }, functions: {}, code: '', problems: [] });
+  });
+
+  it('refuses imports from outside the folder, and top-level await', async () => {
+    const outside = await buildCharacterLibrary({ 'a.ts': "import fs from 'node:fs';\nexport const a = () => fs;" }, 'lib');
+    expect(outside.library.problems).toEqual([{ file: 'lib/a.ts', line: 1, column: 16, message: expect.stringContaining('can only import other files of the library') }]);
+    expect(outside.library.code).toBe('');
+    const up = await buildCharacterLibrary({ 'a.ts': "import { b } from '../b';\nexport const a = () => b;" }, 'lib');
+    expect(up.library.problems[0]!.message).toContain('outside the lib folder');
+    const missing = await buildCharacterLibrary({ 'a.ts': "import { b } from './b';\nexport const a = () => b;" }, 'lib');
+    expect(missing.library.problems[0]!.message).toContain('no such file');
+    const awaited = await buildCharacterLibrary({ 'a.ts': 'const x = await sdk.state.get("x");\nexport const a = () => x;' }, 'lib');
+    expect(awaited.library.problems[0]).toMatchObject({ file: 'lib/a.ts', line: 1 });
+  });
+
+  it('reuses the previous build when no file changed', async () => {
+    const first = await buildCharacterLibrary({ 'a.ts': 'export const a = () => 1;' }, 'lib');
+    const again = await buildCharacterLibrary({ 'a.ts': 'export const a = () => 1;' }, 'lib', { previous: first.library });
+    expect(again.library).toBe(first.library);
+    const changed = await buildCharacterLibrary({ 'a.ts': 'export const b = () => 1;' }, 'lib', { previous: first.library });
+    expect(Object.keys(changed.library.functions)).toEqual(['b']);
   });
 });

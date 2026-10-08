@@ -1,5 +1,5 @@
-// (game) memory: flip pairs of pack images in a widget. Every wrong pair calls lib[onLose]({ game: "memory", event: "mistake", attempt, mistakes, roundMistakes, moves }); more than maxMistakes wrong pairs or the timer running out calls it with event "lost" and reshuffles a new attempt; matching every pair calls lib[onWin] and ends the game. Options { onLose, onWin?, pairs?: 6, maxMistakes?: pairs * 2, timeLimitS?: 90, tags?: ["card"] }
-async (opts: { onLose: string; onWin?: string; pairs?: number; maxMistakes?: number; timeLimitS?: number; tags?: string[]; attempt?: number; mistakes?: number }) => {
+/** (game) memory: flip pairs of pack images in a widget. Every wrong pair calls lib[onLose]({ game: "memory", event: "mistake", attempt, mistakes, roundMistakes, moves }); more than maxMistakes wrong pairs or the timer running out calls it with event "lost" and reshuffles a new attempt; matching every pair calls lib[onWin] and ends the game. Options { onLose, onWin?, pairs?: 6, maxMistakes?: pairs * 2, timeLimitS?: 90, tags?: ["card"] } */
+export const memoryGame = async (opts: { onLose: string; onWin?: string; pairs?: number; maxMistakes?: number; timeLimitS?: number; tags?: string[]; attempt?: number; mistakes?: number }) => {
   const pairs = Math.max(2, Math.min(12, Math.round(opts.pairs ?? 6)));
   const maxMistakes = Math.max(0, Math.round(opts.maxMistakes ?? pairs * 2));
   const timeLimitS = Math.max(10, Math.round(opts.timeLimitS ?? 90));
@@ -55,4 +55,4 @@ for(const c of cards)c.onclick=()=>{
   });
   await sdk.widgets.show({ id: "game-memory", title: `Memory — attempt ${game.attempt}`, html, width: cols * 78 + 16, height: rows * 78 + 44, position: "center" });
   return { started: "memory", attempt: game.attempt, pairs, maxMistakes, timeLimitS };
-}
+};

@@ -1,5 +1,5 @@
-// (game, internal) whack-a-mole: pop the next mole — one random pool image at a random spot for showMs (click closes it) — and remember it as the current one in the "game" session state
-async () => {
+/** (game, internal) whack-a-mole: pop the next mole — one random pool image at a random spot for showMs (click closes it) — and remember it as the current one in the "game" session state */
+export const molePop = async () => {
   const game = (await sdk.state.session.get("game")) as { [key: string]: any } | null | undefined;
   if (!game || game.game !== "mole") return null;
   const pool = game.pool as string[];
@@ -8,4 +8,4 @@ async () => {
   const round = Number(game.round ?? 0) + 1;
   await sdk.state.session.set("game", { ...game, current: h.id, round });
   return { round, mediaId: h.id, asset: path };
-}
+};

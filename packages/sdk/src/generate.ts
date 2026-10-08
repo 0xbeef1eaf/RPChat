@@ -37,23 +37,19 @@ declare const console: {
 
 /**
  * Typings for the `lib` global the host defines in front of character code
- * (`CodeRunRequest.prelude`): the character's own function library. Its members
- * are only known at run time, so the type is an open record; `sdk.lib` is the
- * same object (the `lib` module's `LibApi`, emitted with the module).
+ * (`CodeRunRequest.prelude`): the character's function library, the exports of
+ * its pack's `lib/` folder. Its members are only known per character, so the
+ * type is an open record; `sdk.lib` is the same object.
  */
 export const LIB_TYPINGS = `/**
- * Your own function library: everything you saved with lib.register(), callable as lib.<name>(...).
+ * Your function library: the functions your pack ships under characters/<id>/lib/, callable as lib.<name>(...).
  * Available in every action, timer handler and event handler; see <library> in your prompt for the names.
  * \`sdk.lib\` is this very object, so \`sdk.lib.<name>(...)\` does the same as \`lib.<name>(...)\`.
  */
+interface LibApi {
+  [name: string]: (...args: any[]) => any;
+}
 declare const lib: LibApi;`;
-
-/** {@link LIB_TYPINGS} for a surface without the `lib` module, where `LibApi` is not emitted. */
-export const LIB_TYPINGS_WITHOUT_MODULE = `/**
- * Your own function library: the functions saved under characters/<id>/lib/, callable as lib.<name>(...).
- * Available in every action, timer handler and event handler; see <library> in your prompt for the names.
- */
-declare const lib: { [name: string]: (...args: any[]) => any };`;
 
 /** The method names of `spec` the selection keeps, in spec order. */
 function selectMethods(spec: CapabilityModuleSpec, options: GenerateTypingsOptions): string[] {
@@ -92,8 +88,10 @@ export function generateSdkTypings(registry: CapabilityRegistry, options: Genera
     out.push(`  /** ${spec.summary.trim()} (permission: ${spec.permission}) */`);
     out.push(`  ${spec.id}: ${spec.apiTypeName};`);
   }
-  const hasLib = specs.some((spec) => spec.id === 'lib');
-  out.push('}', '', CONSOLE_TYPINGS, '', hasLib ? LIB_TYPINGS : LIB_TYPINGS_WITHOUT_MODULE);
+  // Not a module: the character's own library, which the sandbox puts on `sdk` as the global `lib`.
+  out.push('  /** Your function library: the same object as the global `lib`. */');
+  out.push('  lib: LibApi;');
+  out.push('}', '', CONSOLE_TYPINGS, '', LIB_TYPINGS);
 
   for (const spec of specs) {
     out.push('', `// ---- module: ${spec.id} v${spec.version} ----`);

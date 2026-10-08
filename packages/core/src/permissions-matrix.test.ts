@@ -145,7 +145,7 @@ describe('permission matrix (app-wide policy only)', () => {
   it('switches trusted modules off too — every module but sdk.lib is the user\'s to turn off', async () => {
     t = await createTestEngine();
     const { engine, packsDir } = t;
-    // `lib` is named as well, and ignored: it is the character's own saved functions.
+    // `lib` is named as well, and ignored: it is the pack's own library, not a module.
     await engine.settings.update({ permissions: { functionAllow: { state: false, lib: false } } });
     await installLunaWith(engine, packsDir);
     const session = await engine.sessions.create({ characterRef: LUNA_REF });
@@ -155,8 +155,9 @@ describe('permission matrix (app-wide policy only)', () => {
       error: { code: 'PERMISSION_DENIED' },
     });
     expect(await engine.permissions.allowedModules(LUNA_ID)).not.toContain('state');
-    expect(await engine.permissions.allowedModules(LUNA_ID)).toContain('lib');
-    expect((await engine.behaviours.surfaceFor(LUNA_ID)).modules.some((m) => m.id === 'lib')).toBe(true);
+    // and `lib` is no module at all: sdk.lib is the pack's own library, put there by the sandbox
+    expect(await engine.permissions.allowedModules(LUNA_ID)).not.toContain('lib');
+    expect((await engine.behaviours.surfaceFor(LUNA_ID)).modules.some((m) => m.id === 'lib')).toBe(false);
   });
 
   it('switches off one function without touching its siblings, in the surface and in the prompt', async () => {
@@ -208,8 +209,8 @@ describe('permission matrix (app-wide policy only)', () => {
     expect(system).toContain('showImage');
     expect(system).not.toContain('playVideo');
     expect(system).not.toContain('## sdk.state —');
-    // `lib` is never narrowed away: it is the character's own library.
-    expect(system).toContain('## sdk.lib —');
+    // `lib` is not a module of the reference: the library is listed under <library> instead.
+    expect(system).not.toContain('## sdk.lib —');
 
     // …and none of that took anything away from the code.
     expect((await engine.behaviours.surfaceFor(LUNA_ID)).modules.some((m) => m.id === 'state')).toBe(true);

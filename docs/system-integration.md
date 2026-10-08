@@ -290,7 +290,7 @@ Points worth knowing:
   wins over its module's. A key the policy file sets to `false` is off for every character and its
   toggle is shown as managed and locked in the app — pinning a module locks its functions with it;
   keys the file does not mention stay under the user's control. `sdk.lib`, the character's own
-  saved functions, is not subject to the policy. `moduleAllow` is the name this map had while
+  function library (not a module), is not subject to the policy. `moduleAllow` is the name this map had while
   permissions were per module; policy files that still use it keep working unchanged.
 - `inputLock.enabled: false` refuses every lock request; injection is unaffected.
 - `vtLock.enabled: false` refuses both virtual-terminal operations (`sdk.system.vtPreventSwitching`

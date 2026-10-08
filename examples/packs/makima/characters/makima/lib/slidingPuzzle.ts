@@ -1,5 +1,5 @@
-// (game) sliding puzzle: one pack image cut into a 3x3 or 4x4 grid with one gap, shuffled by legal moves; clicking a tile next to the gap slides it. Solving it calls lib[onWin]; exceeding moveLimit calls lib[onLose]({ game: "puzzle", event: "lost", reason: "moves", moves, attempt, mistakes }) and reshuffles a new attempt. Options { onLose, onWin?, image?: pack path (default: a "puzzle" or "wallpaper" tagged image), size?: 3, moveLimit?: 40 * (size - 2) }
-async (opts: { onLose: string; onWin?: string; image?: string; size?: 3 | 4; moveLimit?: number; attempt?: number; mistakes?: number }) => {
+/** (game) sliding puzzle: one pack image cut into a 3x3 or 4x4 grid with one gap, shuffled by legal moves; clicking a tile next to the gap slides it. Solving it calls lib[onWin]; exceeding moveLimit calls lib[onLose]({ game: "puzzle", event: "lost", reason: "moves", moves, attempt, mistakes }) and reshuffles a new attempt. Options { onLose, onWin?, image?: pack path (default: a "puzzle" or "wallpaper" tagged image), size?: 3, moveLimit?: 40 * (size - 2) } */
+export const slidingPuzzle = async (opts: { onLose: string; onWin?: string; image?: string; size?: 3 | 4; moveLimit?: number; attempt?: number; mistakes?: number }) => {
   const size = opts.size === 4 ? 4 : 3;
   const moveLimit = Math.max(size * size, Math.round(opts.moveLimit ?? 40 * (size - 2)));
   let image = typeof opts.image === "string" ? (await sdk.pack.asset(opts.image)).path : "";
@@ -42,4 +42,4 @@ const draw=()=>{pos.forEach((id,slot)=>{if(id===N*N-1)return;els[id].style.left=
   });
   await sdk.widgets.show({ id: "game-puzzle", title: `Puzzle ${size}×${size} — attempt ${game.attempt}`, html, width: board + 16, height: board + 40, position: "center" });
   return { started: "puzzle", attempt: game.attempt, image, size, moveLimit };
-}
+};

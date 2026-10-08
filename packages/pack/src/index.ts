@@ -59,34 +59,25 @@ export {
   behaviourScriptPath,
   behaviourTemplates,
   hookFileStem,
-  libraryFunctionTemplate,
+  libraryFileTemplate,
   libraryReadme,
   personaTemplate,
 } from './templates.js';
 
 export {
   LIB_RESERVED_NAMES,
-  LIB_STATIC_NAMES,
-  formatLibraryFile,
+  buildCharacterLibrary,
   libraryFilePath,
   libraryNameProblem,
-  parseLibraryFile,
+  normalizeLibraryPath,
   readCharacterLibrary,
-  removeLibraryFunction,
-  writeLibraryFunction,
+  removeLibraryFile,
+  writeLibraryFile,
 } from './library.js';
-export type { CharacterLibraryScan, LibraryFileProblem, ReadLibraryOptions } from './library.js';
+export type { CharacterLibraryScan, ReadLibraryOptions } from './library.js';
 
-export {
-  exportedFunctionSource,
-  functionSourceProblem,
-  isLibraryModule,
-  libraryFunctionShape,
-  libraryValueExpression,
-  stripLeadingComments,
-  unwrapFunctionSource,
-} from './library-source.js';
-export type { LibraryFunctionShape, LibraryModule } from './library-source.js';
+export { functionParams, hasExports, jsDocSummary, scanExports, stripLeadingComments } from './library-source.js';
+export type { ExportShape } from './library-source.js';
 
 export {
   addAssetFile,

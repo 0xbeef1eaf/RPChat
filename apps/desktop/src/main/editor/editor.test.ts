@@ -165,7 +165,7 @@ describe('EditorService media options', () => {
   });
 });
 
-describe('EditorService scripts (lib/<name>.ts)', () => {
+describe('EditorService library (lib/**/*.ts)', () => {
   let tmp: string;
   beforeAll(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-editor-scripts-'));
@@ -183,86 +183,90 @@ describe('EditorService scripts (lib/<name>.ts)', () => {
     });
   }
 
-  it('creates, lists, renames, reports and deletes function files', async () => {
+  it('creates, lists, renames, reports and deletes library files', async () => {
     const s = svc();
     const project = await s.create({ packId: 'com.test.scripts', name: 'Scripts', characterId: 'mia', characterName: 'Mia' });
     const key = project.summary.key;
     const dir = project.summary.dir;
+    const libDir = path.join(dir, 'characters', 'mia', 'lib');
     const mia = project.characters[0]!;
-    expect(mia.library).toEqual([]);
-    expect(fs.existsSync(path.join(dir, 'characters', 'mia', 'lib', 'README.md'))).toBe(true);
-    expect(s.scriptTemplate()).toMatch(/^\/\/ .*\nasync \(mood: string\) => \{/);
+    expect(mia.library).toEqual({ files: [], functions: [], problems: [] });
+    expect(fs.existsSync(path.join(libDir, 'README.md'))).toBe(true);
+    expect(s.libraryFileTemplate()).toMatch(/^\/\*\* .*\*\/\nexport async function cheer\(mood: string\) \{/);
 
-    // add
-    let p = await s.saveScript(key, { dir: mia.dir, name: 'cheer', source: 'async (mood: string) => {\n  return mood;\n}\n', description: ' show a picture for a mood ' });
-    expect(p.characters[0]!.library).toEqual([{ name: 'cheer', description: 'show a picture for a mood', source: 'async (mood: string) => {\n  return mood;\n}', bytes: expect.any(Number), file: 'characters/mia/lib/cheer.ts' }]);
-    expect(fs.readFileSync(path.join(dir, 'characters', 'mia', 'lib', 'cheer.ts'), 'utf8')).toBe('// show a picture for a mood\nasync (mood: string) => {\n  return mood;\n}\n');
+    // add: the file is written as given, and what it exports is listed with its JSDoc summary
+    const cheer = '/** show a picture for a mood */\nexport async function cheer(mood: string) {\n  return mood;\n}\n';
+    let p = await s.saveLibraryFile(key, { dir: mia.dir, path: 'cheer.ts', source: cheer });
+    expect(p.characters[0]!.library.files).toEqual([{ path: 'cheer.ts', file: 'characters/mia/lib/cheer.ts', source: cheer, bytes: Buffer.byteLength(cheer) }]);
+    expect(p.characters[0]!.library.functions).toEqual([{ name: 'cheer', file: 'characters/mia/lib/cheer.ts', params: 'mood: string', description: 'show a picture for a mood' }]);
+    expect(p.characters[0]!.library.problems).toEqual([]);
+    expect(fs.readFileSync(path.join(libDir, 'cheer.ts'), 'utf8')).toBe(cheer);
     expect(p.validation.ok).toBe(true);
-    // a second one without a description; sorted by name
-    p = await s.saveScript(key, { dir: mia.dir, name: 'tick', source: '() => 1' });
-    expect(p.characters[0]!.library.map((f) => [f.name, f.description])).toEqual([['cheer', 'show a picture for a mood'], ['tick', undefined]]);
-    // rename: the old file goes once the new one is written
-    p = await s.saveScript(key, { dir: mia.dir, name: 'tock', source: '() => 2', previousName: 'tick' });
-    expect(p.characters[0]!.library.map((f) => f.name)).toEqual(['cheer', 'tock']);
-    expect(fs.readdirSync(path.join(dir, 'characters', 'mia', 'lib')).sort()).toEqual(['README.md', 'cheer.ts', 'tock.ts']);
-    // an internal helper is written with the `// @internal` first line and comes back flagged
-    p = await s.saveScript(key, { dir: mia.dir, name: 'pick', source: '(mood: string) => mood', description: 'pick a picture', internal: true });
-    expect(p.characters[0]!.library.find((f) => f.name === 'pick')).toMatchObject({ description: 'pick a picture', internal: true, source: '(mood: string) => mood' });
-    expect(fs.readFileSync(path.join(dir, 'characters', 'mia', 'lib', 'pick.ts'), 'utf8')).toBe('// @internal pick a picture\n(mood: string) => mood\n');
-    expect(p.characters[0]!.library.find((f) => f.name === 'cheer')!.internal).toBeUndefined();
-    // clearing the box writes it back as an ordinary function
-    p = await s.saveScript(key, { dir: mia.dir, name: 'pick', source: '(mood: string) => mood', description: 'pick a picture', previousName: 'pick' });
-    expect(p.characters[0]!.library.find((f) => f.name === 'pick')!.internal).toBeUndefined();
-    p = await s.removeScript(key, mia.dir, 'pick');
 
-    // a file may keep helpers of its own beside the one function it exports
-    const withHelpers = 'const MARK = "!";\nfunction shout(t: string) { return t.toUpperCase() + MARK; }\nexport default (name: string) => shout(name);';
-    p = await s.saveScript(key, { dir: mia.dir, name: 'greet', source: withHelpers, description: 'greet someone' });
-    const greet = p.characters[0]!.library.find((f) => f.name === 'greet')!;
-    expect(greet).toMatchObject({ description: 'greet someone', source: withHelpers });
-    expect(greet.problem).toBeUndefined();
-    expect(p.validation).toMatchObject({ ok: true, warnings: [] });
-    p = await s.removeScript(key, mia.dir, 'greet');
+    // a file in a sub-folder that imports a private helper from another; `@internal` hides an export
+    const dice = 'export function roll(sides: number) { return 1 + Math.floor(Math.random() * sides); }\n';
+    p = await s.saveLibraryFile(key, { dir: mia.dir, path: 'games/dice.ts', source: dice });
+    const simon = "import { roll } from './dice';\n\n/**\n * pick a colour\n * @internal\n */\nexport const pick = () => ['red', 'blue'][roll(2) - 1];\n";
+    p = await s.saveLibraryFile(key, { dir: mia.dir, path: 'games/simon.ts', source: simon });
+    expect(p.characters[0]!.library.files.map((f) => f.path)).toEqual(['cheer.ts', 'games/dice.ts', 'games/simon.ts']);
+    expect(p.characters[0]!.library.functions.map((f) => [f.name, f.description, f.internal])).toEqual([
+      ['cheer', 'show a picture for a mood', undefined],
+      ['pick', 'pick a colour', true],
+      ['roll', undefined, undefined],
+    ]);
+    expect(p.characters[0]!.library.problems).toEqual([]);
 
-    // a broken function is saved (the author is mid-edit) but reported the way the loader reports it
-    p = await s.saveScript(key, { dir: mia.dir, name: 'half', source: 'async ( => 1' });
-    const half = p.characters[0]!.library.find((f) => f.name === 'half')!;
-    expect(half.problem).toMatch(/^not a single function expression: fn does not parse/);
-    expect(half.source).toBe('async ( => 1');
+    // rename: the old file goes once the new one is written; renaming onto another file is refused
+    p = await s.saveLibraryFile(key, { dir: mia.dir, path: 'games/simonSays.ts', source: simon, previousPath: 'games/simon.ts' });
+    expect(p.characters[0]!.library.files.map((f) => f.path)).toEqual(['cheer.ts', 'games/dice.ts', 'games/simonSays.ts']);
+    expect(fs.readdirSync(path.join(libDir, 'games')).sort()).toEqual(['dice.ts', 'simonSays.ts']);
+    await expect(s.saveLibraryFile(key, { dir: mia.dir, path: 'cheer.ts', source: dice, previousPath: 'games/dice.ts' })).rejects.toThrow(/already exists/);
+    expect(fs.readFileSync(path.join(libDir, 'cheer.ts'), 'utf8')).toBe(cheer);
+    // saving under its own path (previousPath unchanged) just rewrites it
+    p = await s.saveLibraryFile(key, { dir: mia.dir, path: 'cheer.ts', source: cheer, previousPath: 'cheer.ts' });
+    expect(p.characters[0]!.library.files).toHaveLength(3);
+
+    // a broken file is saved (the author is mid-edit) and reported against its line, as the loader reports it
+    p = await s.saveLibraryFile(key, { dir: mia.dir, path: 'half.ts', source: 'export const half = async ( => 1;\n' });
+    const lib = p.characters[0]!.library;
+    expect(lib.files.find((f) => f.path === 'half.ts')!.source).toBe('export const half = async ( => 1;\n');
+    expect(lib.functions).toEqual([]);
+    expect(lib.problems).toEqual([expect.objectContaining({ file: 'characters/mia/lib/half.ts', line: 1, column: expect.any(Number) })]);
     expect(p.validation.ok).toBe(true);
-    expect(p.validation.warnings).toEqual([expect.stringMatching(/^warning: characters\/mia\/lib\/half\.ts: not a single function expression/)]);
+    expect(p.validation.warnings).toEqual([expect.stringMatching(/^warning: characters\/mia\/lib\/half\.ts:1:\d+: /)]);
+    // `export default` has no name: the rest of the library still builds
+    p = await s.saveLibraryFile(key, { dir: mia.dir, path: 'half.ts', source: 'export default () => 1;\n', previousPath: 'half.ts' });
+    expect(p.characters[0]!.library.functions.map((f) => f.name)).toEqual(['cheer', 'pick', 'roll']);
+    expect(p.characters[0]!.library.problems).toEqual([expect.objectContaining({ file: 'characters/mia/lib/half.ts', message: expect.stringMatching(/export default/) })]);
+
     // rejections
-    await expect(s.saveScript(key, { dir: mia.dir, name: 'a-b', source: '() => 1' })).rejects.toThrow(/identifier/);
-    await expect(s.saveScript(key, { dir: mia.dir, name: 'class', source: '() => 1' })).rejects.toThrow(/reserved/);
-    await expect(s.saveScript(key, { dir: mia.dir, name: 'cheer', source: '() => 1', previousName: 'tock' })).rejects.toThrow(/already exists/);
-    await expect(s.saveScript(key, { dir: mia.dir, name: 'empty', source: '   ' })).rejects.toThrow(/source is required/);
-    await expect(s.saveScript(key, { dir: '../mia', name: 'x', source: '() => 1' })).rejects.toThrow(/Unsafe/);
-    // delete
-    p = await s.removeScript(key, mia.dir, 'half');
-    expect(p.characters[0]!.library.map((f) => f.name)).toEqual(['cheer', 'tock']);
-    await expect(s.removeScript(key, mia.dir, 'half')).rejects.toThrow(/No function file/);
-    // the read path (tolerant or not) carries the same list
-    expect((await s.read(key)).characters[0]!.library.map((f) => f.name)).toEqual(['cheer', 'tock']);
-  });
+    await expect(s.saveLibraryFile(key, { dir: mia.dir, path: 'notes.md', source: 'x' })).rejects.toThrow(/\.ts/);
+    await expect(s.saveLibraryFile(key, { dir: mia.dir, path: 'types.d.ts', source: 'x' })).rejects.toThrow(/\.d\.ts/);
+    await expect(s.saveLibraryFile(key, { dir: mia.dir, path: '../escape.ts', source: 'x' })).rejects.toThrow(/Invalid library file/);
+    await expect(s.saveLibraryFile(key, { dir: mia.dir, path: '.hidden.ts', source: 'x' })).rejects.toThrow(/start with "\."/);
+    await expect(s.saveLibraryFile(key, { dir: mia.dir, path: 'empty.ts', source: '   ' })).rejects.toThrow(/source is required/);
+    await expect(s.saveLibraryFile(key, { dir: '../mia', path: 'x.ts', source: 'export const x = 1;' })).rejects.toThrow(/Unsafe/);
 
-  it('checkScript with kind "function" applies the loader check, with a position when esbuild gives one', async () => {
+    // delete
+    p = await s.removeLibraryFile(key, mia.dir, 'half.ts');
+    expect(p.characters[0]!.library.files.map((f) => f.path)).toEqual(['cheer.ts', 'games/dice.ts', 'games/simonSays.ts']);
+    expect(p.characters[0]!.library.problems).toEqual([]);
+    await expect(s.removeLibraryFile(key, mia.dir, 'half.ts')).rejects.toThrow(/No library file/);
+    await expect(s.removeLibraryFile(key, mia.dir, '../persona.md')).rejects.toThrow(/Invalid library file/);
+    // the read path (tolerant or not) carries the same library
+    expect((await s.read(key)).characters[0]!.library.functions.map((f) => f.name)).toEqual(['cheer', 'pick', 'roll']);
+  }, 30_000);
+
+  it('checkScript with kind "module" parses one library file as an ES module, with a position when esbuild gives one', async () => {
     const s = svc();
-    expect(await s.checkScript('async (mood: string) => mood', 'function')).toEqual([]);
-    expect(await s.checkScript('  ', 'function')).toEqual([]);
-    const [call] = await s.checkScript('sdk.chat.emote("hi")', 'function');
-    expect(call?.message).toMatch(/function expression/);
-    expect(call?.line).toBeUndefined();
-    const [broken] = await s.checkScript('async (a: string) => {\n  return a +;\n}', 'function');
-    expect(broken?.message).toMatch(/does not parse/);
-    expect(broken?.line).toBe(2);
+    expect(await s.checkScript('/** cheer */\nexport async function cheer(mood: string) {\n  return mood;\n}', 'module')).toEqual([]);
+    expect(await s.checkScript('  ', 'module')).toEqual([]);
+    // imports are not resolved here: only the saved, bundled library knows its siblings
+    expect(await s.checkScript("import { roll } from './dice';\nexport const two = () => roll(2);", 'module')).toEqual([]);
+    const [broken] = await s.checkScript('export async function f(a: string) {\n  return a +;\n}', 'module');
+    expect(broken?.message).toMatch(/Unexpected/);
+    expect(broken).toMatchObject({ line: 2, column: expect.any(Number) });
     expect(broken?.lineText).toContain('return a +;');
-    // the module form passes the same check, and its problems are named against its own lines
-    expect(await s.checkScript('function shout(t: string) { return t + "!"; }\nexport default (t: string) => shout(t);', 'function')).toEqual([]);
-    const [twice] = await s.checkScript('export const a = () => 1;\nexport const b = () => 2;', 'function');
-    expect(twice?.message).toMatch(/exports more than one thing/);
-    const [unparsed] = await s.checkScript('const n = 1;\nexport default (t: string) => {', 'function');
-    expect(unparsed?.message).toMatch(/the file does not parse/);
-    expect(unparsed?.line).toBe(2);
     // the default kind still compiles a hook body
     expect(await s.checkScript('return 1;')).toEqual([]);
   });

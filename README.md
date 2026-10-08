@@ -36,7 +36,7 @@ Characters, their behaviours and their media are distributed as shareable
   the machine; every host effect is a permission-checked, audited SDK call.
 - **Shareable packs**: manifest + one character + persona + media + optional
   behaviour scripts (`onSessionStart`, `onTimer`, ...) + the character's
-  function library (`lib/*.ts`).
+  function library (`lib/`).
 - **Provider-agnostic**: Anthropic, OpenAI-compatible servers (OpenAI, Ollama,
   LM Studio, OpenRouter, ...).
 - **Real overlays on Hyprland**: a native wlr-layer-shell helper renders media
@@ -61,15 +61,15 @@ Characters, their behaviours and their media are distributed as shareable
 - **Initiative**: characters can schedule code to run later, wake themselves
   with a self-written prompt, and keep a session moving without you typing,
   within rate limits you control.
-- **A function library of their own**: a character can save reusable functions with
-  `lib.register` and call them as `lib.<name>(...)` from any later action, timer
-  or event handler (`sdk.lib` is that same object, so `sdk.lib.<name>(...)` works too). Each function is a file in the pack
-  (`characters/<id>/lib/<name>.ts`), so pack authors can ship functions, the
-  character's own definitions persist with the installed pack, and the library
-  is listed in its prompt. A pack author can keep a function to themselves with a
-  `// @internal` first line: it stays out of the prompt and the model's own code
-  cannot call it, while the character's other functions, its behaviour hooks, its
-  event handlers and its timers all use it normally.
+- **A function library of their own**: a pack author ships the character's reusable
+  functions as a small TypeScript project in `characters/<id>/lib/`, and the character
+  calls them as `lib.<name>(...)` from any action, timer or event handler (`sdk.lib` is
+  that same object, so `sdk.lib.<name>(...)` works too). Every `.ts` file is a module:
+  each named export is a library function, listed in the prompt with its parameters and
+  JSDoc summary; what a file does not export stays private to it, and files import each
+  other by relative path. An export tagged `@internal` in its JSDoc stays out of the
+  prompt and the model's own code cannot call it, while the other library functions, the
+  behaviour hooks, event handlers and timers use it normally.
 - **External commands**: wallpaper, browser, desktop and voice actions run through
   command templates you edit in Settings. Input locking and injection are
   daemon-only (see *System integration* below).
@@ -425,8 +425,8 @@ Packs and model output are untrusted. Read the security model in
 installing packs from people you do not know. Permissions are app-wide and per function: every
 installed character can call every SDK function you have not switched off under Settings →
 Permissions (packs neither request nor are granted anything; a `capabilities` key in an old pack
-is ignored with a warning). The one exception is `sdk.lib`, the character's own saved functions,
-which is always available. A pack can narrow what its character's prompt describes, which changes
+is ignored with a warning). The one exception is `sdk.lib`, the character's own function library
+(not a module), which is always available. A pack can narrow what its character's prompt describes, which changes
 nothing about what you allow. Nothing prompts per call: a character uses what is switched on
 freely, and every call is written to the audit log.
 

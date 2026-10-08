@@ -1,5 +1,5 @@
-// (game) Simon says: a small centred widget flashes a sequence of pack images one at a time, then those images (plus decoys) appear around the screen and must be clicked in the flashed order; a wrong click calls lib[onLose]({ game: "simon", event: "mistake", expected, clicked, progress, attempt, mistakes }) and a new sequence starts; clicking the whole sequence calls lib[onWin]. Options { onLose, onWin?, length?: 4, images?: 4, flashMs?: 700, tags?: ["card"] }
-async (opts: { onLose: string; onWin?: string; length?: number; images?: number; flashMs?: number; tags?: string[]; attempt?: number; mistakes?: number }) => {
+/** (game) Simon says: a small centred widget flashes a sequence of pack images one at a time, then those images (plus decoys) appear around the screen and must be clicked in the flashed order; a wrong click calls lib[onLose]({ game: "simon", event: "mistake", expected, clicked, progress, attempt, mistakes }) and a new sequence starts; clicking the whole sequence calls lib[onWin]. Options { onLose, onWin?, length?: 4, images?: 4, flashMs?: 700, tags?: ["card"] } */
+export const simonSays = async (opts: { onLose: string; onWin?: string; length?: number; images?: number; flashMs?: number; tags?: string[]; attempt?: number; mistakes?: number }) => {
   const images = Math.max(2, Math.min(8, Math.round(opts.images ?? 4)));
   const length = Math.max(2, Math.min(images, Math.round(opts.length ?? 4)));
   const flashMs = Math.max(200, Math.min(3000, Math.round(opts.flashMs ?? 700)));
@@ -66,4 +66,4 @@ setTimeout(step,600);
   });
   await sdk.widgets.show({ id: "game-simon", title: `Simon says — attempt ${game.attempt}`, html, width: 220, height: 230, position: "center" });
   return { started: "simon", attempt: game.attempt, length, images, flashMs };
-}
+};

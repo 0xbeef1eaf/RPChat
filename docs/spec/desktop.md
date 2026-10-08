@@ -36,7 +36,7 @@ Main UI (React, one small store with `useSyncExternalStore` or plain context; no
 - Layout: left sidebar (characters + sessions), centre chat, right/inline panels via routes: Chat, Packs, Settings, Action Log, SDK Reference (renders typings in `<pre>`).
 - Chat: message list with streaming text (markdown rendering via a tiny safe renderer — use `marked` + `DOMPurify`? Keep deps small: use `marked` with `sanitize` via `dompurify`; both are on cdnjs but we bundle from npm), action cards (purpose, collapsible code, result/logs/error, duration), emote styling, status line, composer (Enter to send, Shift+Enter newline; Send reads **Queue** while a reply is in flight, and the messages waiting for it are listed above the composer, each with a × that takes it back — `chat.queued` on open, `queue-changed` after, `chat.unqueue` to drop one), abort button while a turn runs, "new session" for a character, scenario editor in session settings.
 - Packs: list of installed packs, install button → `pickInstallSource` (with an `InspectModal` showing the pack's contents first), uninstall confirm, README view, characters list with "Start chat", and per card a note "Permissions apply to every character and are set under Settings → Permissions" with a button that opens that tab (`openSettings('permissions')` → `state.settingsTab`, adopted once by `SettingsView`). No per-pack toggles: permissions are app-wide.
-- Settings → Permissions (`PermissionsSection`): the single permission control, one row per module with a per-function list behind a "<n> functions" button (`settings.permissions.functionAllow`, keys `module` or `module.function`, default on; grouped by level `trusted` = "Inside the app", `pack` = "Capabilities", `prompt` = "Confirm-every-call capabilities"). The module toggle clears its function keys and pins the module; a function toggle stores only the odd one out, and each write sends the whole map (patches replace it). Off = the function disappears from every character's SDK. `sdk.lib` is not listed: it is the character's own saved functions and always available. Managed values from the system policy file are shown as such and locked — a module pinned by policy locks its functions too, since `isManaged` treats the module path as their parent.
+- Settings → Permissions (`PermissionsSection`): the single permission control, one row per module with a per-function list behind a "<n> functions" button (`settings.permissions.functionAllow`, keys `module` or `module.function`, default on; grouped by level `trusted` = "Inside the app", `pack` = "Capabilities", `prompt` = "Confirm-every-call capabilities"). The module toggle clears its function keys and pins the module; a function toggle stores only the odd one out, and each write sends the whole map (patches replace it). Off = the function disappears from every character's SDK. `sdk.lib` is not listed: it is the character's own function library, not a module, and always available. Managed values from the system policy file are shown as such and locked — a module pinned by policy locks its functions too, since `isManaged` treats the module path as their parent.
 - Settings: provider list (add/edit/remove; kind select; base URL; API key masked; model text + "fetch models" button; reasoning effort select; "test" button), default provider, maxActionRounds, maxActionRepairs, contextTokenBudget, run limits, useToolCalling, userDisplayName, theme, mediaAlwaysOnTop, and the "How much media at once" grid (`settings.media.maxConcurrent.*` / `maxQueued.*`, one number field per media kind with a managed badge per path). Senses: a "Live snapshot" card (its `auto-refresh` toggle is
   `settings.senses.liveSnapshotAutoRefresh`, so it survives leaving the tab), prompt inclusion, poll
   interval, both idle thresholds (the machine's and the app's), calendar sources, watched directories. General → Debug: "Show model traffic" (`settings.debug.showModelTraffic`, default off).
@@ -56,7 +56,7 @@ Media window: full-viewport React page listening to `media.onCommand`; renders i
 ### Code boxes (`components/common/CodeEditor.tsx`)
 
 Every box in the app that holds code is this component: the Sandbox script and its JSON input,
-a library function (Pack editor → Scripts), each behaviour hook (Pack editor → Character), and
+a library file (Pack editor → Scripts), each behaviour hook (Pack editor → Character), and
 the two policy JSON boxes under Settings → System. It is Monaco, configured once in
 `lib/monaco.ts`:
 
@@ -65,9 +65,11 @@ the two policy JSON boxes under Settings → System. It is Monaco, configured on
   hovers and errors describe the modules *this* install has, plugins included, and follow the
   registry when it changes. `input` is declared alongside it (the host binds it, so no generated
   typing mentions it).
-- **The code is a fragment.** A script is the body of an async function and a library file is one
-  function expression, so `return` outside a function and top-level `await` are not reported, and
-  suggestion diagnostics are off (the value a top-level `return` uses reads as unused).
+- **The code is a fragment.** A script is the body of an async function, so `return` outside a
+  function and top-level `await` are not reported, and suggestion diagnostics are off (the value a
+  top-level `return` uses reads as unused). A library file is a real module, but its siblings are
+  not loaded as models, so "cannot find module" (2307/2792) is not reported either: whether an
+  import resolves is the bundler's call when the folder is saved (`library.problems`).
   `moduleDetection: force` makes every box its own module, so two hooks may both declare `const
   session` without either being a redeclaration.
 - **Workers.** The language services run in web workers and the renderer is a `file://` page:

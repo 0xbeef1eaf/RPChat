@@ -161,87 +161,68 @@ return { ended: ended + 1 };
   },
 };
 
-/** Starter `lib/README.md` for a new character: the function-file format in a few lines. */
+/** Starter `lib/README.md` for a new character: how the library folder works, in a few lines. */
 export function libraryReadme(name: string): string {
   const n = name.trim() || 'the character';
   return `# Function library
 
-Every \`<name>.ts\` file in this folder is one function of ${n}'s \`lib\`
-library, available in every action, timer handler and event handler as
-\`lib.<name>(...)\` (and as \`sdk.lib.<name>(...)\`, the same object). The app
-writes files here too when the character calls \`lib.register\`, so ship the
-functions you want it to start with.
+This folder is ${n}'s \`lib\`: a small TypeScript project whose exports are
+available in every action, timer handler and event handler as
+\`lib.<name>(...)\` (and as \`sdk.lib.<name>(...)\`, the same object).
 
-Format: an optional first line \`// <description>\` (shown in the prompt), then
-exactly one function expression (an arrow function or \`async function\`), for
-example \`lib/cheer.ts\`:
-
-\`\`\`ts
-// show a picture for a mood
-async (mood: string) => {
-  const pic = (await sdk.pack.findAssets({ anyTags: [mood], kind: "image" }))[0];
-  if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
-  return Boolean(pic);
-}
-\`\`\`
-
-Only that first line is the description; any further comments above the
-function stay part of it. The function is an expression, so it ends without
-a \`;\`. The file name is the function name: a JavaScript identifier of at most 64
-characters, and not \`register\` or \`unregister\` (the library's own methods).
-A function may use \`sdk\` and its sibling \`lib\` functions but closes over
-nothing else. Limits: 50 files, 128 KiB in total (no per-file cap).
-This README and anything that is not a \`.ts\` file are ignored.
-
-A file may also be written as a module: helpers, constants and types of its
-own, and one \`export\` — the function the character calls. Everything else in
-the file is private to it, so a long function can be broken up without
-spending a library name on each piece:
+Every \`.ts\` file here, sub-folders included, is a module. What it \`export\`s
+is public — each export is \`lib.<its name>\` — and what it does not export is
+private to the file. The JSDoc summary of an export is its line in the
+character's prompt (only the parameters and that line; never the body):
 
 \`\`\`ts
-// show a picture for a mood
+// lib/pictures.ts
 type Mood = "happy" | "sad";
 
-function query(mood: Mood) {
-  return { anyTags: [mood], kind: "image" } as const;
+/** a picture for a mood, or undefined (private: no export) */
+async function pick(mood: Mood) {
+  return (await sdk.pack.findAssets({ anyTags: [mood], kind: "image" }))[0];
 }
 
-export default async (mood: Mood) => {
-  const pic = (await sdk.pack.findAssets(query(mood)))[0];
+/** Show a picture for a mood; true when there was one. */
+export async function cheer(mood: Mood) {
+  const pic = await pick(mood);
   if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
   return Boolean(pic);
-};
+}
 \`\`\`
 
-\`export default <function>\`, \`export const <name> = <function>\` and
-\`export function <name>() {…}\` all mark the one function; the file name is
-still what the character calls it, whatever the export is named. The other
-statements run once at the start of every run, before the code that calls it,
-so keep them cheap and free of side effects — and a handler such a function
-hands to \`sdk.events.on\` is stored as its own source alone, so let it call
-\`lib.<name>(...)\` rather than reach for a helper beside it. There is no
-\`import\`: a file cannot pull in another.
+Files import each other with relative paths (\`import { roll } from "./dice"\`);
+nothing outside this folder can be imported, and \`sdk\` and \`lib\` are globals,
+not imports. An export name is used by one file only, and \`export default\` has
+no name to be called by, so use named exports.
 
-Start the first line with \`// @internal\` (optionally followed by a
-description) to keep a function as your own plumbing:
+An export another file needs but the character should not call gets an
+\`@internal\` tag: your other library functions and the character's behaviour
+hooks call it as usual, while it is left out of the prompt and refused to the
+code the character writes itself.
 
 \`\`\`ts
-// @internal pick a picture for a mood
-async (mood: string) => (await sdk.pack.findAssets({ anyTags: [mood], kind: "image" }))[0]
+/** @internal Roll an n-sided die. */
+export function roll(n: number) {
+  return 1 + Math.floor(Math.random() * n);
+}
 \`\`\`
 
-Your other library functions and the character's behaviour hooks call it as
-\`lib.<name>(...)\` as usual; the character itself never sees it — it is left
-out of the prompt and out of the \`lib\` object the code it writes runs
-against, and \`lib.register\` refuses the name unless the call passes
-\`{ internal: true }\` itself.
+The whole folder is bundled and its top-level statements run once at the
+start of every run, before the code that calls it — keep them cheap, and do
+not call \`lib\` from them (it is not there yet). A handler a function hands to
+\`sdk.events.on\` is stored as its own source alone, so let it call
+\`lib.<name>(...)\` rather than reach for a private helper. Limits (advisory):
+50 public functions, 128 KiB in total. This README and anything that is not a
+\`.ts\` file are ignored.
 `;
 }
 
-/** Starter source for a new library function in the editor. */
-export function libraryFunctionTemplate(): string {
-  return `// say what this function is for (this first line is its description)
-async (mood: string) => {
+/** Starter source for a new library file in the editor. */
+export function libraryFileTemplate(): string {
+  return `/** Say what this function is for: this summary is its line in the character's prompt. */
+export async function cheer(mood: string) {
   const pic = (await sdk.pack.findAssets({ anyTags: [mood], kind: "image" }))[0];
   if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
   return Boolean(pic);

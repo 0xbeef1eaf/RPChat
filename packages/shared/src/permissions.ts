@@ -7,9 +7,10 @@
  * mention is allowed — so a function added by a later version of the app, or by a plugin, arrives
  * switched on rather than silently missing.
  *
- * `lib` is the one module outside all of this: `sdk.lib` *is* the character's own function library
- * (the same object as the global `lib`), so switching parts of it off would only break the
- * character's own saved code. It is never listed, never offered as a toggle, and always available.
+ * `lib` is outside all of this: `sdk.lib` *is* the character's own function library (the same
+ * object as the global `lib`, the exports of its pack's `lib/` folder), not a module of the app,
+ * so switching parts of it off would only break the pack's own code. A stored `lib` key is
+ * ignored, and the name is never offered as a toggle.
  */
 
 /** Modules no permission applies to: always available, never shown as a toggle. */

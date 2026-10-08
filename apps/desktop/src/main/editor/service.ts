@@ -11,12 +11,13 @@ import type {
   EditorCharacter,
   EditorProject,
   EditorProjectSummary,
-  EditorScript,
+  EditorLibrary,
   EditorValidation,
-  SaveScriptInput,
+  SaveLibraryFileInput,
   ScriptKind,
   ScriptProblem,
   InstalledPackView,
+  CharacterLibrary,
   LoadedPack,
   MediaManifest,
   MediaTagSuggestion,
@@ -38,23 +39,24 @@ import {
   PACK_README_FILENAME,
   assetKindFor,
   folderTagsFor,
-  functionSourceProblem,
   globToRegExp,
   indexAssets,
   inspectPack,
   joinRelative,
-  libraryFunctionTemplate,
-  libraryNameProblem,
+  libraryFileTemplate as packLibraryFileTemplate,
+  normalizeLibraryPath,
   normalizeRelativePath,
   packDirectory,
   readCharacterLibrary,
-  removeLibraryFunction,
+  removeLibraryFile as removeLibraryFileOnDisk,
   resolveAssetPath,
   summariseTags,
   validateMediaManifest,
   validatePack,
-  writeLibraryFunction,
+  writeLibraryFile,
 } from '@rp/pack';
+import { transform } from 'esbuild';
+import type { Message } from 'esbuild';
 import { transpile } from '@rp/sandbox';
 import { expandHome } from '../commands.js';
 import { packWriters, fallbackSlugify } from './pack-writers.js';
@@ -334,25 +336,20 @@ export class EditorService {
   }
 
   /**
-   * The character's `lib/*.ts` files as the loader reads them, plus the files it skips (with the
-   * reason and their content), so the Scripts section can show a broken file for fixing.
+   * The character's `lib/` folder as the loader reads it: every file (broken ones included, so the
+   * Scripts section can show them for fixing), the functions they export and what keeps the library
+   * from building. `previous` is the loader's own scan of the same folder, reused when no file changed.
    */
-  private async libraryOf(dir: string, charDir: string): Promise<EditorScript[]> {
-    const scan = await readCharacterLibrary(dir, charDir).catch(() => undefined);
-    if (!scan) return [];
-    const out: EditorScript[] = Object.entries(scan.library).map(([name, e]) => {
-      const script: EditorScript = { name, source: e.source, bytes: e.bytes, file: e.file };
-      if (e.description !== undefined) script.description = e.description;
-      if (e.internal === true) script.internal = true;
-      return script;
-    });
-    for (const skipped of scan.skipped) {
-      const script: EditorScript = { name: skipped.name, source: skipped.source ?? '', bytes: Buffer.byteLength(skipped.source ?? '', 'utf8'), file: skipped.file, problem: skipped.message };
-      if (skipped.description !== undefined) script.description = skipped.description;
-      if (skipped.internal === true) script.internal = true;
-      out.push(script);
-    }
-    return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  private async libraryOf(dir: string, charDir: string, previous?: CharacterLibrary): Promise<EditorLibrary> {
+    const scan = await readCharacterLibrary(dir, charDir, previous ? { previous } : {}).catch(() => undefined);
+    if (!scan) return { files: [], functions: [], problems: [] };
+    const { library } = scan;
+    const libRel = `${charDir}/lib/`;
+    const files = Object.entries(library.files)
+      .map(([file, source]) => ({ path: file.startsWith(libRel) ? file.slice(libRel.length) : file, file, source, bytes: Buffer.byteLength(source, 'utf8') }))
+      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    const functions = Object.values(library.functions).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    return { files, functions, problems: library.problems };
   }
 
   async read(key: string): Promise<EditorProject> {
@@ -368,7 +365,7 @@ export class EditorService {
     const characters: EditorCharacter[] = [];
     if (pack) {
       for (const c of pack.characters) {
-        const ch: EditorCharacter = { dir: c.dir, definition: c.definition, personaText: c.personaText, behaviours: { ...c.behaviourSources }, library: await this.libraryOf(dir, c.dir) };
+        const ch: EditorCharacter = { dir: c.dir, definition: c.definition, personaText: c.personaText, behaviours: { ...c.behaviourSources }, library: await this.libraryOf(dir, c.dir, c.library) };
         if (c.avatarPath) ch.avatarUrl = assetUrl(host, c.avatarPath);
         if (c.definition.avatarSet?.expressions) {
           const urls: Record<string, string> = {};
@@ -429,19 +426,25 @@ export class EditorService {
    */
   async checkScript(source: string, kind: ScriptKind = 'behaviour'): Promise<ScriptProblem[]> {
     if (typeof source !== 'string' || source.trim().length === 0) return [];
-    if (kind === 'function') {
-      // The loader's own check: one function expression, or a module with one exported function.
-      // Its message names the line and column when esbuild does.
-      const problem = functionSourceProblem(source.trim());
-      if (problem === undefined) return [];
-      const out: ScriptProblem = { message: problem };
-      const at = /\(line (\d+), column (\d+)\)/.exec(problem);
-      if (at) {
-        out.line = Number(at[1]);
-        out.column = Number(at[2]);
-        out.lineText = source.trim().split('\n')[out.line - 1] ?? '';
+    if (kind === 'module') {
+      // One library file parsed on its own as an ES module. What its imports bring in, and what it
+      // exports, is only known once the saved folder is bundled: that lands in `library.problems`.
+      try {
+        await transform(source, { loader: 'ts', format: 'esm', sourcefile: 'library.ts', logLevel: 'silent', tsconfigRaw: {} });
+        return [];
+      } catch (err) {
+        const errors = (err as { errors?: Message[] } | undefined)?.errors;
+        if (!errors || errors.length === 0) return [{ message: err instanceof Error ? err.message : String(err) }];
+        return errors.map((m) => {
+          const problem: ScriptProblem = { message: m.text };
+          if (m.location) {
+            problem.line = m.location.line;
+            problem.column = m.location.column + 1;
+            problem.lineText = m.location.lineText;
+          }
+          return problem;
+        });
       }
-      return [out];
     }
     try {
       transpile(source, 'ts');
@@ -477,47 +480,39 @@ export class EditorService {
   }
 
   /**
-   * Write one library function file, `<dir>/lib/<name>.ts` (docs/spec/pack.md "Function library").
-   * The name must be a valid function name; the source has no size cap. A source that does not hold
-   * one function for the character to call is still saved (the author is mid-edit) and comes back with
-   * `problem` set, exactly as the loader reports it. `previousName` renames: the old file goes once
-   * the new one is written.
+   * Write one file of the character's function library, `<dir>/lib/<path>` (docs/spec/pack.md
+   * "Function library"). The source is saved as is, broken or not (the author is mid-edit): what is
+   * wrong with it comes back in `library.problems`, exactly as the loader reports it. `previousPath`
+   * renames: the old file goes once the new one is written, and an existing file is never renamed over.
    */
-  async saveScript(key: string, input: SaveScriptInput): Promise<EditorProject> {
+  async saveLibraryFile(key: string, input: SaveLibraryFileInput): Promise<EditorProject> {
     const { dir } = this.entry(key);
     if (!input || typeof input !== 'object' || typeof input.dir !== 'string') throw new RpError('INVALID_ARGUMENT', 'input.dir is required');
     const n = normalizeRelativePath(input.dir);
     if (!n.ok) throw new RpError('PATH_ESCAPE', `Unsafe character dir "${input.dir}"`);
-    const name = String(input.name ?? '').trim();
-    const nameProblem = libraryNameProblem(name);
-    if (nameProblem !== undefined) throw new RpError('INVALID_ARGUMENT', nameProblem);
-    const source = typeof input.source === 'string' ? input.source.trim() : '';
-    if (source.length === 0) throw new RpError('INVALID_ARGUMENT', 'source is required: one function expression, or a file exporting one');
-    const description = typeof input.description === 'string' && input.description.trim().length > 0 ? input.description.trim() : undefined;
-    const previous = typeof input.previousName === 'string' ? input.previousName.trim() : '';
-    if (previous.length > 0 && previous !== name && libraryNameProblem(previous) !== undefined) throw new RpError('INVALID_ARGUMENT', `Invalid previous name "${previous}"`);
-    if (previous !== name) {
-      const existing = await this.libraryOf(dir, n.path);
-      if (existing.some((f) => f.name === name)) throw new RpError('PACK_CONFLICT', `A function named "${name}" already exists`);
+    const target = libraryPath(input.path);
+    const previous = typeof input.previousPath === 'string' && input.previousPath.trim().length > 0 ? libraryPath(input.previousPath) : undefined;
+    const source = typeof input.source === 'string' ? input.source : '';
+    if (source.trim().length === 0) throw new RpError('INVALID_ARGUMENT', 'source is required');
+    if (previous !== undefined && previous !== target && (await exists(resolveAssetPath(dir, joinRelative(n.path, `lib/${target}`))))) {
+      throw new RpError('PACK_CONFLICT', `lib/${target} already exists`);
     }
-    await writeLibraryFunction(dir, n.path, name, source, description, input.internal === true);
-    if (previous.length > 0 && previous !== name) await removeLibraryFunction(dir, n.path, previous);
+    await writeLibraryFile(dir, n.path, target, source);
+    if (previous !== undefined && previous !== target) await removeLibraryFileOnDisk(dir, n.path, previous);
     return this.read(key);
   }
 
-  async removeScript(key: string, charDir: string, nameArg: string): Promise<EditorProject> {
+  async removeLibraryFile(key: string, charDir: string, libPathArg: string): Promise<EditorProject> {
     const { dir } = this.entry(key);
     const n = normalizeRelativePath(charDir);
     if (!n.ok) throw new RpError('PATH_ESCAPE', `Unsafe character dir "${charDir}"`);
-    const name = String(nameArg ?? '').trim();
-    const nameProblem = libraryNameProblem(name);
-    if (nameProblem !== undefined) throw new RpError('INVALID_ARGUMENT', nameProblem);
-    if (!(await removeLibraryFunction(dir, n.path, name))) throw new RpError('NOT_FOUND', `No function file lib/${name}.ts`);
+    const libPath = libraryPath(libPathArg);
+    if (!(await removeLibraryFileOnDisk(dir, n.path, libPath))) throw new RpError('NOT_FOUND', `No library file lib/${libPath}`);
     return this.read(key);
   }
 
-  scriptTemplate(): string {
-    return libraryFunctionTemplate();
+  libraryFileTemplate(): string {
+    return packLibraryFileTemplate();
   }
 
   private async characterOf(dir: string, charDir: string, key: string): Promise<EditorCharacter> {
@@ -840,6 +835,13 @@ async function exists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** A path relative to `lib/` in canonical form, or INVALID_ARGUMENT saying why it cannot be a library file. */
+function libraryPath(v: unknown): string {
+  const p = normalizeLibraryPath(v);
+  if (!p.ok) throw new RpError('INVALID_ARGUMENT', `Invalid library file "${String(v)}": ${p.reason}`);
+  return p.path;
 }
 
 function safeJoin(base: string, child: string): string | undefined {

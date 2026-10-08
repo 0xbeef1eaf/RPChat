@@ -66,7 +66,7 @@ export function PromptSdkSection({ value, onChange }: PromptSdkSectionProps) {
         ones this character actually works with. It does not restrict the pack: your behaviour scripts and <code className="mono">lib</code>{' '}
         functions still call anything the user allows, so you can hide <code className="mono">sdk.wallpaper</code> from the character
         and still set the wallpaper from a <code className="mono">lib</code> function. It cannot widen anything either — the user’s
-        Settings → Permissions always has the last word, and <code className="mono">sdk.lib</code> is always described.
+        Settings → Permissions always has the last word, and your <code className="mono">lib</code> functions are always listed.
       </p>
       <div className="row" style={{ marginBottom: 8 }}>
         <Toggle

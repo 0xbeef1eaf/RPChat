@@ -53,9 +53,8 @@ export {
   SEMANTIC_DUPLICATE_MIN_POOL,
 } from './services/embeddings.js';
 export type { Embedder, EmbeddingServiceOptions } from './services/embeddings.js';
-export { LibraryService, LIB_STATE_KEY, EMPTY_PRELUDE, buildPrelude, functionParams, functionSourceProblem, toLibFunction, unwrapFunctionSource } from './services/library.js';
+export { LibraryService, LIB_STATE_KEY, EMPTY_PRELUDE, buildPrelude } from './services/library.js';
 export type { LibraryPacks, LibraryTarget } from './services/library.js';
-export { LibHandler } from './handlers/lib.js';
 export { MediaSourcesHandler } from './handlers/media-sources.js';
 export { MediaSourceService, normaliseQuery as normaliseMediaSourceQuery, MEDIA_SOURCE_SEARCH_DEFAULT_LIMIT, MEDIA_SOURCE_SEARCH_MAX_LIMIT, MEDIA_SOURCE_TIMEOUT_MS } from './services/media-sources.js';
 export type { MediaSourceServiceOptions, RemoteAssetLookup } from './services/media-sources.js';
