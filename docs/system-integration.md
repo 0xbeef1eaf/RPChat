@@ -237,21 +237,26 @@ both need `CAP_SYS_TTY_CONFIG`. Three `sdk.system` functions go through the daem
   request carries **no VT number**: the daemon looks up `VTNR` for the *asking user's* logind
   session, so a character can pull you back to rpchat and cannot send you to anybody else's
   console. It answers with that VT and whether it had to switch at all.
-- **`vtPreventSwitching(durationMs)`** sets `VT_LOCKSWITCH`, which makes the kernel refuse every
-  console switch — `Ctrl+Alt+F<n>`, and the ones logind and the compositor ask for. It is
-  bounded, and the daemon releases it when the time is up, when the character calls
-  `vtAllowSwitching()`, when the **app's connection closes** (so an rpchat that crashed or was
-  killed never leaves your machine stuck), when the input lock's emergency chord fires, and when
-  the daemon stops. There is deliberately no way to hold it indefinitely.
+- **`vtPreventSwitching(durationMs?)`** sets `VT_LOCKSWITCH`, which makes the kernel refuse every
+  console switch — `Ctrl+Alt+F<n>`, and the ones logind and the compositor ask for. With a
+  duration it ends when the time is up; **with none it is held until the character calls
+  `vtAllowSwitching()`**. Either way the daemon releases it when the **app's connection closes**
+  (so an rpchat that crashed or was killed never leaves your machine stuck), when the input
+  lock's emergency chord fires, and when the daemon stops. If you would rather no character
+  could hold it open-ended, `vtLock.maxDurationMs` in the policy puts a ceiling on every lock
+  including those (and `-1` there allows them explicitly).
 - **`vtStatus()`** reports which console is in front, which one is ours and whether switching is
   locked. It needs nothing privileged, so it answers `{ available: false }` rather than failing
   on a machine without the system integration.
 
-While the console lock is on, your way out is: wait (at most `vtLock.maxDurationMs`, 5 minutes by
-default), quit or kill rpchat from your own session — which releases it with the connection —
-hold the emergency key if an input lock is running too, or `sudo systemctl stop rpchatd`. If you
-would rather characters never had this at all, set `vtLock: { "enabled": false }` in the policy:
-that refuses the lock *and* the switch-back, and `Ctrl+Alt+F<n>` stays yours.
+While the console lock is on, your way out is: wait for it (a lock with a duration ends by
+itself, and `vtLock.maxDurationMs` caps even an open-ended one once you set it), quit or kill
+rpchat from your own session — which releases it with the connection — hold the emergency key if
+an input lock is running too, or `sudo systemctl stop rpchatd`. Note that an open-ended lock on a
+machine with no policy has no deadline at all: the character is meant to give it back, and the
+other four releases are what stand behind that. If you would rather characters never had this at
+all, set `vtLock: { "enabled": false }` in the policy: that refuses the lock *and* the
+switch-back, and `Ctrl+Alt+F<n>` stays yours.
 
 Noticing a switch needs none of this. The kernel publishes the foreground console in
 `/sys/class/tty/tty0/active`, which anyone can read, so the app watches it once a second and
@@ -290,11 +295,13 @@ Points worth knowing:
 - `inputLock.enabled: false` refuses every lock request; injection is unaffected.
 - `vtLock.enabled: false` refuses both virtual-terminal operations (`sdk.system.vtPreventSwitching`
   and `vtSwitchBack`), so `Ctrl+Alt+F<n>` is yours alone; `vtStatus` and the `vt-changed` event
-  keep working, since neither changes anything.
+  keep working, since neither changes anything. `vtLock.maxDurationMs` is the softer version:
+  it caps every switch lock, including one a character asked to hold until it unlocks it.
 - A broken policy file (invalid JSON, unknown keys) makes the daemon refuse locks until it is
   fixed — it fails closed rather than falling back to defaults. `journalctl -u rpchatd` names
   the problem.
-- No policy file at all means the daemon defaults (5 min max for both locks, Esc for 5 s) and no
+- No policy file at all means the daemon defaults (5 min max for an input lock and for a switch
+  lock that names a duration, no ceiling on an open-ended switch lock, Esc for 5 s) and no
   managed settings.
 - `settings.updates` controls the in-app updater: `{ "enabled": false }` switches update checks
   off on this machine (Settings → Updates shows "disabled by policy" and hides the token field),

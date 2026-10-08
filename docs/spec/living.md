@@ -39,7 +39,7 @@ all mirroring `@rp/shared` (add them to the structural-identity test where they 
 | `webcam` | pack | `takeImage(): AssetRef` (D); `takeVideo(seconds: number): AssetRef` (D; 1..60) — both write into the character home under `webcam/` and return a `source: 'home'` ref, which `sdk.media` takes as `home:<path>` |
 | `crypto` | pack | `encrypt(path: string): void` (D); `decrypt(path: string): void` (D) — one of the user's own files, in place, under an app-managed AES-256-GCM key (`docs/spec/system.md` "`sdk.crypto` key storage"); paths outside the home directory or that look like a system/session file (`.service`, `.desktop`, `.conf`, ...) are refused before anything is touched |
 | `system` (v1.1) | pack | + `clipboardRead(): string` (D) |
-| `system` (v1.2) | pack | + the virtual terminals (Linux, daemon-only except the first): `vtStatus(): { available; vt?; ourVt?; ours; locked; until? }`; `vtSwitchBack(): { vt; switched }` (D); `vtPreventSwitching(durationMs, opts?: { reason? }): { until; durationMs }` (D); `vtAllowSwitching(): void` (D) |
+| `system` (v1.2) | pack | + the virtual terminals (Linux, daemon-only except the first): `vtStatus(): { available; vt?; ourVt?; ours; locked; until? }`; `vtSwitchBack(): { vt; switched }` (D); `vtPreventSwitching(durationMs?, opts?: { reason? }): { indefinite; until?; durationMs? }` (D; no duration holds the console until `vtAllowSwitching`); `vtAllowSwitching(): void` (D) |
 
 `presence` docs must say: prefer the `<senses>` line already in the prompt; call `status()` only for
 fresh numbers inside an action.

@@ -293,19 +293,29 @@ the daemon and this block is the only thing that bounds them.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `enabled` | boolean | `true` | `false` refuses `vt-lock` **and** `vt-activate` with `code: "POLICY"` — characters cannot lock the console or pull the user back to it. `vt-status` still reports state. |
-| `maxDurationMs` | number | `300000` (5 min) | Longest single switch lock. Requests above are clamped, not refused; the response's `durationMs` says what was applied. Values below 1000 are raised to 1000; `-1` means unlimited (held to a hundred years). |
+| `maxDurationMs` | number | `300000` (5 min) for a lock that names one | Longest single switch lock. Requests above are clamped, not refused; the response's `durationMs` says what was applied. Values below 1000 are raised to 1000; `-1` means unlimited (held to a hundred years). **Naming this key at all also bounds an open-ended lock** (see below). |
 
 Notes:
 
+- A `vt-lock` **without** `durationMs` is open-ended: the console is held until something
+  releases it, which is what `sdk.system.vtPreventSwitching()` with no argument asks for. That
+  is the character promising to give it back, so `maxDurationMs` is how an administrator declines
+  to take its word for it — write a number and *every* lock on the machine ends after it,
+  open-ended ones included, with the caller told the duration it was given instead. Write `-1`
+  to allow an open-ended hold explicitly. A policy written from Settings → System always carries
+  this key (the field is on the *Input lock* tab, 5 minutes by default), so a machine with a
+  form-written policy bounds open-ended holds unless you set `-1` there.
 - The switch lock is a **kernel-wide** flag (`VT_LOCKSWITCH`), so the daemon never lets one
-  outlive the app that asked for it: it is released by the timer, by `vt-unlock`, when the
-  connection that took it closes, when the input lock's emergency chord fires, and when the
-  daemon stops. There is deliberately no way to hold it indefinitely.
+  outlive the app that asked for it, however it was taken: it is released by the timer where
+  there is one, by `vt-unlock`, when the connection that took it closes, when the input lock's
+  emergency chord fires, and when the daemon stops.
 - `vt-activate` has no VT number in the request. The daemon resolves `VTNR` from the **asking
   user's own** logind session, so a character can bring the user back to rpchat's console and
   cannot send them to anyone else's.
 - Set `enabled: false` on a machine where the text consoles are someone's way in to fix things —
-  it is the user's escape hatch from a frozen desktop, and this is the switch that keeps it theirs.
+  it is the user's escape hatch from a frozen desktop, and this is the switch that keeps it
+  theirs. A middle ground is a short `maxDurationMs`: characters may hold the console, never for
+  longer than you allow.
 - Every lock, unlock and switch is logged with the requesting uid/pid (`journalctl -u rpchatd`).
 
 ## `app` — keeping the app running

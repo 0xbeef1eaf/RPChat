@@ -25,11 +25,15 @@ Contracts: `@rp/shared/system.ts` (`PolicyFile`, `DaemonRequest/Response`, `Syst
   `inputLock.maxDurationMs` (default 300 000). Never trusts the app's numbers. The same for the
   virtual terminals: `vtLock.enabled === false` refuses `vt-lock`/`vt-activate`, and `vt-lock`
   durations are clamped to `vtLock.maxDurationMs` (default 300 000, floor 1000, `-1` unlimited).
+  A `vt-lock` with **no** `durationMs` is open-ended — held until released — unless the policy
+  names a finite `maxDurationMs`, which `VtLimits.bounded` records and `open_ended_duration()`
+  turns into that ceiling: an administrator who writes the key has said no lock here outlasts it.
 - **Virtual terminals** (`src/vt.rs`): `vt-status`, `vt-activate`, `vt-lock`, `vt-unlock` behind
   the `VtConsole` trait (`VT_GETSTATE` / `VT_ACTIVATE` / `VT_LOCKSWITCH` / `VT_UNLOCKSWITCH` on
   `/dev/tty0`, opened per call; a fake in tests, exported as `vt::testing` for `main.rs`'s
   socket-level test). `VtEngine` owns no thread and no clock, like `LockEngine`: the daemon
-  `tick`s it every 50 ms. `vt-activate` carries **no VT number** — `keepalive::session_vt` picks
+  `tick`s it every 50 ms (and an open-ended lock has no deadline, so those ticks do no work and
+  no ioctl at all). `vt-activate` carries **no VT number** — `keepalive::session_vt` picks
   the asking uid's session `VTNR` from the logind state files (graphical and active first, then
   graphical, then any), so the op can only switch to that user's own console, and answers
   `NO_DEVICES` when they are on none. It lifts an own lock around the switch and re-applies it
@@ -406,7 +410,8 @@ with `pkexec` for the current user.
   `applyUpdate({ file, version, sha512 })` → `{ version, restartDaemon }` (errors mapped like the
   other ops), `waitForHello(timeoutMs)` (fresh handshake retried with a growing delay, 500 ms → 5 s;
   resolves with whether the daemon is back), `vtStatus()` → `VtInfo`, `vtActivate()` →
-  `{ vt, switched }`, `vtLock(durationMs, reason?)` → `{ until, durationMs }`, `vtUnlock()`),
+  `{ vt, switched }`, `vtLock(durationMs?, reason?)` → `{ until?, durationMs? }` (both absent for an
+  open-ended hold), `vtUnlock()`),
   unit-tested with a fake socket server. `rpErrorCodeFor`/`toRpError` map daemon codes for every caller: `REFUSED`/`POLICY` →
   `PERMISSION_DENIED`, `INVALID`/`EXISTS` → `INVALID_ARGUMENT` (`details.daemonCode` keeps the
   original), others → `CAPABILITY_FAILED`. The four `vt-*` ops use `toRpErrorOrOutdated`
@@ -601,11 +606,12 @@ sets `deny_unknown_fields` — it does not act on them.
 | Key | Type | Effect |
 |---|---|---|
 | `vtLock.enabled` | boolean, default `true` | `false`: `vt-lock` **and** `vt-activate` answer `POLICY`, so no character locks the console or pulls the user back to it. `vt-status` is never gated — it only reports. |
-| `vtLock.maxDurationMs` | number ≥ 1000, or `-1` | Longest single switch lock; requests above are clamped and the response says what was applied. Default 300 000. |
+| `vtLock.maxDurationMs` | number ≥ 1000, or `-1` | Longest single switch lock; requests above are clamped and the response says what was applied. Default 300 000 for a lock that names a duration. **Naming the key also bounds an open-ended lock** (one asked for with no `durationMs`), which then becomes a lock of exactly this length; absent, or `-1`, leaves it running until it is released. |
 
 Modelled by the policy form (`PolicyDraft.vtLock`, written on every save like `inputLock`, so a
-file that carries the block round-trips through Settings → System instead of being dropped), and
-present in both shipped templates.
+file that carries the block round-trips through Settings → System instead of being dropped — and
+so a form-written policy always bounds open-ended locks unless the administrator puts `-1` in the
+field), and present in both shipped templates.
 
 ### Policy `guard` block
 

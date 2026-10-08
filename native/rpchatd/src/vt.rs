@@ -59,19 +59,28 @@ pub trait VtConsole: Send {
     fn set_switch_locked(&mut self, locked: bool) -> io::Result<()>;
 }
 
-/// Result of a successful `vt-lock`.
+/// Result of a successful `vt-lock`. Both fields are `None` for an open-ended hold — one with
+/// no deadline at all, which ends only when something releases it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VtLockOutcome {
-    pub until_unix_ms: u64,
-    pub duration_ms: u64,
+    pub until_unix_ms: Option<u64>,
+    pub duration_ms: Option<u64>,
 }
 
 struct ActiveLock {
-    until: Instant,
-    until_unix_ms: u64,
+    /// When the timer ends it, or `None` for an open-ended hold.
+    until: Option<Instant>,
+    until_unix_ms: Option<u64>,
     reason: Option<String>,
     /// The connection that took it, so it can be released when that connection drops.
     conn_id: u64,
+}
+
+impl ActiveLock {
+    /// Whether the deadline has passed. An open-ended hold never expires.
+    fn expired(&self, now: Instant) -> bool {
+        self.until.is_some_and(|until| now >= until)
+    }
 }
 
 /// The switch-lock state machine.
@@ -140,11 +149,12 @@ impl VtEngine {
 
     fn lock_info(&self, now: Instant) -> Option<VtLockInfo> {
         let a = self.active.as_ref()?;
-        if now >= a.until {
+        if a.expired(now) {
             return None; // expired but not yet ticked
         }
         Some(VtLockInfo {
-            until: crate::protocol::iso_millis(a.until_unix_ms),
+            // No `until` means no deadline: this one is held until it is released.
+            until: a.until_unix_ms.map(crate::protocol::iso_millis),
             reason: a.reason.clone(),
         })
     }
@@ -163,7 +173,7 @@ impl VtEngine {
         // A lock whose time is up but which the ticker has not reached yet still holds the
         // kernel flag: let it go now rather than trying to switch against it (`VT_ACTIVATE`
         // would fail with EINVAL for the few milliseconds until the next tick).
-        if self.active.as_ref().is_some_and(|a| now >= a.until) {
+        if self.active.as_ref().is_some_and(|a| a.expired(now)) {
             self.unlock(VtUnlockCause::Timer);
         }
         let relock = self.active.is_some();
@@ -189,11 +199,13 @@ impl VtEngine {
         result.map(|()| true)
     }
 
-    /// Take (or extend) the switch lock. `duration_ms` must already be clamped by the policy.
+    /// Take (or replace) the switch lock. `duration_ms` must already be resolved by the policy:
+    /// `Some(ms)` for a lock that ends by itself, `None` to hold the console until something
+    /// releases it (`vt-unlock`, the peer going away, the emergency chord, shutdown).
     pub fn lock(
         &mut self,
         now: Instant,
-        duration_ms: u64,
+        duration_ms: Option<u64>,
         reason: Option<String>,
         conn_id: u64,
     ) -> Result<VtLockOutcome, DaemonError> {
@@ -205,9 +217,9 @@ impl VtEngine {
                 .set_switch_locked(true)
                 .map_err(|e| self.io_err("lock VT switching", e))?;
         }
-        let until_unix_ms = (self.wall)() + duration_ms;
+        let until_unix_ms = duration_ms.map(|ms| (self.wall)() + ms);
         self.active = Some(ActiveLock {
-            until: now + Duration::from_millis(duration_ms),
+            until: duration_ms.map(|ms| now + Duration::from_millis(ms)),
             until_unix_ms,
             reason,
             conn_id,
@@ -235,10 +247,10 @@ impl VtEngine {
         was_locked
     }
 
-    /// Expire the timer. Returns the cause when this tick ended the lock.
+    /// Expire the timer. Returns the cause when this tick ended the lock. An open-ended hold
+    /// has no timer, so this does nothing at all for one — not even an ioctl.
     pub fn tick(&mut self, now: Instant) -> Option<VtUnlockCause> {
-        let active = self.active.as_ref()?;
-        if now < active.until {
+        if !self.active.as_ref()?.expired(now) {
             return None;
         }
         self.unlock(VtUnlockCause::Timer);
@@ -500,7 +512,7 @@ mod tests {
     fn activate_lifts_its_own_lock_for_the_switch_and_puts_it_back() {
         let now = Instant::now();
         let (mut vt, state) = engine(2);
-        vt.lock(now, 60_000, None, 7).unwrap();
+        vt.lock(now, Some(60_000), None, 7).unwrap();
         assert!(state.lock().unwrap().locked);
         // The user got to VT 3 some other way (or was there before the lock): we can still
         // bring them back, because the lock is lifted around the switch.
@@ -518,10 +530,94 @@ mod tests {
     }
 
     #[test]
+    fn a_lock_with_no_duration_is_held_until_something_releases_it() {
+        let t0 = Instant::now();
+        let (mut vt, state) = engine(2);
+        let out = vt
+            .lock(t0, None, Some("staying with you".into()), 7)
+            .unwrap();
+        assert_eq!(out.duration_ms, None, "no deadline to report");
+        assert_eq!(out.until_unix_ms, None);
+        assert!(state.lock().unwrap().locked);
+        assert_eq!(
+            vt.status(t0, Some(2)).locked,
+            Some(VtLockInfo {
+                until: None,
+                reason: Some("staying with you".into()),
+            }),
+            "status says it is locked, with no `until` to end it"
+        );
+        // No timer can take it away, however long the daemon runs.
+        for ms in [1, 1_000, 60_000, 24 * 60 * 60 * 1000] {
+            assert_eq!(vt.tick(t0 + Duration::from_millis(ms)), None, "at {ms} ms");
+        }
+        assert!(state.lock().unwrap().locked);
+        assert_eq!(
+            state.lock().unwrap().calls,
+            vec!["lock true"],
+            "and the ticks cost no ioctls at all"
+        );
+        // Switching back still works, and leaves the hold in place.
+        state.lock().unwrap().active = 3;
+        assert_eq!(vt.activate(2, t0 + Duration::from_millis(90_000)), Ok(true));
+        assert!(vt.is_locked() && state.lock().unwrap().locked);
+        // Only an explicit release ends it.
+        assert!(vt.unlock(VtUnlockCause::Request));
+        assert!(!state.lock().unwrap().locked);
+        assert!(!vt.is_locked());
+    }
+
+    #[test]
+    fn an_open_ended_hold_still_dies_with_its_peer_and_at_shutdown() {
+        let t0 = Instant::now();
+        let (mut vt, state) = engine(2);
+        vt.lock(t0, None, None, 7).unwrap();
+        assert!(!vt.release_for_conn(8));
+        assert!(vt.release_for_conn(7), "the app that took it went away");
+        assert!(!state.lock().unwrap().locked);
+
+        vt.lock(t0, None, None, 7).unwrap();
+        assert!(vt.unlock(VtUnlockCause::Shutdown));
+        assert!(!state.lock().unwrap().locked);
+
+        vt.lock(t0, None, None, 7).unwrap();
+        assert!(
+            vt.unlock(VtUnlockCause::Emergency),
+            "the emergency chord too"
+        );
+        assert!(!state.lock().unwrap().locked);
+    }
+
+    #[test]
+    fn a_timed_lock_can_be_replaced_by_an_open_ended_one_and_back() {
+        let t0 = Instant::now();
+        let (mut vt, state) = engine(2);
+        vt.lock(t0, Some(5_000), None, 7).unwrap();
+        // Asking again without a duration drops the deadline rather than keeping the old one.
+        assert_eq!(vt.lock(t0, None, None, 7).unwrap().until_unix_ms, None);
+        assert_eq!(vt.tick(t0 + Duration::from_millis(6_000)), None);
+        assert!(state.lock().unwrap().locked);
+        // And a duration puts one back.
+        assert_eq!(
+            vt.lock(t0, Some(5_000), None, 7).unwrap().duration_ms,
+            Some(5_000)
+        );
+        assert_eq!(
+            vt.tick(t0 + Duration::from_millis(6_000)),
+            Some(VtUnlockCause::Timer)
+        );
+        assert_eq!(
+            state.lock().unwrap().calls,
+            vec!["lock true", "lock false"],
+            "one ioctl to take it, one to give it back, whatever happened in between"
+        );
+    }
+
+    #[test]
     fn a_switch_in_the_moment_between_expiry_and_the_tick_still_works() {
         let t0 = Instant::now();
         let (mut vt, state) = engine(2);
-        vt.lock(t0, 1_000, None, 7).unwrap();
+        vt.lock(t0, Some(1_000), None, 7).unwrap();
         state.lock().unwrap().active = 3;
         // The deadline has passed but `tick` has not run yet, so the kernel flag is still set.
         let after = t0 + Duration::from_millis(1_500);
@@ -542,14 +638,14 @@ mod tests {
         let t0 = Instant::now();
         let (mut vt, state) = engine(2);
         let out = vt
-            .lock(t0, 5_000, Some("reading to you".into()), 7)
+            .lock(t0, Some(5_000), Some("reading to you".into()), 7)
             .unwrap();
-        assert_eq!(out.duration_ms, 5_000);
-        assert_eq!(out.until_unix_ms, 1_005_000);
+        assert_eq!(out.duration_ms, Some(5_000));
+        assert_eq!(out.until_unix_ms, Some(1_005_000));
         assert_eq!(
             vt.status(t0, Some(2)).locked,
             Some(VtLockInfo {
-                until: crate::protocol::iso_millis(1_005_000),
+                until: Some(crate::protocol::iso_millis(1_005_000)),
                 reason: Some("reading to you".into()),
             })
         );
@@ -567,7 +663,7 @@ mod tests {
     fn a_lock_is_released_when_its_connection_goes_away() {
         let t0 = Instant::now();
         let (mut vt, state) = engine(2);
-        vt.lock(t0, 60_000, None, 7).unwrap();
+        vt.lock(t0, Some(60_000), None, 7).unwrap();
         assert!(
             !vt.release_for_conn(8),
             "another connection's loss is not ours"
@@ -596,7 +692,7 @@ mod tests {
             .fail
             .push(("set_switch_locked", io::ErrorKind::PermissionDenied));
         let mut vt = VtEngine::new(Box::new(console));
-        let err = vt.lock(Instant::now(), 5_000, None, 7).unwrap_err();
+        let err = vt.lock(Instant::now(), Some(5_000), None, 7).unwrap_err();
         assert_eq!(err.code, ErrorCode::Internal);
         assert!(!vt.is_locked());
     }

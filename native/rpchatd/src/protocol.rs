@@ -191,13 +191,19 @@ pub enum Request {
     /// so this can switch the user back to rpchat and nowhere else.
     #[serde(rename = "vt-activate")]
     VtActivate,
-    /// Refuse every console switch (`VT_LOCKSWITCH`) for at most `durationMs`, clamped by
-    /// `vtLock.maxDurationMs`. Released by the timer, `vt-unlock`, the loss of this connection,
-    /// the input lock's emergency chord, or the daemon stopping.
+    /// Refuse every console switch (`VT_LOCKSWITCH`). With `durationMs` the lock ends by itself
+    /// after it (clamped by `vtLock.maxDurationMs`); **without** it the console is held until
+    /// something releases it — `vt-unlock`, the loss of this connection, the input lock's
+    /// emergency chord, or the daemon stopping — unless the policy names a finite
+    /// `maxDurationMs`, which caps an open-ended hold too.
     #[serde(rename = "vt-lock")]
     VtLock {
-        #[serde(rename = "durationMs")]
-        duration_ms: f64,
+        #[serde(
+            rename = "durationMs",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        duration_ms: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
@@ -334,8 +340,10 @@ pub struct LockInfo {
 /// `vt-status.vt.locked` (`VtLockInfo` in `@rp/shared`): the switch lock in place right now.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VtLockInfo {
-    /// ISO-8601 (RFC 3339, UTC, millisecond precision) time the lock ends by itself.
-    pub until: String,
+    /// ISO-8601 (RFC 3339, UTC, millisecond precision) time the lock ends by itself. Absent for
+    /// an open-ended hold: that one ends when it is released, not on a clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -581,11 +589,17 @@ pub enum Ok {
         vt: u16,
         switched: bool,
     },
+    /// Both absent for an open-ended hold (no deadline to report).
     #[serde(rename = "vt-lock")]
     VtLock {
-        until: String,
-        #[serde(rename = "durationMs")]
-        duration_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until: Option<String>,
+        #[serde(
+            rename = "durationMs",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        duration_ms: Option<u64>,
     },
     #[serde(rename = "vt-unlock")]
     VtUnlock,
@@ -1007,14 +1021,14 @@ mod tests {
                 json!({"op":"vt-lock","durationMs":30000,"reason":"reading to you"})
             ),
             Request::VtLock {
-                duration_ms: 30000.0,
+                duration_ms: Some(30000.0),
                 reason: Some("reading to you".into()),
             }
         );
         assert_eq!(
             round_trip_request(json!({"op":"vt-lock","durationMs":1000})),
             Request::VtLock {
-                duration_ms: 1000.0,
+                duration_ms: Some(1000.0),
                 reason: None,
             }
         );
@@ -1022,9 +1036,24 @@ mod tests {
             round_trip_request(json!({"op":"vt-unlock"})),
             Request::VtUnlock
         );
+        assert_eq!(
+            round_trip_request(json!({"op":"vt-lock"})),
+            Request::VtLock {
+                duration_ms: None,
+                reason: None,
+            },
+            "no durationMs asks for the console until further notice"
+        );
+        assert_eq!(
+            round_trip_request(json!({"op":"vt-lock","reason":"reading to you"})),
+            Request::VtLock {
+                duration_ms: None,
+                reason: Some("reading to you".into()),
+            }
+        );
         assert!(
-            parse_line(r#"{"op":"vt-lock"}"#).is_err(),
-            "durationMs required"
+            parse_line(r#"{"op":"vt-lock","durationMs":"soon"}"#).is_err(),
+            "a durationMs that is not a number is still refused"
         );
         assert_eq!(
             parse_line(r#"{"op":"vt-activate","vt":3}"#),
@@ -1190,7 +1219,7 @@ mod tests {
                     active: Some(3),
                     session: Some(2),
                     locked: Some(VtLockInfo {
-                        until: "2026-09-14T12:00:05.000Z".into(),
+                        until: Some("2026-09-14T12:00:05.000Z".into()),
                         reason: Some("reading to you".into()),
                     }),
                     unavailable: None,
@@ -1217,10 +1246,18 @@ mod tests {
         );
         round_trip_response(
             &Response::ok(Ok::VtLock {
-                until: "2026-09-14T12:00:05.000Z".into(),
-                duration_ms: 5000,
+                until: Some("2026-09-14T12:00:05.000Z".into()),
+                duration_ms: Some(5000),
             }),
             json!({"ok":true,"op":"vt-lock","until":"2026-09-14T12:00:05.000Z","durationMs":5000}),
+        );
+        // An open-ended hold reports no deadline at all.
+        round_trip_response(
+            &Response::ok(Ok::VtLock {
+                until: None,
+                duration_ms: None,
+            }),
+            json!({"ok":true,"op":"vt-lock"}),
         );
         round_trip_response(
             &Response::ok(Ok::VtUnlock),

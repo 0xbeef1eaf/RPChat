@@ -179,24 +179,39 @@ export class SystemHandler implements CapabilityHandler {
     };
     if (info.active !== undefined) out.vt = info.active;
     if (info.session !== undefined) out.ourVt = info.session;
-    if (info.locked) out.until = info.locked.until;
+    // Only when there is one: an open-ended hold is locked with no deadline, and the key must
+    // be absent rather than present-and-undefined.
+    if (info.locked?.until !== undefined) out.until = info.locked.until;
     return out;
   }
 
-  private async vtPreventSwitching(durationArg: unknown, optsArg: unknown): Promise<{ until: string; durationMs: number }> {
-    if (typeof durationArg !== 'number' || !Number.isFinite(durationArg)) throw new RpError('INVALID_ARGUMENT', 'durationMs must be a number');
+  /**
+   * Lock console switching. A duration asks for a lock that ends by itself; **leaving it out**
+   * asks for the console until `vtAllowSwitching()` — the character takes on the job of giving
+   * it back, and the daemon still releases it if rpchat goes away, on the input lock's
+   * emergency chord, at shutdown, or at the policy's ceiling where one is set.
+   */
+  private async vtPreventSwitching(durationArg: unknown, optsArg: unknown): Promise<{ indefinite: boolean; until?: string; durationMs?: number }> {
+    const open = durationArg === undefined || durationArg === null;
+    if (!open && (typeof durationArg !== 'number' || !Number.isFinite(durationArg))) {
+      throw new RpError('INVALID_ARGUMENT', 'durationMs must be a number, or left out to hold until you unlock it');
+    }
     // No ceiling of our own: the root-owned policy decides how long a lock may hold
-    // (`vtLock.maxDurationMs`, 5 min by default) and the daemon answers with what it granted,
-    // so an administrator who raises that limit is not capped by a constant in here.
-    const durationMs = Math.max(VT_LOCK_MIN_MS, Math.round(durationArg));
+    // (`vtLock.maxDurationMs`) and the daemon answers with what it granted, so an administrator
+    // who raises that limit is not capped by a constant in here.
+    const durationMs = open ? undefined : Math.max(VT_LOCK_MIN_MS, Math.round(durationArg as number));
     const opts = optsArg && typeof optsArg === 'object' ? (optsArg as { reason?: unknown }) : {};
     const reason = typeof opts.reason === 'string' ? opts.reason : '';
     const daemon = await this.requireDaemon();
     // The daemon clamps again against the root-owned policy and releases it by itself.
     const res = await daemon.vtLock(durationMs, reason || undefined);
     this.vtLocked = true;
-    this.deps.logger?.info(`[system] VT switching locked for ${res.durationMs} ms${reason ? ` (${reason})` : ''}`);
-    return res;
+    // `indefinite` is what the daemon actually granted, not what was asked for: an open-ended
+    // request on a machine whose policy caps locks comes back as a timed one.
+    const indefinite = res.until === undefined;
+    const held = indefinite ? 'until it is unlocked' : `for ${res.durationMs} ms`;
+    this.deps.logger?.info(`[system] VT switching locked ${held}${reason ? ` (${reason})` : ''}`);
+    return { indefinite, ...res };
   }
 
   /**

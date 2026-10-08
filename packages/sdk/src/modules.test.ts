@@ -124,7 +124,7 @@ describe('standard modules', () => {
       for (const name of exp.prompt ?? []) expect(r.permissionFor(spec.id, name)).toBe('prompt');
     }
     expect(modules.inputModule.version).toBe('1.2.1');
-    expect(modules.systemModule.version).toBe('1.2.0');
+    expect(modules.systemModule.version).toBe('1.3.0');
   });
 
   it('marks every system method dangerous and pack-level (nothing built-in prompts per call)', () => {

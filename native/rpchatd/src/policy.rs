@@ -929,7 +929,13 @@ impl LockLimits {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VtLimits {
     pub enabled: bool,
+    /// Ceiling for a `vt-lock` that names a duration.
     pub max_duration_ms: u64,
+    /// The policy itself named a finite `maxDurationMs`, so an administrator has said that no
+    /// lock on this machine outlasts it — including an open-ended one, which then becomes a
+    /// lock of exactly that length. Without a policy (or with `-1`) an open-ended hold really
+    /// is open-ended: the character holds the console until it lets go.
+    pub bounded: bool,
 }
 
 impl Default for VtLimits {
@@ -937,6 +943,7 @@ impl Default for VtLimits {
         VtLimits {
             enabled: true,
             max_duration_ms: DEFAULT_MAX_VT_LOCK_MS,
+            bounded: false,
         }
     }
 }
@@ -957,6 +964,7 @@ impl VtLimits {
                     }
                 })
                 .unwrap_or(d.max_duration_ms),
+            bounded: vt.max_duration_ms.is_some_and(|n| n != UNLIMITED),
         }
     }
 
@@ -967,6 +975,16 @@ impl VtLimits {
         }
         let rounded = requested_ms.round().min(u64::MAX as f64) as u64;
         Some(rounded.clamp(MIN_LOCK_MS, self.max_duration_ms.max(MIN_LOCK_MS)))
+    }
+
+    /// What a `vt-lock` with no `durationMs` gets: `None` for "until it is unlocked", or the
+    /// policy's ceiling when an administrator set one.
+    pub fn open_ended_duration(&self) -> Option<u64> {
+        if self.bounded {
+            Some(self.max_duration_ms.max(MIN_LOCK_MS))
+        } else {
+            None
+        }
     }
 }
 
@@ -1419,6 +1437,46 @@ mod tests {
             LockLimits::default().clamp_duration(1e12),
             Some(DEFAULT_MAX_LOCK_MS)
         );
+    }
+
+    /// The `vtLock` ceiling and what a `vt-lock` with no duration gets under it.
+    #[test]
+    fn an_open_ended_vt_lock_is_bounded_only_by_a_policy_that_says_so() {
+        // No policy at all: a character may hold the console until it lets go.
+        let d = VtLimits::default();
+        assert!(d.enabled && !d.bounded);
+        assert_eq!(d.open_ended_duration(), None);
+        assert_eq!(d.clamp_duration(1e12), Some(DEFAULT_MAX_VT_LOCK_MS));
+
+        // A policy that mentions `vtLock` but not the ceiling says nothing about it either.
+        let limits = policy(json!({"version":1,"vtLock":{"enabled":true}}))
+            .unwrap()
+            .vt_limits();
+        assert_eq!(limits.open_ended_duration(), None);
+
+        // An administrator who names a ceiling means every lock, open-ended ones included.
+        let limits = policy(json!({"version":1,"vtLock":{"maxDurationMs":45000}}))
+            .unwrap()
+            .vt_limits();
+        assert!(limits.bounded);
+        assert_eq!(limits.open_ended_duration(), Some(45_000));
+        assert_eq!(limits.clamp_duration(1e12), Some(45_000));
+
+        // Below the floor is raised, for the open-ended case as well.
+        let limits = policy(json!({"version":1,"vtLock":{"maxDurationMs":10}}))
+            .unwrap()
+            .vt_limits();
+        assert_eq!(limits.open_ended_duration(), Some(MIN_LOCK_MS));
+
+        // `-1` is the explicit "no ceiling", so an open-ended hold stays open-ended.
+        let limits = policy(json!({"version":1,"vtLock":{"maxDurationMs":-1}}))
+            .unwrap()
+            .vt_limits();
+        assert!(!limits.bounded);
+        assert_eq!(limits.open_ended_duration(), None);
+        // The ceiling is a hundred years, so a named duration under it is passed through.
+        assert_eq!(limits.clamp_duration(1e12), Some(1_000_000_000_000));
+        assert_eq!(limits.clamp_duration(1e18), Some(UNLIMITED_LOCK_MS));
     }
 
     #[test]

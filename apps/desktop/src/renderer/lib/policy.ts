@@ -176,7 +176,12 @@ export interface PolicyDraft {
   /** Dotted path under `settings` → the value written when it is forced. */
   values: Record<string, PolicyValue>;
   inputLock: { enabled: boolean; maxDurationMs: number; emergencyKey: PolicyEmergencyKey; emergencyHoldMs: number };
-  /** The virtual terminals: whether a character may lock console switching, and for how long. */
+  /**
+   * The virtual terminals: whether a character may lock console switching, and for how long.
+   * `maxDurationMs` is written on every save, so a policy from this form always carries a
+   * ceiling — including on an open-ended lock, which becomes one of that length. `-1` is how an
+   * administrator allows "until the character unlocks it".
+   */
   vtLock: { enabled: boolean; maxDurationMs: number };
   app: { allowQuit: boolean; users: string[]; restrictions: AppRestrictions };
   dev: DevRules;

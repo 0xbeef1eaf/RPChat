@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const systemModule: CapabilityModuleSpec = {
   id: 'system',
-  version: '1.2.0',
+  version: '1.3.0',
   title: 'System access',
   summary: 'Open links, run commands, read/write files, read/write the clipboard and control the virtual terminals on the host PC.',
   permission: 'pack',
@@ -70,16 +70,21 @@ interface SystemApi {
    */
   vtSwitchBack(): Promise<{ vt: number; switched: boolean }>;
   /**
-   * Stop the user leaving for another virtual terminal for a while: ctrl+alt+F<n> does nothing
-   * until it ends. Heavy-handed — it takes away the way out of a frozen desktop — so ask first
-   * or keep it short, and say what you did. It always ends by itself (durationMs is clamped by
-   * the user's limit, 5 min by default), and ends early if rpchat stops or the emergency key
-   * (hold esc) releases an input lock.
-   * @param durationMs How long to hold it, 1000..the configured maximum.
+   * Stop the user leaving for another virtual terminal: ctrl+alt+F<n> does nothing until the
+   * lock ends. Heavy-handed — it takes away the way out of a frozen desktop — so ask first or
+   * keep it short, and say what you did.
+   *
+   * With durationMs it ends by itself after it. **Leave durationMs out and it is held until you
+   * call vtAllowSwitching()** — then giving it back is your job, so only do that when you have a
+   * clear reason and a plan to release it (an event handler, a timer). Either way it ends early
+   * if rpchat stops, if the emergency key (hold esc) releases an input lock, or at the user's
+   * configured limit where they set one — check "indefinite" in the result to see which you got.
+   * @param durationMs How long to hold it, 1000..the configured maximum. Omit to hold it until you unlock it.
    * @param opts reason shown in the action log and in Settings → System.
    * @example await sdk.system.vtPreventSwitching(30000, { reason: "finishing the story" });
+   * @example await sdk.system.vtPreventSwitching(undefined, { reason: "stay with me" });  // until I let go
    */
-  vtPreventSwitching(durationMs: number, opts?: { reason?: string }): Promise<{ until: string; durationMs: number }>;
+  vtPreventSwitching(durationMs?: number, opts?: { reason?: string }): Promise<{ indefinite: boolean; until?: string; durationMs?: number }>;
   /** Allow switching virtual terminals again, before the lock would have ended. */
   vtAllowSwitching(): Promise<void>;
 }`,
@@ -89,7 +94,7 @@ interface SystemApi {
 - \`exec\` throws CAPABILITY_FAILED when the program is not installed or not on PATH (the message says so); unreadable or unwritable paths likewise — report it, do not retry.
 - One system call per action is the norm. \`exec\` is not a shell: give the program and its arguments separately.
 - File paths are absolute (or \`~/...\`). Never touch files the user did not mention.
-- The \`vt*\` functions are the virtual terminals (ctrl+alt+F1…F12) and need the system integration on Linux; without it they fail with CAPABILITY_FAILED. \`vtSwitchBack\` pulls the user back to rpchat's console; \`vtPreventSwitching\` keeps them there for a bounded time and is the one to be careful with — subscribe to the \`vt-changed\` event rather than polling \`vtStatus\`.
+- The \`vt*\` functions are the virtual terminals (ctrl+alt+F1…F12) and need the system integration on Linux; without it they fail with CAPABILITY_FAILED. \`vtSwitchBack\` pulls the user back to rpchat's console; \`vtPreventSwitching\` keeps them there and is the one to be careful with — with a duration it ends on its own, and with none it is yours to release with \`vtAllowSwitching()\`, so pair it with something that will (a handler, a timer) rather than leaving it open. Subscribe to the \`vt-changed\` event rather than polling \`vtStatus\`.
 
 \`\`\`ts
 await sdk.system.writeFile("~/Desktop/shopping-list.txt", list.join("\\n"));
@@ -104,7 +109,7 @@ return { saved: true };
     clipboardRead: { description: 'Read text from the system clipboard.', dangerous: true },
     vtStatus: { description: 'Which virtual terminal is in front, and whether switching is locked.' },
     vtSwitchBack: { description: "Switch back to the virtual terminal rpchat's session is on.", dangerous: true },
-    vtPreventSwitching: { description: 'Refuse virtual-terminal switching for a bounded time.', dangerous: true },
+    vtPreventSwitching: { description: 'Refuse virtual-terminal switching, for a given time or until unlocked.', dangerous: true },
     vtAllowSwitching: { description: 'Allow virtual-terminal switching again.', dangerous: true },
   },
 };

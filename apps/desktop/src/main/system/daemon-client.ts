@@ -225,11 +225,21 @@ export class DaemonClient {
     }
   }
 
-  /** Refuse console switching for `durationMs` (the daemon clamps it and releases it by itself). */
-  async vtLock(durationMs: number, reason?: string): Promise<{ until: string; durationMs: number }> {
+  /**
+   * Refuse console switching. With `durationMs` the daemon clamps it and releases it by itself;
+   * without one it holds the console until something releases it (the policy may still cap that,
+   * in which case the answer carries the duration it was given instead).
+   */
+  async vtLock(durationMs?: number, reason?: string): Promise<{ until?: string; durationMs?: number }> {
+    const req: DaemonRequest = { op: 'vt-lock' };
+    if (durationMs !== undefined) req.durationMs = durationMs;
+    if (reason) req.reason = reason;
     try {
-      const res = await this.request<VtLockResponse>(reason ? { op: 'vt-lock', durationMs, reason } : { op: 'vt-lock', durationMs });
-      return { until: res.until, durationMs: res.durationMs };
+      const res = await this.request<VtLockResponse>(req);
+      const out: { until?: string; durationMs?: number } = {};
+      if (res.until !== undefined) out.until = res.until;
+      if (res.durationMs !== undefined) out.durationMs = res.durationMs;
+      return out;
     } catch (err) {
       throw toRpErrorOrOutdated(err, 'vt-lock');
     }

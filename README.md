@@ -268,10 +268,12 @@ app says so under **Settings → System** rather than implying otherwise.
 The daemon also owns the **virtual terminals** — the text consoles behind `Ctrl+Alt+F1`…`F12`,
 which only root may switch between. A character can read which one is in front
 (`sdk.system.vtStatus`), pull the user back to RPChat's own console
-(`sdk.system.vtSwitchBack`) and refuse switching for a bounded time
-(`sdk.system.vtPreventSwitching`) — released by its timer, by the character, when RPChat goes
-away, by the input lock's emergency key, or when the daemon stops, so it can never strand you;
-`"vtLock": { "enabled": false }` in the policy takes both away and keeps `Ctrl+Alt+F<n>` yours.
+(`sdk.system.vtSwitchBack`) and refuse switching (`sdk.system.vtPreventSwitching`) — for a given
+time, or until it unlocks again if it passes no duration. Either way the lock goes when RPChat
+does, when the input lock's emergency key is held, or when the daemon stops, so a crash can never
+strand you; `"vtLock": { "maxDurationMs": 60000 }` in the policy caps every lock including an
+open-ended one, and `"vtLock": { "enabled": false }` takes both operations away and keeps
+`Ctrl+Alt+F<n>` yours.
 *Noticing* a switch needs none of that: the app watches the kernel's own `tty0/active` and raises
 the `vt-changed` event, so a character can tell when you walk off to a console and when you come
 back.
