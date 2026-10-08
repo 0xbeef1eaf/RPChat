@@ -15,10 +15,10 @@ const logger = { info: () => undefined, warn: () => undefined };
  * clamps to 30 s (standing in for the policy's `vtLock.maxDurationMs`) and `vt-activate` takes
  * no target at all.
  */
-function fakeDaemon(socketPath: string, opts: { session?: number; available?: boolean } = {}) {
+function fakeDaemon(socketPath: string, opts: { session?: number; available?: boolean; cap?: number } = {}) {
   const session = opts.session ?? 2;
   let active = 3;
-  let locked: { until: string; reason?: string } | undefined;
+  let locked: { until?: string; reason?: string } | undefined;
   const seen: DaemonRequest[] = [];
   const conns = new Set<net.Socket>();
   const server = net.createServer((conn) => {
@@ -49,9 +49,13 @@ function fakeDaemon(socketPath: string, opts: { session?: number; available?: bo
             break;
           }
           case 'vt-lock': {
-            const durationMs = Math.min(req.durationMs, 30_000);
-            locked = { until: new Date(Date.UTC(2026, 9, 6, 12, 0, 30)).toISOString(), ...(req.reason ? { reason: req.reason } : {}) };
-            res = { ok: true, op: 'vt-lock', until: locked.until, durationMs };
+            // Like rpchatd: a named duration is clamped to the policy's ceiling (30 s here),
+            // and no duration is held until released — unless `cap` stands in for a policy
+            // that names a ceiling, which bounds an open-ended request too.
+            const asked = req.durationMs;
+            const durationMs = asked === undefined ? opts.cap : Math.min(asked, 30_000);
+            locked = { ...(durationMs === undefined ? {} : { until: new Date(Date.UTC(2026, 9, 6, 12, 0, 30)).toISOString() }), ...(req.reason ? { reason: req.reason } : {}) };
+            res = { ok: true, op: 'vt-lock', ...(locked.until ? { until: locked.until } : {}), ...(durationMs === undefined ? {} : { durationMs }) };
             break;
           }
           case 'vt-unlock':
@@ -116,14 +120,14 @@ describe('sdk.system virtual terminals, with the daemon', () => {
   it('locks switching for a bounded time and lets the daemon clamp it', async () => {
     const { daemon, handler } = await connected();
     const res = await handler.invoke('vtPreventSwitching', [10_000, { reason: 'finishing the story' }], ctx);
-    expect(res).toEqual({ until: '2026-10-06T12:00:30.000Z', durationMs: 10_000 });
+    expect(res).toEqual({ indefinite: false, until: '2026-10-06T12:00:30.000Z', durationMs: 10_000 });
     expect(daemon.isLocked()).toBe(true);
     expect(await handler.invoke('vtStatus', [], ctx)).toMatchObject({ locked: true, until: '2026-10-06T12:00:30.000Z' });
     expect(daemon.seen.at(-2)).toEqual({ op: 'vt-lock', durationMs: 10_000, reason: 'finishing the story' });
 
     // An hour is asked for; the daemon's limit (30 s here) is what is granted and reported.
     const long = await handler.invoke('vtPreventSwitching', [3_600_000], ctx);
-    expect(long).toMatchObject({ durationMs: 30_000 });
+    expect(long).toMatchObject({ indefinite: false, durationMs: 30_000 });
 
     await handler.invoke('vtAllowSwitching', [], ctx);
     expect(daemon.isLocked()).toBe(false);
@@ -135,7 +139,8 @@ describe('sdk.system virtual terminals, with the daemon', () => {
     expect(quiet.daemon.seen.some((r) => r.op === 'vt-unlock'), 'nothing was locked, nothing to release').toBe(false);
 
     const { daemon, handler } = await connected();
-    await handler.invoke('vtPreventSwitching', [30_000], ctx);
+    // The open-ended hold is the one that matters here: nothing else would have ended it.
+    await handler.invoke('vtPreventSwitching', [], ctx);
     await handler.dispose();
     expect(daemon.isLocked()).toBe(false);
     // Idempotent: a second dispose does not ask again.
@@ -143,12 +148,41 @@ describe('sdk.system virtual terminals, with the daemon', () => {
     expect(daemon.seen.filter((r) => r.op === 'vt-unlock')).toHaveLength(1);
   });
 
+  it('holds the console until unlocked when no duration is given', async () => {
+    const { daemon, handler } = await connected();
+    const res = await handler.invoke('vtPreventSwitching', [undefined, { reason: 'stay with me' }], ctx);
+    expect(res).toEqual({ indefinite: true });
+    // Nothing about a duration goes on the wire: the daemon is being asked to hold it.
+    expect(daemon.seen.at(-1)).toEqual({ op: 'vt-lock', reason: 'stay with me' });
+    expect(daemon.isLocked()).toBe(true);
+    // Status says locked, with no deadline to report.
+    const status = await handler.invoke('vtStatus', [], ctx);
+    expect(status).toMatchObject({ locked: true });
+    expect(status).not.toHaveProperty('until');
+
+    // Only the release ends it.
+    await handler.invoke('vtAllowSwitching', [], ctx);
+    expect(daemon.isLocked()).toBe(false);
+
+    // Calling it with no arguments at all means the same thing.
+    expect(await handler.invoke('vtPreventSwitching', [], ctx)).toEqual({ indefinite: true });
+    expect(daemon.seen.at(-1)).toEqual({ op: 'vt-lock' });
+  });
+
+  it('reports a timed lock when the policy caps an open-ended request', async () => {
+    // `cap` stands in for a policy whose `vtLock.maxDurationMs` bounds every lock.
+    const { daemon, handler } = await connected({ cap: 45_000 });
+    const res = await handler.invoke('vtPreventSwitching', [], ctx);
+    expect(res).toEqual({ indefinite: false, until: '2026-10-06T12:00:30.000Z', durationMs: 45_000 });
+    expect(daemon.seen.at(-1)).toEqual({ op: 'vt-lock' }, 'the request is unchanged; the daemon decides');
+  });
+
   it('raises the minimum and refuses a duration that is not a number', async () => {
     const { daemon, handler } = await connected();
     await handler.invoke('vtPreventSwitching', [5], ctx);
     expect(daemon.seen.at(-1)).toEqual({ op: 'vt-lock', durationMs: 1000 });
-    for (const bad of ['soon', undefined, Number.POSITIVE_INFINITY, Number.NaN]) {
-      await expect(handler.invoke('vtPreventSwitching', [bad], ctx)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    for (const bad of ['soon', Number.POSITIVE_INFINITY, Number.NaN, {}, true]) {
+      await expect(handler.invoke('vtPreventSwitching', [bad], ctx), String(bad)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
     }
     // Nothing reached the daemon for the bad ones.
     expect(daemon.seen.filter((r) => r.op === 'vt-lock')).toHaveLength(1);

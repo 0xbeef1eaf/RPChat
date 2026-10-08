@@ -1092,19 +1092,30 @@ impl Daemon {
                 reason,
             } => {
                 let limits = self.require_vt_allowed()?;
-                let duration = limits.clamp_duration(duration_ms).ok_or_else(|| {
-                    DaemonError::invalid("durationMs must be a positive finite number")
-                })?;
+                // No `durationMs` asks for the console until further notice; the policy still
+                // gets to put a ceiling on it (`open_ended_duration`).
+                let duration = match duration_ms {
+                    Some(ms) => Some(limits.clamp_duration(ms).ok_or_else(|| {
+                        DaemonError::invalid("durationMs must be a positive finite number")
+                    })?),
+                    None => limits.open_ended_duration(),
+                };
                 let outcome =
                     self.vt()
                         .lock(Instant::now(), duration, reason.clone(), ctx.conn_id)?;
+                let held = match (outcome.duration_ms, duration_ms) {
+                    (Some(ms), Some(asked)) => format!("for {ms} ms (requested {asked})"),
+                    (Some(ms), None) => {
+                        format!("for {ms} ms (open-ended, capped by vtLock.maxDurationMs)")
+                    }
+                    (None, _) => "until it is unlocked".to_string(),
+                };
                 log_info!(
-                    "VT switching locked for {} ms (requested {duration_ms}) by {peer}{}",
-                    outcome.duration_ms,
+                    "VT switching locked {held} by {peer}{}",
                     reason.map(|r| format!(" ({r})")).unwrap_or_default()
                 );
                 Ok(OkPayload::VtLock {
-                    until: protocol::iso_millis(outcome.until_unix_ms),
+                    until: outcome.until_unix_ms.map(protocol::iso_millis),
                     duration_ms: outcome.duration_ms,
                 })
             }
@@ -5060,10 +5071,35 @@ mod tests {
             Response::Err(ref e) if e.code == ErrorCode::NoDevices && e.error.contains("VTNR")
         ));
 
+        // A lock with no durationMs is held until it is released: no deadline is reported, and
+        // no ticking can take it away.
+        let held = serde_json::to_value(daemon.handle(
+            Request::VtLock {
+                duration_ms: None,
+                reason: Some("staying with you".into()),
+            },
+            &mut alice,
+        ))
+        .unwrap();
+        assert_eq!(held, json!({"ok": true, "op": "vt-lock"}));
+        assert!(state.lock().unwrap().locked);
+        let status = serde_json::to_value(daemon.handle(Request::VtStatus, &mut alice)).unwrap();
+        assert_eq!(status["vt"]["locked"]["reason"], "staying with you");
+        assert_eq!(status["vt"]["locked"]["until"], Value::Null);
+        for _ in 0..5 {
+            daemon.tick();
+        }
+        assert!(
+            state.lock().unwrap().locked,
+            "no timer ends an open-ended hold"
+        );
+        assert!(daemon.handle(Request::VtUnlock, &mut alice).is_ok());
+        assert!(!state.lock().unwrap().locked);
+
         // vt-lock is clamped to the policy's default maximum and reported as locked.
         let locked = serde_json::to_value(daemon.handle(
             Request::VtLock {
-                duration_ms: 9_999_999.0,
+                duration_ms: Some(9_999_999.0),
                 reason: Some("reading to you".into()),
             },
             &mut alice,
@@ -5076,7 +5112,7 @@ mod tests {
         assert!(matches!(
             daemon.handle(
                 Request::VtLock {
-                    duration_ms: 0.0,
+                    duration_ms: Some(0.0),
                     reason: None,
                 },
                 &mut alice,
@@ -5098,7 +5134,7 @@ mod tests {
         assert!(!state.lock().unwrap().locked);
         daemon.handle(
             Request::VtLock {
-                duration_ms: 1000.0,
+                duration_ms: Some(1000.0),
                 reason: None,
             },
             &mut alice,
@@ -5115,7 +5151,7 @@ mod tests {
 
         daemon.handle(
             Request::VtLock {
-                duration_ms: 300_000.0,
+                duration_ms: Some(300_000.0),
                 reason: None,
             },
             &mut alice,
@@ -5131,7 +5167,7 @@ mod tests {
         let mut alice = ConnCtx::test(1000, 7);
         daemon.handle(
             Request::VtLock {
-                duration_ms: 300_000.0,
+                duration_ms: Some(300_000.0),
                 reason: None,
             },
             &mut alice,
@@ -5140,12 +5176,32 @@ mod tests {
         daemon.vt().unlock(VtUnlockCause::Emergency);
         assert!(!state.lock().unwrap().locked);
 
+        // A policy that names a ceiling bounds the open-ended hold too: an administrator who
+        // writes `maxDurationMs` has said no lock here outlasts it.
+        fs::write(
+            &policy_path,
+            r#"{"version":1,"vtLock":{"maxDurationMs":45000}}"#,
+        )
+        .unwrap();
+        let mut alice = ConnCtx::test(1000, 7);
+        let capped = serde_json::to_value(daemon.handle(
+            Request::VtLock {
+                duration_ms: None,
+                reason: None,
+            },
+            &mut alice,
+        ))
+        .unwrap();
+        assert_eq!(capped["durationMs"], 45_000);
+        assert_ne!(capped["until"], Value::Null, "it became a timed lock");
+        assert!(daemon.handle(Request::VtUnlock, &mut alice).is_ok());
+
         // And a policy that switches the whole thing off refuses both ops, while status still reads.
         fs::write(&policy_path, r#"{"version":1,"vtLock":{"enabled":false}}"#).unwrap();
         for req in [
             Request::VtActivate,
             Request::VtLock {
-                duration_ms: 1000.0,
+                duration_ms: Some(1000.0),
                 reason: None,
             },
         ] {

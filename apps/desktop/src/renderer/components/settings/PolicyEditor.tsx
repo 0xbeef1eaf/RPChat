@@ -669,7 +669,11 @@ export function CreatePolicyDialog({
             <div className="field">
               <label htmlFor="policy-vt-max">Longest switch lock</label>
               <DurationInput ms={draft.vtLock.maxDurationMs} min={1000} unlimited disabled={busy || !draft.vtLock.enabled} label="Longest switch lock" onChange={(maxDurationMs) => setDraft({ ...draft, vtLock: { ...draft.vtLock, maxDurationMs } })} />
-              <span className="field-hint">At least 1 s, or -1 for unlimited. The daemon also releases it if rpchat goes away, so a crash never leaves the console locked.</span>
+              <span className="field-hint">
+                At least 1 s, or -1 for no limit. This is also the ceiling on an <em>open-ended</em> lock — one a character asks for with no duration, meaning &ldquo;until I unlock it&rdquo;: writing a
+                number here turns such a lock into one of exactly this length, and -1 lets it run until the character releases it. Either way the daemon releases it if rpchat goes away, so a
+                crash never leaves the console locked.
+              </span>
             </div>
 
             <hr className="rule" />

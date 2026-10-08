@@ -130,7 +130,7 @@ created it. Unknown fields in requests are ignored; a malformed line gets
 | `{ "op": "apply-update", "file", "version", "sha512" }` | `{ "ok": true, "op": "apply-update", "version", "restartDaemon" }` — system install: verify, extract as the user, swap in, self-update (see below; may take a minute) |
 | `{ "op": "vt-status" }` | `{ "ok": true, "op": "vt-status", "vt": VtInfo }` — `{ "available", "active"?, "session"?, "locked"? { "until", "reason"? }, "unavailable"? }`: which virtual terminal is in front, which one the **asking user's** session owns, and the switch lock. Never gated by the policy |
 | `{ "op": "vt-activate" }` | `{ "ok": true, "op": "vt-activate", "vt", "switched" }` — bring the asking user's own VT to the front (`VT_ACTIVATE`). Carries no VT number on purpose: the daemon resolves `VTNR` from that user's logind session, so this can switch to rpchat's console and nowhere else. `NO_DEVICES` when the session is on no VT, `POLICY` when `vtLock.enabled` is false |
-| `{ "op": "vt-lock", "durationMs", "reason"? }` | `{ "ok": true, "op": "vt-lock", "until", "durationMs" }` — refuse every console switch (`VT_LOCKSWITCH`: ctrl+alt+F<n>, and what logind and the compositor ask for) for the clamped `durationMs` (see below) |
+| `{ "op": "vt-lock", "durationMs"?, "reason"? }` | `{ "ok": true, "op": "vt-lock", "until"?, "durationMs"? }` — refuse every console switch (`VT_LOCKSWITCH`: ctrl+alt+F<n>, and what logind and the compositor ask for) for the clamped `durationMs`, or **until it is unlocked** when the request names none (see below). Both answer fields are absent for an open-ended hold: there is no deadline to report |
 | `{ "op": "vt-unlock" }` | `{ "ok": true, "op": "vt-unlock" }` (also when nothing was locked) |
 | `{ "op": "guard-apply" }` | `{ "ok": true, "op": "guard-apply", "guard": GuardInfo }` — session guard: (re)generate and load the profiles from the policy now (see below) |
 | `{ "op": "guard-status" }` | `{ "ok": true, "op": "guard-status", "guard": GuardInfo }` — what is engaged, without touching anything |
@@ -152,12 +152,20 @@ inside a line.
 `Date.prototype.toISOString()`. `devices` is `"keyboard"`, `"mouse"` or `"both"` (default).
 
 **The VT switch lock** is a kernel-wide flag, so the daemon treats it as something that must not
-be able to outlive the app that asked for it. It is released by the timer (`durationMs`, clamped
-to `vtLock.maxDurationMs`, 5 min by default), by `vt-unlock`, when **the connection that took it
-closes**, when the input lock's emergency chord fires, and when the daemon stops — and
-`vt-activate` lifts it around the switch and puts it back, because the kernel refuses
-`VT_ACTIVATE` while it is set (even for root), which would otherwise mean locking the user in
-place also took away the way to bring them home.
+be able to outlive the app that asked for it. It is released by the timer where the request named
+a `durationMs` (clamped to `vtLock.maxDurationMs`, 5 min by default), by `vt-unlock`, when **the
+connection that took it closes**, when the input lock's emergency chord fires, and when the
+daemon stops — and `vt-activate` lifts it around the switch and puts it back, because the kernel
+refuses `VT_ACTIVATE` while it is set (even for root), which would otherwise mean locking the
+user in place also took away the way to bring them home.
+
+A request with **no `durationMs`** has no timer at all: the console stays locked until one of the
+other four things releases it. That is deliberate — releasing it is then the caller's job, and
+the connection-close rule is what keeps a crashed app from leaving the machine stuck. An
+administrator who would rather not rely on the caller sets `vtLock.maxDurationMs`, which bounds
+open-ended requests too (the answer then carries the duration that was granted); `-1` there
+allows them explicitly. Ticks cost nothing while an open-ended lock is held — no deadline to
+check, so no ioctl.
 
 Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 
@@ -216,7 +224,8 @@ Errors: `{ "ok": false, "error": "<message>", "code": <code> }`
 - **Virtual terminals**: `vt-activate` resolves the asking user's `VTNR` from logind
   (`/run/systemd/sessions/*`, `loginctl` as a fallback) and does `VT_ACTIVATE` on `/dev/tty0`;
   `vt-lock` is `VT_LOCKSWITCH`, clamped to `[1000, vtLock.maxDurationMs]` (default max 300 000)
-  and released by the timer (checked with the same 50 ms tick), `vt-unlock`, the closing of the
+  when the request names a duration — and left with no deadline when it does not — released by
+  the timer (checked with the same 50 ms tick), `vt-unlock`, the closing of the
   connection that took it, the input lock's emergency chord, or shutdown. Both are refused with
   `POLICY` while `vtLock.enabled` is `false`, and the switch lock is lifted and re-applied
   around a `vt-activate` because the kernel refuses `VT_ACTIVATE` while it is set.

@@ -70,7 +70,12 @@ export interface PolicyFile {
    * `enabled: false` refuses both — the user's way out to a text console is theirs again.
    */
   vtLock?: {
-    /** Absolute maximum for one switch lock, ms. Default 300_000; `-1` for unlimited. */
+    /**
+     * Absolute maximum for one switch lock, ms; `-1` for no maximum. Setting it at all is also
+     * what bounds an **open-ended** hold (`sdk.system.vtPreventSwitching()` with no duration):
+     * a key the file does not mention leaves such a hold running until it is released, which is
+     * the default on a machine with no policy. Clamping only, never a refusal.
+     */
     maxDurationMs?: number;
     /** When false, `vt-lock` **and** `vt-activate` are refused (`vt-status` still reads). */
     enabled?: boolean;
@@ -314,8 +319,12 @@ export interface GuardAttemptRecord extends GuardAttempt {
 
 /** The switch lock in place right now (`VtInfo.locked`). */
 export interface VtLockInfo {
-  /** When it ends by itself; the daemon releases it then whatever the app does. */
-  until: string;
+  /**
+   * When it ends by itself; the daemon releases it then whatever the app does. Absent for an
+   * open-ended hold — one asked for with no `durationMs`, which ends when it is released
+   * rather than on a clock.
+   */
+  until?: string;
   reason?: string;
 }
 
@@ -674,11 +683,16 @@ export type DaemonRequest =
   | { op: 'vt-activate' }
   /**
    * Refuse every console switch (`VT_LOCKSWITCH` — ctrl+alt+F<n>, and the switches logind and
-   * the compositor ask for) for at most `durationMs`, clamped to `vtLock.maxDurationMs`. The
-   * daemon releases it on the timer, on `vt-unlock`, when this connection drops, when the input
-   * lock's emergency chord fires, and when it stops: a lock can never outlive the app that took it.
+   * the compositor ask for). With `durationMs` the lock ends by itself after it, clamped to
+   * `vtLock.maxDurationMs`; **without** it the console is held until something releases it,
+   * unless the policy names a finite `maxDurationMs`, which caps an open-ended hold too (the
+   * answer then carries that duration, so the caller sees what it was given).
+   *
+   * Either way the daemon releases it on `vt-unlock`, when this connection drops, when the
+   * input lock's emergency chord fires, and when it stops: a lock can never outlive the app
+   * that took it, which is what makes an open-ended one safe to offer at all.
    */
-  | { op: 'vt-lock'; durationMs: number; reason?: string }
+  | { op: 'vt-lock'; durationMs?: number; reason?: string }
   /** Allow console switching again. */
   | { op: 'vt-unlock' }
   /** Session guard: (re)generate and load the profiles from the policy now. */
@@ -715,7 +729,8 @@ export type DaemonResponse =
   | { ok: true; op: 'vt-status'; vt: VtInfo }
   /** `switched` is false when that VT was in the foreground already — nothing to do, not a failure. */
   | { ok: true; op: 'vt-activate'; vt: number; switched: boolean }
-  | { ok: true; op: 'vt-lock'; until: string; durationMs: number }
+  /** Both absent for an open-ended hold: there is no deadline to report. */
+  | { ok: true; op: 'vt-lock'; until?: string; durationMs?: number }
   | { ok: true; op: 'vt-unlock' }
   | { ok: true; op: 'guard-apply' | 'guard-status'; guard: GuardInfo }
   | { ok: true; op: 'subscribe'; events: DaemonEventName[] }
