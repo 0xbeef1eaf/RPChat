@@ -103,6 +103,11 @@ interface PlayVideoOptions extends OverlayOptions {
   closeOnEnd?: boolean;
   /** Start muted. Default false. */
   muted?: boolean;
+  /**
+   * Stop the video and close its window after this many milliseconds, even if it is still playing.
+   * Omit to let it run to its end (or forever with loop). Combine with loop to fill the whole time.
+   */
+  durationMs?: number;
 }
 
 /**
@@ -130,6 +135,11 @@ interface PlayAudioOptions {
   volume?: number;
   /** Restart when playback ends. Default false. */
   loop?: boolean;
+  /**
+   * Stop the sound after this many milliseconds, even if it is still playing. Omit to let it run to
+   * its end (or forever with loop). Combine with loop to fill the whole time.
+   */
+  durationMs?: number;
 }
 
 /** Live changes to an open overlay, for sdk.media.update(). Only the given fields change. */

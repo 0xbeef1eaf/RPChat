@@ -2,7 +2,7 @@ import type { CapabilityModuleSpec } from '@rp/shared';
 
 export const mediaModule: CapabilityModuleSpec = {
   id: 'media',
-  version: '1.6.0',
+  version: '1.7.0',
   title: 'Media playback',
   summary: 'Show images and play video/audio from the pack or your own home folder in an overlay window on the user\'s screen, or wash one over whole screens.',
   permission: 'pack',
@@ -40,19 +40,22 @@ interface MediaApi {
   /**
    * Play a video asset in an overlay. Resolves as soon as playback starts, not when it ends.
    * @param asset An AssetRef, a pack-relative path or a "home:<path>" one (mp4/webm).
-   * @param options volume (0..1), loop, closeOnEnd (default true), muted, plus OverlayOptions
+   * @param options volume (0..1), loop, closeOnEnd (default true), muted, durationMs (stop and close after
+   *   this long even if still playing; add loop to fill the time), plus OverlayOptions
    *   (monitor, position or x/y, layer, opacity, clickThrough, width, height).
    * @returns Handle of the playing video.
    * @example await sdk.media.playVideo("media/video/wave.mp4", { position: "top-right", width: 360 });
+   * @example await sdk.media.playVideo("media/video/dance.mp4", { loop: true, durationMs: 30000 }); // loops for 30 s, then closes
    * @example const clip = await sdk.webcam.takeVideo(5); await sdk.media.playVideo(clip); // a home file plays like a pack one
    */
   playVideo(asset: AssetRef | string, options?: PlayVideoOptions): Promise<MediaHandle>;
   /**
    * Play an audio asset (no window). Resolves as soon as playback starts.
    * @param asset An AssetRef, a pack-relative path or a "home:<path>" one (mp3/ogg/wav).
-   * @param options volume (0..1), loop.
+   * @param options volume (0..1), loop, durationMs (stop after this long even if still playing; add loop to fill the time).
    * @returns Handle of the playing audio; close() stops it.
    * @example const song = await sdk.media.playAudio("media/audio/lullaby.mp3", { volume: 0.5 });
+   * @example await sdk.media.playAudio("media/audio/rain.ogg", { loop: true, durationMs: 60000 }); // a minute of rain
    */
   playAudio(asset: AssetRef | string, options?: PlayAudioOptions): Promise<MediaHandle>;
   /**
@@ -94,7 +97,7 @@ interface MediaApi {
 
 - Pass a pack-relative path (or an \`AssetRef\`); files must exist in the pack — check the asset list in your prompt or use \`sdk.pack.listAssets\`.
 - Your own home folder works the same way: \`"home:<path>"\` (\`sdk.files.list\` names what is in there) or an \`AssetRef\` with \`source: 'home'\`, so an \`sdk.webcam\` capture goes on screen without a detour through the pack. A home file that is not there throws NOT_FOUND. Nothing else on the disk can be shown, and \`sdk.wallpaper.set\` still takes pack assets only. The \`source: 'remote'\` refs \`sdk.mediaSources.search\` returns (where that module exists) work too; the first show of one waits for its download.
-- Images stay open until \`durationMs\` elapses or you \`close()\` them; videos close on end by default. Without \`durationMs\` the user can click an overlay away; with one it is theirs for that long, so keep timed overlays short and out of the way. Do not open many overlays at once — \`closeAll()\` before showing something new if the screen is getting busy.
+- Images stay open until \`durationMs\` elapses or you \`close()\` them; videos close on end by default. \`playVideo\` and \`playAudio\` take a \`durationMs\` too: the item stops after that long even mid-playback (reported as \`timeout\`), and with \`loop: true\` it fills exactly that time. Without \`durationMs\` the user can click an overlay away; with one it is theirs for that long, so keep timed overlays short and out of the way. Do not open many overlays at once — \`closeAll()\` before showing something new if the screen is getting busy.
 - Playback calls resolve when playback starts, not when it finishes; do not wait for the end inside an action (schedule a timer instead if you need to react later).
 - The user can limit how many images, videos and sounds may run at once, each kind separately. Asking for more does not fail and does not block: the call returns a handle with \`state: 'queued'\` and that item opens by itself the moment one of its kind goes away, raising \`media-started\` \`{ mediaId, asset, packId, kind }\`. So three videos with a limit of one play one after another, in the order you asked for them. \`close()\` on a queued handle takes it out of the queue (reported as \`media-closed\`), and \`update()\` on one changes how it will open. Only when the queue is full as well is the call refused, with CAPABILITY_FAILED.
 - Keep a handle in session state if you want to close it in a later action: \`await sdk.state.session.set("song", handle.id)\`.

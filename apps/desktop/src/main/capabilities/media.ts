@@ -287,8 +287,10 @@ export class MediaManager {
       }),
     );
     const duration = durationOf(options);
-    if (kind === 'image' && duration !== undefined) {
-      managed.timer = setTimeout(() => void this.close(id, 'timeout'), duration + 250);
+    if (duration !== undefined) {
+      // An image's page runs its own timer and animates out; this one is the backstop. A video has
+      // no page timer, so it stops right on time.
+      managed.timer = setTimeout(() => void this.close(id, 'timeout'), kind === 'image' ? duration + 250 : duration);
       managed.timer.unref?.();
     }
     if (!this.items.has(id)) {
@@ -418,12 +420,18 @@ export class MediaManager {
     this.listenAudio(win);
     await win.whenReady();
     const item: MediaItem = { id, kind: 'audio', asset, packId: context.packId, startedAt: new Date().toISOString(), state: 'open' };
-    this.items.set(id, { item, owner: pending.owner, sessionId: context.sessionId, handles: [], offs: [], request: pending });
+    const managed: Managed = { item, owner: pending.owner, sessionId: context.sessionId, handles: [], offs: [], request: pending };
+    this.items.set(id, managed);
     const page: PlayAudioOptions = {};
     if (typeof options.volume === 'number') page.volume = options.volume;
     if (options.loop !== undefined) page.loop = Boolean(options.loop);
     const { url } = await this.locate(context, asset);
     win.send({ type: 'play-audio', id, url, options: page });
+    const duration = durationOf(options);
+    if (duration !== undefined && this.items.has(id)) {
+      managed.timer = setTimeout(() => void this.close(id, 'timeout'), duration);
+      managed.timer.unref?.();
+    }
     return toHandle(item);
   }
 
