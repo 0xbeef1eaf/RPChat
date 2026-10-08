@@ -1,5 +1,5 @@
-// (games) stop the running game without calling onWin or onLose: closes its widget and media, removes its "game:*" event subscriptions and clears session key "game"; returns the record that was stopped, or null when no game was running
-async () => {
+/** (games) stop the running game without calling onWin or onLose: closes its widget and media, removes its "game:*" event subscriptions and clears session key "game"; returns the record that was stopped, or null when no game was running */
+export const quitGame = async () => {
   const game = (await sdk.state.session.get("game")) as { [key: string]: any } | null | undefined;
   if (!game) return null;
   try { await sdk.widgets.close(String(game.widgetId)); } catch { /* widgets switched off or already closed */ }
@@ -13,4 +13,4 @@ async () => {
   }
   await sdk.state.session.delete("game");
   return game;
-}
+};

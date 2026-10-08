@@ -1,5 +1,5 @@
-// (games, internal) start or restart a game round: puts a different running game away, stores the game record under session key "game" (attempt and mistakes carry over on a restart), (re)subscribes the given event handlers with labels "game:<name>" so restarts never stack duplicates, and returns the stored record
-async (record: { game: string; starter: string; options: Record<string, unknown>; widgetId: string; usesMedia?: boolean; subscriptions?: Array<{ event: string; handler: (input: any) => unknown; filter?: Record<string, unknown>; label: string }>; [key: string]: unknown }) => {
+/** (games, internal) start or restart a game round: puts a different running game away, stores the game record under session key "game" (attempt and mistakes carry over on a restart), (re)subscribes the given event handlers with labels "game:<name>" so restarts never stack duplicates, and returns the stored record */
+export const gameSetup = async (record: { game: string; starter: string; options: Record<string, unknown>; widgetId: string; usesMedia?: boolean; subscriptions?: Array<{ event: string; handler: (input: any) => unknown; filter?: Record<string, unknown>; label: string }>; [key: string]: unknown }) => {
   const opts = record.options as { onLose?: string; onWin?: string; attempt?: number; mistakes?: number };
   const previous = (await sdk.state.session.get("game")) as { starter?: string } | null | undefined;
   const restart = typeof opts.attempt === "number" && opts.attempt > 1 && Boolean(previous && previous.starter === record.starter);
@@ -23,4 +23,4 @@ async (record: { game: string; starter: string; options: Record<string, unknown>
     await sdk.events.on(s.event as any, s.handler, { ...(s.filter ? { filter: s.filter as any } : {}), label: s.label });
   }
   return game;
-}
+};

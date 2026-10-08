@@ -1,5 +1,5 @@
-// (game) reaction test in a widget: the panel turns green after a random wait and must be clicked at once; clicking early or slower than thresholdMs repeats the round and calls lib[onLose]({ game: "reaction", event: "mistake", reason: "early" | "slow", ms, round, attempt, mistakes }); `rounds` clean rounds call lib[onWin]. Options { onLose, onWin?, rounds?: 5, thresholdMs?: 500 }
-async (opts: { onLose: string; onWin?: string; rounds?: number; thresholdMs?: number; attempt?: number; mistakes?: number }) => {
+/** (game) reaction test in a widget: the panel turns green after a random wait and must be clicked at once; clicking early or slower than thresholdMs repeats the round and calls lib[onLose]({ game: "reaction", event: "mistake", reason: "early" | "slow", ms, round, attempt, mistakes }); `rounds` clean rounds call lib[onWin]. Options { onLose, onWin?, rounds?: 5, thresholdMs?: 500 } */
+export const reactionTest = async (opts: { onLose: string; onWin?: string; rounds?: number; thresholdMs?: number; attempt?: number; mistakes?: number }) => {
   const rounds = Math.max(1, Math.min(30, Math.round(opts.rounds ?? 5)));
   const thresholdMs = Math.max(150, Math.min(5000, Math.round(opts.thresholdMs ?? 500)));
   const html = `<!doctype html><meta charset="utf-8"><style>
@@ -32,4 +32,4 @@ arm();
   });
   await sdk.widgets.show({ id: "game-reaction", title: `Reaction — attempt ${game.attempt}`, html, width: 300, height: 190, position: "center" });
   return { started: "reaction", attempt: game.attempt, rounds, thresholdMs };
-}
+};

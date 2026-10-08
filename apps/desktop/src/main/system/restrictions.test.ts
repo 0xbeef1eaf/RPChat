@@ -49,7 +49,7 @@ describe('app restrictions — which channels they close', () => {
 
   it('closes the whole editor namespace on allowPackEditor', () => {
     const off = withOff('allowPackEditor');
-    for (const method of ['create', 'saveScript', 'removeMedia', 'exportPack', 'installToApp']) {
+    for (const method of ['create', 'saveLibraryFile', 'removeMedia', 'exportPack', 'installToApp']) {
       expect(refusalFor(`editor:${method}`, off), method).toMatch(/pack editor is disabled/i);
     }
     // A namespace it does not name stays open.

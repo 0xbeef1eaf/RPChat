@@ -1,5 +1,5 @@
-// (game) write lines: a widget shows a line to copy and an input; the widget checks every keystroke against the line, and the first wrong character clears the input, restarts that line and calls lib[onLose]({ game: "lines", event: "mistake", typed, at, line, attempt, mistakes }); the game keeps going until every line is typed cleanly, which calls lib[onWin]. Options { onLose, onWin?, line: string, count?: 5 }
-async (opts: { onLose: string; onWin?: string; line: string; count?: number; attempt?: number; mistakes?: number }) => {
+/** (game) write lines: a widget shows a line to copy and an input; the widget checks every keystroke against the line, and the first wrong character clears the input, restarts that line and calls lib[onLose]({ game: "lines", event: "mistake", typed, at, line, attempt, mistakes }); the game keeps going until every line is typed cleanly, which calls lib[onWin]. Options { onLose, onWin?, line: string, count?: 5 } */
+export const writeLines = async (opts: { onLose: string; onWin?: string; line: string; count?: number; attempt?: number; mistakes?: number }) => {
   const line = String(opts.line ?? "").replace(/\s+/g, " ").trim();
   if (line.length === 0) throw new Error("writeLines needs a line to copy");
   const count = Math.max(1, Math.min(50, Math.round(opts.count ?? 5)));
@@ -34,4 +34,4 @@ i.oninput=()=>{const v=i.value;
   });
   await sdk.widgets.show({ id: "game-lines", title: `Write it ${count} times — attempt ${game.attempt}`, html, width: 420, height: 170, position: "center" });
   return { started: "lines", attempt: game.attempt, line, count };
-}
+};

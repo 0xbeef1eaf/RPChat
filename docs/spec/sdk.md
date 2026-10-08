@@ -34,7 +34,7 @@ export * as modules from './modules/index.js';   // chatModule, logModule, state
 
 `options.modules` / `options.methods` filter to what is available — every SDK function the user has not switched off under Settings → Permissions, narrowed for the prompt by the character's `promptFunctions` (core builds both from `PermissionService`; see docs/spec/core.md). `generateSdkIndex` simply leaves a filtered-out function out of the index. The typings and the docs are one authored block per module and cannot drop a single method from their text, so they add a `Not available: <module>.<name>` line naming it instead — as does `sdk.help.module(id)`, in its `unavailable` field.
 
-Permission levels (`CapabilityModuleSpec.permission`, per-method override in `methods[name].permission`) say how much ceremony a call needs, not whether it is allowed — that is the user's per-function policy (docs/spec/core.md), which every module but `lib` answers to. `trusted` — effects stay inside the app's own data, never confirmed; `pack` — reaches outside the app, used without asking; `prompt` — as `pack`, plus a confirmation dialog on every call (remembered per session on `allow-session`; a handler may `preauthorize`). No built-in module uses `prompt`.
+Permission levels (`CapabilityModuleSpec.permission`, per-method override in `methods[name].permission`) say how much ceremony a call needs, not whether it is allowed — that is the user's per-function policy (docs/spec/core.md), which every module answers to (`sdk.lib`, the character's own library and not a module, is outside it). `trusted` — effects stay inside the app's own data, never confirmed; `pack` — reaches outside the app, used without asking; `prompt` — as `pack`, plus a confirmation dialog on every call (remembered per session on `allow-session`; a handler may `preauthorize`). No built-in module uses `prompt`.
 
 ## Generated typings format
 
@@ -47,10 +47,12 @@ interface Sdk {
   /** <summary> (permission: pack) */
   media: MediaApi;
   ...
+  /** Your function library: the same object as the global `lib`. */
+  lib: LibApi;              // always, whatever modules are selected: not a module
 }
 declare const console: { log(...a: unknown[]): void; ... };   // captured into the action result
+interface LibApi { [name: string]: (...args: any[]) => any }
 declare const lib: LibApi;  // the character's function library (LIB_TYPINGS); defined at run time by CodeRunRequest.prelude, and the same object as sdk.lib
-                            // (without the `lib` module on the surface: `declare const lib: { [name: string]: (...args: any[]) => any }`, LIB_TYPINGS_WITHOUT_MODULE)
 <each module's typings verbatim, separated by a `// ---- module: <id> vX.Y.Z ----` banner>
 ```
 
@@ -96,13 +98,7 @@ timers (trusted)
 - `cancel(id: string): Promise<boolean>`
 - `list(): Promise<TimerInfo[]>`
 
-lib (trusted) — the character's own function library, one file per function in the pack: `characters/<id>/lib/<name>.ts` (core: `LibraryService`, docs/spec/core.md; format: docs/spec/pack.md "Function library" — one function expression, or a module with helpers of its own and one exported function). Pack authors can ship functions there; `register` writes there.
-
-**`sdk.lib` is not a namespace of its own: it is the `lib` global.** The sandbox bootstrap builds the library object from the prelude (`__rp_lib`, docs/spec/sandbox.md) and exposes it as `sdk.lib`, so `sdk.lib.cheer(1)` and `lib.cheer(1)` are the same call and characters that reach for the wrong one still get what they meant. `LibApi` is therefore the type of both: the two methods below plus an index signature `[name: string]: (...args: any[]) => any` for the saved functions. Only the two methods cross to the host; everything else runs inside the isolate — though the sandbox does report each settled `lib.<name>(...)` to the host afterwards, so the action log shows library calls too (docs/spec/sandbox.md §3). The names `register` and `unregister` are reserved for them (`LIB_STATIC_NAMES`), so no saved function can take one.
-- `register(name: string, fn: ((...args: any[]) => unknown) | string, opts?: { description?: string; internal?: boolean }): Promise<LibFunctionInfo>` — save or replace a function. `fn` crosses the boundary exactly like a `Handler`: the sandbox serialises a function argument to the action body `return await (<its compiled source>)(input);` (docs/spec/sandbox.md §4) and core unwraps that to the function expression; a string is accepted as is, and may hold a whole module — helpers of its own with `export` on the one this name calls, the file format of docs/spec/pack.md. Names `^[a-zA-Z_$][\w$]*$`, ≤ 64 chars, no reserved words, not `register`/`unregister`; ≤ 50 functions per character, ≤ 128 KiB in total (no per-source cap); the source must parse (esbuild) as a single function expression, or as a module with exactly one exported function → `INVALID_ARGUMENT` otherwise. `internal: true` writes an `// @internal` helper (docs/spec/pack.md "Function library").
-- `unregister(name: string): Promise<boolean>` — deletes the file, internal helpers included.
-- There is no `define`, `remove`, `list` or `source`: `Object.keys(lib)` lists the names, `String(lib.<name>)` is the source — the exported function, without the helpers of its file — (both straight from the prelude), and registering a name again replaces it.
-- `LibFunctionInfo { name; description?; internal?; bytes; updatedAt }` is declared in the module typings. A library function may be async and may use `sdk`, `lib` (its siblings) and whatever else its own file declares, but nothing from the registering action's scope. Every later run (action, timer handler, event handler, behaviour hook) sees `lib.<name>(...)`; the prompt lists the library under `<library>`. Docs example: `await lib.register("cheer", async (mood: string) => { … }, { description: "show a picture for a mood" })`, then `await lib.cheer("happy")`. The docs also say that a pack may ship internal helpers of its own: they are not listed anywhere, and `register` refuses their names unless the call passes `internal: true` itself.
+`lib` is not a module. `sdk.lib` is the `lib` global — the character's function library, the exports of its pack's `characters/<id>/lib/` folder (format: docs/spec/pack.md "Function library"; core: `LibraryService`, docs/spec/core.md). The sandbox bootstrap builds the library object from the prelude (`__rp_lib`, docs/spec/sandbox.md) and exposes it as `sdk.lib`, so `sdk.lib.cheer(1)` and `lib.cheer(1)` are the same call. Nothing on it crosses to the host — the functions run inside the isolate, though the sandbox reports each settled `lib.<name>(...)` afterwards for the action log (docs/spec/sandbox.md §3). Its members are only known per character, so `LibApi` is an open record (`LIB_TYPINGS`) and the prompt's `<library>` names them. The library is fixed: there is no `register`, `unregister`, `define` or `list`, and no `lib` entry in the registry (the engine refuses a plugin module with that id).
 
 media (pack)
 - `showImage(asset: AssetRef | string, options?: ShowImageOptions): Promise<MediaHandle>` — `ShowImageOptions` adds `closeOnClick?: boolean` (default true; false keeps the image up after a click; a timed image only closes on click when it is set to true). Clicks raise the `media-clicked` host event and every close `media-closed` `{ mediaId, asset, packId, kind, reason }` (`docs/spec/living.md` §3.3), so a character can build clickable things with `sdk.events.on`.

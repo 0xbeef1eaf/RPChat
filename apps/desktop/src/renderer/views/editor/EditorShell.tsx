@@ -175,7 +175,7 @@ export function EditorShell({ projectKey, active }: EditorShellProps) {
             {character
               ? railItem(character.definition.name || character.definition.id, { section: 'character', characterDir: character.dir }, section === 'character' && characterDir === character.dir, 'character')
               : null}
-            {railItem('Scripts', { section: 'scripts', characterDir: null }, section === 'scripts', String(character?.library.length ?? 0))}
+            {railItem('Scripts', { section: 'scripts', characterDir: null }, section === 'scripts', String(character?.library.files.length ?? 0))}
             {railItem('Media', { section: 'media', characterDir: null }, section === 'media', String(project.assets.length))}
             {railItem('README', { section: 'readme', characterDir: null }, section === 'readme')}
             {railItem('Check & publish', { section: 'publish', characterDir: null }, section === 'publish')}

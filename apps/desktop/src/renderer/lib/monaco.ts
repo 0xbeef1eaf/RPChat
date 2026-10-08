@@ -39,16 +39,24 @@ const WORKERS: Record<string, new (options?: { name?: string }) => Worker> = {
 };
 
 /**
- * Compiler errors that are right about the file and wrong about the code. Everything the
- * author writes in these boxes is spliced into something larger before it runs: a script
- * is the body of an async function (`return` is how it answers, see
- * packages/sandbox/src/transpile.ts) and a library file is one function expression. Left
- * alone, TypeScript would underline the shape of every one of them.
+ * Compiler errors that are right about the file and wrong about the code. A behaviour
+ * script is spliced into something larger before it runs: it is the body of an async
+ * function (`return` is how it answers, see packages/sandbox/src/transpile.ts). Left alone,
+ * TypeScript would underline the shape of every one of them.
+ *
+ * A library file is a real module, but the box holds one file of the `lib/` folder and its
+ * siblings are not models here, so every relative import (`./dice`) would read as missing.
+ * Whether an import resolves is the bundler's call, made when the folder is saved
+ * (`library.problems`); and a behaviour script cannot import at all, which the host's own
+ * check (`editor.checkScript`) already underlines, so nothing is lost by ignoring these
+ * everywhere (Monaco's list is per language, not per file).
  */
 const IGNORED_DIAGNOSTICS = [
   1108, // "A 'return' statement can only be used within a function body."
   1375, // "'await' expressions are only allowed at the top level of a file when that file is a module."
   1378, // "Top-level 'await' expressions are only allowed when the 'module' option is set to ..."
+  2307, // "Cannot find module './dice' or its corresponding type declarations."
+  2792, // "Cannot find module './dice'. Did you mean to set the 'moduleResolution' option to 'nodenext', ...?"
 ];
 
 /**

@@ -193,8 +193,8 @@ module at once — on or off under Settings → Permissions, for every character
 Everything is on until they say otherwise. Packs neither request nor are granted
 anything: there is nothing to declare in `pack.json` or `character.json`. (A
 `capabilities` key from older packs is accepted, ignored and reported as a
-loader warning.) `sdk.lib` is the one module outside all of this — it is the
-character's own saved functions, so it is always available.
+loader warning.) `sdk.lib` is outside all of this — it is not a module but the
+character's own function library (§8), so it is always available.
 
 The level says how much ceremony a call needs, not whether it is allowed:
 
@@ -248,32 +248,36 @@ are no imports. The same is true of the code the model writes.
 
 ## 8. Function library (`lib/`)
 
-A character can save functions with `lib.register` and call them as
-`lib.<name>(...)` in every later action, timer handler and event handler
-(`sdk.lib` is that same object, so `sdk.lib.<name>(...)` works too). Those
-functions are files in the pack, `characters/<id>/lib/<name>.ts`, so you can
-ship the ones you want the character to start with — and what the character
-registers itself is written to the same folder of the installed copy (a reinstall
-replaces the folder, so ship what must survive). Format: an optional first line
-`// <description>` (shown in the character's prompt), then exactly one function
-expression, as `lib.register` would receive it:
+`characters/<id>/lib/` is the character's `lib`: a small TypeScript project
+you ship with the pack. Its functions are available in every action, timer
+handler and event handler as `lib.<name>(...)` (`sdk.lib` is that same object,
+so `sdk.lib.<name>(...)` works too). Every `.ts` file in it, sub-folders
+included, is an ES module: each named export lands on `lib` under its own name,
+and whatever a file does not export is private to it. The JSDoc summary of an
+export is its line in the character's prompt, next to its parameters (never its
+body):
 
 ```ts
 // characters/makima/lib/glance.ts
-// show a random portrait of Makima for five seconds and return its path
-async () => {
+/** show a random portrait of Makima for five seconds and return its path */
+export const glance = async () => {
   const portraits = await sdk.pack.findAssets({ tags: ["portrait"], kind: "image" });
   if (portraits.length === 0) return null;
   const pick = portraits[Math.floor(Math.random() * portraits.length)];
   await sdk.media.showImage(pick, { durationMs: 5000, position: "bottom-right" });
   return pick.path;
-}
+};
 ```
 
-The file name is the function name (a JavaScript identifier, at most 64
-characters, no reserved words, and not `register` or `unregister` — the
-library's own methods). A function may use `sdk` and its sibling `lib`
-functions but closes over nothing else.
+Files import each other by relative path (`import { roll } from "./dice"`);
+nothing outside `lib/` can be imported, and `sdk` and `lib` are globals, not
+imports. An export name is a JavaScript identifier (at most 64 characters, no
+reserved words) used by one file only, and `export default` has no name to be
+called by, so use named exports. An export another file needs but the character
+should not call gets an `@internal` tag (`/** @internal Roll a die. */`): the
+other library functions, the behaviour hooks, event handlers and timers call it
+as usual, while it is left out of the prompt and refused to the code the
+character writes itself. The library is fixed: the character cannot add to it.
 
 Library functions are the right place for anything that outlives one action:
 the Makima pack ships six desktop **mini games** (`memoryGame`, `simonSays`,
@@ -290,10 +294,19 @@ event-driven library code (see `makima/README.md`, "Mini games"):
   `{ game, event | result, attempt, mistakes, …details }`;
 - pack images inside widget HTML use `{{asset:media/images/x.png}}` placeholders,
   which the host turns into loadable URLs; clicks on images shown with
-  `sdk.media.showImage` arrive as `media-clicked` / `media-closed` events. A file that is not one function
-expression is skipped with a warning; the caps — 50 files, 16 KiB per file,
-128 KiB in total — are errors. Anything in `lib/` that is not a `.ts` file
-(a README, say) is ignored. The pack editor's **Scripts** tab edits this folder.
+  `sdk.media.showImage` arrive as `media-clicked` / `media-closed` events.
+
+The whole folder is bundled when the pack loads, and its top-level statements
+run once at the start of every run — keep them cheap, and do not call `lib`
+from them. A handler a library function hands to `sdk.events.on` is stored as
+its own source alone, so let it call `lib.<name>(...)` rather than a private
+helper. If the folder does not build (a syntax error, an import that does not
+resolve), the character has no library functions until it does; the reason is
+a loader warning, and the pack still installs. A default export or a name
+another file already exports is a warning too, and only that export is left
+out. The caps — 50 public functions, 128 KiB in total — are advisory warnings.
+Anything in `lib/` that is not a `.ts` file (a README, say), `.d.ts` files and
+dotfiles are ignored. The pack editor's **Scripts** tab edits this folder.
 
 ## 9. SDK usage example
 
@@ -323,12 +336,13 @@ Standard modules (v1):
 | `state`  | trusted    | `get/set/delete/keys` (per character, persistent), `session.get/set/delete/keys`                 |
 | `pack`   | trusted    | `asset(path)`, `listAssets(prefix?)`, `tags()`, `readText(path)`, `info()`                       |
 | `timers` | trusted    | `schedule(delayMs, payload, opts?)`, `cancel(id)`, `list()`                                      |
-| `lib`    | trusted    | `register(name, fn, opts?)`, `unregister(name)` — `sdk.lib` **is** the `lib` global, so every other member is one of your saved functions; files under `lib/` (§8). The one module the permission policy never touches |
 | `media`  | pack       | `showImage(asset, opts?)`, `playVideo(asset, opts?)`, `playAudio(asset, opts?)`, `overlay(asset, opts?)` (whole-screen, click-through), `close(id)`, `closeAll()`, `list()` |
 | `ui`     | pack       | `notify(title, body?)`, `confirm(question)`, `choose(question, options[])`                       |
 | `webcam` | pack       | `takeImage()`, `takeVideo(seconds)` — saved under `webcam/` in the character home, returned as a `source: 'home'` AssetRef that `sdk.media` can show |
 | `crypto` | pack       | `encrypt(path)`, `decrypt(path)` — one of the user's own files, in place, under a key the app manages |
 | `system` | pack       | `openExternal(url)`, `exec(command, args?)`, `readFile(path)`, `writeFile(path, text)`, `clipboardWrite(text)` |
+
+`lib` is not a module: `sdk.lib` is your character's own library (§8).
 
 Every run is limited (wall-clock timeout, CPU budget, memory, number of host
 calls, log and result size), so keep scripts short and never loop forever.

@@ -1,5 +1,6 @@
 import type { BehaviourHook } from './capability.js';
 import type { CharacterId, PackId } from './ids.js';
+import type { CharacterLibrary } from './library.js';
 
 export const PACK_FORMAT_VERSION = 1 as const;
 export const PACK_MANIFEST_FILENAME = 'pack.json';
@@ -202,35 +203,10 @@ export interface LoadedCharacter {
   personaText: string;
   /** Hook → script source text. */
   behaviourSources: Partial<Record<BehaviourHook, string>>;
-  /**
-   * The character's function library (the `lib` global), read from `characters/<id>/lib/<name>.ts`:
-   * name → entry, sorted by name. Files the loader had to skip are reported as warnings.
-   */
-  library: Record<string, CharacterLibraryEntry>;
+  /** The character's function library (the `lib` global): the files of `characters/<id>/lib/`, bundled. */
+  library: CharacterLibrary;
   /** Avatar path relative to the pack root, if any. */
   avatarPath?: string;
-}
-
-/**
- * One `lib` function as shipped in (or saved into) the pack. The file is
- * `characters/<id>/lib/<name>.ts`: an optional first-line `// <description>`
- * comment followed by exactly one function expression — or by a module with
- * helpers of its own and one exported function, which is the one the character
- * calls (docs/spec/pack.md "Function library").
- */
-export interface CharacterLibraryEntry {
-  /** Everything after the description comment: the function expression, or the module around it. */
-  source: string;
-  /** From the file's leading `// …` comment, when present. */
-  description?: string;
-  /** Set by a `// @internal` first line: callable from the character's other library functions and its behaviour hooks, not by the character itself. */
-  internal?: boolean;
-  /** UTF-8 size of `source`. */
-  bytes: number;
-  /** Path relative to the pack root, e.g. `characters/luna/lib/cheer.ts`. */
-  file: string;
-  /** ISO-8601 modification time of the file (what `lib.register` reports as `updatedAt`). */
-  updatedAt: string;
 }
 
 /** Record kept by the app for an installed pack. */

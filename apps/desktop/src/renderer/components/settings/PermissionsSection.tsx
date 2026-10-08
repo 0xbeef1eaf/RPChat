@@ -69,7 +69,7 @@ export function PermissionsSection({ settings, onPatch }: PermissionsSectionProp
         Switching a module off removes all of its functions from every character’s SDK; open it to switch off single functions
         instead. Either way the function is not there to attempt. A pack may describe fewer functions than this in its
         character’s prompt, but it can never reach past what you allow here. <span className="mono">sdk.lib</span> — the
-        character’s own saved functions — is always available and not listed.
+        functions the pack ships in its own <span className="mono">lib/</span> folder — is always available and not listed.
         {offCount > 0 ? ` Currently ${offCount} function${offCount === 1 ? '' : 's'} off.` : ''}
       </div>
       {caps.length === 0 ? <p className="muted small">No capability modules reported.</p> : null}

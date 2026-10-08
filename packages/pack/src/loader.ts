@@ -184,10 +184,10 @@ async function loadCharacter(
     behaviourSources[hook] = await fs.readFile(scriptAbs, 'utf8');
   }
 
-  // function library: lib/<name>.ts (optional). A broken file is skipped with a warning; the caps are advisory warnings too.
+  // function library: lib/**/*.ts (optional). What is wrong in it is a warning — the pack still loads,
+  // with whatever of the library builds — and so are the advisory caps.
   const scan = await readCharacterLibrary(rootAbs, dir);
-  problems.push(...scan.problems);
-  for (const skipped of scan.skipped) warnings.push(`warning: ${skipped.file}: ${skipped.message}`);
+  for (const p of scan.library.problems) warnings.push(`warning: ${p.file}${p.line !== undefined ? `:${p.line}:${p.column ?? 1}` : ''}: ${p.message}`);
   for (const over of scan.warnings) warnings.push(`warning: ${over}`);
 
   if (problems.length > before) return undefined;

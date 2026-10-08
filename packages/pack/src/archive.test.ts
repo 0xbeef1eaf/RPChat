@@ -65,9 +65,9 @@ describe('packDirectory → extractPack', () => {
     expect(files).toContain('characters/makima/lib/glance.ts');
     expect(files).toContain('characters/makima/lib/memoryGame.ts');
     expect(files).toContain('media/images/cards/red-circle.png');
-    expect(Object.keys(pack.character.library)).toEqual(['endGame', 'gameLost', 'gameSetup', 'glance', 'memoryGame', 'molePop', 'punish', 'quitGame', 'reactionTest', 'reward', 'simonSays', 'slidingPuzzle', 'whackAMole', 'writeLines']);
-    expect(pack.character.library['glance']!.description).toContain('portrait');
-    expect(pack.character.library['memoryGame']!.description).toContain('lib[onLose]');
+    expect(Object.keys(pack.character.library.functions)).toEqual(['endGame', 'gameLost', 'gameSetup', 'glance', 'memoryGame', 'molePop', 'punish', 'quitGame', 'reactionTest', 'reward', 'simonSays', 'slidingPuzzle', 'whackAMole', 'writeLines']);
+    expect(pack.character.library.functions['glance']!.description).toContain('portrait');
+    expect(pack.character.library.functions['memoryGame']!.description).toContain('lib[onLose]');
   });
 
   it('is deterministic and skips dotfiles, node_modules and the destination file', async () => {
