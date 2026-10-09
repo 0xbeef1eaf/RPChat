@@ -308,6 +308,107 @@ out. The caps — 50 public functions, 128 KiB in total — are advisory warning
 Anything in `lib/` that is not a `.ts` file (a README, say), `.d.ts` files and
 dotfiles are ignored. The pack editor's **Scripts** tab edits this folder.
 
+### Moving a library from the old format
+
+Before PR #97 a library was one function per file: `lib/<name>.ts` held an
+optional first-line `// <description>` (or `// @internal <description>`), then
+either a bare function expression or a module with exactly one export, and the
+**file name** was the function's name. The character could also add and remove
+functions itself with `lib.register` / `lib.unregister`. None of that is read
+any more: an old-format file builds, but it exports nothing, so it adds nothing
+to `lib`, and the loader warns about it:
+
+```
+warning: characters/luna/lib/cheer.ts: this file exports nothing and no other file imports it, so it adds nothing to lib: …
+```
+
+That warning (in the editor's **Check & publish** tab, or from `validatePack`)
+lists every file still to convert. Converting is mechanical: the file name
+becomes the export name, and the first-line comment becomes JSDoc.
+
+**A bare function expression** — the common case:
+
+```ts
+// before: lib/cheer.ts
+// show a picture for a mood
+async (mood: string) => {
+  const pic = (await sdk.pack.findAssets({ anyTags: [mood], kind: "image" }))[0];
+  if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
+  return Boolean(pic);
+}
+```
+
+```ts
+// after: lib/cheer.ts
+/** show a picture for a mood */
+export const cheer = async (mood: string) => {
+  const pic = (await sdk.pack.findAssets({ anyTags: [mood], kind: "image" }))[0];
+  if (pic) await sdk.media.showImage(pic, { durationMs: 6000 });
+  return Boolean(pic);
+};
+```
+
+That is: turn the `// …` first line into `/** … */`, put
+`export const <file name> = ` in front of the function, and end it with `;`.
+`export async function cheer(mood: string) { … }` works just as well. The JSDoc
+must sit directly above the `export`: other comments that were above the
+function go above the JSDoc or inside the function, since a `// note` between
+the two hides the description.
+
+**An `// @internal` helper** keeps its tag, now inside the JSDoc:
+`// @internal pick a picture` becomes `/** @internal pick a picture */`.
+
+**A module with one export.** Drop the description line into a JSDoc on the
+export, and name the export after the file — before, the file name won whatever
+the export was called:
+
+```ts
+// before: lib/greet.ts
+// greet someone loudly
+function shout(text: string) { return `${text.toUpperCase()}!`; }
+export default async (name: string) => shout(`hi ${name}`);
+```
+
+```ts
+// after: lib/greet.ts
+function shout(text: string) { return `${text.toUpperCase()}!`; }
+
+/** greet someone loudly */
+export const greet = async (name: string) => shout(`hi ${name}`);
+```
+
+`export default` is refused now, and an `export function hello()` in
+`greet.ts` used to be `lib.greet` but is now `lib.hello`: rename the export, or
+change the callers.
+
+**Calls to `lib.register` / `lib.unregister`** have nowhere to go: `lib.register`
+is now just a name a library function could have, so a call fails with
+`lib.register is not a function`. Take them out of behaviour scripts, and out of
+any persona text that tells the character to save its own functions; ship
+those functions in `lib/` instead.
+
+**Functions a character saved itself** were written into the installed copy of
+the pack, `<userData>/packs/<packId>/<version>/characters/<id>/lib/`, never
+into your source folder, and they are in the old format. Copy any worth keeping
+into the pack's own `lib/`, convert them as above, and reinstall — an install
+replaces that folder, so they go once you do.
+
+Once everything loads, take what the new format allows, at your own pace:
+
+- **Split helpers back into the files that use them.** A helper that was its
+  own `@internal` file only so that two functions could share it can be
+  imported directly (`import { pick } from "./pick"`); one used by a single file
+  can live there unexported, and then it is not on `lib` at all.
+- **Group related functions** in one file, or in a sub-folder
+  (`lib/games/simon.ts`): the file name no longer has to be the function name.
+- **Keep calling siblings through `lib.<name>(...)`** wherever a handler is
+  handed to `sdk.events.on` or `sdk.timers.runLater`: such a handler is stored
+  as its own source, without the imports of the file it came from.
+- **`register` and `unregister`** are ordinary function names now.
+
+`examples/packs/makima/characters/makima/lib/` is a converted library: each
+file is its old function, now `export const <name> = …`.
+
 ## 9. SDK usage example
 
 ```ts
