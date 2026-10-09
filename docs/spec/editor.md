@@ -62,6 +62,14 @@ Tests: scaffold → loadPack ok; write/read round trips; addAssetFile naming; re
   instead of a `<video>` element — and it defaults to `--reasoning-effort none` with the schema on,
   because a local thinking model is otherwise unusable for tagging. `--debug` wraps the provider to
   print each request and stream the answer, `--dry-run` prints the manifest instead of writing it.
+- A `.qvoice` speaker profile is never tagged on either path. It is the character's voice, not
+  media: an opaque graft with nothing to look at or read, so a model could only guess at it from its
+  name, and nothing reads tags on it afterwards. `suggestMediaTags` drops profiles from a batch
+  (so "Auto-tag…" over a whole list still tags the list) and refuses a batch of nothing else;
+  `tag-media.ts` leaves them out of `--scope all` and of its untagged selection, drops them silently
+  from a directory or glob, and says what they are when one is named outright. `isVoiceProfile`
+  (`@rp/pack`) is the single test both use, and `indexAssets` marks them `role: 'voice'` so the
+  character is never offered its own voice as an asset to show either.
 - `checkScript(source, kind?)` compiles one behaviour script with the sandbox's own `transpile` and returns
   `ScriptProblem[]` (message plus 1-based line/column and the offending line); with `kind: 'module'` it
   parses one library file on its own as a TypeScript ES module (esbuild `transform`, syntax only) —

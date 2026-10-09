@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { BehaviourHook, CharacterDefinition, PackManifest } from '@rp/shared';
 import { PACK_FORMAT_VERSION } from '@rp/shared';
-import { assetKindFor, extensionOf } from './assets.js';
+import { VOICE_PROFILE_EXTENSION, assetKindFor, extensionOf } from './assets.js';
 import { invalidError, relativePathSchema } from './zod-common.js';
 
 export { relativePathSchema, issuesOf } from './zod-common.js';
@@ -150,7 +150,7 @@ export const VOICE_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
  * on the engine behind `voice.model`; the schema accepts either, and the engine ignores the one it
  * cannot read rather than failing the line.
  */
-export const VOICE_REFERENCE_EXTENSIONS = ['wav', 'qvoice'] as const;
+export const VOICE_REFERENCE_EXTENSIONS = ['wav', VOICE_PROFILE_EXTENSION] as const;
 
 const referencePathSchema = relativePathSchema.check((ctx) => {
   if (!(VOICE_REFERENCE_EXTENSIONS as readonly string[]).includes(extensionOf(ctx.value))) {

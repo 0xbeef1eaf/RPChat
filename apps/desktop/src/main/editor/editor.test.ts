@@ -381,6 +381,32 @@ describe('EditorService.suggestMediaTags', () => {
     await expect(svc.suggestMediaTags(key, new Array(MAX_TAG_BATCH + 1).fill('media/images/portraits/smile.png'))).rejects.toThrow(/At most 25 assets/);
   });
 
+  it('drops a .qvoice profile from the batch, and refuses one on its own', async () => {
+    const tagger = fakeTagger();
+    const svc = new EditorService({
+      userData: tmp,
+      registry: new ProjectRegistry(path.join(tmp, 'data', 'editor-projects.json')),
+      packs: { install: async () => { throw new Error('not in test'); }, tryGetLoaded: () => undefined, installedIds: async () => [] },
+      dialogs: { openDirectory: async () => undefined, openFiles: async () => [], saveFile: async () => undefined },
+      reveal: () => undefined,
+      logger: { warn: () => undefined, debug: () => undefined },
+      tagger: tagger as unknown as MediaTagger,
+    });
+    const project = await svc.create({ packId: 'com.test.qvoice', name: 'Qvoice', characterId: 'mia', characterName: 'Mia' });
+    const key = project.summary.key;
+    const dir = project.summary.dir;
+    fs.mkdirSync(path.join(dir, 'media', 'images'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'media', 'images', 'card.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    fs.writeFileSync(path.join(dir, 'media', 'mia.qvoice'), Buffer.from('QVCE'));
+
+    // "Auto-tag…" over a whole list still tags the list; the profile is simply not in it.
+    const out = await svc.suggestMediaTags(key, ['media/images/card.png', 'media/mia.qvoice']);
+    expect(out.map((s) => s.path)).toEqual(['media/images/card.png']);
+    expect(tagger.calls.at(-1)!.assets.map((a) => a.path)).toEqual(['media/images/card.png']);
+
+    await expect(svc.suggestMediaTags(key, ['media/mia.qvoice'])).rejects.toThrow(/nothing to tag/);
+  });
+
   it('says so when the build has no tagger', async () => {
     const svc = new EditorService({
       userData: tmp,
