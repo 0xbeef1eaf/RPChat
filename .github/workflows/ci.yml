@@ -47,7 +47,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-electron-
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           # Shared with the release workflow: without a shared key the cache key
           # carries the job id, so the two workflows could never reuse each
