@@ -94,13 +94,85 @@ if (!worker) {
 }
 const extensionId = new URL(worker.url()).host;
 console.log(`[chromium] extension ${extensionId} service worker ${worker.url()}${mode === 'policy' ? ' (force-installed by policy)' : ''}`);
+// Keep one page open so the browser has a window to show tabs in (and so closing a temporary
+// extension page during unpacked port setup never closes the browser).
+if (context.pages().length === 0) await context.newPage();
+
+const currentWorker = () => context.serviceWorkers().find(wanted) ?? worker;
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 if (mode === 'unpacked') {
-  await worker.evaluate((p) => chrome.storage.local.set({ port: p }), port);
-  console.log(`[chromium] bridge port set to ${port}`);
+  // MV3 service workers can still be settling or restart right after `serviceworker` fires,
+  // causing a bare `worker.evaluate` to throw or hang. Retry and fall back to an extension page
+  // (`popup.html`), which shares `chrome.storage.local` and wakes the worker via `reconnect`.
+  let portSet = false;
+  let lastErr = '';
+  for (let attempt = 1; attempt <= 6 && !portSet; attempt++) {
+    try {
+      const stored = await withTimeout(
+        currentWorker().evaluate(async (p) => {
+          await chrome.storage.local.set({ port: p });
+          return (await chrome.storage.local.get('port')).port;
+        }, port),
+        5_000,
+        'worker.evaluate(storage.set)',
+      );
+      if (stored === port) {
+        portSet = true;
+        console.log(`[chromium] bridge port set to ${port}`);
+        break;
+      }
+      lastErr = `unexpected stored port ${JSON.stringify(stored)}`;
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : String(err);
+      console.log(`[chromium] bridge port set attempt ${attempt} via worker failed (${lastErr}); trying extension page`);
+      const extPage = await context.newPage().catch(() => undefined);
+      if (extPage) {
+        try {
+          await extPage.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'domcontentloaded', timeout: 10_000 });
+          const stored = await withTimeout(
+            extPage.evaluate(async (p) => {
+              await chrome.storage.local.set({ port: p });
+              await Promise.race([
+                chrome.runtime.sendMessage({ type: 'reconnect' }).catch(() => undefined),
+                new Promise((r) => setTimeout(r, 1000)),
+              ]);
+              return (await chrome.storage.local.get('port')).port;
+            }, port),
+            5_000,
+            'popup.evaluate(storage.set)',
+          );
+          if (stored === port) {
+            portSet = true;
+            console.log(`[chromium] bridge port set to ${port} (via extension page)`);
+            break;
+          }
+          lastErr = `unexpected stored port via popup ${JSON.stringify(stored)}`;
+        } catch (popupErr) {
+          lastErr = popupErr instanceof Error ? popupErr.message : String(popupErr);
+          console.log(`[chromium] bridge port set attempt ${attempt} via extension page failed (${lastErr})`);
+        } finally {
+          await extPage.close().catch(() => undefined);
+        }
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (!portSet) {
+    console.error(`[chromium] failed to set bridge port ${port}: ${lastErr}`);
+    await context.close().catch(() => undefined);
+    process.exit(1);
+  }
 } else {
   // The policy's 3rdparty block delivers the port; report what managed storage holds once it lands.
   for (let i = 0; i < 20; i++) {
-    const managed = await worker.evaluate(() => chrome.storage.managed.get(null)).catch(() => ({}));
+    const managed = await currentWorker().evaluate(() => chrome.storage.managed.get(null)).catch(() => ({}));
     if (managed && Object.keys(managed).length > 0) {
       console.log(`[chromium] managed storage ${JSON.stringify(managed)}`);
       break;
@@ -108,9 +180,6 @@ if (mode === 'unpacked') {
     await new Promise((r) => setTimeout(r, 500));
   }
 }
-// Keep one page open so the browser has a window to show tabs in.
-const pages = context.pages();
-if (pages.length === 0) await context.newPage();
 
 // Home page check: when the app has set one (sdk.browser.setHomePage → chrome.storage.local.homePage),
 // open a new tab once; the extension's newtab override must take it to that URL.
@@ -118,7 +187,7 @@ let newtabChecked = false;
 const newtabTimer = setInterval(() => {
   if (newtabChecked) return;
   void (async () => {
-    const stored = await worker.evaluate(() => chrome.storage.local.get('homePage')).catch(() => ({}));
+    const stored = await currentWorker().evaluate(() => chrome.storage.local.get('homePage')).catch(() => ({}));
     const home = stored && typeof stored.homePage === 'string' ? stored.homePage : undefined;
     if (!home || newtabChecked) return;
     newtabChecked = true;
@@ -126,15 +195,15 @@ const newtabTimer = setInterval(() => {
     // A real new tab (no URL → the new-tab page → the extension's override → the home page). The
     // tab is watched through chrome.tabs rather than a Playwright page handle, which the
     // chrome:// → chrome-extension:// → http redirect chain can leave behind.
-    const before = new Set((await worker.evaluate(() => chrome.tabs.query({}))).map((t) => t.id));
-    const created = await worker.evaluate(() => chrome.tabs.create({}).then((t) => t.id)).catch((err) => {
+    const before = new Set((await currentWorker().evaluate(() => chrome.tabs.query({}))).map((t) => t.id));
+    const created = await currentWorker().evaluate(() => chrome.tabs.create({}).then((t) => t.id)).catch((err) => {
       console.log(`[chromium] chrome.tabs.create failed (${err.message}); falling back to a Playwright page`);
       return context.newPage().then((p) => p.goto('chrome://newtab/', { waitUntil: 'commit', timeout: 10_000 }).catch(() => undefined)).then(() => undefined);
     });
     const deadline = Date.now() + 15_000;
     let url = '';
     while (Date.now() < deadline) {
-      const tabs = await worker.evaluate(() => chrome.tabs.query({})).catch(() => []);
+      const tabs = await currentWorker().evaluate(() => chrome.tabs.query({})).catch(() => []);
       const tab = tabs.find((t) => (created !== undefined ? t.id === created : !before.has(t.id)));
       url = tab?.url ?? tab?.pendingUrl ?? '';
       if (/^https?:/.test(url)) break;
