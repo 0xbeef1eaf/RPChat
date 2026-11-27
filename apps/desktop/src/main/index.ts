@@ -14,6 +14,7 @@ import { detectWindowSystem, isHyprland } from './display/layers.js';
 import { createApp } from './engine.js';
 import type { AppServices } from './engine.js';
 import { applyDevGuard, refusalMessage } from './dev-guard.js';
+import { configureEsbuildBinary } from './esbuild-binary.js';
 import { isBrowserSmokeRun, isSmokeRun, runBrowserSmoke, runSmokeTurn, smokeEnableModelTraffic, smokeLoadPlugin } from './dev-mode.js';
 import { registerIpc } from './ipc.js';
 import { createLogger } from './logger.js';
@@ -39,6 +40,8 @@ if (devGuard.refuse) {
   console.error(refusalMessage(devGuard.refusedFlags));
   app.exit(1);
 }
+// Point esbuild at the unpacked binary before any lazy `esbuild` import runs.
+configureEsbuildBinary({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath });
 const logger = createLogger();
 const env = process.env;
 /** `rpchat --hidden` (autostart): start minimized to the tray, no window until Show. */
@@ -115,23 +118,9 @@ async function acquireInstanceLock(): Promise<boolean> {
 
 // ---- lifecycle --------------------------------------------------------------
 
-/**
- * esbuild spawns a platform binary; inside a packaged app that binary lives in the asar, which
- * cannot be executed, so point esbuild at the `app.asar.unpacked` copy (electron-builder's
- * `asarUnpack` keeps it there). No-op in development or when already configured.
- */
-function configureEsbuildBinary(): void {
-  if (process.env.ESBUILD_BINARY_PATH || !app.isPackaged) return;
-  const platformKey = `${process.platform}-${process.arch}`;
-  const subpath = process.platform === 'win32' ? 'esbuild.exe' : path.join('bin', 'esbuild');
-  const candidate = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', '@esbuild', platformKey, subpath);
-  if (fs.existsSync(candidate)) process.env.ESBUILD_BINARY_PATH = candidate;
-}
-
 async function main(): Promise<void> {
   let services: AppServices | undefined;
   let stopping = false;
-  configureEsbuildBinary();
 
   // ---- what was on screen last time (session-state.ts) -----------------------------------
   const sessionFile = new SessionStateFile(path.join(app.getPath('userData'), 'data', SESSION_STATE_FILENAME));

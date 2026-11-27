@@ -15,7 +15,6 @@
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { build } from 'esbuild';
 import type { Message, Metafile, Plugin } from 'esbuild';
 import type { CharacterLibrary, LibFunction, LibraryProblem } from '@rp/shared';
 import { LIB_DIR_NAME, LIB_FILE_EXTENSION, LIB_MAX_FUNCTIONS, LIB_MAX_TOTAL_BYTES, LIB_NAME_MAX_CHARS, LIB_NAME_PATTERN, RpError } from '@rp/shared';
@@ -175,6 +174,11 @@ export async function buildCharacterLibrary(
     library: { files, functions: {}, code: '', problems: [...readProblems, ...messages.map((m) => toProblem(m, toPackPath, libRel))] },
     warnings,
   });
+
+  // Loaded lazily rather than at module import time: esbuild snapshots
+  // `process.env.ESBUILD_BINARY_PATH` once when first required, and the packaged
+  // desktop app points it at `app.asar.unpacked` during startup.
+  const { build } = await import('esbuild');
 
   // Pass 1: every file as an entry of its own, for the names each one exports (re-exports resolved).
   const virtualFiles = new Map(paths.map((p) => [`${VIRTUAL_LIB}${p}`, sources[p]!]));

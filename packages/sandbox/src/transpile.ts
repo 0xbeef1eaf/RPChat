@@ -1,7 +1,23 @@
-import { transformSync } from 'esbuild';
+import { createRequire } from 'node:module';
 import type { Message } from 'esbuild';
 import { RpError } from '@rp/shared';
 import type { ActionLanguage } from '@rp/shared';
+
+type EsbuildModule = typeof import('esbuild');
+let cachedEsbuild: EsbuildModule | undefined;
+
+/**
+ * Loaded lazily rather than at module import time: esbuild snapshots
+ * `process.env.ESBUILD_BINARY_PATH` once when first required, and the packaged
+ * desktop app points it at `app.asar.unpacked` during startup.
+ */
+function loadEsbuild(): EsbuildModule {
+  if (!cachedEsbuild) {
+    const require = createRequire(import.meta.url);
+    cachedEsbuild = require('esbuild') as EsbuildModule;
+  }
+  return cachedEsbuild;
+}
 
 /** Name of the async function the user's code is wrapped into. */
 export const ENTRY_FUNCTION_NAME = '__rp_main';
@@ -56,7 +72,7 @@ export function transpile(code: string, language: ActionLanguage, options: Trans
   const preludeText = preludeLines > 0 ? `${options.prelude}\n` : '';
   const wrapped = `${PRELUDE}${preludeText}${code}\n}`;
   try {
-    const out = transformSync(wrapped, {
+    const out = loadEsbuild().transformSync(wrapped, {
       loader: language === 'ts' ? 'ts' : 'js',
       target: 'es2020',
       charset: 'utf8',

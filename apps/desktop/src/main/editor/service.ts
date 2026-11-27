@@ -56,7 +56,6 @@ import {
   validatePack,
   writeLibraryFile,
 } from '@rp/pack';
-import { transform } from 'esbuild';
 import type { Message } from 'esbuild';
 import { transpile } from '@rp/sandbox';
 import { expandHome } from '../commands.js';
@@ -431,6 +430,8 @@ export class EditorService {
       // One library file parsed on its own as an ES module. What its imports bring in, and what it
       // exports, is only known once the saved folder is bundled: that lands in `library.problems`.
       try {
+        // Loaded lazily so esbuild reads `ESBUILD_BINARY_PATH` after startup configures it.
+        const { transform } = await import('esbuild');
         await transform(source, { loader: 'ts', format: 'esm', sourcefile: 'library.ts', logLevel: 'silent', tsconfigRaw: {} });
         return [];
       } catch (err) {
