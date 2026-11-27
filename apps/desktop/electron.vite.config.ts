@@ -27,9 +27,30 @@ async function reactPlugin(): Promise<PluginOption[]> {
   }
 }
 
+/**
+ * Guardrail: esbuild snapshots `process.env.ESBUILD_BINARY_PATH` once when first required. Any
+ * static import of `esbuild` anywhere in the main bundle gets hoisted to the top of
+ * `out/main/index.js`, before `configureEsbuildBinary()` can point it at `app.asar.unpacked`,
+ * causing `esbuild.build`/`transform` to fail with `spawn ENOTDIR` in packaged builds.
+ */
+function forbidEagerEsbuildPlugin(): PluginOption {
+  return {
+    name: 'forbid-eager-esbuild',
+    generateBundle(_options, bundle) {
+      for (const [fileName, output] of Object.entries(bundle)) {
+        if (output.type === 'chunk' && output.imports.some((id) => id === 'esbuild' || id.startsWith('esbuild/'))) {
+          this.error(
+            `${fileName} statically imports "esbuild"; load it lazily (e.g. await import("esbuild") or createRequire) so configureEsbuildBinary() sets ESBUILD_BINARY_PATH first.`,
+          );
+        }
+      }
+    },
+  };
+}
+
 export default defineConfig(async () => ({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: WORKSPACE_PACKAGES })],
+    plugins: [externalizeDepsPlugin({ exclude: WORKSPACE_PACKAGES }), forbidEagerEsbuildPlugin()],
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') },
