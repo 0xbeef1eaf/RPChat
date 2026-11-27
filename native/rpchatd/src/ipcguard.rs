@@ -1909,7 +1909,8 @@ mod tests {
             key: stat(&guarded_path),
         };
 
-        // Enforce, with an empty allow-list: this process is in no allowed cgroup.
+        // Enforce, with no app_cgroup yet: `IpcRequest::mediated` withholds targets until the
+        // allow-list can name the app, so `load` leaves the target map empty.
         let request = IpcRequest {
             mode: GuardMode::Enforce,
             setting: IpcGuardMode::Auto,
@@ -1938,6 +1939,19 @@ mod tests {
             }
         };
 
+        assert_eq!(
+            engaged.targets(),
+            0,
+            "targets must stay withheld until app_cgroup is known"
+        );
+        UnixStream::connect(&guarded_path)
+            .expect("withheld targets must not block before app_cgroup is known");
+
+        // Now populate the target map directly with an empty allow-list: this process is in no
+        // allowed cgroup, so enforce must deny the mediated socket and leave its sibling alone.
+        engaged
+            .set_targets(std::slice::from_ref(&target))
+            .expect("mediate the target socket");
         let err = UnixStream::connect(&guarded_path)
             .expect_err("enforce must deny a mediated socket")
             .kind();
@@ -1984,9 +1998,15 @@ mod tests {
             .filter(|d| d.is_dir());
         match own {
             Some(cgroup) => {
+                // Supplying `app_cgroup` via `update` populates both the allow-list and the
+                // target map (no longer withheld), letting this process through.
                 engaged
-                    .set_allowed(&allowed_cgroups(Some(cgroup), &[]))
+                    .update(&IpcRequest {
+                        app_cgroup: Some(cgroup),
+                        ..request
+                    })
                     .expect("allow this process's cgroup");
+                assert_eq!(engaged.targets(), 1);
                 UnixStream::connect(&guarded_path)
                     .expect("a caller in the allowed cgroup must get through");
                 // And taking it away again denies once more, so the map is really what decides.
