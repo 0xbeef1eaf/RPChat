@@ -95,13 +95,19 @@ run_phase() {
   for _ in $(seq 1 16); do grep -q "\[chromium\] newtab →" "$CLOG" 2>/dev/null && break; sleep 0.5; done
   echo "--- chromium ($MODE)"; grep -E "^\[chromium\]" "$CLOG" | cut -c1-200
   echo "--- smoke log ($MODE)"; grep -E "\[(smoke|error|browser)\]" "$LOG" | cut -c1-240
-  if ! grep -q "\[smoke\] browser extension connected" "$LOG"; then echo "FAIL ($MODE): the extension never connected to the bridge"; STATUS=1; fi
-  if ! grep -q "\[smoke\] browser action ok" "$LOG"; then echo "FAIL ($MODE): the browser action did not succeed"; STATUS=1; fi
-  if ! grep -q "\[smoke\] verify browser: PASS" "$LOG"; then echo "FAIL ($MODE): browser verification failed (see verify line above)"; STATUS=1; fi
-  if ! grep -q "\[smoke\] verify browser capabilities: PASS" "$LOG"; then echo "FAIL ($MODE): browser capabilities verification failed (see the capabilities line above)"; STATUS=1; fi
-  if ! grep -q "\[chromium\] newtab → http" "$CLOG"; then echo "FAIL ($MODE): the new-tab override did not open the home page (see the chromium lines above)"; STATUS=1; fi
-  if grep -qiE "typeerror|unhandled" "$LOG"; then echo "FAIL ($MODE): TypeError/unhandled in app log"; STATUS=1; fi
-  if [ "$MODE" = policy ] && ! grep -q "force-installed by policy" "$CLOG"; then echo "FAIL (policy): the browser did not force-install the extension from the policy"; STATUS=1; fi
+  local PHASE_OK=1
+  if ! grep -q "\[smoke\] browser extension connected" "$LOG"; then echo "FAIL ($MODE): the extension never connected to the bridge"; STATUS=1; PHASE_OK=0; fi
+  if ! grep -q "\[smoke\] browser action ok" "$LOG"; then echo "FAIL ($MODE): the browser action did not succeed"; STATUS=1; PHASE_OK=0; fi
+  if ! grep -q "\[smoke\] verify browser: PASS" "$LOG"; then echo "FAIL ($MODE): browser verification failed (see verify line above)"; STATUS=1; PHASE_OK=0; fi
+  if ! grep -q "\[smoke\] verify browser capabilities: PASS" "$LOG"; then echo "FAIL ($MODE): browser capabilities verification failed (see the capabilities line above)"; STATUS=1; PHASE_OK=0; fi
+  if ! grep -q "\[chromium\] newtab → http" "$CLOG"; then echo "FAIL ($MODE): the new-tab override did not open the home page (see the chromium lines above)"; STATUS=1; PHASE_OK=0; fi
+  if grep -qiE "typeerror|unhandled" "$LOG"; then echo "FAIL ($MODE): TypeError/unhandled in app log"; STATUS=1; PHASE_OK=0; fi
+  if [ "$MODE" = policy ] && ! grep -q "force-installed by policy" "$CLOG"; then echo "FAIL (policy): the browser did not force-install the extension from the policy"; STATUS=1; PHASE_OK=0; fi
+  if [ "$PHASE_OK" -eq 0 ]; then
+    local EXTRA
+    EXTRA="$(grep -vE "^\[chromium\]" "$CLOG" 2>/dev/null | tail -n 30 || true)"
+    if [ -n "$EXTRA" ]; then echo "--- chromium stderr/other ($MODE)"; echo "$EXTRA" | cut -c1-240; fi
+  fi
   kill "$APP_PID" "$CHROME_PID" 2>/dev/null; wait "$APP_PID" "$CHROME_PID" 2>/dev/null; APP_PID=""; CHROME_PID=""
   if [ "$MODE" = policy ]; then $SUDO "$INSTALLER" --remove-browser-policy | grep -c "^\[ok\]   removed" | sed 's/^/--- policy files removed: /'; fi
 }
