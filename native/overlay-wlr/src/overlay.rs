@@ -10,13 +10,13 @@ use std::rc::Rc;
 
 use glib::translate::ToGlibPtr;
 use gtk::prelude::*;
-use gtk_layer_shell::{Edge, KeyboardMode, LayerShell};
 use webkit2gtk::{
     LoadEvent, SettingsExt, UserContentInjectedFrames, UserContentManager, UserContentManagerExt,
     UserScript, UserScriptInjectionTime, WebView, WebViewExt,
 };
 
 use crate::events::EventSink;
+use crate::layer_shell::{self, Edge, KeyboardMode, LayerShell};
 use crate::monitors::MonitorSource;
 use crate::plan::{plan, OverlayPlan, OverlaySettings};
 use crate::protocol::{Event, Layer, ShowParams, UpdatePatch};
@@ -79,12 +79,12 @@ fn grant_user_activation(view: &WebView, id: &str) {
     log_debug!("[{}] playback activation delivered", id);
 }
 
-fn shell_layer(layer: Layer) -> gtk_layer_shell::Layer {
+fn shell_layer(layer: Layer) -> layer_shell::Layer {
     match layer {
-        Layer::Background => gtk_layer_shell::Layer::Background,
-        Layer::Bottom => gtk_layer_shell::Layer::Bottom,
-        Layer::Top => gtk_layer_shell::Layer::Top,
-        Layer::Overlay => gtk_layer_shell::Layer::Overlay,
+        Layer::Background => layer_shell::Layer::Background,
+        Layer::Bottom => layer_shell::Layer::Bottom,
+        Layer::Top => layer_shell::Layer::Top,
+        Layer::Overlay => layer_shell::Layer::Overlay,
     }
 }
 

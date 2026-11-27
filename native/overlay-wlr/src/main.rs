@@ -83,6 +83,7 @@ mod logging {
 }
 
 mod events;
+mod layer_shell;
 mod monitors;
 mod overlay;
 mod plan;
@@ -329,13 +330,59 @@ mod self_test {
 mod runtime {
     use super::*;
     use std::cell::RefCell;
+    use std::sync::mpsc;
 
+    use crate::layer_shell;
     use crate::monitors::{GdkMonitors, MonitorSource};
     use crate::overlay::OverlayManager;
 
     enum Incoming {
         Line(String),
         Eof,
+    }
+
+    struct MainLoopState {
+        rx: mpsc::Receiver<Incoming>,
+        manager: Rc<RefCell<OverlayManager>>,
+        sink: EventSink,
+        monitors: Rc<dyn MonitorSource>,
+    }
+
+    thread_local! {
+        static MAIN_STATE: RefCell<Option<MainLoopState>> = const { RefCell::new(None) };
+    }
+
+    fn drain_incoming() {
+        let should_quit = MAIN_STATE.with(|slot| {
+            let borrow = slot.borrow();
+            let Some(state) = borrow.as_ref() else {
+                return false;
+            };
+            while let Ok(msg) = state.rx.try_recv() {
+                let quit = match msg {
+                    Incoming::Eof => {
+                        log_info!("stdin closed; quitting");
+                        true
+                    }
+                    Incoming::Line(line) => {
+                        dispatch(&line, &state.manager, &state.sink, state.monitors.as_ref())
+                    }
+                };
+                if quit || state.sink.is_broken() {
+                    let mut m = state.manager.borrow_mut();
+                    log_info!("closing {} overlay(s) and exiting", m.len());
+                    m.close_all(None);
+                    return true;
+                }
+            }
+            false
+        });
+        if should_quit {
+            MAIN_STATE.with(|slot| {
+                slot.borrow_mut().take();
+            });
+            gtk::main_quit();
+        }
     }
 
     pub fn run() -> ExitCode {
@@ -348,7 +395,7 @@ mod runtime {
             sink.emit(Event::error(None, message), None);
             return ExitCode::from(2);
         }
-        if !gtk_layer_shell::is_supported() {
+        if !layer_shell::is_supported() {
             let message =
                 "wlr-layer-shell is not supported by this compositor / display backend".to_owned();
             log_error!("{message}");
@@ -360,10 +407,10 @@ mod runtime {
             gtk::major_version(),
             gtk::minor_version(),
             gtk::micro_version(),
-            gtk_layer_shell::major_version(),
-            gtk_layer_shell::minor_version(),
-            gtk_layer_shell::micro_version(),
-            gtk_layer_shell::protocol_version()
+            layer_shell::major_version(),
+            layer_shell::minor_version(),
+            layer_shell::micro_version(),
+            layer_shell::protocol_version()
         );
 
         let monitors: Rc<dyn MonitorSource> = Rc::new(GdkMonitors);
@@ -372,11 +419,17 @@ mod runtime {
             monitors.clone(),
         )));
 
-        // stdin reader thread → glib channel → main loop.
-        // `MainContext::channel` is deprecated in glib 0.18 but remains the simplest
-        // thread-safe hand-off into the GTK main context without an async runtime.
-        #[allow(deprecated)]
-        let (tx, rx) = glib::MainContext::channel::<Incoming>(glib::Priority::DEFAULT);
+        // stdin reader thread → mpsc channel + MainContext::invoke → GTK main loop.
+        let (tx, rx) = mpsc::channel::<Incoming>();
+        MAIN_STATE.with(|slot| {
+            *slot.borrow_mut() = Some(MainLoopState {
+                rx,
+                manager,
+                sink,
+                monitors,
+            });
+        });
+        let main_context = glib::MainContext::default();
         std::thread::Builder::new()
             .name("stdin-reader".into())
             .spawn(move || {
@@ -387,6 +440,7 @@ mod runtime {
                             if tx.send(Incoming::Line(l)).is_err() {
                                 return;
                             }
+                            main_context.invoke(drain_incoming);
                         }
                         Err(e) => {
                             eprintln!("rp-overlay-wlr [error] stdin read failed: {e}");
@@ -394,35 +448,16 @@ mod runtime {
                         }
                     }
                 }
-                let _ = tx.send(Incoming::Eof);
+                if tx.send(Incoming::Eof).is_ok() {
+                    main_context.invoke(drain_incoming);
+                }
             })
             .expect("spawn stdin reader");
 
-        {
-            let manager = manager.clone();
-            let sink = sink.clone();
-            let monitors = monitors.clone();
-            #[allow(deprecated)]
-            rx.attach(None, move |msg| {
-                let quit = match msg {
-                    Incoming::Eof => {
-                        log_info!("stdin closed; quitting");
-                        true
-                    }
-                    Incoming::Line(line) => dispatch(&line, &manager, &sink, monitors.as_ref()),
-                };
-                if quit || sink.is_broken() {
-                    let mut m = manager.borrow_mut();
-                    log_info!("closing {} overlay(s) and exiting", m.len());
-                    m.close_all(None);
-                    gtk::main_quit();
-                    return glib::ControlFlow::Break;
-                }
-                glib::ControlFlow::Continue
-            });
-        }
-
         gtk::main();
+        MAIN_STATE.with(|slot| {
+            slot.borrow_mut().take();
+        });
         log_info!("exiting");
         ExitCode::SUCCESS
     }
