@@ -2,7 +2,7 @@
 name = "rp-overlay-wlr"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.92"
 description = "wlr-layer-shell overlay helper for the rp desktop app (GTK3 + gtk-layer-shell + WebKitGTK)"
 license = "MIT"
 publish = false
@@ -13,18 +13,21 @@ path = "src/main.rs"
 
 [dependencies]
 # GTK3 stack (system: gtk+-3.0 >= 3.24)
-gtk = "0.18"
-gdk = "0.18"
-glib = "0.18"
-cairo-rs = "0.18"
-# wlr-layer-shell integration (system: gtk-layer-shell-0 >= 0.6)
-gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
+gtk = "0.19"
+gdk = "0.19"
+glib = "0.22"
+cairo-rs = "0.22"
 # WebKitGTK (system: webkit2gtk-4.1 >= 2.40)
-webkit2gtk = { version = "2.0", features = ["v2_40"] }
-# JSC value access for script messages (version pinned by webkit2gtk)
-javascriptcore-rs = "=1.1"
+webkit2gtk = { version = "3.0", features = ["v2_40"] }
+# JSC value access for script messages (version matching webkit2gtk 3)
+javascriptcore-rs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[build-dependencies]
+# Links the system gtk-layer-shell-0 >= 0.6 C library directly (the crates.io
+# gtk-layer-shell crate is unmaintained and pinned to glib 0.18).
+pkg-config = "0.3"
 
 [profile.release]
 opt-level = 2

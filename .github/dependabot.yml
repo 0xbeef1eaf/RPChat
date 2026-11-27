@@ -65,8 +65,8 @@ updates:
       cargo:
         patterns: ['*']
     ignore:
-      # The gtk-rs 0.18 family (gtk/gdk/glib/gio/cairo/pango/webkit2gtk 2.0) must move together;
-      # bumping glib alone breaks the build. Update them deliberately as a set.
+      # The gtk-rs 0.19 / glib 0.22 family (gtk/gdk/glib/gio/cairo/pango/webkit2gtk 3.0) must move
+      # together; bumping glib alone breaks the build. Update them deliberately as a set.
       - dependency-name: glib
         update-types: [version-update:semver-minor, version-update:semver-major]
       - dependency-name: gio
@@ -82,8 +82,6 @@ updates:
       - dependency-name: webkit2gtk
         update-types: [version-update:semver-minor, version-update:semver-major]
       - dependency-name: javascriptcore-rs
-        update-types: [version-update:semver-minor, version-update:semver-major]
-      - dependency-name: gtk-layer-shell
         update-types: [version-update:semver-minor, version-update:semver-major]
   - package-ecosystem: github-actions
     directory: /
