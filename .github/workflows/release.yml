@@ -130,7 +130,7 @@ jobs:
       # The installers go straight from this job to the release: no Actions artifact in between, so
       # the artifact storage quota never blocks a release.
       - name: Create tag and release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           target_commitish: ${{ needs.version.outputs.sha }}
